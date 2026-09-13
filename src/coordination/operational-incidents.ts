@@ -599,12 +599,12 @@ export class OperationalIncidentCoordinator {
 			);
 		}
 		const recipient = this.#requireAgent(snapshot.agentId);
-		const question = this.#messages.requestQuestion(requestId);
+		const requestTitle = this.#messages.requestTitle(requestId);
 		const inspectProof = () => inspectObligationReminder({
 			recipientAgentId: snapshot.agentId,
 			transcript: recipient.transcript.inspect(),
 			requestMessageId: requestId,
-			question,
+			requestTitle,
 		});
 		if (inspectProof()) return false;
 		// Settlement reconciliation can run while the affected Agent lane is held.
@@ -615,7 +615,7 @@ export class OperationalIncidentCoordinator {
 			deliveryMode: "deferred",
 			customMessage: createModelVisibleObligationReminder({
 				requestMessageId: requestId,
-				question,
+				requestTitle,
 			}),
 			inspectProof,
 			isSuppressed: () => !this.#messages.hasUnsettledAnswerObligation(

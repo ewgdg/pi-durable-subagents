@@ -10,13 +10,12 @@ import type { EntryPointer } from "./moderator-input.ts";
 
 export { OBLIGATION_REMINDER_CUSTOM_TYPE } from "./custom-entry-types.ts";
 
-export const MAX_OBLIGATION_REMINDER_SNIPPET_CODE_POINTS = 160;
 export const OBLIGATION_REMINDER_GUIDANCE =
 	"This Request still needs an Answer. Choose which outstanding Request to work on or answer; attention order does not prescribe execution order. Send each Answer as a standalone agent_message operation \"answer\" call, then end the turn without a summary.";
 
 export type ObligationReminder = Readonly<{
 	requestMessageId: string;
-	requestSnippet: string;
+	requestTitle: string;
 	guidance: typeof OBLIGATION_REMINDER_GUIDANCE;
 }>;
 
@@ -28,7 +27,7 @@ export type ModelVisibleObligationReminder = Readonly<{
 
 export function createModelVisibleObligationReminder(options: {
 	requestMessageId: string;
-	question: string;
+	requestTitle: string;
 }): ModelVisibleObligationReminder {
 	return {
 		customType: OBLIGATION_REMINDER_CUSTOM_TYPE,
@@ -45,7 +44,7 @@ export function inspectObligationReminder(options: {
 	recipientAgentId: string;
 	transcript: TranscriptInspection;
 	requestMessageId: string;
-	question: string;
+	requestTitle: string;
 }): EntryPointer | undefined {
 	const expected = reminderFor(options);
 	const matches: string[] = [];
@@ -78,21 +77,16 @@ export function inspectObligationReminder(options: {
 
 function reminderFor(options: {
 	requestMessageId: string;
-	question: string;
+	requestTitle: string;
 }): ObligationReminder {
+	if (typeof options.requestTitle !== "string" || !options.requestTitle.trim()) {
+		throw new ProtocolInvariantError("Obligation Reminder Request title must not be blank");
+	}
 	return {
 		requestMessageId: options.requestMessageId,
-		requestSnippet: boundedRequestSnippet(options.question),
+		requestTitle: options.requestTitle,
 		guidance: OBLIGATION_REMINDER_GUIDANCE,
 	};
-}
-
-function boundedRequestSnippet(question: string): string {
-	const normalized = question.replaceAll(/\s+/g, " ").trim();
-	const codePoints = [...normalized];
-	return codePoints.length <= MAX_OBLIGATION_REMINDER_SNIPPET_CODE_POINTS
-		? normalized
-		: `${codePoints.slice(0, MAX_OBLIGATION_REMINDER_SNIPPET_CODE_POINTS - 1).join("")}…`;
 }
 
 function parseObligationReminder(content: string): ObligationReminder {
@@ -106,17 +100,16 @@ function parseObligationReminder(content: string): ObligationReminder {
 	}
 	if (
 		!isRecord(parsed) ||
-		!hasExactKeys(parsed, ["requestMessageId", "requestSnippet", "guidance"]) ||
+		!hasExactKeys(parsed, ["requestMessageId", "requestTitle", "guidance"]) ||
 		!isProtocolString(parsed.requestMessageId) ||
-		typeof parsed.requestSnippet !== "string" ||
-		parsed.requestSnippet.includes("\0") ||
+		typeof parsed.requestTitle !== "string" || !parsed.requestTitle.trim() ||
 		parsed.guidance !== OBLIGATION_REMINDER_GUIDANCE
 	) {
 		throw new ProtocolInvariantError("Obligation Reminder has an invalid shape");
 	}
 	return {
 		requestMessageId: parsed.requestMessageId,
-		requestSnippet: parsed.requestSnippet,
+		requestTitle: parsed.requestTitle,
 		guidance: OBLIGATION_REMINDER_GUIDANCE,
 	};
 }

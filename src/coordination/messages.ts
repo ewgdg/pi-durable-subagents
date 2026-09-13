@@ -274,8 +274,8 @@ export class MessageCoordinator {
 		);
 	}
 
-	requestQuestion(requestId: string): string {
-		return this.#requestEvidence.requireRequest(requestId).question;
+	requestTitle(requestId: string): string {
+		return this.#requestEvidence.requireRequest(requestId).title;
 	}
 
 	// Re-arbitrate retrieval at the native commit edge so a direct Delivery that
