@@ -95,8 +95,6 @@ For conversation forks, omit template and config to preserve the parent setup an
 
 const AGENT_OBSERVE_PROMPT_GUIDE = `<agent_observe>
 To locate the transcript for the caller or an authorized Agent, use primaryEvidence.transcriptPath from an operation "status" result. A null path means the session is not file-backed.
-
-Titles are navigation labels, not complete instructions. Inspect the full Request before acting if its instructions are no longer in context. Observation neither delivers work nor resolves an obligation.
 </agent_observe>`;
 
 const AGENT_CONTROL_PROMPT_GUIDE = `<agent_control>
