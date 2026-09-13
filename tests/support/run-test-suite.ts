@@ -37,6 +37,7 @@ const PROCESS_TEST_FILES = new Set([
 	"owner-bootstrap.test.ts",
 	"owner-fork.test.ts",
 	"owner-settlement-parking.test.ts",
+	"parked-owner-deferred-request.test.ts",
 	"owner-workflow.test.ts",
 	"participant-lifecycle-native.test.ts",
 	"pi-child-hosted-runtime.test.ts",
