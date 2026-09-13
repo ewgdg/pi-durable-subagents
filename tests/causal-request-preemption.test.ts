@@ -15,10 +15,13 @@ function delivered(context: Context): Delivered[] {
 		});
 	});
 }
+let waitCallSequence = 0;
 function call(id: string, name: string, input: Record<string, unknown>) {
-	return fauxAssistantMessage(fauxToolCall(name, input, { id }), { stopReason: "toolUse" });
+	// Resuming after preemption authors a fresh Wait, not a replay of its committed source.
+	const toolCallId = name === "agent_wait" ? `${id}-${++waitCallSequence}` : id;
+	return fauxAssistantMessage(fauxToolCall(name, input, { id: toolCallId }), { stopReason: "toolUse" });
 }
-for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, siblings: false }, { extra: true, unrelated: false, siblings: false }, { extra: false, unrelated: true, siblings: false }, { extra: false, unrelated: false, siblings: true }]) test(`reverse clarification resumes delegated work with ${extra ? "two" : "one"} outgoing Requests${unrelated ? " behind an unrelated queue head" : ""}${siblings ? " and serialized sibling clarifications" : ""}`, {
+for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, siblings: false }, { extra: true, unrelated: false, siblings: false }, { extra: false, unrelated: true, siblings: false }, { extra: false, unrelated: false, siblings: true }]) test(`reverse clarification resumes delegated work with ${extra ? "two" : "one"} outgoing Requests${unrelated ? " behind an unrelated queue head" : ""}${siblings ? " and FIFO sibling clarifications" : ""}`, {
 	timeout: 10_000, // Starts two real child processes and exercises their cross-process waits.
 }, async t => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
@@ -27,6 +30,7 @@ for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, 
 	const route = (context: Context) => {
 		const text = JSON.stringify(context.messages);
 		const requests = delivered(context).filter(item => item.kind === "request");
+		assert.equal(new Set(requests.map(item => item.requestMessageId)).size, requests.length, "each Request is delivered once");
 		const root = requests.find(item => item.question === "IMPLEMENT_ROOT");
 		const build = requests.find(item => item.question === "BUILD_CORE");
 		if (text.includes("START_CAUSAL")) {
@@ -34,19 +38,19 @@ for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, 
 			if (unrelated && text.includes("spawn-implement") && !text.includes("queue-unrelated")) {
 				const spawn = context.messages.find(message => message.role === "toolResult" && message.toolCallId === "spawn-implement");
 				assert.ok(spawn?.role === "toolResult");
-				return call("queue-unrelated", "agent_message", { operation: "request", targetAgent: (spawn.details as { agentId: string }).agentId, question: "UNRELATED_WORK" });
+				return call("queue-unrelated", "agent_message", { title: "Fixture request", operation: "request", targetAgent: (spawn.details as { agentId: string }).agentId, question: "UNRELATED_WORK" });
 			}
-			return text.includes("spawn-implement") ? call("owner-wait", "agent_wait", {}) : call("spawn-implement", "agent_spawn", { request: "IMPLEMENT_ROOT" });
+			return text.includes("spawn-implement") ? call("owner-wait", "agent_wait", {}) : call("spawn-implement", "agent_spawn", { title: "Fixture request", request: "IMPLEMENT_ROOT" });
 		}
 		if (root) {
 			const other = requests.find(item => item.question === "UNRELATED_WORK");
-			if (other) {
-				assert.ok(text.includes("answer-implementation"), "unrelated queued work cannot preempt the delegated foreground");
+			if (other && !text.includes("answer-unrelated")) {
+				assert.ok(!text.includes("answer-implementation"), "unrelated queued work enters before the open delegation is answered");
 				return call("answer-unrelated", "agent_message", { operation: "answer", requestId: other.requestMessageId, answer: "UNRELATED_COMPLETE" });
 			}
 			const sibling = requests.find(item => item.question === "CLARIFY_SECOND");
 			if (sibling && !text.includes("answer-sibling")) {
-				assert.ok(text.includes("answer-clarification"), "a sibling cannot preempt the nested clarification");
+				assert.ok(requests.find(item => item.question === "CLARIFY_INTERFACE"), "the earlier clarification must be delivered before its sibling");
 				return call("answer-sibling", "agent_message", { operation: "answer", requestId: sibling.requestMessageId, answer: "USE_SECOND_A" });
 			}
 			const clarification = requests.find(item => item.question === "CLARIFY_INTERFACE");
@@ -54,30 +58,31 @@ for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, 
 				operation: "answer", requestId: clarification.requestMessageId.slice(-12), answer: "USE_INTERFACE_A",
 			});
 			if (text.includes("answer-clarification")) {
-				assert.match(text, /Outstanding Requests/, "remaining obligations must be available on the subsequent continuation");
+				assert.match(text, /Open incoming Requests/, "remaining obligations must be available on the subsequent continuation");
 				resumed = true;
 			}
 			if (text.includes("CORE_COMPLETE") && (!extra || text.includes("EXTRA_COMPLETE"))) return call("answer-implementation", "agent_message", {
 				operation: "answer", requestId: root.requestMessageId, answer: "IMPLEMENT_COMPLETE",
 			});
-			if (!text.includes("spawn-core")) return call("spawn-core", "agent_spawn", { request: "BUILD_CORE" });
+			if (!text.includes("spawn-core")) return call("spawn-core", "agent_spawn", { title: "Fixture request", request: "BUILD_CORE" });
 			if (extra && !text.includes("request-extra")) {
 				const result = context.messages.find(message => message.role === "toolResult" && message.toolCallId === "spawn-core");
 				assert.ok(result?.role === "toolResult");
 				const receipt = JSON.parse(result.content.find(part => part.type === "text")!.text);
-				return call("request-extra", "agent_message", { operation: "request", targetAgent: receipt.agentId, question: "BUILD_EXTRA" });
+				return call("request-extra", "agent_message", { title: "Fixture request", operation: "request", targetAgent: receipt.agentId, question: "BUILD_EXTRA" });
 			}
 			return call(resumed ? "resumed-wait" : "implementation-wait", "agent_wait", {});
 		}
 		if (build) {
 			const extraRequest = requests.find(item => item.question === "BUILD_EXTRA");
-			if (extraRequest) return call("answer-extra", "agent_message", { operation: "answer", requestId: extraRequest.requestMessageId, answer: "EXTRA_COMPLETE" });
+			if (extraRequest && !text.includes("answer-extra")) return call("answer-extra", "agent_message", { operation: "answer", requestId: extraRequest.requestMessageId, answer: "EXTRA_COMPLETE" });
 			if (text.includes("USE_INTERFACE_A") && (!siblings || text.includes("USE_SECOND_A"))) return call("answer-core", "agent_message", { operation: "answer", requestId: build.requestMessageId, answer: "CORE_COMPLETE" });
 			if (siblings && !text.includes("request-clarification")) return fauxAssistantMessage([
-				fauxToolCall("agent_message", { operation: "request", targetAgent: build.fromAgentId, question: "CLARIFY_INTERFACE" }, { id: "request-clarification" }),
-				fauxToolCall("agent_message", { operation: "request", targetAgent: build.fromAgentId, question: "CLARIFY_SECOND" }, { id: "request-sibling" }),
+				fauxToolCall("agent_message", { title: "Fixture request", operation: "request", targetAgent: build.fromAgentId, question: "CLARIFY_INTERFACE" }, { id: "request-clarification" }),
+				fauxToolCall("agent_message", { title: "Fixture request", operation: "request", targetAgent: build.fromAgentId, question: "CLARIFY_SECOND" }, { id: "request-sibling" }),
 			], { stopReason: "toolUse" });
 			return text.includes("request-clarification") ? call("core-wait", "agent_wait", {}) : call("request-clarification", "agent_message", {
+				title: "Fixture request",
 				operation: "request", targetAgent: build.fromAgentId, question: "CLARIFY_INTERFACE",
 			});
 		}
@@ -102,7 +107,7 @@ test("Cancellation reaches a parked foreground and leaves downstream cleanup pos
 		const spawn = context.messages.find(message => message.role === "toolResult" && message.toolName === "agent_spawn");
 		const receipt = spawn?.role === "toolResult" ? spawn.details as { agentId: string; requestMessageId: string } : undefined;
 		if (text.includes("CANCEL_PARKED_ROOT")) {
-			if (!receipt) return call("spawn-cancel-target", "agent_spawn", { request: "CANCELLABLE_WORK" });
+			if (!receipt) return call("spawn-cancel-target", "agent_spawn", { title: "Fixture request", request: "CANCELLABLE_WORK" });
 			if (text.includes("cancel-root")) return fauxAssistantMessage("Cancelled");
 			await childWaiting;
 			return call("cancel-root", "agent_message", { operation: "cancel", requestMessageId: receipt.requestMessageId, reason: "Stop this obligation" });
@@ -113,7 +118,7 @@ test("Cancellation reaches a parked foreground and leaves downstream cleanup pos
 				assert.ok(receipt);
 				return call("cleanup-core", "agent_message", { operation: "cancel", requestMessageId: receipt.requestMessageId, reason: "No longer needed" });
 			}
-			if (!receipt) return call("spawn-cancel-core", "agent_spawn", { request: "CANCEL_CORE" });
+			if (!receipt) return call("spawn-cancel-core", "agent_spawn", { title: "Fixture request", request: "CANCEL_CORE" });
 			releaseCancellation();
 			return call("wait-cancel-core", "agent_wait", {});
 		}
@@ -143,10 +148,10 @@ for (const oldestFirst of [true, false]) test(`either delivered Request may be a
 		}
 		assert.ok(frames().some(frame => frame.requestId === requestId), "Request must be delivered before Answer");
 	};
-	const root = await execute(host.session, "agent_message", "self-root", { operation: "request", targetAgent: agentId, question: "Root work" });
+	const root = await execute(host.session, "agent_message", "self-root", { title: "Fixture request", operation: "request", targetAgent: agentId, question: "Root work" });
 	const rootId = (root.details as { requestMessageId: string }).requestMessageId;
 	await waitForRequest(rootId);
-	const nested = await execute(host.session, "agent_message", "self-nested", { operation: "request", targetAgent: agentId, question: "New work", deliveryMode: "steer" });
+	const nested = await execute(host.session, "agent_message", "self-nested", { title: "Fixture request", operation: "request", targetAgent: agentId, question: "New work", deliveryMode: "steer" });
 	const nestedId = (nested.details as { requestMessageId: string }).requestMessageId;
 	await waitForRequest(nestedId);
 	const firstId = oldestFirst ? rootId : nestedId;

@@ -140,6 +140,8 @@ test("a delivered Request does not consume fresh Wait admission for its undelive
 		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "First obligation was delivered.",
 	});
+	// Simulate active work so the later Deferred Request must survive recovery.
+	h.responder.blocked = true;
 	const sibling = await h.message(h.requester, "queued-before-stop", {
 		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Sibling still needs delivery.",
@@ -148,12 +150,14 @@ test("a delivered Request does not consume fresh Wait admission for its undelive
 	assert.equal(h.deliveries(h.responder).length, 1);
 	h.responder.stop();
 	await h.recover();
+	h.responder.blocked = false;
 	const waiting = h.wait("renew-mixed-delivery-snapshot");
 	await flush();
 	assert.equal(h.responder.record.host.observe().phase, "live",
 		"inspecting delivered work must leave dormant admission available for its sibling");
-	assert.equal(h.deliveries(h.responder).length, 1,
-		"the sibling stays causally queued behind the delivered foreground");
+	assert.deepEqual(h.deliveries(h.responder).map(delivery =>
+		delivery.projection.kind === "request" && delivery.projection.requestMessageId),
+		[first.requestMessageId, sibling.requestMessageId], "renewed Deferred work enters at settlement while the earlier obligation remains open");
 	await h.message(h.responder, "first-answer-after-stop", {
 		operation: "answer", requestId: first.requestMessageId, answer: "First obligation completed.",
 	});
@@ -239,7 +243,7 @@ test("Wait fails explicitly when authoritative recipient inspection is unavailab
 	assert.equal(h.deliveries(h.responder).length, 0);
 });
 
-test("Wait keeps a sibling Request queued behind the responder's foreground", async (t) => {
+test("Wait admits a sibling Request while the earlier obligation remains open", async (t) => {
 	const h = harness(t);
 	const foreground = await h.message(h.requester, "foreground-request", {
 		title: "Fixture request",
@@ -255,7 +259,7 @@ test("Wait keeps a sibling Request queued behind the responder's foreground", as
 	h.wait("sibling-wait");
 	await flush();
 	await h.tick();
-	assert.equal(h.deliveries(h.responder).length, 1, "a queued sibling is not lost scheduling");
+	assert.equal(h.deliveries(h.responder).length, 2, "open obligations do not block later Deferred work at settlement");
 	await h.message(h.responder, "foreground-answer", {
 		operation: "answer", requestId: foreground.requestMessageId, answer: "First done.",
 	});
@@ -562,7 +566,13 @@ test("queued Steer Requests form an admission-ordered batch past a blocked Defer
 	assert.equal(h.deliveries(h.responder).filter(d => d.projection.kind === "request" && d.projection.requestMessageId === deferred.requestMessageId).length, 0);
 	h.responder.settle();
 	await flush();
-	assert.equal(h.deliveries(h.responder).length, 3, "Steer batch must not redeliver at the next boundary");
+	assert.equal(h.deliveries(h.responder).length, 4, "Deferred work follows the Steer batch at the next boundary");
+	const deferredDelivery = h.deliveries(h.responder).at(-1)?.projection;
+	assert.ok(deferredDelivery?.kind === "request");
+	assert.equal(deferredDelivery.requestMessageId, deferred.requestMessageId);
+	h.responder.settle();
+	await flush();
+	assert.equal(h.deliveries(h.responder).length, 4, "later settlement must not redeliver either mode");
 });
 
 test("Answer rejects unknown, undelivered, cancelled and wrong-responder Requests", { timeout: 5_000 }, async (t) => {
@@ -667,8 +677,8 @@ test("parked Wait preserves Steer Request order across preemption reservation an
 	h.requester.settle();
 	await h.tick();
 	assert.deepEqual(h.deliveries(h.requester).map(delivery =>
-		delivery.projection.kind === "request" && delivery.projection.requestMessageId), [foregroundId, ...ids]);
-	assert.deepEqual(dispatchedIds(), [foregroundId, ...ids], "later boundaries must not duplicate either reservation or batch");
+		delivery.projection.kind === "request" && delivery.projection.requestMessageId), [foregroundId, ...ids, deferred.requestMessageId]);
+	assert.deepEqual(dispatchedIds(), [foregroundId, ...ids, deferred.requestMessageId], "later boundaries deliver Deferred work once after the Steer reservation and batch");
 });
 
 function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHooks?: MessageBoundaryHooks) {
