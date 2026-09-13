@@ -42,7 +42,7 @@ Delivery progress uses the admission-time `deliveryProgressIntervalMs` from [Wor
 | Poll, heartbeat, repeated state observation, or policy reload | No extension |
 | Scheduling/dispatch exception with no continuing delivery path, including startup/admission exits before dispatch | Immediately request investigation once a qualifying obligation path exists |
 
-A dispatch Promise can cover the entire Pi model turn. It is not Delivery proof, and waiting for its completion must not time model generation: transcript commitment ends delivery observation independently of that Promise.
+A dispatch Promise can cover the entire Pi model turn. It is not Delivery proof, and waiting for its completion must not time model generation: transcript commitment ends delivery observation independently of that Promise. A proven Deferred Delivery may retain its dispatch reservation for prompt ownership and serialization, but that reservation is not an external progress source that excludes a parked `agent_wait` from Dependency Deadlock handling.
 
 Human waiting, selection, and Holds anywhere along a qualifying path exclude that path. Active or starting intermediate Agents remain legitimate progress sources. An obligated parent doing ordinary model work does not qualify just because a child delivery is pending. Run termination does not cancel Requests or exempt stranded delivery work: an unproven Delivery losing its recipient Run remains observable as a known scheduling failure while an upstream obligation still qualifies. This does not restart the recipient or turn deliberate termination into Run Failure handling.
 

@@ -1157,8 +1157,11 @@ export class MessageDeliveryScheduler {
 	}
 
 	hasProgress(record: AgentRecord): boolean {
+		const activeDeferred = this.#activeDeferredByAgent.get(record.identity.agentId);
+		// A proven Delivery may still own its native prompt while agent_wait parks it.
+		// Keep that reservation for serialization, not as an external progress source.
 		if (this.#activeModeratorReminderByAgent.has(record.identity.agentId) ||
-			this.#activeDeferredByAgent.has(record.identity.agentId) ||
+			(activeDeferred !== undefined && !activeDeferred.deliveryCommitted) ||
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId) ||
 			this.#reservedResumeByAgent.has(record.identity.agentId) ||
 			this.#activeResumeByAgent.has(record.identity.agentId) ||
