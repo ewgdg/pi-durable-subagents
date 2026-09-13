@@ -86,7 +86,7 @@ test("a Steer Request preempting Agent Wait commits one Delivery across turn_end
 	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
 });
 
-test("a Steer Request wakes Owner Wait with the queued ordinary Steer context in one native delivery", {
+test("an ordinary Steer Message wakes Owner Wait before a later Request exists", {
 	timeout: 5_000,
 }, async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
@@ -99,6 +99,9 @@ test("a Steer Request wakes Owner Wait with the queued ordinary Steer context in
 	let releaseWorker!: () => void;
 	const workerGate = new Promise<void>(resolve => { releaseWorker = resolve; });
 	t.after(releaseWorker);
+	let releaseQuestion!: () => void;
+	const questionGate = new Promise<void>(resolve => { releaseQuestion = resolve; });
+	t.after(releaseQuestion);
 	const call = (name: string, args: Record<string, unknown>, id: string) =>
 		fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
 	const route = async (context: Context) => {
@@ -106,11 +109,15 @@ test("a Steer Request wakes Owner Wait with the queued ordinary Steer context in
 		if (text.includes("START_OWNER_BATCH")) {
 			if (text.includes(parentResult)) return fauxAssistantMessage("Done.");
 			if (text.includes(question)) {
-				const delivery = context.messages.find(message => message.role === "user" && Array.isArray(message.content) &&
-					message.content.some(part => part.type === "text" && part.text.includes(question) && part.text.includes(note)));
-				assert.ok(delivery, "the model receives the Request and ordinary Message in one delivery");
+				assert.ok(text.includes(note), "the earlier ordinary Message remains in context");
 				return text.includes("answer-batch-decision") ? fauxAssistantMessage("Waiting for completion.") :
 					call("agent_message", { operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: decision }, "answer-batch-decision");
+			}
+			if (text.includes(note)) {
+				// The worker cannot send its Request until the ordinary Message alone
+				// has interrupted Owner Wait and reached this model generation.
+				releaseQuestion();
+				return call("agent_wait", {}, "owner-after-message-wait");
 			}
 			return text.includes("spawn-batch-parent") ? call("agent_wait", {}, "owner-batch-wait") :
 				call("agent_spawn", { title: "Coordinate report", request: "BATCH_PARENT_WORK" }, "spawn-batch-parent");
@@ -127,6 +134,7 @@ test("a Steer Request wakes Owner Wait with the queued ordinary Steer context in
 			operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: workerResult,
 		}, "answer-batch-worker");
 		if (text.includes("request-batch-decision")) return fauxAssistantMessage("Awaiting the report decision.");
+		if (text.includes("send-batch-note")) await questionGate;
 		return text.includes("send-batch-note") ? call("agent_message", {
 			operation: "request", targetAgent: ownerId, title: "Choose report format", question, deliveryMode: "steer",
 		}, "request-batch-decision") : call("agent_message", {
@@ -145,8 +153,13 @@ test("a Steer Request wakes Owner Wait with the queued ordinary Steer context in
 	const deliveries = entries.filter(entry => entry.type === "custom_message" &&
 		entry.customType === "agent-coordination.message-delivery" && JSON.stringify(entry.content).includes(question));
 	assert.equal(deliveries.length, 1);
-	assert.ok(JSON.stringify(deliveries[0]).includes(note));
-	assert.equal(entries.filter(entry => entry.type === "custom_message" &&
-		entry.customType === "agent-coordination.message-delivery" && JSON.stringify(entry.content).includes(note)).length, 1);
+	const noteDeliveries = entries.filter(entry => entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.message-delivery" && JSON.stringify(entry.content).includes(note));
+	assert.equal(noteDeliveries.length, 1);
+	assert.ok(!JSON.stringify(noteDeliveries[0]).includes(question), "ordinary Message Delivery precedes Request authorship");
+	const waitResult = entries.find(entry => entry.type === "message" && entry.message.role === "toolResult" &&
+		entry.message.toolCallId === "owner-batch-wait");
+	assert.ok(waitResult?.type === "message" && waitResult.message.role === "toolResult");
+	assert.deepEqual(waitResult.message.details, { disposition: "preempted" });
 	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
 });

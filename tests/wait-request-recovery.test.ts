@@ -672,38 +672,53 @@ test("parked Wait reserves one mixed Steer batch, excluding later arrivals and d
 	assert.equal(new Set(provenIds).size, provenIds.length);
 });
 
-for (const trigger of ["request", "cancellation"] as const) test(
-	`ordinary Steer Messages wait for a ${trigger} trigger and join its preemption batch`, { timeout: 5_000 }, async (t) => {
+for (const deliveryMode of ["steer", "deferred", "background"] as const) test(
+	`ordinary ${deliveryMode} Message ${deliveryMode === "steer" ? "preempts" : "does not preempt"} Wait`, { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	const author = h.addRecipient("author");
-	let cancelId: string | undefined;
-	if (trigger === "cancellation") {
-		const duty = await h.message(author, "duty", { title: "Duty", operation: "request", targetAgent: "requester", question: "Current duty" });
-		assert.ok("requestMessageId" in duty);
-		cancelId = duty.requestMessageId;
-		h.requester.settle(); await flush();
-	}
 	await h.message(h.requester, "dependency", { title: "Dependency", operation: "request", targetAgent: "responder", question: "Wait for this" });
-	const initialCount = h.requester.dispatches.length;
 	let settled = false;
-	const waiting = h.wait("wait-for-trigger").then(result => { settled = true; return result; });
+	const waiting = h.wait("wait-for-message");
+	void waiting.then(() => { settled = true; }, () => { settled = true; });
 	await flush();
-	const note = await h.message(author, "note", { operation: "send", targetAgent: "requester", content: "Context for next turn", deliveryMode: "steer" });
+	const note = await h.message(author, "note", { operation: "send", targetAgent: "requester", content: "Context for next turn", deliveryMode });
 	assert.ok("messageId" in note);
 	await h.tick();
-	assert.equal(settled, false, "ordinary Steer alone does not preempt Wait");
-	assert.equal(h.requester.dispatches.length, initialCount);
-	if (cancelId) await h.message(author, "cancel-duty", { operation: "cancel", requestMessageId: cancelId, reason: "No longer needed" });
-	else await h.message(author, "trigger", { title: "Trigger", operation: "request", targetAgent: "requester", question: "New direction", deliveryMode: "steer" });
+	assert.equal(settled, deliveryMode === "steer");
+	if (deliveryMode !== "steer") {
+		assert.deepEqual(h.deliveries(h.requester), []);
+		return;
+	}
 	assert.deepEqual(await waiting, { disposition: "preempted" });
-	const dispatch = h.requester.dispatches.at(-1);
-	assert.ok(dispatch?.kind === "custom" && typeof dispatch.message.content === "string");
-	const batch = JSON.parse(dispatch.message.content).messages;
-	assert.equal(batch.length, 2);
-	assert.equal(batch[0].messageId, note.messageId);
-	assert.equal(batch[1].kind, cancelId ? "request_cancellation" : "request");
+	h.commitWait("wait-for-message", { disposition: "preempted" });
+	assert.deepEqual(h.deliveries(h.requester).map(delivery => delivery.projection.kind), ["message"]);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.requester.record), [], "ordinary input creates no Answer obligation");
+	let rewaitSettled = false;
+	void h.wait("wait-again").then(() => { rewaitSettled = true; }, () => { rewaitSettled = true; });
+	await h.tick();
+	assert.equal(rewaitSettled, false, "the delivered Message cannot preempt another Wait");
+	assert.equal(h.requester.dispatches.length, 1, "one delivery without duplicates");
 });
 
+test("ordinary Steer Messages queued before Wait admission preempt in one FIFO batch", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const author = h.addRecipient("author");
+	await h.message(h.requester, "dependency", { title: "Dependency", operation: "request", targetAgent: "responder", question: "Await this" });
+	h.requester.blocked = true;
+	for (const content of ["First correction", "Second correction"]) {
+		await h.message(author, content, { operation: "send", targetAgent: "requester", content, deliveryMode: "steer" });
+	}
+	const waiting = h.wait("ordinary-batch");
+	await flush();
+	h.requester.blocked = false;
+	h.requester.settle();
+	assert.deepEqual(await waiting, { disposition: "preempted" });
+	h.commitWait("ordinary-batch", { disposition: "preempted" });
+	assert.equal(h.requester.dispatches.length, 1);
+	assert.deepEqual(h.deliveries(h.requester).map(delivery =>
+		delivery.projection.kind === "message" && delivery.projection.content), ["First correction", "Second correction"]);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.requester.record), []);
+});
 
 test("Wait's Steer batch delivers Cancellation without its still-queued Request", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
@@ -727,7 +742,7 @@ test("Wait's Steer batch delivers Cancellation without its still-queued Request"
 	assert.equal(h.deliveries(h.requester).length, 2, "Cancellation suppresses the Request instead of delivering it later");
 });
 
-test("Wait preemption excludes incomplete Answers from the mixed Steer batch", { timeout: 5_000 }, async (t) => {
+test("ordinary Steer Message preemption excludes incomplete Answers from the batch", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	const author = h.addRecipient("author");
 	const ids: string[] = [];
@@ -741,9 +756,8 @@ test("Wait preemption excludes incomplete Answers from the mixed Steer batch", {
 	await flush();
 	await h.message(h.responder, "first-answer", { operation: "answer", requestId: ids[0], answer: "First complete" });
 	await h.message(author, "note", { operation: "send", targetAgent: "requester", content: "Queued context", deliveryMode: "steer" });
-	await h.message(author, "trigger", { title: "Trigger", operation: "request", targetAgent: "requester", question: "New work", deliveryMode: "steer" });
 	assert.deepEqual(await waiting, { disposition: "preempted" });
-	assert.deepEqual(h.deliveries(h.requester).map(delivery => delivery.projection.kind), ["message", "request"],
+	assert.deepEqual(h.deliveries(h.requester).map(delivery => delivery.projection.kind), ["message"],
 		"preemption creates no requester-side Answer Delivery proof");
 	h.commitWait("incomplete-aggregate", { disposition: "preempted" });
 	const next = h.wait("rewait-aggregate", { requestMessageIds: ids });

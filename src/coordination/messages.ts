@@ -1304,7 +1304,8 @@ export class MessageCoordinator {
 			isSuppressed: message.kind === "request"
 				? () => this.#isCancellationDelivered(message.messageId, recipient)
 				: undefined,
-			preemptsAgentWait: message.kind === "request_cancellation",
+			preemptsAgentWait: message.kind === "request_cancellation" ||
+				(message.kind === "message" && message.deliveryMode === "steer"),
 			isIncomingRequest: message.kind === "request"
 				? true
 				: undefined,

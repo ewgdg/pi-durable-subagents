@@ -139,7 +139,7 @@ An explicit join of all the caller Agent's outstanding outbound Requests, or a s
 _Avoid_: Answer cache, Request retry, durable Wait
 
 **Agent Wait Preemption**:
-The non-error completion of a parked Agent Wait when primary interactive human input, an eligible inbound Request, or delivered Request Cancellation needs attention before its complete Answer aggregate is ready. Deferred Requests qualify in live admission order irrespective of ancestry; Steer retains priority. Preemption leaves all Answers available for ordinary Delivery or a fresh Wait.
+The non-error completion of a parked Agent Wait when primary interactive human input, an ordinary Steer Message, an eligible inbound Request, or delivered Request Cancellation needs attention before its complete Answer aggregate is ready. Deferred Requests qualify in live admission order irrespective of ancestry; Steer retains priority. Preemption leaves all Answers available for ordinary Delivery or a fresh Wait.
 _Avoid_: interruption, failure, Answer retrieval
 
 **Request Cancellation**:

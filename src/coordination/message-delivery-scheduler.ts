@@ -742,18 +742,18 @@ export class MessageDeliveryScheduler {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending || pending.size === 0) return;
 		const eligible = this.#eligibleDeliveries(pending);
-		const incomingRequest = eligible.find(
+		const waitTrigger = eligible.find(
 			(delivery) => delivery.deliveryMode === "steer" && (delivery.isIncomingRequest || delivery.preemptsAgentWait),
 		) ?? eligible.find((delivery) => delivery.isIncomingRequest || delivery.preemptsAgentWait);
 		const run = record.host.observe();
 		if ("attention" in run && run.attention === "agent_wait") {
-			if (incomingRequest && this.#preemptAgentWait) {
+			if (waitTrigger && this.#preemptAgentWait) {
 				void this.#preemptAgentWait(record, () =>
-					this.#reserveWaitPreemptionInLane(record, incomingRequest)
+					this.#reserveWaitPreemptionInLane(record, waitTrigger)
 				);
 			}
-			// Requests and Cancellation trigger Wait preemption. Ordinary Steer
-			// Messages can join a triggered batch, but cannot acquire Wait alone.
+			// Steer input acquires Wait as one batch; Deferred Requests acquire it
+			// singly. Answers remain owned by Wait aggregation and retrieval.
 			return;
 		}
 		if (
@@ -937,7 +937,7 @@ export class MessageDeliveryScheduler {
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId)
 		) return false;
 		// Native steering is one-at-a-time: earlier input can start Agent Wait
-		// while this Request is still queued. Its reservation already owns Delivery.
+		// while this input is still queued. Its reservation already owns Delivery.
 		if (this.hasDispatchReservation(record.identity.agentId, trigger.messageId)) return true;
 		const steer = trigger.deliveryMode === "steer"
 			? this.#eligibleSteerDeliveries(record, this.#eligibleDeliveries(pending))
@@ -947,7 +947,7 @@ export class MessageDeliveryScheduler {
 			: undefined;
 		const deliveries = steer ?? [trigger];
 		// Cancellation suppression may remove a Request selected before this
-		// reservation. Only a remaining Request/Cancellation can acquire Wait.
+		// reservation. At least one preempting input must remain after suppression.
 		if (!deliveries.some(delivery => delivery.isIncomingRequest || delivery.preemptsAgentWait)) return false;
 		// Freeze once after Wait's complete-Answer check. One native queue item
 		// carries the whole batch, so later arrivals cannot join this preemption.

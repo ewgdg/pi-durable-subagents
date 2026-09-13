@@ -84,7 +84,7 @@ After either tool returns requestMessageId with messageStatus "sent", the respon
 const AGENT_WAIT_PROMPT_GUIDE = `<agent_wait>
 Use agent_wait when one next decision needs a set of Answers together. With no arguments it joins all your outstanding outbound Requests. Optional requestMessageIds selects a non-empty list of your authored Requests using full IDs or unique case-sensitive suffixes, not incoming obligations. Choose only dependencies that can progress without an Answer you still owe. If strict fan-in is unnecessary, let ordinary Answer Delivery reactivate you; do not poll or use Wait to monitor ordinary progress. Ordinary Messages do not satisfy Requests.
 
-Primary interactive human input, a Request Cancellation, or an eligible inbound Request (including unrelated Steer) may preempt agent_wait. If it returns disposition "preempted", consider the new input and choose what needs attention next. Preemption consumes no Answers and creates no Answer Delivery proof. If a join is still needed, call agent_wait again with the desired selection; each call fixes a fresh snapshot.
+Primary interactive human input or eligible inbound delivery may preempt agent_wait. If it returns disposition "preempted", consider the new input and choose what needs attention next. Preemption consumes no Answers and creates no Answer Delivery proof. If a join is still needed, call agent_wait again with the desired selection; each call fixes a fresh snapshot.
 </agent_wait>`;
 
 const AGENT_SPAWN_PROMPT_GUIDE = `<agent_spawn>
@@ -215,7 +215,7 @@ const messageDeliveryModeParameters = Type.Union([
 	Type.Literal("steer"),
 	Type.Literal("background"),
 ], {
-	description: "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: delivers an admission-ordered batch at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. A Steer Request or Cancellation preempts agent_wait with the eligible Steer Request/Message batch; ordinary Messages alone do not preempt. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.",
+	description: "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: delivers an admission-ordered batch at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. Steer Messages, Requests, or Cancellations preempt agent_wait with the eligible Steer batch. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.",
 });
 const messageDeliveryModeReference = Type.Optional(
 	Type.Unsafe<MessageDeliveryMode>(Type.Ref("#/$defs/deliveryMode")),
@@ -634,7 +634,7 @@ export function registerParticipantCoordinationTools<
 		name: "agent_wait",
 		label: "Wait for Answers",
 		description:
-			"Join all or selected outstanding outbound Requests' Answers. Renew missing Request delivery scheduling without duplicates; primary human input or an eligible inbound Request may preempt.",
+			"Join all or selected outstanding outbound Requests' Answers. Renew missing Request delivery scheduling without duplicates; primary human input or eligible inbound delivery may preempt.",
 		promptSnippet:
 			"Wait for all your outstanding outbound Requests, or select requestMessageIds by full ID or unique suffix.",
 		promptGuidelines: [AGENT_WAIT_PROMPT_GUIDE],
