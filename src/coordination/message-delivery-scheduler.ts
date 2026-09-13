@@ -191,6 +191,15 @@ export class MessageDeliveryScheduler {
 		this.#workflowPolicy = options.workflowPolicy;
 	}
 
+	isRequestBlocked(record: AgentRecord, deliveryMode: "deferred" | "steer"): boolean {
+		if (deliveryMode === "steer") return false;
+		const run = record.host.observe();
+		// Passive Owner parking is a cooperative boundary even while Pi keeps
+		// its native prompt active; the scheduler owns that volatile reservation.
+		return run.phase !== "live" ||
+			(run.attention !== "agent_wait" && run.work !== "settled" && !this.#isDeliveryBoundary(record));
+	}
+
 	blockedDeliveries(): readonly BlockedDelivery[] {
 		const blocked: BlockedDelivery[] = [];
 		for (const [messageId, item] of this.#progress) {

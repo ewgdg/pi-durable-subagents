@@ -289,23 +289,6 @@ export class RequestEvidence {
 		return obligationStack(author.transcript.inspect(), request.fromAgentId, request.source).at(-1)?.requestId;
 	}
 
-	isRequestBlocked(responder: AgentRecord, requestId: string): boolean {
-		if (this.requireRequest(requestId).deliveryMode === "steer") return false;
-		const foreground = this.obligationFrames(responder).at(-1);
-		if (!foreground) return false;
-		const run = responder.host.observe();
-		if (run.phase !== "live" || (run.attention !== "agent_wait" && run.work !== "settled")) return true;
-		const visited = new Set<string>();
-		let parent = this.parentRequestId(requestId);
-		while (parent !== undefined) {
-			if (parent === foreground.requestId) return false;
-			if (visited.has(parent)) throw new Error("invariant_violation: cyclic Request ancestry");
-			visited.add(parent);
-			parent = this.parentRequestId(parent);
-		}
-		return true;
-	}
-
 	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
 		return withAgentTranscriptObservations(this.#agents.values(), () => {
 			const graph = this.#relationshipGraph(agent);
