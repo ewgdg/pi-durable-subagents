@@ -109,6 +109,9 @@ _Avoid_: Workflow state, Workflow configuration lifecycle
 **Agent Request**:
 A Request targeting a known Agent in the same Workflow, with a required immutable sender-authored title, full instructions, and one stable Request Message identity for Answer, Cancellation, retry, and retrieval. The title identifies the work for navigation, not identity or complete instructions. Definitive initial admission failure creates no Agent Request or outstanding dependency; uncertain admission preserves the Request, and later Delivery or retry failure never withdraws an admitted Request. Deferred brings queued Requests to attention one at a time in live admission order when the recipient waits or settles, irrespective of Request ancestry. Steer retains priority at safe boundaries.
 
+**Background Delivery**:
+A low-priority Message or Request Delivery policy that admits work in FIFO order only at settlement, with no Answer obligations owed and no eligible higher-priority Delivery. It never preempts Agent Wait, has no ancestry exemptions, and is not inherited by new Messages or Requests. Higher-priority work may postpone it indefinitely. Once delivered, a Background Request creates the same Answer obligation as any other Request.
+
 **Agent Observation Search**:
 A passive lookup over the caller's authorized verified Agent identities. It combines structural scope, stable Agent metadata, and an Agent's current Run phase to return a bounded set of Agent Statuses. It is a live, potentially non-atomic observation and never prepares a Runtime or searches transcript contents.
 _Avoid_: transcript search, evidence search

@@ -57,7 +57,7 @@ The tool renders the Owner's outbound Requests with their target, recovery statu
 
 Recovery takes a fixed snapshot of verified durable evidence, then admits work through the normal recipient lanes:
 
-- Undelivered Messages and Requests retain their original identities, authorship, recipients, payloads, Delivery modes, and context preparation. Request titles remain canonical; Deferred eligibility uses cooperative boundaries, not ancestry.
+- Undelivered Messages and Requests retain their original identities, authorship, recipients, payloads, Delivery modes, and context preparation. Request titles and Delivery modes remain canonical. Deferred eligibility uses cooperative boundaries, not ancestry; Background still waits for settlement with no reconstructed Answer obligations owed or eligible higher-priority work.
 - Successfully committed, undelivered supervisory resume Messages are included. If their process-local Hold reservation is gone, they recover as ordinary Steer direction and cannot clear a newer Hold. Live resume reservations coalesce without consuming ordinary capacity.
 - Committed undelivered Answers return to their original requesters, not to the Owner requesting recovery. Completed responder work is not restarted.
 - A dormant responder with delivered, unanswered Requests restores its transcript, outstanding obligations, attention ordering, and Agent-owned dependencies before a successor Run receives runtime-generated continuation input. The original Request is not redelivered and still owns the work; recovery authors no replacement Request or ordinary Agent Message.

@@ -1,11 +1,15 @@
 # Agent messaging and Requests
 
-Every authenticated ordinary Agent can send an immutable free-form Message or correlated Request to a known Agent in the same Workflow. Each authored Message fixes either Deferred or Steer Delivery.
+Every authenticated ordinary Agent can send an immutable free-form Message or correlated Request to a known Agent in the same Workflow. Each authored Message fixes Deferred, Steer, or Background Delivery.
 
-- Deferred waits until the recipient's current work settles and receives its own model turn.
+- Deferred Messages wait until the recipient's current work settles. Deferred Requests can also enter at `agent_wait`.
 - Steer waits for the current generation and its complete issued tool batch, then redirects the next model turn without aborting work or rolling back effects.
 
-Omitting `deliveryMode` selects Deferred.
+- Background Messages and Requests wait for settlement, no outstanding Answer obligations owed, and no eligible higher-priority delivery. They never preempt `agent_wait`.
+
+Omitting `deliveryMode` selects Deferred; modes are never inherited from the Request being handled. Creation Requests remain fixed Deferred.
+
+Background is for optional follow-ups and independent work. Use Deferred for clarifications or prerequisites needed to complete existing obligations: a Background prerequisite can deadlock its requester. Background has no ancestry exemptions, and may be postponed indefinitely by higher-priority work. Messages and Requests share one Background FIFO; delivering a Background Request creates its normal Answer obligation before another Background item can enter. Passive Owner settlement parking counts as settlement, not Agent Wait. Delivery mode controls admission, not the Agent's execution or Answer order.
 
 ## Short Message references
 
@@ -80,7 +84,7 @@ Use Steer only when the next model turn needs exceptional direction:
 }
 ```
 
-At a safe boundary, all Steer Messages already pending for that recipient are frozen in admission order, deduplicated against transcript proof and existing dispatch reservations, and committed as one model-visible batch. A Request already queued to preempt Agent Wait keeps that single dispatch while its Delivery proof is pending. A Message admitted after that freeze waits for the next safe boundary. Steer takes precedence over Deferred when both are pending.
+At a safe boundary, all Steer Messages already pending for that recipient are frozen in admission order, deduplicated against transcript proof and existing dispatch reservations, and committed as one model-visible batch. A Request already queued to preempt Agent Wait keeps that single dispatch while its Delivery proof is pending. A Message admitted after that freeze waits for the next safe boundary. Steer takes precedence over Deferred, and both take precedence over Background.
 
 The initial receipt reports admission, not Delivery:
 
@@ -237,7 +241,7 @@ The wait registers before its final evidence inspection, responds to live Answer
 
 Primary interactive human input directed at the waiting Agent continues through Pi's native steering path. Wait preemption begins only after Pi admits that steering input, so the non-error `{ "disposition": "preempted" }` result cannot start another model turn ahead of the user message. The next model generation receives both. Explicit follow-up input remains queued until later.
 
-An eligible inbound Request preempts the parked Wait to bring work to attention. Deferred qualifies in live admission order regardless of Request ancestry, and Steer retains priority. Delivered Request Cancellation can also preempt. Its Delivery is reserved and committed before the next model generation. A complete Answer aggregate wins if already ready; otherwise Wait returns `{ "disposition": "preempted" }`, consumes no Answer, and creates no requester-side Answer Delivery proof. Consider the new input and choose what to handle next; an already-delivered unresolved obligation does not repeatedly preempt future Waits. Call `agent_wait` again only if a join is still needed, with the desired selection; each call fixes a fresh snapshot. Ordinary Deferred and Steer Agent Messages remain queued.
+An eligible inbound Request preempts the parked Wait to bring work to attention. Deferred qualifies in live admission order regardless of Request ancestry, and Steer retains priority. Delivered Request Cancellation can also preempt. Its Delivery is reserved and committed before the next model generation. A complete Answer aggregate wins if already ready; otherwise Wait returns `{ "disposition": "preempted" }`, consumes no Answer, and creates no requester-side Answer Delivery proof. Consider the new input and choose what to handle next; an already-delivered unresolved obligation does not repeatedly preempt future Waits. Call `agent_wait` again only if a join is still needed, with the desired selection; each call fixes a fresh snapshot. Ordinary Agent Messages and Background Requests remain queued.
 
 Interruption, exact-Run fencing, termination, or shutdown ends the live wait without consuming undelivered Answers. A successful aggregate result becomes Delivery proof only when its native tool result commits. Ordinary Answer Delivery or explicit Request retry therefore remains available if result commitment loses a race.
 
@@ -317,7 +321,7 @@ Retry uses the original immutable Message and its authored delivery mode:
 
 For an ordinary Message, retry returns existing Delivery proof when present. Otherwise it coalesces with the same Message already pending in the recipient lane or admits one new volatile item after authoritative absence. At most one recipient transcript Delivery can prove a Message.
 
-Retry does not accept `deliveryMode`; it cannot turn Deferred into Steer or Steer into Deferred.
+Retry does not accept `deliveryMode`; it preserves the authored mode.
 
 If retry admission may have happened but its confirmation is lost, retry returns `messageStatus: "unknown"`; poll before deciding whether to retry again.
 
@@ -325,7 +329,7 @@ If recipient evidence cannot be inspected, retry is rejected without scheduling.
 
 ## Bounded scheduling
 
-Each recipient admits at most the current Workflow Policy's `maxPendingDeliveriesPerAgent` distinct pending Message identities across Deferred and Steer; the default is 256. A retry of an already-pending identity consumes no additional capacity. Admitted work is never evicted, including when Owner reload lowers the limit.
+Each recipient admits at most the current Workflow Policy's `maxPendingDeliveriesPerAgent` distinct pending Message identities across all three Delivery modes; the default is 256. A retry of an already-pending identity consumes no additional capacity. Admitted work is never evicted, including when Owner reload lowers the limit.
 
 Waiting Requests consume this same pending Delivery capacity. A Request receipt with `messageStatus: "sent"` means the recipient lane admitted it; the Request may still be waiting for a cooperative or safe delivery boundary under its authored mode.
 
