@@ -4,7 +4,7 @@ import { coordinationEntries, indexedState } from "../transcript/retained-transc
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 
-import { inspectCommittedAgentWaitResult, type AgentWaitAnswer } from "./agent-wait.ts";
+import { callerRequestTitle, inspectCommittedAgentWaitResult, type AgentWaitAnswer } from "./agent-wait.ts";
 import {
 	deriveMessageIdentity,
 	ProtocolInvariantError,
@@ -15,6 +15,7 @@ import {
 } from "./identities.ts";
 import {
 	inspectStandaloneMessageDelivery,
+	deliveriesBySource,
 	type DeliveryInspection,
 	type DeliveryIdentity,
 	type EntryPointer,
@@ -55,6 +56,7 @@ export type MessageAuthorResultState = CanonicalMessageInspection["state"];
 export type AnswerRetrievalEvidence = Readonly<{
 	answerId: string;
 	requestId: string;
+	requestTitle: string;
 	fromAgentId: string;
 	answer: string;
 	answerSource: ToolCallPointer;
@@ -64,7 +66,7 @@ export type AnswerRetrievalEvidence = Readonly<{
 type MessageResultIdentity =
 	| Readonly<{ kind: "message"; messageId: string; targetAgentId: string }>
 	| Readonly<{ kind: "request"; messageId: string; targetAgentId: string }>
-	| Readonly<{ kind: "answer"; messageId: string; requestId: string }>
+	| Readonly<{ kind: "answer"; messageId: string; requestId: string; requestTitle: string }>
 	| Readonly<{
 		kind: "request_cancellation";
 		messageId: string;
@@ -90,12 +92,14 @@ export type Message =
 	| (MessageSource & Readonly<{
 		kind: "request";
 		origin: "agent_message" | "agent_spawn";
+		title: string;
 		question: string;
 		contextPreparation?: ContextPreparation;
 	}>)
 	| (MessageSource & Readonly<{
 		kind: "answer";
 		requestId: string;
+		requestTitle: string;
 		answer: string;
 	}>)
 	| (MessageSource & Readonly<{
@@ -151,6 +155,7 @@ export function resolveCommittedMessage(options: {
 						...common,
 						kind: "request",
 						origin: "agent_message",
+						title: committedInput.title,
 						question: committedInput.question,
 						...(committedInput.contextPreparation === undefined
 							? {}
@@ -197,6 +202,7 @@ export function resolveCommittedAnswer(options: {
 		deliveryMode: "steer",
 		source,
 		requestId: request.messageId,
+		requestTitle: request.title,
 		answer: committedInput.answer,
 	};
 }
@@ -288,16 +294,19 @@ type AgentMessageAuthorInspectionOptions = Readonly<{
 		input: MessageSendInput | RequestSendInput;
 		resolvedTargetAgentId: string;
 		requestId?: never;
+		requestTitle?: never;
 	}>
 	| Readonly<{
 		input: AnswerInput;
 		requestId: string;
+		requestTitle: string;
 		resolvedTargetAgentId?: never;
 	}>
 	| Readonly<{
 		input: CancellationInput;
 		resolvedTargetAgentId: string;
 		requestId?: never;
+		requestTitle?: never;
 	}>
 );
 
@@ -310,6 +319,7 @@ export function inspectAgentMessageAuthorResult(
 		source,
 		input,
 		requestId,
+		requestTitle,
 		resolvedTargetAgentId,
 	} = options;
 	if (source.agentId !== authorAgentId) {
@@ -337,7 +347,7 @@ export function inspectAgentMessageAuthorResult(
 				targetAgentId: resolvedTargetAgentId!,
 			}
 			: input.operation === "answer"
-				? { kind: "answer", messageId, requestId: requestId! }
+				? { kind: "answer", messageId, requestId: requestId!, requestTitle: requestTitle! }
 				: {
 					kind: "request_cancellation",
 					messageId,
@@ -445,7 +455,8 @@ function isNonAuthoringMessageResult(value: unknown, message: MessageResultIdent
 	}
 	if (value.disposition === "already_answered") {
 		return (
-			sameStringList(keys, ["answerId", "disposition", "messageId", "requestMessageId"]) &&
+			sameStringList(keys, ["answerId", "disposition", "messageId", "requestMessageId", "requestTitle"]) &&
+			value.requestTitle === message.requestTitle &&
 			typeof value.answerId === "string" &&
 			value.answerId.length > 0 &&
 			value.messageId === value.answerId
@@ -467,7 +478,7 @@ function validateMessageAuthorResult(
 	const keys = Object.keys(value).sort();
 	const identityKey = message.kind === "request" ? "requestMessageId" : "messageId";
 	const correlationKeys = message.kind === "answer"
-		? ["requestMessageId"]
+		? ["requestMessageId", "requestTitle"]
 		: message.kind === "message" ||
 				message.kind === "request" ||
 				message.kind === "request_cancellation"
@@ -520,6 +531,9 @@ function validateMessageAuthorResult(
 			`invariant_violation: Answer ${messageId} author result has the wrong Request`,
 		);
 	}
+	if (message.kind === "answer" && value.requestTitle !== message.requestTitle) {
+		throw new ProtocolInvariantError(`Answer ${messageId} author result has the wrong Request title`);
+	}
 	if (
 		(message.kind === "message" ||
 			message.kind === "request" ||
@@ -535,11 +549,17 @@ function validateMessageAuthorResult(
 export function inspectMessageDelivery(options: {
 	recipientAgentId: string;
 	transcript: TranscriptInspection;
-	message: DeliveryIdentity & Pick<Message, "source" | "targetAgentId">;
+	message: Message;
 }): DeliveryInspection {
 	const { recipientAgentId, transcript, message } = options;
 	if (recipientAgentId !== message.targetAgentId) {
 		throw new ProtocolInvariantError("Message Delivery inspection names another recipient");
+	}
+	for (const { projection } of deliveriesBySource({ recipientAgentId, transcript, source: message.source })) {
+		if ((message.kind === "request" && projection.kind === "request" && projection.title !== message.title) ||
+			(message.kind === "answer" && projection.kind === "answer" && projection.requestTitle !== message.requestTitle)) {
+			throw new ProtocolInvariantError("Message Delivery title differs from its Request source");
+		}
 	}
 	return inspectStandaloneMessageDelivery({
 		recipientAgentId,
@@ -553,7 +573,7 @@ export function inspectMessageDelivery(options: {
 export function inspectAnswerDelivery(options: {
 	requesterAgentId: string;
 	transcript: TranscriptInspection;
-	answer: Extract<DeliveryIdentity, { kind: "answer" }> & Pick<Message, "source" | "targetAgentId">;
+	answer: Extract<Message, { kind: "answer" }>;
 }): DeliveryInspection {
 	const { requesterAgentId, transcript, answer } = options;
 	const customDelivery = inspectMessageDelivery({
@@ -569,6 +589,7 @@ export function inspectAnswerDelivery(options: {
 		if (!sameToolCallPointer(retrieval.answerSource, answer.source)) return false;
 		if (
 			retrieval.requestId !== answer.requestId ||
+			retrieval.requestTitle !== answer.requestTitle ||
 			retrieval.answerId !== answer.messageId ||
 			retrieval.fromAgentId !== answer.fromAgentId
 		) {
@@ -655,14 +676,17 @@ function answerRetrievalFacts(options: {
 						"disposition",
 						"fromAgentId",
 						"requestMessageId",
+						"requestTitle",
 					];
 					if (
 						!sameStringList(Object.keys(details).sort(), expectedKeys) ||
 						!isToolCallPointer(details.answerSource) ||
 						typeof details.answerId !== "string" ||
 						typeof details.requestMessageId !== "string" ||
+						typeof details.requestTitle !== "string" || !details.requestTitle.trim() ||
 						typeof details.fromAgentId !== "string" ||
 						typeof details.answer !== "string" ||
+						details.requestTitle !== callerRequestTitle({ agentId: requesterAgentId, transcript, requestMessageId: details.requestMessageId }) ||
 						details.answerId !== deriveMessageIdentity(details.answerSource) ||
 						details.fromAgentId !== details.answerSource.agentId
 					) {
@@ -671,6 +695,7 @@ function answerRetrievalFacts(options: {
 					retrievals.push({
 						answerId: details.answerId,
 						requestId: details.requestMessageId,
+						requestTitle: details.requestTitle,
 						fromAgentId: details.fromAgentId,
 						answer: details.answer,
 						answerSource: details.answerSource,
@@ -739,6 +764,7 @@ function modelVisibleProjection(message: Message): ModelVisibleMessage {
 				kind: "request",
 				requestMessageId: message.messageId,
 				fromAgentId: message.fromAgentId,
+				title: message.title,
 				question: message.question,
 			};
 		case "answer":
@@ -746,6 +772,7 @@ function modelVisibleProjection(message: Message): ModelVisibleMessage {
 				kind: "answer",
 				answerId: message.messageId,
 				requestMessageId: message.requestId,
+				requestTitle: message.requestTitle,
 				fromAgentId: message.fromAgentId,
 				answer: message.answer,
 			};

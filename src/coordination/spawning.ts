@@ -260,7 +260,7 @@ export class DefaultChildSpawner {
 		this.#integrateAgent(child);
 		this.#addRetentionReason(parent, "awaiting_answer", requestId);
 		const creationDelivery = {
-			recipient: child, requestId, fromAgentId: callerAgentId, question: input.request, source,
+			recipient: child, requestId, fromAgentId: callerAgentId, title: input.title, question: input.request, source,
 		};
 		if (materializationUncertain || identityConfirmation === "confirmation_lost") {
 			this.#messages.recordCreationRequestFailure(creationDelivery,

@@ -8,6 +8,7 @@ import {
 import type { Message } from "./message.ts";
 import {
 	inspectStandaloneMessageDelivery,
+	deliveriesBySource,
 	type DeliveryInspection,
 	type MessageDeliveryItem,
 } from "./message-delivery.ts";
@@ -27,6 +28,7 @@ export function resolveCreationRequest(options: {
 		targetAgentId: childIdentity.agentId,
 		deliveryMode: "deferred",
 		source: childIdentity.spawnSource,
+		title: creationInput.title,
 		question: creationInput.request,
 	};
 }
@@ -34,16 +36,18 @@ export function resolveCreationRequest(options: {
 export function createCreationRequestDeliveryItem(options: {
 	requestId: string;
 	fromAgentId: string;
+	title: string;
 	question: string;
 	source: ToolCallPointer;
 }): MessageDeliveryItem {
-	const { requestId, fromAgentId, question, source } = options;
+	const { requestId, fromAgentId, title, question, source } = options;
 	return {
 		source,
 		projection: {
 			kind: "request",
 			requestMessageId: requestId,
 			fromAgentId,
+			title,
 			question,
 		},
 	};
@@ -54,6 +58,7 @@ export function inspectCreationRequestDelivery(options: {
 	transcript: TranscriptInspection;
 	requestId: string;
 	fromAgentId: string;
+	title: string;
 	source: ToolCallPointer;
 }): DeliveryInspection {
 	const {
@@ -61,8 +66,14 @@ export function inspectCreationRequestDelivery(options: {
 		transcript,
 		requestId,
 		fromAgentId,
+		title,
 		source,
 	} = options;
+	for (const { projection } of deliveriesBySource({ recipientAgentId, transcript, source })) {
+		if (projection.kind === "request" && projection.title !== title) {
+			throw new Error("invariant_violation: Creation Request Delivery title differs from its source");
+		}
+	}
 	return inspectStandaloneMessageDelivery({
 		recipientAgentId,
 		transcript,

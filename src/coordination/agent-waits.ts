@@ -117,8 +117,9 @@ export class AgentWaitCoordinator {
 		);
 		const requestRelationships = this.#messages.requestRelationships(requestMessageIds);
 		onProgress?.({
-			waitingFor: requestRelationships.map(({ requestId, targetAgentId }) => ({
+			waitingFor: requestRelationships.map(({ requestId, requestTitle, targetAgentId }) => ({
 				requestMessageId: requestId,
+				requestTitle,
 				responderAgentId: targetAgentId,
 			})),
 		});

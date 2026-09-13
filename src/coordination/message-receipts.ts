@@ -41,10 +41,12 @@ export type AgentAnswerReceipt =
 	| (Readonly<{
 		messageId: string;
 		requestMessageId: string;
+		requestTitle: string;
 	}> & MessageSendOutcome)
 	| Readonly<{
 		messageId: string;
 		requestMessageId: string;
+		requestTitle: string;
 		answerId: string;
 		disposition: "already_answered";
 	}>;
@@ -94,6 +96,7 @@ export type AgentRequestRetryReceipt =
 	| Readonly<{
 		disposition: "answer_delivered";
 		requestMessageId: string;
+		requestTitle: string;
 		answerId: string;
 		fromAgentId: string;
 		answer: string;
@@ -102,6 +105,7 @@ export type AgentRequestRetryReceipt =
 	| Readonly<{
 		disposition: "answer_already_delivered";
 		requestMessageId: string;
+		requestTitle: string;
 		answerId: string;
 		deliveryEvidence: Readonly<{ agentId: string; entryId: string }>;
 	}>

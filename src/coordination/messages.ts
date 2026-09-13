@@ -81,6 +81,7 @@ type CreationRequestScheduling = Readonly<{
 	recipient: AgentRecord;
 	requestId: string;
 	fromAgentId: string;
+	title: string;
 	question: string;
 	source: ToolCallPointer;
 }>;
@@ -312,6 +313,7 @@ export class MessageCoordinator {
 		const expected = {
 			disposition: "answer_delivered" as const,
 			requestMessageId: request.messageId,
+			requestTitle: request.title,
 			answerId: answer.messageId,
 			fromAgentId: answer.fromAgentId,
 			answer: answer.answer,
@@ -327,6 +329,7 @@ export class MessageCoordinator {
 			? {
 				disposition: "answer_already_delivered" as const,
 				requestMessageId: request.messageId,
+				requestTitle: request.title,
 				answerId: answer.messageId,
 				deliveryEvidence,
 			}
@@ -395,11 +398,12 @@ export class MessageCoordinator {
 		);
 	}
 
-	requestRelationships(requestIds: readonly string[]): readonly UnresolvedAgentRequest[] {
+	requestRelationships(requestIds: readonly string[]): readonly (UnresolvedAgentRequest & { requestTitle: string })[] {
 		return requestIds.map((requestId) => {
 			const request = this.#requestEvidence.requireRequest(requestId);
 			return {
 				requestId,
+				requestTitle: request.title,
 				fromAgentId: request.fromAgentId,
 				targetAgentId: request.targetAgentId,
 			};
@@ -606,13 +610,14 @@ export class MessageCoordinator {
 	}
 
 	#creationRequestDelivery(options: CreationRequestScheduling): ScheduledMessageDelivery {
-		const { recipient, requestId, fromAgentId, question, source } = options;
+		const { recipient, requestId, fromAgentId, title, question, source } = options;
 		return {
 			messageId: requestId,
 			deliveryMode: "deferred",
 			deliveryItem: createCreationRequestDeliveryItem({
 				requestId,
 				fromAgentId,
+				title,
 				question,
 				source,
 			}),
@@ -622,6 +627,7 @@ export class MessageCoordinator {
 					transcript: recipient.transcript.inspect(),
 					requestId,
 					fromAgentId,
+					title,
 					source,
 				}).deliveryEvidence,
 			isSuppressed: () => this.#isCancellationDelivered(requestId, recipient),
@@ -813,6 +819,7 @@ export class MessageCoordinator {
 			return {
 				messageId: admitted.answer.messageId,
 				requestMessageId: admitted.request.messageId,
+				requestTitle: admitted.request.title,
 				answerId: admitted.answer.messageId,
 				disposition: "already_answered",
 			};
@@ -822,6 +829,7 @@ export class MessageCoordinator {
 			return {
 				messageId: answer.messageId,
 				requestMessageId: request.messageId,
+				requestTitle: request.title,
 				messageStatus: "not_sent",
 				reason: "host_shutting_down",
 			};
@@ -836,6 +844,7 @@ export class MessageCoordinator {
 			return {
 				messageId: answer.messageId,
 				requestMessageId: request.messageId,
+				requestTitle: request.title,
 				messageStatus: "not_sent",
 				reason: "target_unavailable",
 			};
@@ -853,18 +862,21 @@ export class MessageCoordinator {
 				? {
 					messageId: answer.messageId,
 					requestMessageId: request.messageId,
+					requestTitle: request.title,
 					messageStatus: "unknown",
 					reason: "confirmation_lost",
 				}
 				: {
 					messageId: answer.messageId,
 					requestMessageId: request.messageId,
+					requestTitle: request.title,
 					messageStatus: "sent",
 				};
 		}
 		return {
 			messageId: answer.messageId,
 			requestMessageId: request.messageId,
+			requestTitle: request.title,
 			messageStatus: "not_sent",
 			reason: admission,
 		};
@@ -1145,12 +1157,14 @@ export class MessageCoordinator {
 				? {
 					disposition: "answer_already_delivered",
 					requestMessageId: request.messageId,
+					requestTitle: request.title,
 					answerId: answer.messageId,
 					deliveryEvidence: answerDelivery.deliveryEvidence,
 				}
 				: {
 					disposition: "answer_delivered",
 					requestMessageId: request.messageId,
+					requestTitle: request.title,
 					answerId: answer.messageId,
 					fromAgentId: answer.fromAgentId,
 					answer: answer.answer,

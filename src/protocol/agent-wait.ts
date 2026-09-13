@@ -16,6 +16,7 @@ export type AgentWaitInput = Readonly<{ requestMessageIds?: string[] }>;
 export type AgentWaitProgress = Readonly<{
 	waitingFor: readonly Readonly<{
 		requestMessageId: string;
+		requestTitle: string;
 		responderAgentId: string;
 	}>[];
 }>;
@@ -24,6 +25,7 @@ export type AgentWaitAnswer =
 	| Readonly<{
 		disposition: "answer_delivered";
 		requestMessageId: string;
+		requestTitle: string;
 		answerId: string;
 		fromAgentId: string;
 		answer: string;
@@ -32,6 +34,7 @@ export type AgentWaitAnswer =
 	| Readonly<{
 		disposition: "answer_already_delivered";
 		requestMessageId: string;
+		requestTitle: string;
 		answerId: string;
 		deliveryEvidence: Readonly<{ agentId: string; entryId: string }>;
 	}>;
@@ -134,6 +137,10 @@ export function inspectCommittedAgentWaitResult(options: {
 	);
 	for (let index = 0; index < requestSources.length; index += 1) {
 		const source = requestSources[index]!;
+		if (result.answers[index]!.requestTitle !== callerRequestTitle({
+			agentId: options.agentId, transcript: options.transcript,
+			requestMessageId: result.answers[index]!.requestMessageId,
+		})) throw new ProtocolInvariantError("Agent Wait Answer title differs from its Request source");
 		if (
 			compareCommittedToolCallOrder(options.transcript, source, call.source) >= 0 ||
 			(index > 0 && compareCommittedToolCallOrder(
@@ -167,10 +174,11 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 			if (
 				!sameKeys(candidate, [
 					"answer", "answerId", "answerSource", "disposition",
-					"fromAgentId", "requestMessageId",
+					"fromAgentId", "requestMessageId", "requestTitle",
 				]) ||
 				!isToolCallPointer(candidate.answerSource) ||
 				typeof candidate.requestMessageId !== "string" ||
+				typeof candidate.requestTitle !== "string" || !candidate.requestTitle.trim() ||
 				typeof candidate.answerId !== "string" ||
 				typeof candidate.fromAgentId !== "string" ||
 				typeof candidate.answer !== "string" || candidate.answer.length === 0 ||
@@ -182,9 +190,10 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 		if (
 			candidate.disposition !== "answer_already_delivered" ||
 			!sameKeys(candidate, [
-				"answerId", "deliveryEvidence", "disposition", "requestMessageId",
+				"answerId", "deliveryEvidence", "disposition", "requestMessageId", "requestTitle",
 			]) ||
 			typeof candidate.requestMessageId !== "string" ||
+			typeof candidate.requestTitle !== "string" || !candidate.requestTitle.trim() ||
 			typeof candidate.answerId !== "string" || candidate.answerId.length === 0 ||
 			!isEntryPointer(candidate.deliveryEvidence)
 		) throw new ProtocolInvariantError("Agent Wait prior Answer Delivery is invalid");
@@ -197,6 +206,25 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 		new Set(requestIds).size !== requestIds.length
 	) throw new ProtocolInvariantError("Agent Wait result has invalid Request identities");
 	return { answers };
+}
+
+/** Receipt labels are bound to the author's immutable Request, including Creation Requests. */
+export function callerRequestTitle(options: {
+	agentId: string;
+	transcript: TranscriptInspection;
+	requestMessageId: string;
+}): string {
+	const source = findCallerRequestSource(options);
+	const calls = coordinationEntries(options.transcript, options.agentId, `call:${source.toolCallId}`)
+		.flatMap(entry => entry.type === "message" && entry.message.role === "assistant"
+			? entry.message.content.filter(part => part.type === "toolCall" && part.id === source.toolCallId)
+			: []);
+	const call = calls[0];
+	if (calls.length !== 1 || call?.type !== "toolCall" ||
+		typeof call.arguments.title !== "string" || !call.arguments.title.trim()) {
+		throw new ProtocolInvariantError("Answer receipt Request source has an invalid title");
+	}
+	return call.arguments.title;
 }
 
 export function validateAgentWaitInput(value: unknown): AgentWaitInput {

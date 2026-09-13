@@ -16,6 +16,7 @@ export type MessageSendInput = Readonly<{
 export type RequestSendInput = Readonly<{
 	operation: "request";
 	targetAgent: string;
+	title: string;
 	question: string;
 	deliveryMode?: MessageDeliveryMode;
 	contextPreparation?: ContextPreparation;
@@ -65,6 +66,7 @@ export function sameAgentMessageInput(
 		case "request":
 			return right.operation === "request" &&
 				left.targetAgent === right.targetAgent &&
+				left.title === right.title &&
 				left.question === right.question &&
 				(left.deliveryMode ?? "deferred") ===
 					(right.deliveryMode ?? "deferred") &&
@@ -144,6 +146,7 @@ function validateRequestSendInput(value: Record<string, unknown>): RequestSendIn
 		"operation",
 		"question",
 		"targetAgent",
+		"title",
 	].sort();
 	if (!sameStringList(keys, expectedKeys)) {
 		throw new Error("invalid_input: Agent Request input has an invalid shape");
@@ -153,6 +156,9 @@ function validateRequestSendInput(value: Record<string, unknown>): RequestSendIn
 	}
 	if (typeof value.question !== "string" || value.question.length === 0) {
 		throw new Error("invalid_input: Agent Request question must not be empty");
+	}
+	if (typeof value.title !== "string" || !value.title.trim()) {
+		throw new Error("invalid_input: Agent Request title must not be blank");
 	}
 	if (
 		value.deliveryMode !== undefined &&
@@ -167,6 +173,7 @@ function validateRequestSendInput(value: Record<string, unknown>): RequestSendIn
 	return {
 		operation: "request",
 		targetAgent: value.targetAgent,
+		title: value.title,
 		question: value.question,
 		...(value.deliveryMode === undefined
 			? {}

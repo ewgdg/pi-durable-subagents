@@ -7,6 +7,7 @@ import type { ToolCallPointer } from "./identities.ts";
 export type ObligationFrame = Readonly<{
 	requestId: string;
 	requesterAgentId: string;
+	title: string;
 	question: string;
 }>;
 
@@ -23,7 +24,7 @@ export function obligationStack(
 			if (entry.type === "custom" && entry.customType === OBLIGATION_FOCUS_CUSTOM_TYPE) {
 				const value = entry.data as { frames?: ObligationFrame[] } | undefined;
 				if (!Array.isArray(value?.frames) || value.frames.some(frame =>
-					typeof frame.requestId !== "string" || typeof frame.requesterAgentId !== "string" || typeof frame.question !== "string"
+					typeof frame.requestId !== "string" || typeof frame.requesterAgentId !== "string" || typeof frame.title !== "string" || !frame.title.trim() || typeof frame.question !== "string"
 				)) throw new Error("invariant_violation: invalid recovered obligation focus");
 				state.frames = [...value.frames];
 			}
@@ -35,7 +36,7 @@ export function obligationStack(
 				const { projection } = delivery;
 				if (projection.kind === "request") {
 					state.frames.push({ requestId: projection.requestMessageId,
-						requesterAgentId: projection.fromAgentId, question: projection.question });
+						requesterAgentId: projection.fromAgentId, title: projection.title, question: projection.question });
 				} else if (projection.kind === "request_cancellation") {
 					state.frames = state.frames.filter(frame => frame.requestId !== projection.requestMessageId);
 				}

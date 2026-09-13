@@ -7,6 +7,7 @@ import {
 
 
 export type AgentSpawnInput = Readonly<{
+	title: string;
 	request: string;
 	conversation?: "fork";
 	template?: string;
@@ -17,6 +18,7 @@ export type AgentSpawnInput = Readonly<{
 
 export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSpawnInput {
 	requireExactKeys(value, [
+		"title",
 		"request",
 		...(value.conversation === undefined ? [] : ["conversation"]),
 		...(value.template === undefined ? [] : ["template"]),
@@ -26,6 +28,9 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 	]);
 	if (typeof value.request !== "string" || value.request.length === 0) {
 		throw new Error("invalid_input: Agent Spawn request must not be empty");
+	}
+	if (typeof value.title !== "string" || !value.title.trim()) {
+		throw new Error("invalid_input: Creation Request title must not be blank");
 	}
 	const conversation = validateConversation(value.conversation);
 	const template = optionalString(value.template, "template");
@@ -41,6 +46,7 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 	const description = optionalString(value.description, "description");
 	const config = value.config === undefined ? undefined : validateConfiguration(value.config);
 	return {
+		title: value.title,
 		request: value.request,
 		...(conversation === undefined ? {} : { conversation }),
 		...(template === undefined ? {} : { template }),

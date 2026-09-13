@@ -310,19 +310,19 @@ const AgentMessageReceiptSchema = Type.Union([
 		reason: MessageUnknownReasonSchema,
 	}),
 	closed({
-		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema, requestTitle: NonEmptyStringSchema,
 		messageStatus: Type.Literal("sent"),
 	}),
 	closed({
-		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema, requestTitle: NonEmptyStringSchema,
 		messageStatus: Type.Literal("not_sent"), reason: MessageNotSentReasonSchema,
 	}),
 	closed({
-		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema, requestTitle: NonEmptyStringSchema,
 		messageStatus: Type.Literal("unknown"), reason: Type.Literal("confirmation_lost"),
 	}),
 	closed({
-		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema, requestTitle: NonEmptyStringSchema,
 		answerId: NonEmptyStringSchema, disposition: Type.Literal("already_answered"),
 	}),
 	closed({
@@ -346,12 +346,12 @@ const AgentMessageReceiptSchema = Type.Union([
 		reason: Type.Literal("inspection_incomplete"),
 	}),
 	closed({
-		disposition: Type.Literal("answer_delivered"), requestMessageId: NonEmptyStringSchema,
+		disposition: Type.Literal("answer_delivered"), requestMessageId: NonEmptyStringSchema, requestTitle: NonEmptyStringSchema,
 		answerId: NonEmptyStringSchema,
 		fromAgentId: NonEmptyStringSchema, answer: Type.String(), answerSource: ToolCallPointerSchema,
 	}),
 	closed({
-		disposition: Type.Literal("answer_already_delivered"), requestMessageId: NonEmptyStringSchema,
+		disposition: Type.Literal("answer_already_delivered"), requestMessageId: NonEmptyStringSchema, requestTitle: NonEmptyStringSchema,
 		answerId: NonEmptyStringSchema,
 		deliveryEvidence: EntryPointerSchema,
 	}),
@@ -382,6 +382,7 @@ const AgentWaitAnswerSchema = Type.Union([
 	closed({
 		disposition: Type.Literal("answer_delivered"),
 		requestMessageId: NonEmptyStringSchema,
+		requestTitle: NonEmptyStringSchema,
 		answerId: NonEmptyStringSchema,
 		fromAgentId: NonEmptyStringSchema,
 		answer: Type.String(),
@@ -390,6 +391,7 @@ const AgentWaitAnswerSchema = Type.Union([
 	closed({
 		disposition: Type.Literal("answer_already_delivered"),
 		requestMessageId: NonEmptyStringSchema,
+		requestTitle: NonEmptyStringSchema,
 		answerId: NonEmptyStringSchema,
 		deliveryEvidence: EntryPointerSchema,
 	}),
@@ -401,6 +403,7 @@ const AgentWaitResultSchema = Type.Union([
 const AgentWaitProgressSchema = Type.Unsafe<AgentWaitProgress>(closed({
 	waitingFor: Type.Array(closed({
 		requestMessageId: NonEmptyStringSchema,
+		requestTitle: NonEmptyStringSchema,
 		responderAgentId: NonEmptyStringSchema,
 	}), { minItems: 1 }),
 }));
@@ -460,6 +463,7 @@ const ProspectiveRequestSchema = closed({
 	kind: Type.Literal("request"),
 	requestMessageId: NonEmptyStringSchema,
 	fromAgentId: NonEmptyStringSchema,
+	title: NonEmptyStringSchema,
 	question: Type.String(),
 });
 const WorkingZonePreparationSchema = closed({
@@ -671,6 +675,7 @@ export const agentControlMethods = {
 			frames: Type.Array(closed({
 				requestId: NonEmptyStringSchema,
 				requesterAgentId: NonEmptyStringSchema,
+				title: NonEmptyStringSchema,
 				question: NonEmptyStringSchema,
 			})),
 		}),

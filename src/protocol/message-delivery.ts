@@ -38,12 +38,14 @@ export type ModelVisibleMessage =
 		kind: "request";
 		requestMessageId: string;
 		fromAgentId: string;
+		title: string;
 		question: string;
 	}>
 	| Readonly<{
 		kind: "answer";
 		answerId: string;
 		requestMessageId: string;
+		requestTitle: string;
 		fromAgentId: string;
 		answer: string;
 	}>
@@ -360,12 +362,13 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 	if (value.kind === "request") {
 		const request = requireExactRecord(
 			value,
-			["kind", "requestMessageId", "fromAgentId", "question"],
+			["kind", "requestMessageId", "fromAgentId", "title", "question"],
 			"Message Delivery projection",
 		);
 		if (
 			!isProtocolString(request.requestMessageId) ||
 			!isProtocolString(request.fromAgentId) ||
+			!isProtocolString(request.title) || !request.title.trim() ||
 			!isProtocolString(request.question)
 		) {
 			throw new ProtocolInvariantError("Message Delivery projection is invalid");
@@ -374,18 +377,20 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 			kind: "request",
 			requestMessageId: request.requestMessageId,
 			fromAgentId: request.fromAgentId,
+			title: request.title,
 			question: request.question,
 		};
 	}
 	if (value.kind === "answer") {
 		const answer = requireExactRecord(
 			value,
-			["kind", "answerId", "requestMessageId", "fromAgentId", "answer"],
+			["kind", "answerId", "requestMessageId", "requestTitle", "fromAgentId", "answer"],
 			"Message Delivery projection",
 		);
 		if (
 			!isProtocolString(answer.answerId) ||
 			!isProtocolString(answer.requestMessageId) ||
+			!isProtocolString(answer.requestTitle) || !answer.requestTitle.trim() ||
 			!isProtocolString(answer.fromAgentId) ||
 			!isProtocolString(answer.answer)
 		) {
@@ -395,6 +400,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 			kind: "answer",
 			answerId: answer.answerId,
 			requestMessageId: answer.requestMessageId,
+			requestTitle: answer.requestTitle,
 			fromAgentId: answer.fromAgentId,
 			answer: answer.answer,
 		};
