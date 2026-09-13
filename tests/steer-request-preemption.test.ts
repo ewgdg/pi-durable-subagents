@@ -85,3 +85,68 @@ test("a Steer Request preempting Agent Wait commits one Delivery across turn_end
 	assert.deepEqual(waitResult.message.details, { disposition: "preempted" });
 	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
 });
+
+test("a Steer Request wakes Owner Wait with the queued ordinary Steer context in one native delivery", {
+	timeout: 5_000,
+}, async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+	const ownerId = host.session.sessionId;
+	const note = "Batch context: the report has three sections.";
+	const question = "Which batch report format should I use?";
+	const decision = "Use the three-section format.";
+	const workerResult = "BATCH_WORKER_COMPLETED";
+	const parentResult = "BATCH_PARENT_COMPLETED";
+	let releaseWorker!: () => void;
+	const workerGate = new Promise<void>(resolve => { releaseWorker = resolve; });
+	t.after(releaseWorker);
+	const call = (name: string, args: Record<string, unknown>, id: string) =>
+		fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
+	const route = async (context: Context) => {
+		const text = JSON.stringify(context.messages);
+		if (text.includes("START_OWNER_BATCH")) {
+			if (text.includes(parentResult)) return fauxAssistantMessage("Done.");
+			if (text.includes(question)) {
+				const delivery = context.messages.find(message => message.role === "user" && Array.isArray(message.content) &&
+					message.content.some(part => part.type === "text" && part.text.includes(question) && part.text.includes(note)));
+				assert.ok(delivery, "the model receives the Request and ordinary Message in one delivery");
+				return text.includes("answer-batch-decision") ? fauxAssistantMessage("Waiting for completion.") :
+					call("agent_message", { operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: decision }, "answer-batch-decision");
+			}
+			return text.includes("spawn-batch-parent") ? call("agent_wait", {}, "owner-batch-wait") :
+				call("agent_spawn", { title: "Coordinate report", request: "BATCH_PARENT_WORK" }, "spawn-batch-parent");
+		}
+		if (text.includes("BATCH_PARENT_WORK")) {
+			if (text.includes(workerResult)) return call("agent_message", {
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: parentResult,
+			}, "answer-batch-parent");
+			return text.includes("spawn-batch-worker") ? call("agent_wait", {}, "parent-batch-wait") :
+				call("agent_spawn", { title: "Prepare report", request: "BATCH_LEAF_WORK" }, "spawn-batch-worker");
+		}
+		await workerGate;
+		if (text.includes(decision)) return call("agent_message", {
+			operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: workerResult,
+		}, "answer-batch-worker");
+		if (text.includes("request-batch-decision")) return fauxAssistantMessage("Awaiting the report decision.");
+		return text.includes("send-batch-note") ? call("agent_message", {
+			operation: "request", targetAgent: ownerId, title: "Choose report format", question, deliveryMode: "steer",
+		}, "request-batch-decision") : call("agent_message", {
+			operation: "send", targetAgent: ownerId, content: note, deliveryMode: "steer",
+		}, "send-batch-note");
+	};
+	host.model.setResponses(Array.from({ length: 24 }, () => route));
+	const removeListener = host.session.subscribe(event => {
+		if (event.type === "tool_execution_start" && event.toolName === "agent_wait") releaseWorker();
+	});
+	t.after(removeListener);
+	await host.session.prompt("START_OWNER_BATCH");
+	await host.session.waitForIdle();
+	const entries = host.session.sessionManager.getEntries();
+	assert.ok(JSON.stringify(entries).includes(parentResult), "both child obligations complete after the batch");
+	const deliveries = entries.filter(entry => entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.message-delivery" && JSON.stringify(entry.content).includes(question));
+	assert.equal(deliveries.length, 1);
+	assert.ok(JSON.stringify(deliveries[0]).includes(note));
+	assert.equal(entries.filter(entry => entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.message-delivery" && JSON.stringify(entry.content).includes(note)).length, 1);
+	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
+});

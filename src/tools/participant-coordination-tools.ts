@@ -215,7 +215,7 @@ const messageDeliveryModeParameters = Type.Union([
 	Type.Literal("steer"),
 	Type.Literal("background"),
 ], {
-	description: "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: enters at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.",
+	description: "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: delivers an admission-ordered batch at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. A Steer Request or Cancellation preempts agent_wait with the eligible Steer Request/Message batch; ordinary Messages alone do not preempt. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.",
 });
 const messageDeliveryModeReference = Type.Optional(
 	Type.Unsafe<MessageDeliveryMode>(Type.Ref("#/$defs/deliveryMode")),

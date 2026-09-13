@@ -121,13 +121,11 @@ type BlockedDelivery = Readonly<{
 	reason: DeliveryBlockageReason;
 }>;
 
-type ActiveDeferredDelivery = {
-	delivery: ScheduledDelivery;
+type ActivePromptDelivery = {
+	deliveries: readonly ScheduledDelivery[];
 	completion: Promise<void>;
-	deliveryCommitted: boolean;
+	committedMessageIds: Set<string>;
 };
-
-type ActiveWaitPreemption = ActiveDeferredDelivery;
 
 type FrozenSteerBatch = {
 	deliveries: readonly ScheduledMessageDelivery[];
@@ -152,8 +150,8 @@ export class MessageDeliveryScheduler {
 	readonly #isWaitingForCapacity: (agentId: string) => boolean;
 	readonly #pendingByAgent = new Map<string, Map<string, ScheduledDelivery>>();
 	readonly #activeModeratorReminderByAgent = new Map<string, { settled: boolean }>();
-	readonly #activeDeferredByAgent = new Map<string, ActiveDeferredDelivery>();
-	readonly #activeWaitPreemptionByAgent = new Map<string, ActiveWaitPreemption>();
+	readonly #activeDeferredByAgent = new Map<string, ActivePromptDelivery>();
+	readonly #activeWaitPreemptionByAgent = new Map<string, ActivePromptDelivery>();
 	readonly #frozenSteerByAgent = new Map<string, FrozenSteerBatch>();
 	readonly #reservedResumeByAgent = new Map<string, ReservedResume>();
 	readonly #activeResumeByAgent = new Map<string, ActiveResume>();
@@ -524,10 +522,8 @@ export class MessageDeliveryScheduler {
 	}
 
 	hasDispatchReservation(recipientAgentId: string, messageId: string): boolean {
-		return this.#activeDeferredByAgent.get(recipientAgentId)?.delivery.messageId ===
-			messageId ||
-			this.#activeWaitPreemptionByAgent.get(recipientAgentId)?.delivery.messageId ===
-				messageId ||
+		return this.#activeDeferredByAgent.get(recipientAgentId)?.deliveries.some(delivery => delivery.messageId === messageId) === true ||
+			this.#activeWaitPreemptionByAgent.get(recipientAgentId)?.deliveries.some(delivery => delivery.messageId === messageId) === true ||
 			this.#frozenSteerByAgent.get(recipientAgentId)?.deliveries.some(
 				(delivery) => delivery.messageId === messageId,
 			) === true ||
@@ -659,13 +655,14 @@ export class MessageDeliveryScheduler {
 				failed = true;
 			}
 			if (!record.host.isCurrent(handle)) return;
-			const proof = active.delivery.inspectProof();
 			activeByAgent.delete(record.identity.agentId);
-			this.#pendingByAgent
-				.get(record.identity.agentId)
-				?.delete(active.delivery.messageId);
-			if (proof && !active.deliveryCommitted) active.delivery.afterCommit?.();
-			if (failed || !proof) {
+			for (const delivery of active.deliveries) {
+				const proof = delivery.inspectProof();
+				this.#pendingByAgent.get(record.identity.agentId)?.delete(delivery.messageId);
+				if (proof && !active.committedMessageIds.has(delivery.messageId)) delivery.afterCommit?.();
+				if (!proof) failed = true;
+			}
+			if (failed) {
 				this.discardInLane(record);
 				await record.host.discardAndEndInLane("failure");
 				return;
@@ -752,12 +749,11 @@ export class MessageDeliveryScheduler {
 		if ("attention" in run && run.attention === "agent_wait") {
 			if (incomingRequest && this.#preemptAgentWait) {
 				void this.#preemptAgentWait(record, () =>
-					this.#reservePreemptingRequestInLane(record, incomingRequest)
+					this.#reserveWaitPreemptionInLane(record, incomingRequest)
 				);
 			}
-			// Requests and Cancellation can acquire a parked Wait. Ordinary
-			// Deferred and Steer Messages remain queued regardless of host work-state
-			// projection; Steer Message preemption is a separate protocol decision.
+			// Requests and Cancellation trigger Wait preemption. Ordinary Steer
+			// Messages can join a triggered batch, but cannot acquire Wait alone.
 			return;
 		}
 		if (
@@ -810,9 +806,9 @@ export class MessageDeliveryScheduler {
 				: createRuntimeMessageDelivery([delivery], deliverAs),
 		);
 		this.#activeDeferredByAgent.set(record.identity.agentId, {
-			delivery,
+			deliveries: [delivery],
 			completion,
-			deliveryCommitted: false,
+			committedMessageIds: new Set(),
 		});
 	}
 
@@ -910,16 +906,15 @@ export class MessageDeliveryScheduler {
 			],
 		] as const) {
 			if (!active) continue;
-			const proof = active.delivery.inspectProof();
-			if (!proof) return false;
+			if (!active.deliveries.every(delivery => delivery.inspectProof())) return false;
 			// An idle Deferred dispatch owns the whole Pi prompt Promise. Its custom
 			// message proof commits before the model response, but the Promise cannot
 			// resolve until native settlement, which this listener is delaying.
 			activeByAgent.delete(record.identity.agentId);
-			this.#pendingByAgent
-				.get(record.identity.agentId)
-				?.delete(active.delivery.messageId);
-			if (!active.deliveryCommitted) active.delivery.afterCommit?.();
+			for (const delivery of active.deliveries) {
+				this.#pendingByAgent.get(record.identity.agentId)?.delete(delivery.messageId);
+				if (!active.committedMessageIds.has(delivery.messageId)) delivery.afterCommit?.();
+			}
 		}
 		return true;
 	}
@@ -930,34 +925,46 @@ export class MessageDeliveryScheduler {
 			(parked !== undefined && record.host.isCurrent(parked));
 	}
 
-	#reservePreemptingRequestInLane(
+	#reserveWaitPreemptionInLane(
 		record: AgentRecord,
-		delivery: ScheduledDelivery,
+		trigger: ScheduledDelivery,
 	): boolean {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (
 			!pending ||
-			pending.get(delivery.messageId) !== delivery ||
-			!this.#eligibleDeliveries(pending).includes(delivery) ||
+			pending.get(trigger.messageId) !== trigger ||
+			!this.#eligibleDeliveries(pending).includes(trigger) ||
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId)
 		) return false;
 		// Native steering is one-at-a-time: earlier input can start Agent Wait
 		// while this Request is still queued. Its reservation already owns Delivery.
-		if (this.hasDispatchReservation(record.identity.agentId, delivery.messageId)) return true;
-		const { completion } = this.#dispatchInLane(record, [delivery],
-			"customMessage" in delivery
+		if (this.hasDispatchReservation(record.identity.agentId, trigger.messageId)) return true;
+		const steer = trigger.deliveryMode === "steer"
+			? this.#eligibleSteerDeliveries(record, this.#eligibleDeliveries(pending))
+				// Preemption leaves partial Answers available for a fresh aggregate;
+				// joining the batch would create requester-side Answer Delivery proof.
+				.filter(delivery => delivery.deliveryItem.projection.kind !== "answer")
+			: undefined;
+		const deliveries = steer ?? [trigger];
+		// Cancellation suppression may remove a Request selected before this
+		// reservation. Only a remaining Request/Cancellation can acquire Wait.
+		if (!deliveries.some(delivery => delivery.isIncomingRequest || delivery.preemptsAgentWait)) return false;
+		// Freeze once after Wait's complete-Answer check. One native queue item
+		// carries the whole batch, so later arrivals cannot join this preemption.
+		const { completion } = this.#dispatchInLane(record, deliveries,
+			"customMessage" in trigger
 				? {
 					kind: "custom",
-					message: delivery.customMessage,
+					message: trigger.customMessage,
 					triggerTurn: true,
 					deliverAs: "steer",
 				}
-				: createRuntimeMessageDelivery([delivery], "steer"),
+				: createRuntimeMessageDelivery(steer ?? [trigger], "steer"),
 		);
 		this.#activeWaitPreemptionByAgent.set(record.identity.agentId, {
-			delivery,
+			deliveries,
 			completion,
-			deliveryCommitted: false,
+			committedMessageIds: new Set(),
 		});
 		return true;
 	}
@@ -1072,20 +1079,20 @@ export class MessageDeliveryScheduler {
 		);
 		for (const [messageId, delivery] of pending) {
 			const proof = delivery.inspectProof();
-			const activeDelivery = active?.delivery.messageId === messageId;
-			const preemptingDelivery = preemption?.delivery.messageId === messageId;
+			const activeDelivery = active?.deliveries.some(delivery => delivery.messageId === messageId);
+			const preemptingDelivery = preemption?.deliveries.some(delivery => delivery.messageId === messageId);
 			const suppressed =
 				!proof && !activeDelivery && !preemptingDelivery && delivery.isSuppressed?.();
 			if (!proof && !suppressed) continue;
 			pending.delete(messageId);
-			if (activeDelivery) active.deliveryCommitted = true;
-			if (preemptingDelivery) {
-				preemption.deliveryCommitted = true;
-				// The resumed parent may park before the original prompt Promise settles.
-				// Delivery proof releases this reservation so another eligible frame can preempt.
-				this.#activeWaitPreemptionByAgent.delete(record.identity.agentId);
-			}
+			if (active && activeDelivery) active.committedMessageIds.add(messageId);
+			if (preemption && preemptingDelivery) preemption.committedMessageIds.add(messageId);
 			if (proof) delivery.afterCommit?.();
+		}
+		// A resumed Agent may re-Wait before its original prompt settles. Release
+		// the reservation only once every member of this batch has Delivery proof.
+		if (preemption && preemption.deliveries.every(delivery => preemption.committedMessageIds.has(delivery.messageId))) {
+			this.#activeWaitPreemptionByAgent.delete(record.identity.agentId);
 		}
 		if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
 		const frozen = this.#frozenSteerByAgent.get(record.identity.agentId);
