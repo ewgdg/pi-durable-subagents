@@ -15,7 +15,7 @@ import type { AgentStatus } from "../coordination/agent-record.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
 import type { AgentLabelResolver } from "../presentation/agent-identity.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
-import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
+import type { AgentMessageInput, MessageDeliveryMode } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import type {
@@ -61,7 +61,7 @@ For send and request, targetAgent accepts an exact Agent label, full Agent ID, o
 
 When agent_message returns messageStatus "sent", the Message was admitted for asynchronous Delivery and may still be queued; it does not mean delivered. An initial request returning "not_sent" creates no Request or dependency: correct the problem and author a new Request rather than retrying its correlation ID. "unknown" preserves uncertain admission; inspect the same identity. Later retry failures do not withdraw an admitted Request.
 
-A delivered Agent Request, including a Creation Request, creates one Answer obligation. Every Request requires a short, specific title identifying the work; its full body remains authoritative. Request ordering controls attention, not execution order: choose which delivered unresolved Request to work on or answer. Deferred Requests enter one at a time in admission order when the recipient waits or settles, regardless of Request ancestry. Steer retains priority at safe boundaries. Background Messages and Requests wait for settlement, no Answers owed, and no eligible higher-priority delivery; they never preempt agent_wait. Background is FIFO and may starve.
+A delivered Agent Request, including a Creation Request, creates one Answer obligation. Every Request requires a short, specific title identifying the work; its full body remains authoritative. Request ordering controls attention, not execution order: choose which delivered unresolved Request to work on or answer.
 
 While any Answer obligation remains, agent_message operation "send" to its requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
 
@@ -210,6 +210,17 @@ const requestTitleParameters = Type.String({
 	description: "Short, specific title identifying the Request. The full Request body remains authoritative.",
 });
 
+const messageDeliveryModeParameters = Type.Union([
+	Type.Literal("deferred"),
+	Type.Literal("steer"),
+	Type.Literal("background"),
+], {
+	description: "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: enters at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.",
+});
+const messageDeliveryModeReference = Type.Optional(
+	Type.Unsafe<MessageDeliveryMode>(Type.Ref("#/$defs/deliveryMode")),
+);
+
 const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
@@ -219,13 +230,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 				description: "Exact Agent label, full Agent ID, or unique Agent ID suffix",
 			}),
 			content: Type.String({ minLength: 1 }),
-			deliveryMode: Type.Optional(
-				Type.Union([
-					Type.Literal("deferred"),
-					Type.Literal("steer"),
-					Type.Literal("background"),
-				]),
-			),
+			deliveryMode: messageDeliveryModeReference,
 		},
 		{ additionalProperties: false },
 	),
@@ -238,13 +243,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 				description: "Exact Agent label, full Agent ID, or unique Agent ID suffix",
 			}),
 			question: Type.String({ minLength: 1 }),
-			deliveryMode: Type.Optional(
-				Type.Union([
-					Type.Literal("deferred"),
-					Type.Literal("steer"),
-					Type.Literal("background"),
-				]),
-			),
+			deliveryMode: messageDeliveryModeReference,
 			contextPreparation: Type.Optional(contextPreparationParameters),
 		},
 		{ additionalProperties: false },
@@ -279,7 +278,12 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 		},
 		{ additionalProperties: false },
 	),
-]));
+], {
+	// The tool is also nested inside control requests. Its own resource ID keeps
+	// local definition references scoped to this schema rather than the envelope.
+	$id: "urn:pi-durable-subagents:agent-message-parameters",
+	$defs: { deliveryMode: messageDeliveryModeParameters },
+}));
 
 const agentWaitParameters = Type.Object({
 	requestMessageIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {

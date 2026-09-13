@@ -24,13 +24,6 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 			}>;
 		}>;
 	};
-	const sendSchema = parameters.anyOf?.find(
-		(candidate) => candidate.properties?.operation?.const === "send",
-	);
-	assert.deepEqual(
-		sendSchema?.properties?.deliveryMode?.anyOf?.map(({ const: value }) => value),
-		["deferred", "steer", "background"],
-	);
 	assert.deepEqual(
 		parameters.anyOf?.map((candidate) => candidate.properties?.operation?.const),
 		["send", "request", "answer", "cancel", "poll", "retry"],

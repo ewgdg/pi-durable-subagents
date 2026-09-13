@@ -11,6 +11,8 @@ Omitting `deliveryMode` selects Deferred; modes are never inherited from the Req
 
 Background is for optional follow-ups and independent work. Use Deferred for clarifications or prerequisites needed to complete existing obligations: a Background prerequisite can deadlock its requester. Background has no ancestry exemptions, and may be postponed indefinitely by higher-priority work. Messages and Requests share one Background FIFO; delivering a Background Request creates its normal Answer obligation before another Background item can enter. Passive Owner settlement parking counts as settlement, not Agent Wait. Delivery mode controls admission, not the Agent's execution or Answer order.
 
+The tool schema defines `deliveryMode` and its delivery rules once under `$defs`; both `send` and `request` reference it. Calls remain flat, and other operations do not accept that field. The schema has its own `$id` so local references retain their scope when embedded in control-transport requests. Delivery rules belong in the parameter description; cross-operation Answer obligations remain in tool guidance.
+
 ## Short Message references
 
 `poll.messageId`, `retry.messageId`, and `cancel.requestMessageId` accept a full canonical ID or a unique case-sensitive suffix. Whitespace around the reference is ignored. Matching considers the caller's earlier authored Message sources, including Spawn Creation Requests; exact IDs take precedence. Ambiguity is rejected, so use a longer suffix or the full ID. Normal authorship, Message-kind, and Delivery validation still applies.

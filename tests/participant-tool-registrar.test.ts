@@ -378,6 +378,16 @@ test("Template catalogue shows available Template configuration without Runtime 
 	assert.doesNotMatch(catalogue, /use `inherit`/);
 });
 
+test("Message guidance keeps obligations separate from deliveryMode parameter rules", async (t) => {
+	const host = await createRegistrarHost(t, "ordinary", handlers);
+	const message = host.session.getToolDefinition("agent_message");
+	assert.ok(message);
+	const guidance = message.promptGuidelines?.join("\n") ?? "";
+	assert.match(guidance, /creates one Answer obligation/);
+	assert.match(guidance, /attention, not execution order/);
+	assert.doesNotMatch(guidance, /FIFO|may starve|Background Messages and Requests|Deferred Requests enter/);
+});
+
 test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalogue", async (t) => {
 	let observedSystemPrompt = "";
 	const templateSnapshot = {
