@@ -19,6 +19,20 @@ import {
 
 const identity = { protocolVersion: 7, workflowId: "workflow", agentId: "agent" } as const;
 
+test("Request observation schemas keep lists compact and inspection complete", () => {
+	const schema = agentControlMethods["coordination.observe"];
+	const summary = { requestMessageId: "request", requesterAgentId: "requester", title: "Verify storage" };
+	assert.ok(Check(schema.request, { operation: "obligations" }));
+	assert.equal(Check(schema.request, { operation: "obligations", agentId: "other" }), false);
+	assert.ok(Check(schema.request, { operation: "request", requestId: "request" }));
+	assert.equal(Check(schema.request, { operation: "request", requestId: "  " }), false);
+	assert.ok(Check(schema.response, { requests: [summary] }));
+	assert.equal(Check(schema.response, { requests: [{ ...summary, question: "Body must not appear in list" }] }), false);
+	assert.equal(Check(schema.response, { requests: [{ ...summary, title: "  " }] }), false);
+	assert.ok(Check(schema.response, { ...summary, responderAgentId: "responder", question: "Full instructions" }));
+	assert.equal(Check(schema.response, { ...summary, responderAgentId: "responder" }), false);
+});
+
 test("Control Endpoint and child bootstrap descriptors are closed and versioned", () => {
 	const endpoint = { transport: "unix", address: "/tmp/control.sock" } as const;
 	const namedPipeEndpoint = {

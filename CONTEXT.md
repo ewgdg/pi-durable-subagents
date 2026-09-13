@@ -107,20 +107,26 @@ The Owner-scoped configuration snapshot governing new host admissions, limits, o
 _Avoid_: Workflow state, Workflow configuration lifecycle
 
 **Agent Request**:
-A Request targeting a known Agent in the same Workflow, with one stable Request Message identity for Answer, Cancellation, retry, and retrieval. Definitive initial admission failure creates no Agent Request or outstanding dependency; uncertain admission preserves the Request, and later Delivery or retry failure never withdraws an admitted Request. Steer brings it to attention at the next safe boundary regardless of ancestry; Deferred preserves admission order among candidates allowed by cooperative foreground ancestry.
+A Request targeting a known Agent in the same Workflow, with a required immutable sender-authored title, full instructions, and one stable Request Message identity for Answer, Cancellation, retry, and retrieval. The title identifies the work for navigation, not identity or complete instructions. Definitive initial admission failure creates no Agent Request or outstanding dependency; uncertain admission preserves the Request, and later Delivery or retry failure never withdraws an admitted Request. Deferred brings queued Requests to attention one at a time in live admission order when the recipient waits or settles, irrespective of Request ancestry. Steer retains priority at safe boundaries.
 
 **Agent Observation Search**:
 A passive lookup over the caller's authorized verified Agent identities. It combines structural scope, stable Agent metadata, and an Agent's current Run phase to return a bounded set of Agent Statuses. It is a live, potentially non-atomic observation and never prepares a Runtime or searches transcript contents.
 _Avoid_: transcript search, evidence search
 
 **Request Attention**:
-The runtime's ordering of which Requests it brings forward, and when. Its foreground is the latest unresolved attention entry, not a mandatory next task; the Agent chooses execution and Answer order.
+The runtime's ordering and presentation of Requests brought forward for consideration. Attention does not choose the next task or replace other open obligations; the Agent chooses execution and Answer order.
 
 **Answer Obligation**:
 One responder duty created by Agent Request Delivery and ended by committing its correlated Agent Answer or receiving Request Cancellation. Any delivered unresolved obligation is actionable, independent of attention order.
 
+**Open Incoming Requests**:
+The caller's delivered Requests with remaining Answer Obligations. Their compact listing identifies each Request, requester, and title without repeating its full instructions. It is a view of existing obligations, not a separate task state or a prescribed work order.
+
+**Request Inspection**:
+A passive retrieval of the exact full Request and its identifying metadata for a Request the caller authored or received. It neither delivers pending work nor resolves an Answer Obligation, and remains useful after that obligation ends.
+
 **Agent Answer**:
-An immutable responder-authored Message explicitly targeting any delivered unresolved Request by Message ID or unique incoming suffix. It resolves only that obligation and is the responder's final output for that model/tool loop, not a choice of subsequent work.
+An immutable responder-authored Message explicitly targeting any delivered unresolved Request by Message ID or unique incoming suffix. Its receipts and presentation identify the originating Request by its canonical title while retaining identity-based correlation. It resolves only that obligation and is the responder's final output for that model/tool loop, not a choice of subsequent work.
 
 **Answer Retrieval**:
 Requester-initiated delivery of an already-committed Agent Answer through the model-visible result of retrying its Request or joining outstanding Request Answers. The result is the Answer's recipient-side delivery proof and transports the responder's immutable Answer without impersonating the responder or authoring another Message. Retrieval may win while direct Answer Delivery remains only scheduler-held; once direct Answer Delivery owns a frozen or dispatched scheduling reservation, retrieval waits for its proof rather than competing with it. Native tool-result commitment re-arbitrates a previously prepared retrieval against current direct Delivery reservation and proof.
@@ -130,7 +136,7 @@ An explicit join of all the caller Agent's outstanding outbound Requests, or a s
 _Avoid_: Answer cache, Request retry, durable Wait
 
 **Agent Wait Preemption**:
-The non-error completion of a parked Agent Wait when primary interactive human input, an eligible inbound Request, or delivered Request Cancellation needs attention before its complete Answer aggregate is ready. Steer Requests qualify regardless of ancestry; Deferred retains descendant eligibility, and Preemption leaves all Answers available for ordinary Delivery or a fresh Wait.
+The non-error completion of a parked Agent Wait when primary interactive human input, an eligible inbound Request, or delivered Request Cancellation needs attention before its complete Answer aggregate is ready. Deferred Requests qualify in live admission order irrespective of ancestry; Steer retains priority. Preemption leaves all Answers available for ordinary Delivery or a fresh Wait.
 _Avoid_: interruption, failure, Answer retrieval
 
 **Request Cancellation**:
@@ -187,7 +193,7 @@ The unexpected terminal end of one exact Agent Run after Pi's user-configured na
 A live closed component of settled Agent Runs whose unanswered Agent-owned outbound dependencies remain within the component, with no actionable input or external progress source. A committed Answer removes its dependency edge even while requester-side Answer Delivery remains outstanding for Wait. Ineligible queued Delivery and upstream dependants are not progress. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.
 
 **Obligation Reminder**:
-One runtime-authored, model-visible Deferred Delivery sent when a simple Obligation Stall first appears for an exact Request identity. It carries only that identity, a bounded normalized Request snippet, and direct Answer guidance. Durable transcript proof suppresses another reminder for the same obligation across later Runs and recurring Stall conditions. If the reminded Agent settles again without discharging the obligation, Moderator handling begins. Dependency Deadlock members use their normalized Deadlock handling instead of individual reminders.
+One runtime-authored, model-visible Deferred Delivery sent when a simple Obligation Stall first appears for an exact Request identity. It carries that identity, the canonical Request title, and direct Answer guidance. Durable transcript proof suppresses another reminder for the same obligation across later Runs and recurring Stall conditions. If the reminded Agent settles again without discharging the obligation, Moderator handling begins. Dependency Deadlock members use their normalized Deadlock handling instead of individual reminders.
 
 **Obligation Stall**:
 A settled Agent Run retained by an Answer Obligation it must discharge, with no active or admitted work, external progress source, or Interruption Hold. An unresolved outgoing Request to a dormant Agent is not an external progress source. The first simple occurrence schedules an Obligation Reminder; a later occurrence with durable reminder proof starts Moderator handling.

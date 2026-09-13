@@ -1,5 +1,6 @@
 import { REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
+import { summarizeRequestObligations } from "../protocol/request-inspection.ts";
 import { transcriptFromSessionManager } from "./session-manager-transcript.ts";
 import type {
 	ExtensionAPI,
@@ -140,14 +141,16 @@ export function registerParticipantLifecycle(
 }
 
 function requestPresentation(frames: readonly ObligationFrame[]) {
+	const summary = summarizeRequestObligations(frames);
 	return {
 		customType: REQUEST_ATTENTION_CUSTOM_TYPE,
 		display: true,
 		content: [
-			"Outstanding Requests. Choose which to work on or answer; attention order does not prescribe execution order.",
-			...frames.map(frame => `Request: ${frame.requestId}\nRequester: ${frame.requesterAgentId}\n${frame.question}`),
+			"Open incoming Requests. Choose which to work on or answer; attention order does not prescribe execution order.",
+			...summary.requests.map(request => `Request: ${request.requestMessageId}\nRequester: ${request.requesterAgentId}\nTitle: ${request.title}`),
+			"Use agent_observe operation \"request\" with requestId to inspect full instructions when they are no longer in context. A title is not the full Request.",
 		].join("\n\n"),
-		details: { requests: frames },
+		details: summary,
 	};
 }
 

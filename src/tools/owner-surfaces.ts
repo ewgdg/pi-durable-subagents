@@ -249,9 +249,12 @@ export function participantCoordinatorHandlers(
 		async observe(input: AgentObserveInput) {
 			const view = resolveView();
 			await view.refreshTranscriptFacts();
-			return input.operation === "status"
-				? view.status(input.agentId)
-				: view.search(input);
+			switch (input.operation) {
+				case "status": return view.status(input.agentId);
+				case "search": return view.search(input);
+				case "obligations": return view.openIncomingRequests();
+				case "request": return view.inspectRequest(input.requestId);
+			}
 		},
 		control: (toolCallId: string, input: Parameters<AgentCoordinatorView["control"]>[1]) =>
 			resolveView().control(toolCallId, input),

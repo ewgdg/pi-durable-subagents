@@ -1101,14 +1101,15 @@ export class MessageDeliveryScheduler {
 		// An admitted continuation owns the next recovery turn. Queued siblings
 		// must not overtake it while its recipient-relative receipt is finalized.
 		if (deliveries.some(delivery => delivery.isReady?.() === false)) return [];
-		// Steer admission order is independent of Deferred head-of-line eligibility.
-		// Deferred still admits only one causally eligible Request at a time.
+		// Steer keeps its priority. Deferred admits only its earliest pending
+		// Request at a cooperative boundary, without skipping to another branch.
 		const frontDeferredRequest = deliveries.find(
-			delivery => delivery.isIncomingRequest && delivery.deliveryMode !== "steer" && !delivery.isIncomingRequestBlocked?.(),
+			delivery => delivery.isIncomingRequest && delivery.deliveryMode !== "steer",
 		);
 		return deliveries.filter((delivery) =>
 			!delivery.isIncomingRequest ||
-			delivery.deliveryMode === "steer" || delivery === frontDeferredRequest
+			delivery.deliveryMode === "steer" ||
+			(delivery === frontDeferredRequest && !delivery.isIncomingRequestBlocked?.())
 		);
 	}
 

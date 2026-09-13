@@ -34,6 +34,7 @@ import type {
 	RequestCancellationReceipt,
 } from "./message-receipts.ts";
 import { RequestEvidence } from "./request-evidence.ts";
+import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import {
 	createMessageDeliveryItem,
 	inspectAnswerDelivery,
@@ -245,6 +246,14 @@ export class MessageCoordinator {
 	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
 
 	obligationFrames(agentId: string) { return this.#requestEvidence.obligationFrames(this.#requireAgent(agentId)); }
+
+	openIncomingRequests(agentId: string): OpenIncomingRequestList {
+		return this.#requestEvidence.openIncomingRequests(this.#requireAgent(agentId));
+	}
+
+	inspectRequest(agentId: string, requestId: string): RequestInspection {
+		return this.#requestEvidence.inspectRequest(this.#requireAgent(agentId), requestId);
+	}
 
 	foregroundRequestId(record: AgentRecord): string | undefined {
 		return this.#requestEvidence.obligationFrames(record).at(-1)?.requestId;

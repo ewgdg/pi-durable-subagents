@@ -17,6 +17,7 @@ import {
 	type AgentLabelResolver,
 } from "../presentation/agent-identity.ts";
 import { BodyPreview } from "../presentation/body-preview.ts";
+import { boundedToolPreview } from "./bounded-preview.ts";
 
 export function renderAgentMessageCall(
 	args: AgentMessageInput,
@@ -82,6 +83,10 @@ function renderMessageCallHeader(
 		"customMessageLabel",
 		theme.bold(`[${messageCallOperationLabel(args.operation)}]`),
 	);
+	// Tool-call arguments can still be streaming when Pi renders the header.
+	if (args.operation === "request" && typeof args.title === "string") {
+		text += theme.fg("customMessageLabel", ` ${boundedToolPreview(args.title)}`);
+	}
 	const targetAgentId = args.operation === "send" || args.operation === "request"
 		? args.targetAgent
 		: args.operation === "answer"
@@ -153,6 +158,9 @@ export function renderAgentMessageResult(
 		? receipt.messageStatus
 		: receipt.disposition;
 	let text = theme.fg(messageReceiptStatusColor(disposition), disposition);
+	if ("requestTitle" in receipt) {
+		text += theme.fg("customMessageLabel", ` · ${boundedToolPreview(receipt.requestTitle)}`);
+	}
 	if ("messageId" in receipt) {
 		text += theme.fg("dim", ` · ${formatMessageIdentity(receipt.messageId, options.expanded)}`);
 	} else if ("requestMessageId" in receipt) {

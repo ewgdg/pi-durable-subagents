@@ -17,6 +17,7 @@ import type { AgentLabelResolver } from "../presentation/agent-identity.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
+import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import type {
 	AgentWaitInput,
 	AgentWaitProgress,
@@ -60,7 +61,7 @@ For send and request, targetAgent accepts an exact Agent label, full Agent ID, o
 
 When agent_message returns messageStatus "sent", the Message was admitted for asynchronous Delivery and may still be queued; it does not mean delivered. An initial request returning "not_sent" creates no Request or dependency: correct the problem and author a new Request rather than retrying its correlation ID. "unknown" preserves uncertain admission; inspect the same identity. Later retry failures do not withdraw an admitted Request.
 
-A delivered Agent Request, including a Creation Request, creates one Answer obligation. Request ordering controls attention, not execution order: choose which delivered unresolved Request to work on or answer. A Steer Request brings new work to attention at the next safe boundary regardless of ancestry; Deferred Requests retain cooperative descendant ordering.
+A delivered Agent Request, including a Creation Request, creates one Answer obligation. Every Request requires a short, specific title identifying the work; its full body remains authoritative. Request ordering controls attention, not execution order: choose which delivered unresolved Request to work on or answer. Deferred Requests enter one at a time in admission order when the recipient waits or settles, regardless of Request ancestry. Steer retains priority at safe boundaries.
 
 While any Answer obligation remains, agent_message operation "send" to its requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
 
@@ -87,13 +88,15 @@ Primary interactive human input, a Request Cancellation, or an eligible inbound 
 </agent_wait>`;
 
 const AGENT_SPAWN_PROMPT_GUIDE = `<agent_spawn>
-A successful agent_spawn returns spawnStatus "created", confirming that the child exists. Its Creation Request follows the shared Agent Delegation rules.
+A successful agent_spawn returns spawnStatus "created", confirming that the child exists. Its Creation Request requires its own title, independent of the Agent label, and follows the shared Agent Delegation rules.
 
 For conversation forks, omit template and config to preserve the parent setup and maximize cache reuse potential; cache hits are not guaranteed.
 </agent_spawn>`;
 
 const AGENT_OBSERVE_PROMPT_GUIDE = `<agent_observe>
 To locate the transcript for the caller or an authorized Agent, use primaryEvidence.transcriptPath from an operation "status" result. A null path means the session is not file-backed.
+
+Operation "obligations" lists your delivered, still-open incoming Requests by ID, requester, and title. Operation "request" with requestId retrieves the exact full Request you authored or received, including closed Requests; full IDs or unique suffixes are accepted. A title is a navigation label, not complete instructions. Inspect the full Request before acting if its instructions are no longer in context. Observation neither delivers work nor resolves an obligation.
 </agent_observe>`;
 
 const AGENT_CONTROL_PROMPT_GUIDE = `<agent_control>
@@ -123,6 +126,8 @@ export type AgentObserveInput =
 		operation: "status";
 		agentId?: string;
 	}>
+	| Readonly<{ operation: "obligations" }>
+	| Readonly<{ operation: "request"; requestId: string }>
 	| AgentSearchInput;
 
 export type AgentSearchResult = Readonly<{
@@ -130,7 +135,7 @@ export type AgentSearchResult = Readonly<{
 	hasMore: boolean;
 }>;
 
-export type AgentObserveResult = AgentStatus | AgentSearchResult;
+export type AgentObserveResult = AgentStatus | AgentSearchResult | OpenIncomingRequestList | RequestInspection;
 
 type CommonParticipantCoordinationToolHandlers = Readonly<{
 	message(
@@ -201,6 +206,12 @@ const contextPreparationParameters = Type.Object(
 	{ additionalProperties: false },
 );
 
+const requestTitleParameters = Type.String({
+	minLength: 1,
+	pattern: "\\S",
+	description: "Short, specific title identifying the Request. The full Request body remains authoritative.",
+});
+
 const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
@@ -222,6 +233,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("request"),
+			title: requestTitleParameters,
 			targetAgent: Type.String({
 				minLength: 1,
 				description: "Exact Agent label, full Agent ID, or unique Agent ID suffix",
@@ -325,6 +337,7 @@ const agentSpawnConfigurationParameters = Type.Object(
 
 const agentSpawnParameters = Type.Object(
 	{
+		title: requestTitleParameters,
 		request: Type.String({ minLength: 1 }),
 		conversation: Type.Optional(Type.Literal("fork", {
 			description: "Inherit the completed parent conversation independently of Runtime configuration.",
@@ -407,6 +420,17 @@ const agentSearchAuthorizedPhaseParameters = Type.Object(
 	{ additionalProperties: false },
 );
 const agentObserveParameters = objectRootUnion(Type.Union([
+	Type.Object(
+		{ operation: Type.Literal("obligations") },
+		{ additionalProperties: false, description: "List only the caller's delivered, open incoming Requests by ID, requester, and title." },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("request"),
+			requestId: Type.String({ minLength: 1, pattern: "\\S", description: "Full Request ID or unique suffix among Requests you authored or received. Returns the complete Request body." }),
+		},
+		{ additionalProperties: false },
+	),
 	Type.Object(
 		{
 			operation: Type.Literal("status"),
@@ -669,17 +693,18 @@ export function registerParticipantCoordinationTools<
 		name: "agent_observe",
 		label: "Observe Agent",
 		description: role === "moderator"
-			? "Passively observe any known Agent in this Workflow or search authorized Agent scopes."
-			: "Passively observe an authorized Agent or search its authorized Agent scope.",
+			? "Passively observe Workflow Agents, search authorized Agent scopes, or inspect your Request obligations."
+			: "Passively observe authorized Agents, search their metadata, or inspect your Request obligations.",
 		promptSnippet: role === "moderator"
-			? "Pull bounded status or search results for Workflow Agents relevant to diagnosis."
-			: "Observe exact status or search authorized Agents by metadata and Run phase.",
+			? "Pull Agent status/search results, list your open incoming Requests, or inspect a full Request."
+			: "Observe Agent status/search, list your open incoming Requests, or inspect a full Request.",
 		promptGuidelines: [AGENT_OBSERVE_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentObserveParameters,
 		renderCall: (args, theme) =>
 			renderAgentObserveCall(args, theme, resolveAgentLabel),
-		renderResult: renderAgentObserveResult,
+		renderResult: (result, options, theme, context) =>
+			renderAgentObserveResult(result, options, theme, context, resolveAgentLabel),
 		async execute(_toolCallId, parameters) {
 			return toolResult(await availableHandlers.observe(parameters));
 		},

@@ -4,6 +4,7 @@ Every ordinary Agent can create one fresh child per `agent_spawn` call:
 
 ```ts
 agent_spawn({
+  title: "Diagnose the failing integration",
   request: "Inspect the failing integration and report the smallest safe fix.",
   template: "integration-researcher",
   label: "Integration researcher",
@@ -21,10 +22,11 @@ agent_spawn({
 })
 ```
 
-`request` is required. `template`, `config`, `label`, and `description` are optional. Omit `conversation` for the default context-isolated child. Set `conversation: "fork"` to continue from the spawning conversation:
+`title` and `request` are required and nonblank. The immutable title identifies this Creation Request, independently of the child's label or description. `template`, `config`, `label`, and `description` are optional. Omit `conversation` for the default context-isolated child. Set `conversation: "fork"` to continue from the spawning conversation:
 
 ```ts
 agent_spawn({
+  title: "Explore an alternative design",
   request: "Explore an alternative from the completed conversation.",
   conversation: "fork",
   label: "Alternative",
@@ -102,7 +104,7 @@ A spawning Runtime loads project-scoped Templates from its own cwd; children sel
 
 The committed native `agent_spawn` tool call is the Creation Request source and retains the canonical explicit Spawn configuration. The child Identity append commits the child, its captured `creationPreset`, and Request together. For a Conversation Fork, the inherited prefix, child Identity, and model-visible handoff materialize atomically before the child becomes discoverable. After Identity commit, startup or scheduling failure never removes the child or Request.
 
-The child starts a fresh Pi CLI/TUI process and admits its fixed-Deferred Creation Request into the same serialized incoming-Request lane used by ordinary [Agent messaging](agent-messaging.md). Creation Request Delivery establishes an Answer obligation. Descendant Deferred Requests may enter at cooperative waiting boundaries; Steer Requests may take attention at safe boundaries regardless of ancestry. The child chooses which delivered unresolved Request to work on or answer. A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
+The child starts a fresh Pi CLI/TUI process and admits its fixed-Deferred Creation Request into the same serialized incoming-Request lane used by ordinary [Agent messaging](agent-messaging.md). Creation Request Delivery establishes an Answer obligation. Deferred Requests enter in live admission order at Agent Wait or settled-work boundaries, irrespective of ancestry; Steer Requests take priority at safe boundaries. The child chooses which delivered unresolved Request to work on or answer. A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
 
 Confirmed Delivery admission failure releases the new child Run to dormant while preserving the committed child and Creation Request. Once Delivery commits, the Run remains retained while the child owes the corresponding Answer.
 

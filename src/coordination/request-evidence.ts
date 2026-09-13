@@ -1,5 +1,6 @@
 import { resolveMessageReference } from "../protocol/message-reference.ts";
 import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
+import { summarizeRequestObligations, type OpenIncomingRequestList, type RequestInspection } from "../protocol/request-inspection.ts";
 import { indexedState, type RetainedTranscript } from "../transcript/retained-transcript.ts";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import {
@@ -279,14 +280,58 @@ export class RequestEvidence {
 		return obligationStack(agent.transcript.inspect(), agent.identity.agentId).filter(frame => owed.has(frame.requestId));
 	}
 
-	outstandingRequestIdsFor(agent: AgentRecord): readonly string[] {
-		return this.residualRelationshipsFor(agent).awaitingAnswerRequestIds;
+	openIncomingRequests(agent: AgentRecord): OpenIncomingRequestList {
+		return summarizeRequestObligations(this.obligationFrames(agent));
 	}
 
-	parentRequestId(requestId: string): string | undefined {
-		const request = this.requireRequest(requestId);
-		const author = this.#requireAgent(request.fromAgentId);
-		return obligationStack(author.transcript.inspect(), request.fromAgentId, request.source).at(-1)?.requestId;
+	inspectRequest(agent: AgentRecord, selector: string): RequestInspection {
+		const reference = selector.trim();
+		if (!reference) throw new Error("invalid_input: Request reference must not be blank");
+		const agentId = agent.identity.agentId;
+		const transcript = agent.transcript.inspect();
+		const incoming = new Set(inspectMessageDeliveries({ recipientAgentId: agentId, transcript })
+			.flatMap(({ projection }) => projection.kind === "request" ? [projection.requestMessageId] : []));
+		const candidates = new Set([...indexedState(transcript).requestChanges, ...incoming]);
+		// A committed child Identity can establish a Creation Request before the
+		// parent's native Spawn result exists in its transcript index.
+		for (const child of this.#agents.values()) {
+			if ("spawnSource" in child.identity && child.identity.spawnSource.agentId === agentId) {
+				candidates.add(deriveMessageIdentity(child.identity.spawnSource));
+			}
+		}
+		const matchingIds = candidates.has(reference) ? [reference]
+			: [...candidates].filter(id => id.endsWith(reference));
+		const visible = matchingIds.flatMap(requestId => {
+			const authored = this.#findBoundAuthoredRequest(agent, requestId);
+			if (!authored && !incoming.has(requestId)) return [];
+			const request = authored ?? this.#requireResponderRequest(agent, requestId);
+			const recipient = this.#agents.get(request.targetAgentId);
+			const deliveryEvidence = recipient ? this.#inspectRequestDelivery(request, recipient).deliveryEvidence : undefined;
+			const canonical = inspectCanonicalMessage({
+				message: request,
+				authorTranscript: this.#requireAgent(request.fromAgentId).transcript.inspect(),
+				deliveryEvidence,
+			});
+			if (canonical.state === "not_created") return [];
+			if (canonical.state === "indeterminate") {
+				throw new EvidenceUnavailableError(`Request ${requestId} has no canonical admission evidence`);
+			}
+			return [request];
+		});
+		if (visible.length > 1) throw new Error(`ambiguous_target: Request ID suffix ${reference}`);
+		const request = visible[0];
+		if (!request) throw new Error(`unknown_identity: Request ${reference}`);
+		return {
+			requestMessageId: request.messageId,
+			requesterAgentId: request.fromAgentId,
+			responderAgentId: request.targetAgentId,
+			title: request.title,
+			question: request.question,
+		};
+	}
+
+	outstandingRequestIdsFor(agent: AgentRecord): readonly string[] {
+		return this.residualRelationshipsFor(agent).awaitingAnswerRequestIds;
 	}
 
 	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
@@ -597,12 +642,14 @@ export class RequestEvidence {
 			? {
 				disposition: "answer_already_delivered",
 				requestMessageId: requestId,
+				requestTitle: message.title,
 				answerId: answer.messageId,
 				deliveryEvidence: delivery.deliveryEvidence,
 			}
 			: {
 				disposition: "answer_delivered",
 				requestMessageId: requestId,
+				requestTitle: message.title,
 				answerId: answer.messageId,
 				fromAgentId: answer.fromAgentId,
 				answer: answer.answer,
@@ -690,6 +737,7 @@ export class RequestEvidence {
 						source,
 						input,
 						requestId,
+						requestTitle: this.requireRequest(requestId).title,
 					}) === "canonical"
 				);
 			}
@@ -719,6 +767,7 @@ export class RequestEvidence {
 				transcript: recipient.transcript.inspect(),
 				requestId: request.messageId,
 				fromAgentId: request.fromAgentId,
+				title: request.title,
 				source: request.source,
 			})
 			: inspectMessageDelivery({

@@ -33,7 +33,7 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const agentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
-	const frame = { requestId: "current-request", requesterAgentId: "requester", question: "Finish this Request." };
+	const frame = { requestId: "current-request", requesterAgentId: "requester", title: "Finish current work", question: "Finish this Request." };
 	const pi = new CapturedExtensionApi();
 	pi.api.appendEntry = (customType, data) => { sessionManager.appendCustomEntry(customType, data); };
 	pi.api.sendMessage = (message) => {
@@ -171,10 +171,10 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 	]);
 });
 
-test("each execution presents all outstanding Requests without selecting the next task", async () => {
+test("each execution presents titled open Requests without repeating bodies or selecting the next task", async () => {
 	const frames = [
-		{ requestId: "request-a", requesterAgentId: "author-a", question: "Finish A" },
-		{ requestId: "request-b", requesterAgentId: "author-b", question: "Consider B" },
+		{ requestId: "request-a", requesterAgentId: "author-a", title: "Complete storage", question: "Finish A" },
+		{ requestId: "request-b", requesterAgentId: "author-b", title: "Review integration", question: "Consider B" },
 	];
 	const pi = new CapturedExtensionApi();
 	const context = createExtensionContext();
@@ -187,10 +187,13 @@ test("each execution presents all outstanding Requests without selecting the nex
 	assert.equal(pi.messages.length, 0, "context presentation does not queue another turn");
 	assert.equal(projected.messages.length, 1);
 	const presentation = projected.messages[0]!;
-	assert.deepEqual(presentation.details, { requests: frames });
+	assert.deepEqual(presentation.details, { requests: frames.map(({ requestId, requesterAgentId, title }) => ({
+		requestMessageId: requestId, requesterAgentId, title,
+	})) });
 	assert.match(presentation.content, /Choose/);
-	assert.match(presentation.content, /Finish A/);
-	assert.match(presentation.content, /Consider B/);
+	assert.match(presentation.content, /Complete storage/);
+	assert.match(presentation.content, /Review integration/);
+	assert.doesNotMatch(presentation.content, /Finish A|Consider B/);
 });
 
 for (const pending of [false, true]) test(`Answer offers one neutral continuation only when needed (pending input: ${pending})`, async () => {
@@ -198,7 +201,7 @@ for (const pending of [false, true]) test(`Answer offers one neutral continuatio
 	const context = createExtensionContext();
 	context.hasPendingMessages = () => pending;
 	context.sessionManager.appendCustomEntry("agent-coordination.obligation-focus", { frames: [
-		{ requestId: "request-a", requesterAgentId: "author-a", question: "Remaining A" },
+		{ requestId: "request-a", requesterAgentId: "author-a", title: "Complete remaining work", question: "Remaining A" },
 	] });
 	registerParticipantLifecycle(pi.api, lifecycleHandlers());
 	const answer = { ...toolResultMessage, toolName: "agent_message", details: {

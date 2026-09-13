@@ -31,7 +31,7 @@ Before every newly started Run proceeds, the host inspects complete physical cur
 - `awaiting_answer` is initialized for each canonical Request authored by the Agent that has neither a canonical requester Cancellation nor Answer Delivery.
 - `answer_owed` is initialized for each canonical Request delivered to the Agent that has neither a canonical Answer commit nor Cancellation Delivery.
 
-Creation Requests use the same predicates after verified child Identity makes them canonical. Durable Request Delivery, Answer, and Cancellation evidence reconstruct outstanding obligations, source-time attention ancestry, and Agent-owned outbound dependencies. Startup records a local focus reconciliation when requester-side Answer proof preceded the responder result, before new model authorship. Recovered relationships are exact Request-keyed Run Retention Reasons; they are not a durable or Workflow-global obligation store.
+Creation Requests use the same predicates after verified child Identity makes them canonical. Durable Request Delivery, Answer, and Cancellation evidence reconstruct outstanding obligations, attention ordering, and Agent-owned outbound dependencies. Startup records a local focus reconciliation when requester-side Answer proof preceded the responder result, before new model authorship. Recovered relationships are exact Request-keyed Run Retention Reasons; they are not a durable or Workflow-global obligation store.
 
 Quarantining a peer does not erase relationships that the verified Agent's own transcript proves. Those local Retention Reasons return, while an operation that needs the quarantined peer's source transcript fails with `evidence_unavailable`.
 
@@ -57,10 +57,10 @@ The tool renders the Owner's outbound Requests with their target, recovery statu
 
 Recovery takes a fixed snapshot of verified durable evidence, then admits work through the normal recipient lanes:
 
-- Undelivered Messages and Requests retain their original identities, authorship, recipients, payloads, Delivery modes, ancestry, and context preparation.
+- Undelivered Messages and Requests retain their original identities, authorship, recipients, payloads, Delivery modes, and context preparation. Request titles remain canonical; Deferred eligibility uses cooperative boundaries, not ancestry.
 - Successfully committed, undelivered supervisory resume Messages are included. If their process-local Hold reservation is gone, they recover as ordinary Steer direction and cannot clear a newer Hold. Live resume reservations coalesce without consuming ordinary capacity.
 - Committed undelivered Answers return to their original requesters, not to the Owner requesting recovery. Completed responder work is not restarted.
-- A dormant responder with delivered, unanswered Requests restores its transcript, outstanding obligations, attention ancestry, and Agent-owned dependencies before a successor Run receives runtime-generated continuation input. The original Request is not redelivered and still owns the work; recovery authors no replacement Request or ordinary Agent Message.
+- A dormant responder with delivered, unanswered Requests restores its transcript, outstanding obligations, attention ordering, and Agent-owned dependencies before a successor Run receives runtime-generated continuation input. The original Request is not redelivered and still owns the work; recovery authors no replacement Request or ordinary Agent Message.
 - The continuation explicitly says that the Owner requested continuation and instructs the Agent to inspect interrupted operations before repeating them. Coordination recovery cannot determine whether an interrupted command already produced side effects.
 - Runs already owning input or model activity remain running without duplicate continuation input. An empty successor started by a causally blocked sibling can receive the outstanding-obligations continuation in that same Run. Ordinary delivered Message history alone never justifies restarting a dormant Agent.
 

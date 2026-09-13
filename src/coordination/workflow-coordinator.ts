@@ -109,6 +109,7 @@ import type {
 	AgentSearchResult,
 } from "../tools/participant-coordination-tools.ts";
 import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
+import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import { createOwnerAgentPresentationHandlers } from "../process-runtime/remote-agent-selector.ts";
 import type {
 	DurableAgentView,
@@ -195,6 +196,8 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	answerTargetAgent(toolCallId: string): string | undefined;
 	children(agentId?: string): readonly AgentStatus[];
 	search(input: AgentSearchInput): AgentSearchResult;
+	openIncomingRequests(): OpenIncomingRequestList;
+	inspectRequest(requestId: string): RequestInspection;
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
 	wait(
 		toolCallId: string,
@@ -594,6 +597,8 @@ export class WorkflowCoordinator {
 			refreshTranscriptFacts: () => refreshAgentTranscripts(this.#agents.values()),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			search: (input) => this.#searchFor(agentId, input),
+			openIncomingRequests: () => this.#messages.openIncomingRequests(agentId),
+			inspectRequest: (requestId) => this.#messages.inspectRequest(agentId, requestId),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
 			wait: (toolCallId, input, signal, onProgress) => {
 				this.#assertAdmissionOpen();

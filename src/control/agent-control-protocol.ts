@@ -211,8 +211,19 @@ const AgentRosterStatusSchema = closed({
 	compacting: Type.Boolean(),
 	queuedInputCount: QueuedInputCountSchema,
 });
+const OpenIncomingRequestProperties = {
+	requestMessageId: NonEmptyStringSchema,
+	requesterAgentId: NonEmptyStringSchema,
+	title: Type.String({ minLength: 1, pattern: "\\S" }),
+} as const;
 const AgentObserveResultSchema = Type.Union([
 	AgentStatusSchema,
+	closed({ requests: Type.Array(closed(OpenIncomingRequestProperties)) }),
+	closed({
+		...OpenIncomingRequestProperties,
+		responderAgentId: NonEmptyStringSchema,
+		question: Type.String(),
+	}),
 	closed({
 		matches: Type.Array(AgentStatusSchema, { maxItems: 50 }),
 		hasMore: Type.Boolean(),

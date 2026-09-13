@@ -43,6 +43,7 @@ import { boundedToolPreview } from "./bounded-preview.ts";
 import { renderMessageProjection } from "./message-delivery-renderer.ts";
 import { messageReceiptStatusColor } from "./message-renderer.ts";
 import { formatMessageIdentity } from "../presentation/message-identity.ts";
+import type { OpenIncomingRequest } from "../protocol/request-inspection.ts";
 
 export function renderWorkflowResumeCall(_args: object, theme: Theme): Text {
 	return toolCall(theme, "resume", ["Workflow"]);
@@ -104,11 +105,9 @@ export function renderAgentWaitResult(
 		if (isAgentWaitProgress(result.details)) {
 			context.state.progress = result.details;
 			const count = result.details.waitingFor.length;
-			const identities = result.details.waitingFor.map(({ responderAgentId }) =>
-				theme.fg(
-					"accent",
-					formatAgentIdentity(responderAgentId, resolveAgentLabel),
-				)
+			const identities = result.details.waitingFor.map(({ responderAgentId, requestTitle }) =>
+				theme.fg("customMessageLabel", boundedToolPreview(requestTitle)) +
+					theme.fg("muted", ` · ${formatAgentIdentity(responderAgentId, resolveAgentLabel)}`)
 			);
 			return new Text([
 				theme.fg("warning", `waiting for ${count} Answer${count === 1 ? "" : "s"}…`),
@@ -144,6 +143,7 @@ export function renderAgentWaitResult(
 					kind: "answer",
 					answerId: answer.answerId,
 					requestMessageId: answer.requestMessageId,
+					requestTitle: answer.requestTitle,
 					fromAgentId: answer.fromAgentId,
 					answer: answer.answer,
 				},
@@ -162,7 +162,7 @@ export function renderAgentWaitResult(
 			)}`
 			: "";
 		container.addChild(new Text(
-			`${theme.fg("customMessageLabel", theme.bold("[Answer already delivered]"))}${
+			`${theme.fg("customMessageLabel", theme.bold("[Answer already delivered]"))} ${theme.fg("customMessageLabel", boundedToolPreview(answer.requestTitle))}${
 				theme.fg("muted", identity)
 			}`,
 			0,
@@ -192,6 +192,11 @@ export function renderAgentObserveCall(
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Text {
+	if (args.operation === "obligations") return toolCall(theme, "observe", [args.operation]);
+	if (args.operation === "request") {
+		return toolCall(theme, "observe", [args.operation,
+			typeof args.requestId === "string" ? formatMessageIdentity(args.requestId) : undefined]);
+	}
 	if (args.operation === "status") {
 		return toolCall(theme, "observe", [
 			args.operation,
@@ -221,9 +226,31 @@ export function renderAgentObserveResult(
 	options: ToolRenderResultOptions,
 	theme: Theme,
 	_context: Readonly<{ args: AgentObserveInput }>,
-): Text {
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
+): Component {
 	if (options.isPartial) return pending(theme, "inspecting");
 	const details = asRecord(result.details);
+	if (_context.args.operation === "obligations" && Array.isArray(details?.requests)) {
+		const requests = details.requests as readonly OpenIncomingRequest[];
+		return new Text([
+			theme.fg("success", `${requests.length} open incoming Request${requests.length === 1 ? "" : "s"}`),
+			...requests.map(request =>
+				`${theme.fg("customMessageLabel", boundedToolPreview(request.title))} · ${
+					formatAgentIdentity(request.requesterAgentId, resolveAgentLabel, options.expanded ? "full" : "compact")
+				} · ${formatMessageIdentity(request.requestMessageId, options.expanded)}`),
+		].join("\n"), 0, 0);
+	}
+	if (_context.args.operation === "request" && typeof details?.question === "string" &&
+		typeof details.title === "string" && typeof details.requestMessageId === "string" &&
+		typeof details.requesterAgentId === "string") {
+		const container = new Container();
+		container.addChild(renderMessageProjection({
+			kind: "request", requestMessageId: details.requestMessageId,
+			fromAgentId: details.requesterAgentId, title: details.title, question: details.question,
+		}, options, theme, resolveAgentLabel));
+		container.addChild(new Text(theme.fg("dim", formatMessageIdentity(details.requestMessageId, options.expanded)), 0, 0));
+		return container;
+	}
 	const matches = Array.isArray(details?.matches) ? details.matches : undefined;
 	if (matches) {
 		const hasMore = details?.hasMore === true;

@@ -19,6 +19,7 @@ import {
 	type AgentLabelResolver,
 } from "../presentation/agent-identity.ts";
 import { BodyPreview } from "../presentation/body-preview.ts";
+import { boundedToolPreview } from "./bounded-preview.ts";
 import {
 	MESSAGE_DELIVERY_CUSTOM_TYPE,
 	parseMessageDeliveryContent,
@@ -105,11 +106,14 @@ function renderHeader(
 	resolveAgentLabel: AgentLabelResolver,
 	identityDetail: AgentIdentityDetail,
 ): string {
+	const title = projection.kind === "request" ? projection.title
+		: projection.kind === "answer" ? projection.requestTitle : undefined;
 	return [
 		theme.fg(
 			"customMessageLabel",
 			theme.bold(`[${messageTypeLabel(projection.kind)}]`),
 		),
+		title === undefined ? "" : theme.fg("customMessageLabel", ` ${boundedToolPreview(title)}`),
 		theme.fg(
 			"muted",
 			` from ${formatAgentIdentity(

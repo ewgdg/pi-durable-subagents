@@ -48,6 +48,7 @@ const PROCESS_TEST_FILES = new Set([
 	"process-model-broker.test.ts",
 	"process-visible-owner-model.test.ts",
 	"pty-terminal-projection.test.ts",
+	"request-inspection-process.test.ts",
 	"run-supervision.test.ts",
 	"run-test-suite.test.ts",
 	"steer-request-preemption.test.ts",

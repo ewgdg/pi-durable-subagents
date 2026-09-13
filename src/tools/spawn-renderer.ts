@@ -29,7 +29,8 @@ export function renderAgentSpawnCall(
 	container.addChild(new Text(header, 0, 0));
 	container.addChild(new Spacer(1));
 	container.addChild(new Text(
-		theme.fg("customMessageLabel", theme.bold("[Request]")),
+		theme.fg("customMessageLabel", theme.bold("[Request]")) +
+			(typeof args.title === "string" ? theme.fg("customMessageLabel", ` ${boundedToolPreview(args.title)}`) : ""),
 		0,
 		0,
 	));
