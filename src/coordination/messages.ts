@@ -641,8 +641,8 @@ export class MessageCoordinator {
 				}).deliveryEvidence,
 			isSuppressed: () => this.#isCancellationDelivered(requestId, recipient),
 			isIncomingRequest: true,
-			isIncomingRequestBlocked: () =>
-				this.#deliveryScheduler.isRequestBlocked(recipient, "deferred"),
+			isDeliveryBlocked: () =>
+				this.#deliveryScheduler.isDeliveryBlocked(recipient, "deferred"),
 			afterCommit: () => {
 				const request = this.#requestEvidence.requireRequest(requestId);
 				if (
@@ -1308,8 +1308,9 @@ export class MessageCoordinator {
 			isIncomingRequest: message.kind === "request"
 				? true
 				: undefined,
-			isIncomingRequestBlocked: message.kind === "request"
-				? () => this.#deliveryScheduler.isRequestBlocked(recipient, message.deliveryMode)
+			isDeliveryBlocked: message.kind === "request" || message.deliveryMode === "background"
+				? () => this.#deliveryScheduler.isDeliveryBlocked(recipient, message.deliveryMode) ||
+					(message.deliveryMode === "background" && this.answerObligationRequestIds(recipient).length > 0)
 				: undefined,
 			suppressesAfterCommitMessageId: message.kind === "request_cancellation"
 				? message.requestId

@@ -4,7 +4,7 @@ import {
 	type ContextPreparation,
 } from "../policy/working-zone-preparation.ts";
 
-export type MessageDeliveryMode = "deferred" | "steer";
+export type MessageDeliveryMode = "deferred" | "steer" | "background";
 
 export type MessageSendInput = Readonly<{
 	operation: "send";
@@ -163,7 +163,8 @@ function validateRequestSendInput(value: Record<string, unknown>): RequestSendIn
 	if (
 		value.deliveryMode !== undefined &&
 		value.deliveryMode !== "deferred" &&
-		value.deliveryMode !== "steer"
+		value.deliveryMode !== "steer" &&
+		value.deliveryMode !== "background"
 	) {
 		throw new Error("invalid_input: Agent Request deliveryMode is unavailable");
 	}
@@ -223,7 +224,8 @@ function validateMessageSendInput(
 	if (
 		value.deliveryMode !== undefined &&
 		value.deliveryMode !== "deferred" &&
-		value.deliveryMode !== "steer"
+		value.deliveryMode !== "steer" &&
+		value.deliveryMode !== "background"
 	) {
 		throw new Error("invalid_input: Agent Message deliveryMode is unavailable");
 	}

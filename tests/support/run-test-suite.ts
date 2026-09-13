@@ -16,6 +16,7 @@ const PROCESS_TEST_TIMEOUT_MS = 120_000;
 // brokers. Keeping the boundary explicit prevents machine CPU count from turning
 // integration tests into a resource-contention lottery.
 const PROCESS_TEST_FILES = new Set([
+	"background-delivery-process.test.ts",
 	"causal-request-preemption.test.ts",
 	"child-runtime-settlement-continuation.test.ts",
 	"agent-request.test.ts",

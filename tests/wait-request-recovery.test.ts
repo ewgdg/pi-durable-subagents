@@ -493,6 +493,7 @@ for (const answerLatestFirst of [false, true]) test(`delivered Requests can be a
 	h.responder.settle();
 	await flush();
 	const second = await h.message(h.requester, "second", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Second", deliveryMode: "steer" });
+	h.responder.settle(); await flush();
 	assert.ok("requestMessageId" in first && "requestMessageId" in second);
 	await h.tick();
 	assert.deepEqual(h.deliveries(h.responder).map(d => d.projection.kind === "request" && d.projection.requestMessageId), [first.requestMessageId, second.requestMessageId]);
@@ -679,6 +680,100 @@ test("parked Wait preserves Steer Request order across preemption reservation an
 	assert.deepEqual(h.deliveries(h.requester).map(delivery =>
 		delivery.projection.kind === "request" && delivery.projection.requestMessageId), [foregroundId, ...ids, deferred.requestMessageId]);
 	assert.deepEqual(dispatchedIds(), [foregroundId, ...ids, deferred.requestMessageId], "later boundaries deliver Deferred work once after the Steer reservation and batch");
+});
+
+for (const resolution of ["answer", "cancel"] as const) test(`Background Messages and Requests wait for every obligation to ${resolution}`, { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const author = h.addRecipient("background-author");
+	const first = await h.message(h.requester, "first-duty", { operation: "request", targetAgent: "responder", title: "First duty", question: "Do this first" });
+	h.responder.settle(); await flush();
+	const second = await h.message(h.requester, "second-duty", { operation: "request", targetAgent: "responder", title: "Second duty", question: "Also do this" });
+	h.responder.settle(); await flush();
+	assert.ok("requestMessageId" in first && "requestMessageId" in second);
+	const note = await h.message(author, "background-note", { operation: "send", targetAgent: "responder", content: "Optional note", deliveryMode: "background" });
+	const work = await h.message(author, "background-work", { operation: "request", targetAgent: "responder", title: "Optional work", question: "Do this later", deliveryMode: "background" });
+	assert.ok("messageId" in note && "requestMessageId" in work);
+	assert.equal(h.deliveries(h.responder).length, 2);
+	for (const [index, requestId] of [first.requestMessageId, second.requestMessageId].entries()) {
+		if (resolution === "answer") await h.message(h.responder, `resolve-${index}`, { operation: "answer", requestId, answer: "Done" });
+		else await h.message(h.requester, `resolve-${index}`, { operation: "cancel", requestMessageId: requestId, reason: "Withdrawn" });
+		h.responder.settle();
+		await h.messages.refreshTranscriptFacts();
+		await flush();
+		const projections = h.deliveries(h.responder).map(item => item.projection);
+		if (index === 0) assert.ok(!projections.some(item => item.kind === "message" && item.messageId === note.messageId));
+	}
+	h.responder.settle(); await flush();
+	const background = h.deliveries(h.responder).map(item => item.projection).filter(item => item.kind === "message" || item.kind === "request" && item.requestMessageId === work.requestMessageId);
+	assert.deepEqual(background.map(item => item.kind), ["message", "request"]);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [work.requestMessageId]);
+	h.responder.settle(); await flush();
+	assert.equal(h.deliveries(h.responder).filter(item => item.projection.kind === "request" && item.projection.requestMessageId === work.requestMessageId).length, 1);
+});
+
+test("Background never preempts Agent Wait; higher modes bypass its FIFO queue", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const upstream = h.addRecipient("upstream");
+	const dependency = await h.message(h.requester, "dependency", { operation: "request", targetAgent: "responder", title: "Dependency", question: "Work" });
+	assert.ok("requestMessageId" in dependency);
+	const waiting = h.wait("parked-background", { requestMessageIds: [dependency.requestMessageId] });
+	let completed = false; void waiting.then(() => { completed = true; }, () => undefined);
+	await flush();
+	const low = await h.message(upstream, "low", { operation: "request", targetAgent: "requester", title: "Optional", question: "Later", deliveryMode: "background" });
+	await h.message(upstream, "low-note", { operation: "send", targetAgent: "requester", content: "Later note", deliveryMode: "background" });
+	assert.ok("requestMessageId" in low);
+	await h.tick();
+	assert.equal(completed, false);
+	assert.equal(h.deliveries(h.requester).length, 0);
+	const normal = await h.message(upstream, "normal", { operation: "request", targetAgent: "requester", title: "Clarification", question: "Answer now" });
+	assert.ok("requestMessageId" in normal);
+	assert.deepEqual(await waiting, { disposition: "preempted" });
+	h.commitWait("parked-background", { disposition: "preempted" });
+	await flush();
+	assert.deepEqual(h.deliveries(h.requester).map(item => item.projection.kind === "request" && item.projection.requestMessageId), [normal.requestMessageId]);
+	await h.message(h.requester, "normal-answer", { operation: "answer", requestId: normal.requestMessageId, answer: "Confirmed" });
+	h.requester.settle(); await h.messages.refreshTranscriptFacts(); await flush();
+	assert.ok(h.deliveries(h.requester).some(item => item.projection.kind === "request" && item.projection.requestMessageId === low.requestMessageId));
+	assert.ok(!h.deliveries(h.requester).some(item => item.projection.kind === "message"), "Background Request creates an obligation before the next Background Message");
+});
+
+test("Background yields to queued Steer and Deferred Messages and preserves FIFO across recovery", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	h.responder.blocked = true;
+	const ids: string[] = [];
+	for (const [index, deliveryMode] of ["background", "deferred", "background", "steer"].entries()) {
+		const receipt = await h.message(h.requester, `queued-${index}`, { operation: "send", targetAgent: "responder", content: `Note ${index}`, deliveryMode: deliveryMode as "background" | "deferred" | "steer" });
+		assert.ok("messageId" in receipt); ids.push(receipt.messageId);
+	}
+	await h.recover();
+	for (const messageId of ids) await h.message(h.requester, `retry-${messageId}`, { operation: "retry", messageId });
+	h.responder.blocked = false;
+	for (const _ of ids) { h.responder.settle(); await flush(); }
+	const delivered = h.deliveries(h.responder).map(item => item.projection.kind === "message" && item.projection.messageId);
+	assert.deepEqual(delivered, [ids[3], ids[1], ids[0], ids[2]]);
+	h.responder.settle(); await flush();
+	assert.equal(h.deliveries(h.responder).length, 4);
+});
+
+test("Background Request recovery retains obligation gating and queued cancellation suppresses delivery", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	const duty = await h.message(h.requester, "duty", { operation: "request", targetAgent: "responder", title: "Duty", question: "Finish first" });
+	assert.ok("requestMessageId" in duty);
+	h.responder.settle(); await flush();
+	const cancelled = await h.message(h.requester, "cancelled-background", { operation: "request", targetAgent: "responder", title: "Unneeded", question: "Optional", deliveryMode: "background" });
+	const kept = await h.message(h.requester, "kept-background", { operation: "request", targetAgent: "responder", title: "Later", question: "Optional retained", deliveryMode: "background" });
+	assert.ok("requestMessageId" in cancelled && "requestMessageId" in kept);
+	h.responder.stop();
+	await h.recover();
+	await h.message(h.requester, "renew-cancelled", { operation: "retry", messageId: cancelled.requestMessageId });
+	await h.message(h.requester, "renew-kept", { operation: "retry", messageId: kept.requestMessageId });
+	h.responder.settle(); await flush();
+	assert.equal(h.deliveries(h.responder).length, 1, "reconstruction retains the earlier Answer obligation");
+	await h.message(h.requester, "withdraw", { operation: "cancel", requestMessageId: cancelled.requestMessageId, reason: "Unneeded" });
+	await h.message(h.responder, "finish-duty", { operation: "answer", requestId: duty.requestMessageId, answer: "Done" });
+	h.responder.settle(); await h.messages.refreshTranscriptFacts(); await flush();
+	const requests = h.deliveries(h.responder).filter(item => item.projection.kind === "request").map(item => item.projection.kind === "request" && item.projection.requestMessageId);
+	assert.deepEqual(requests, [duty.requestMessageId, kept.requestMessageId]);
 });
 
 function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHooks?: MessageBoundaryHooks) {

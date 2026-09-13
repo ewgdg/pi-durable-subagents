@@ -99,9 +99,9 @@ function renderMessageCallHeader(
 		);
 		if (
 			(args.operation === "send" || args.operation === "request") &&
-			args.deliveryMode === "steer"
+			(args.deliveryMode === "steer" || args.deliveryMode === "background")
 		) {
-			text += theme.fg("warning", " · steer");
+			text += theme.fg(args.deliveryMode === "steer" ? "warning" : "dim", ` · ${args.deliveryMode}`);
 		}
 	} else if (args.operation === "cancel") {
 		text += theme.fg("dim", ` · ${formatMessageIdentity(args.requestMessageId, expanded)}`);

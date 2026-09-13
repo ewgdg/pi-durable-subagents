@@ -33,7 +33,7 @@ type ScheduledDeliveryBase = Readonly<{
 	afterCommit?(): void;
 	isIncomingRequest?: boolean;
 	preemptsAgentWait?: boolean;
-	isIncomingRequestBlocked?(): boolean;
+	isDeliveryBlocked?(): boolean;
 	suppressesAfterCommitMessageId?: string;
 }>;
 
@@ -191,9 +191,12 @@ export class MessageDeliveryScheduler {
 		this.#workflowPolicy = options.workflowPolicy;
 	}
 
-	isRequestBlocked(record: AgentRecord, deliveryMode: "deferred" | "steer"): boolean {
+	isDeliveryBlocked(record: AgentRecord, deliveryMode: MessageDeliveryMode): boolean {
 		if (deliveryMode === "steer") return false;
 		const run = record.host.observe();
+		if (deliveryMode === "background") {
+			return run.phase !== "live" || run.attention === "agent_wait" || !this.#isDeliveryBoundary(record);
+		}
 		// Passive Owner parking is a cooperative boundary even while Pi keeps
 		// its native prompt active; the scheduler owns that volatile reservation.
 		return run.phase !== "live" ||
@@ -228,10 +231,9 @@ export class MessageDeliveryScheduler {
 			if (run.phase === "live" && run.attention === "agent_wait" &&
 				!delivery.isIncomingRequest && !delivery.preemptsAgentWait) continue;
 			// Pending work only counts when its existing scheduling can advance;
-			// dormant recipients and blocked Request ancestry are not recovery.
+			// dormant recipients and ineligible deliveries are not recovery.
 			const pending = this.#pendingByAgent.get(record.identity.agentId);
-			if (pending && this.#eligibleDeliveries(pending).includes(delivery) &&
-				(!delivery.isIncomingRequest || !delivery.isIncomingRequestBlocked?.())) return true;
+			if (pending && this.#eligibleDeliveries(pending).includes(delivery)) return true;
 		}
 		return false;
 	}
@@ -250,7 +252,7 @@ export class MessageDeliveryScheduler {
 		// Unrelated recipient work cannot restore a lost scheduling continuation.
 		// Only renewed scheduling progress, proof or suppression clears that failure.
 		if (item.dispatched || item.failed) return false;
-		if (delivery.isIncomingRequest && delivery.isIncomingRequestBlocked?.()) return true;
+		if (delivery.isDeliveryBlocked?.()) return true;
 		const atDeliveryBoundary = this.#isDeliveryBoundary(record);
 		if (run.phase === "live" && run.work === "active" &&
 			run.attention === "none" && !atDeliveryBoundary) return true;
@@ -1098,19 +1100,23 @@ export class MessageDeliveryScheduler {
 		pending: ReadonlyMap<string, ScheduledDelivery>,
 	): ScheduledDelivery[] {
 		const deliveries = [...pending.values()];
-		// An admitted continuation owns the next recovery turn. Queued siblings
-		// must not overtake it while its recipient-relative receipt is finalized.
+		// An admitted recovery continuation owns the next turn until its
+		// recipient-relative receipt is ready; no queued input may overtake it.
 		if (deliveries.some(delivery => delivery.isReady?.() === false)) return [];
-		// Steer keeps its priority. Deferred admits only its earliest pending
-		// Request at a cooperative boundary, without skipping to another branch.
-		const frontDeferredRequest = deliveries.find(
-			delivery => delivery.isIncomingRequest && delivery.deliveryMode !== "steer",
+		const foreground = deliveries.filter(delivery => delivery.deliveryMode !== "background");
+		const frontDeferredRequest = foreground.find(
+			delivery => delivery.isIncomingRequest && delivery.deliveryMode === "deferred",
 		);
-		return deliveries.filter((delivery) =>
-			!delivery.isIncomingRequest ||
-			delivery.deliveryMode === "steer" ||
-			(delivery === frontDeferredRequest && !delivery.isIncomingRequestBlocked?.())
+		const eligible = foreground.filter(delivery =>
+			(!delivery.isIncomingRequest || delivery.deliveryMode === "steer" || delivery === frontDeferredRequest) &&
+			!delivery.isDeliveryBlocked?.()
 		);
+		if (eligible.length > 0) return eligible;
+		// One shared FIFO for Background Messages and Requests. Delivering a
+		// Request establishes its obligation before considering the next item.
+		const background = deliveries.find(delivery => delivery.deliveryMode === "background");
+		return background && !background.isDeliveryBlocked?.()
+			? [background] : [];
 	}
 
 	#eligibleSteerDeliveries(
