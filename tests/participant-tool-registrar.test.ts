@@ -235,6 +235,22 @@ test("Agent Observe schema describes omitted status identity as self-observation
 	);
 });
 
+test("Agent Observe request schema documents full inspection including closed Requests", () => {
+	const variants = (participantCoordinationToolSchemas.agent_observe as {
+		anyOf: Array<{
+			properties: Record<string, { const?: string; description?: string }>;
+		}>;
+	}).anyOf;
+	const request = variants.find(({ properties }) =>
+		properties.operation?.const === "request"
+	);
+	assert.ok(request);
+	assert.equal(
+		request.properties.requestId?.description,
+		"Full Request ID or unique suffix among Requests you authored or received, including closed Requests. Returns the complete Request body.",
+	);
+});
+
 test("Agent Observe schema composes authorized and direct-child search filters", () => {
 	const schema = participantCoordinationToolSchemas.agent_observe;
 	assert.equal(Value.Check(schema, { operation: "status" }), true);

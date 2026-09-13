@@ -156,6 +156,7 @@ test("startup presents recovered open obligations without binding subsequent dep
 	const presented = await handlers.get("context")!({ messages: [] }, { sessionManager: h.responder.manager });
 	assert.match(JSON.stringify(presented.messages), /Outstanding Requests/);
 	assert.doesNotMatch(JSON.stringify(presented.messages), /Choose which to work on or answer/);
+	assert.doesNotMatch(JSON.stringify(presented.messages), /Use agent_observe operation/);
 	assert.match(JSON.stringify(presented.messages), new RegExp(root));
 	const dependency = h.request(h.responder, h.requester);
 	assert.deepEqual(evidence.obligationFrames(h.responder.record).map(frame => frame.requestId), [root]);

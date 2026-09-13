@@ -148,7 +148,6 @@ function requestPresentation(frames: readonly ObligationFrame[]) {
 		content: [
 			"Outstanding Requests.",
 			...summary.requests.map(request => `Request: ${request.requestMessageId}\nRequester: ${request.requesterAgentId}\nTitle: ${request.title}`),
-			"Use agent_observe operation \"request\" with requestId to inspect full instructions when they are no longer in context. A title is not the full Request.",
 		].join("\n\n"),
 		details: summary,
 	};

@@ -427,7 +427,7 @@ const agentObserveParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("request"),
-			requestId: Type.String({ minLength: 1, pattern: "\\S", description: "Full Request ID or unique suffix among Requests you authored or received. Returns the complete Request body." }),
+			requestId: Type.String({ minLength: 1, pattern: "\\S", description: "Full Request ID or unique suffix among Requests you authored or received, including closed Requests. Returns the complete Request body." }),
 		},
 		{ additionalProperties: false },
 	),

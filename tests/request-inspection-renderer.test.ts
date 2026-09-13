@@ -14,7 +14,7 @@ test("obligation observation presents a compact titled list rather than hidden g
 	const result = renderAgentObserveResult({ content: [], details: { requests: [{
 		requestMessageId: "request-constants", requesterAgentId: "observation-agent", title: "Confirm storage constants",
 	}] } }, { expanded: false, isPartial: false }, theme, { args }).render(160).join("\n");
-	assert.match(result, /1 outstanding incoming Request/);
+	assert.match(result, /1 outstanding Request/);
 	assert.match(result, /Confirm storage constants/);
 	assert.match(result, /observation-agent/);
 	assert.match(renderAgentObserveCall(args, theme).render(160).join("\n"), /obligations/);
