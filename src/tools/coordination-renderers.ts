@@ -233,7 +233,7 @@ export function renderAgentObserveResult(
 	if (_context.args.operation === "obligations" && Array.isArray(details?.requests)) {
 		const requests = details.requests as readonly OpenIncomingRequest[];
 		return new Text([
-			theme.fg("success", `${requests.length} open incoming Request${requests.length === 1 ? "" : "s"}`),
+			theme.fg("success", `${requests.length} outstanding incoming Request${requests.length === 1 ? "" : "s"}`),
 			...requests.map(request =>
 				`${theme.fg("customMessageLabel", boundedToolPreview(request.title))} · ${
 					formatAgentIdentity(request.requesterAgentId, resolveAgentLabel, options.expanded ? "full" : "compact")

@@ -462,7 +462,7 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	assert.deepEqual(toolMetadata(ordinary, "agent_observe"), {
 		label: "Observe Agent",
 		description: "Passively observe authorized Agents, search their metadata, or inspect your Request obligations.",
-		promptSnippet: "Observe Agent status/search, list your open incoming Requests, or inspect a full Request.",
+		promptSnippet: "Observe Agent status/search and inspect Request obligations.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(moderator, "agent_observe"), {
@@ -470,7 +470,7 @@ test("participant registrar preserves role-specific tool presentation metadata",
 		description:
 			"Passively observe Workflow Agents, search authorized Agent scopes, or inspect your Request obligations.",
 		promptSnippet:
-			"Pull Agent status/search results, list your open incoming Requests, or inspect a full Request.",
+			"Pull Agent status/search results and inspect Request obligations.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_control"), {

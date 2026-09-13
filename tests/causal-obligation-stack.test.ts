@@ -154,7 +154,8 @@ test("startup presents recovered open obligations without binding subsequent dep
 	} as import("../src/pi-integration/participant-lifecycle.ts").ParticipantLifecycleHandlers);
 	await handlers.get("agent_start")!({}, { sessionManager: h.responder.manager });
 	const presented = await handlers.get("context")!({ messages: [] }, { sessionManager: h.responder.manager });
-	assert.match(JSON.stringify(presented.messages), /Open incoming Requests/);
+	assert.match(JSON.stringify(presented.messages), /Outstanding Requests/);
+	assert.doesNotMatch(JSON.stringify(presented.messages), /Choose which to work on or answer/);
 	assert.match(JSON.stringify(presented.messages), new RegExp(root));
 	const dependency = h.request(h.responder, h.requester);
 	assert.deepEqual(evidence.obligationFrames(h.responder.record).map(frame => frame.requestId), [root]);

@@ -151,7 +151,7 @@ When delivered unresolved obligations remain after a newly committed Answer, the
 
 Ordinary Messages to the requester of any unresolved obligation are rejected; use a reverse Request for a decision, or keep provisional findings local. Sending becomes available when no unresolved obligation owes that requester.
 
-## Inspect open incoming Requests
+## Inspect Outstanding Requests
 
 Use the read-only observation interface to recover what you owe:
 

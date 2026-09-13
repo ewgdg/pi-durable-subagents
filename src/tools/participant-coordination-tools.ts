@@ -96,7 +96,7 @@ For conversation forks, omit template and config to preserve the parent setup an
 const AGENT_OBSERVE_PROMPT_GUIDE = `<agent_observe>
 To locate the transcript for the caller or an authorized Agent, use primaryEvidence.transcriptPath from an operation "status" result. A null path means the session is not file-backed.
 
-Operation "obligations" lists your delivered, still-open incoming Requests by ID, requester, and title. Operation "request" with requestId retrieves the exact full Request you authored or received, including closed Requests; full IDs or unique suffixes are accepted. A title is a navigation label, not complete instructions. Inspect the full Request before acting if its instructions are no longer in context. Observation neither delivers work nor resolves an obligation.
+Titles are navigation labels, not complete instructions. Inspect the full Request before acting if its instructions are no longer in context. Observation neither delivers work nor resolves an obligation.
 </agent_observe>`;
 
 const AGENT_CONTROL_PROMPT_GUIDE = `<agent_control>
@@ -422,7 +422,7 @@ const agentSearchAuthorizedPhaseParameters = Type.Object(
 const agentObserveParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{ operation: Type.Literal("obligations") },
-		{ additionalProperties: false, description: "List only the caller's delivered, open incoming Requests by ID, requester, and title." },
+		{ additionalProperties: false, description: "List only the caller's delivered, outstanding incoming Requests by ID, requester, and title." },
 	),
 	Type.Object(
 		{
@@ -696,8 +696,8 @@ export function registerParticipantCoordinationTools<
 			? "Passively observe Workflow Agents, search authorized Agent scopes, or inspect your Request obligations."
 			: "Passively observe authorized Agents, search their metadata, or inspect your Request obligations.",
 		promptSnippet: role === "moderator"
-			? "Pull Agent status/search results, list your open incoming Requests, or inspect a full Request."
-			: "Observe Agent status/search, list your open incoming Requests, or inspect a full Request.",
+			? "Pull Agent status/search results and inspect Request obligations."
+			: "Observe Agent status/search and inspect Request obligations.",
 		promptGuidelines: [AGENT_OBSERVE_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentObserveParameters,

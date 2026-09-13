@@ -146,7 +146,7 @@ function requestPresentation(frames: readonly ObligationFrame[]) {
 		customType: REQUEST_ATTENTION_CUSTOM_TYPE,
 		display: true,
 		content: [
-			"Open incoming Requests. Choose which to work on or answer; attention order does not prescribe execution order.",
+			"Outstanding Requests.",
 			...summary.requests.map(request => `Request: ${request.requestMessageId}\nRequester: ${request.requesterAgentId}\nTitle: ${request.title}`),
 			"Use agent_observe operation \"request\" with requestId to inspect full instructions when they are no longer in context. A title is not the full Request.",
 		].join("\n\n"),

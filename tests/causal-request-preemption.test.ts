@@ -58,7 +58,7 @@ for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, 
 				operation: "answer", requestId: clarification.requestMessageId.slice(-12), answer: "USE_INTERFACE_A",
 			});
 			if (text.includes("answer-clarification")) {
-				assert.match(text, /Open incoming Requests/, "remaining obligations must be available on the subsequent continuation");
+				assert.match(text, /Outstanding Requests/, "remaining obligations must be available on the subsequent continuation");
 				resumed = true;
 			}
 			if (text.includes("CORE_COMPLETE") && (!extra || text.includes("EXTRA_COMPLETE"))) return call("answer-implementation", "agent_message", {
