@@ -420,7 +420,7 @@ const agentSearchAuthorizedPhaseParameters = Type.Object(
 const agentObserveParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{ operation: Type.Literal("obligations") },
-		{ additionalProperties: false, description: "List only the caller's delivered, outstanding incoming Requests by ID, requester, and title." },
+		{ additionalProperties: false, description: "List the caller's outstanding Requests by ID, requester, and title." },
 	),
 	Type.Object(
 		{

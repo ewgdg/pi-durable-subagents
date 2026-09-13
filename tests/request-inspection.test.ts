@@ -47,7 +47,7 @@ function history() {
 	return { author, recipient, other, evidence, call, deliver, request, answer };
 }
 
-test("outstanding incoming Requests list delivered unanswered obligations without repeating bodies", () => {
+test("outstanding Requests list delivered unanswered obligations without repeating bodies", () => {
 	const h = history();
 	const body = "Full instructions\n\nKeep the exact final constraint: 禁止改写。";
 	const open = h.request("Check storage constants", body);
