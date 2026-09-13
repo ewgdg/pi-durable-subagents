@@ -277,7 +277,7 @@ test("a child Agent Wait releases and reacquires child execution capacity", { ti
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Answer after starting your Run." },
+				{ title: "Fixture request", request: "Answer after starting your Run." },
 				{ id: "spawn-wait-responder" },
 			),
 			{ stopReason: "toolUse" },
@@ -439,7 +439,7 @@ async function spawnChild(
 	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
 	toolCallId: string,
 ): Promise<void> {
-	const input = { request: `Creation Request for ${toolCallId}` } as const;
+	const input = { title: "Fixture request", request: `Creation Request for ${toolCallId}` } as const;
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_spawn", input, { id: toolCallId }),

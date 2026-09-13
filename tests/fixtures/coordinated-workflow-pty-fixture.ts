@@ -80,6 +80,7 @@ host.model.setResponses([
 const spawn = await executeCommittedTool(
 	ownerSession,
 	appendToolSource(ownerSession, "agent_spawn", "pty-spawn-viewed-agent", {
+		title: "Fixture request",
 		request: "Remain active while the Owner inspects this Agent view.",
 		label: "PTY Viewed Worker",
 	}),
@@ -118,6 +119,7 @@ host.model.setResponses([
 const secondSpawn = await executeCommittedTool(
 	ownerSession,
 	appendToolSource(ownerSession, "agent_spawn", "pty-spawn-second-viewed-agent", {
+		title: "Fixture request",
 		request: "Remain available as the second Agent-to-Agent switch target.",
 		label: "PTY Second Worker",
 	}),
@@ -363,6 +365,7 @@ function routeNestedProcessResponse(context: Context): AssistantMessage {
 	}
 	return fauxAssistantMessage(
 		fauxToolCall("agent_spawn", {
+			title: "Fixture request",
 			request: "Remain available as nested activity for PTY ordering.",
 			label: "PTY Nested Worker",
 		}, { id: "pty-spawn-nested-agent" }),

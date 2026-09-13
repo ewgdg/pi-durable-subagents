@@ -166,7 +166,7 @@ function entry(index: number, parentId: string | null) {
 			message: fauxAssistantMessage(
 				fauxToolCall(
 					"agent_message",
-					{ operation: "request", targetAgent: "benchmark", question: `Request ${index}` },
+					{ title: "Fixture request", operation: "request", targetAgent: "benchmark", question: `Request ${index}` },
 					{ id: `request-${index}` },
 				),
 				{ stopReason: "toolUse" },

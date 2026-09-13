@@ -15,6 +15,7 @@ test("fresh Wait restores a lost original Request after passive coordinator reco
 	const h = harness(t);
 	h.responder.blocked = true;
 	const receipt = await h.message(h.requester, "original", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Need the decision before proceeding.",
 		contextPreparation: { workScale: "medium", contextDependence: "high" },
 	});
@@ -26,6 +27,7 @@ test("fresh Wait restores a lost original Request after passive coordinator reco
 	const waiting = h.wait("after-recovery");
 	await flush();
 	assert.deepEqual(h.deliveries(h.responder).map(item => item.projection), [{
+		title: "Fixture request",
 		kind: "request", requestMessageId: requestId, fromAgentId: "requester",
 		question: "Need the decision before proceeding.",
 	}]);
@@ -47,6 +49,7 @@ test("Wait coalesces a held queue, repairs loss in the same Run, and delivers on
 	const h = harness(t);
 	h.responder.blocked = true;
 	const receipt = await h.message(h.requester, "held-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Captured work.",
 	});
 	assert.ok("requestMessageId" in receipt);
@@ -57,6 +60,7 @@ test("Wait coalesces a held queue, repairs loss in the same Run, and delivers on
 	await h.responder.record.host.lane.run(() => h.messages.discardSchedulingInLane(h.responder.record));
 	// Later canonical sources are deliberately not scheduled and cannot enter the fixed snapshot.
 	call(h.requester, "later-request", "agent_message", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Later unrelated work.",
 	});
 	h.responder.blocked = false;
@@ -70,6 +74,7 @@ test("fresh Wait may start a Dormant recipient, but a parked Wait cannot undo la
 	const h = harness(t);
 	h.responder.blocked = true;
 	await h.message(h.requester, "lost-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Renewed work.",
 	});
 	h.responder.stop();
@@ -93,6 +98,7 @@ for (const selected of [false, true]) test(`${selected ? "selected" : "all-Reque
 	const h = harness(t);
 	h.responder.blocked = true;
 	const receipt = await h.message(h.requester, "cancelled-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Work no longer needed.",
 	});
 	assert.ok("requestMessageId" in receipt);
@@ -111,6 +117,7 @@ for (const selected of [false, true]) test(`${selected ? "selected" : "all-Reque
 test("delivered Requests are never replayed and committed Answers remain retrievable from a Dormant responder", async (t) => {
 	const h = harness(t);
 	const receipt = await h.message(h.requester, "delivered-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Work already received.",
 	});
 	assert.ok("requestMessageId" in receipt);
@@ -130,9 +137,11 @@ test("delivered Requests are never replayed and committed Answers remain retriev
 test("a delivered Request does not consume fresh Wait admission for its undelivered sibling on a Dormant responder", async (t) => {
 	const h = harness(t);
 	const first = await h.message(h.requester, "delivered-before-stop", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "First obligation was delivered.",
 	});
 	const sibling = await h.message(h.requester, "queued-before-stop", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Sibling still needs delivery.",
 	});
 	assert.ok("requestMessageId" in first && "requestMessageId" in sibling);
@@ -163,6 +172,7 @@ test("a delivered Request does not consume fresh Wait admission for its undelive
 test("a delivered unanswered Request stays awaited without starting a Dormant responder", async (t) => {
 	const h = harness(t);
 	await h.message(h.requester, "received-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Work already received.",
 	});
 	h.responder.stop();
@@ -180,6 +190,7 @@ test("Wait leaves a frozen original Steer Request reserved exactly once", async 
 	let release: (() => Promise<void>) | undefined;
 	const h = harness(t, { afterSteerFreeze(context) { release = context.release; return "defer"; } });
 	await h.message(h.requester, "frozen-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Reserved work.", deliveryMode: "steer",
 	});
 	assert.ok(release);
@@ -197,6 +208,7 @@ test("Wait preserves a dispatched Request while recipient proof is in flight", a
 	const h = harness(t);
 	h.responder.deferProof = true;
 	await h.message(h.requester, "inflight-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Dispatched work.",
 	});
 	h.wait("inflight-wait");
@@ -215,6 +227,7 @@ test("Wait fails explicitly when authoritative recipient inspection is unavailab
 	const h = harness(t, { beforeRecipientInspection: () => "inspection_incomplete" });
 	h.responder.blocked = true;
 	const receipt = await h.message(h.requester, "uninspectable-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Cannot safely inspect.",
 	});
 	assert.ok("requestMessageId" in receipt);
@@ -229,10 +242,12 @@ test("Wait fails explicitly when authoritative recipient inspection is unavailab
 test("Wait keeps a sibling Request queued behind the responder's foreground", async (t) => {
 	const h = harness(t);
 	const foreground = await h.message(h.requester, "foreground-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "First obligation.",
 	});
 	assert.ok("requestMessageId" in foreground);
 	const sibling = await h.message(h.requester, "sibling-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Second obligation.",
 	});
 	assert.ok("requestMessageId" in sibling);
@@ -252,6 +267,7 @@ test("Wait keeps a sibling Request queued behind the responder's foreground", as
 test("Answer notification completes Wait even while delivery reconciliation is queued behind a busy recipient lane", async (t) => {
 	const h = harness(t);
 	const request = await h.message(h.requester, "busy-recipient-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Commit the Answer independently.",
 	});
 	assert.ok("requestMessageId" in request);
@@ -268,6 +284,7 @@ test("Answer notification completes Wait even while delivery reconciliation is q
 		operation: "answer", requestId: request.requestMessageId, answer: "Committed remotely.",
 	}, { id: toolCallId }), { stopReason: "toolUse" }));
 	commit(h.responder, toolCallId, "agent_message", {
+		requestTitle: "Fixture request",
 		messageId: deriveMessageIdentity({ agentId: "responder", entryId, toolCallId }),
 		requestMessageId: request.requestMessageId, messageStatus: "sent",
 	});
@@ -281,7 +298,7 @@ test("Answer notification completes Wait even while delivery reconciliation is q
 test("fresh Wait restores a canonical Creation Request under its Spawn identity", async (t) => {
 	const h = harness(t);
 	const toolCallId = "original-spawn";
-	const input = { request: "Original creation work." };
+	const input = { title: "Fixture request", request: "Original creation work." };
 	const entryId = h.requester.manager.appendMessage(fauxAssistantMessage(
 		fauxToolCall("agent_spawn", input, { id: toolCallId }), { stopReason: "toolUse" },
 	));
@@ -297,6 +314,7 @@ test("fresh Wait restores a canonical Creation Request under its Spawn identity"
 	const waiting = h.wait("creation-wait", { requestMessageIds: [requestId.slice(-12)] });
 	await flush();
 	assert.deepEqual(h.deliveries(h.responder).map(d => d.projection), [{
+		title: "Fixture request",
 		kind: "request", requestMessageId: requestId, fromAgentId: "requester", question: input.request,
 	}]);
 	await h.message(h.responder, "creation-answer", { operation: "answer", requestId, answer: "Creation work done." });
@@ -309,6 +327,7 @@ test("a queued reconciliation cannot admit delivery after its caller Run is fenc
 	const h = harness(t);
 	h.responder.blocked = true;
 	await h.message(h.requester, "fenced-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Do not revive fenced intent.",
 	});
 	await h.recover();
@@ -332,9 +351,11 @@ test("one busy recipient lane does not prevent Wait from scheduling another capt
 	h.responder.blocked = true;
 	other.blocked = true;
 	await h.message(h.requester, "first-recipient", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "First recipient.",
 	});
 	await h.message(h.requester, "other-recipient", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "other", question: "Other recipient.",
 	});
 	await h.recover();
@@ -356,12 +377,15 @@ for (const busyAtEntry of [true, false]) {
 		h.responder.blocked = true;
 		other.blocked = true;
 		await h.message(h.requester, "busy-request", {
+			title: "Fixture request",
 			operation: "request", targetAgent: "responder", question: "Busy recipient.",
 		});
 		const first = await h.message(h.requester, "other-first", {
+			title: "Fixture request",
 			operation: "request", targetAgent: "other", question: "Other recipient's first work.",
 		});
 		const sibling = await h.message(h.requester, "other-sibling", {
+			title: "Fixture request",
 			operation: "request", targetAgent: "other", question: "Other recipient's sibling.",
 		});
 		assert.ok("requestMessageId" in first && "requestMessageId" in sibling);
@@ -400,6 +424,7 @@ for (const transition of ["ending", "failure", "replacement"] as const) {
 		const h = harness(t);
 		h.responder.blocked = true;
 		const receipt = await h.message(h.requester, "request-before-lifecycle-change", {
+			title: "Fixture request",
 			operation: "request", targetAgent: "responder", question: "Keep the original delivery identity.",
 		});
 		assert.ok("requestMessageId" in receipt);
@@ -444,6 +469,7 @@ test("late delivery-maintenance failure cannot replace a preempted Wait result",
 	} });
 	h.responder.blocked = true;
 	await h.message(h.requester, "preempted-request", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Work before redirection.",
 	});
 	await h.recover();
@@ -459,10 +485,10 @@ test("late delivery-maintenance failure cannot replace a preempted Wait result",
 
 for (const answerLatestFirst of [false, true]) test(`delivered Requests can be answered ${answerLatestFirst ? "latest" : "earlier"} first`, { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
-	const first = await h.message(h.requester, "first", { operation: "request", targetAgent: "responder", question: "First" });
+	const first = await h.message(h.requester, "first", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "First" });
 	h.responder.settle();
 	await flush();
-	const second = await h.message(h.requester, "second", { operation: "request", targetAgent: "responder", question: "Second", deliveryMode: "steer" });
+	const second = await h.message(h.requester, "second", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Second", deliveryMode: "steer" });
 	assert.ok("requestMessageId" in first && "requestMessageId" in second);
 	await h.tick();
 	assert.deepEqual(h.deliveries(h.responder).map(d => d.projection.kind === "request" && d.projection.requestMessageId), [first.requestMessageId, second.requestMessageId]);
@@ -482,7 +508,7 @@ test("explicit Wait selects suffixes, deduplicates in source order and leaves un
 	const h = harness(t, { beforeDeliveryAdmission: ({ operation }) => operation === "answer" ? "confirmed_failure" : undefined });
 	const ids: string[] = [];
 	for (const id of ["one", "two", "three"]) {
-		const receipt = await h.message(h.requester, id, { operation: "request", targetAgent: "responder", question: id, deliveryMode: "steer" });
+		const receipt = await h.message(h.requester, id, { title: "Fixture request", operation: "request", targetAgent: "responder", question: id, deliveryMode: "steer" });
 		assert.ok("requestMessageId" in receipt);
 		ids.push(receipt.requestMessageId);
 	}
@@ -499,7 +525,7 @@ test("explicit Wait selects suffixes, deduplicates in source order and leaves un
 test("explicit Wait rejects all invalid selections before renewing any Request delivery", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	h.responder.blocked = true;
-	const request = await h.message(h.requester, "lost", { operation: "request", targetAgent: "responder", question: "Lost" });
+	const request = await h.message(h.requester, "lost", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Lost" });
 	assert.ok("requestMessageId" in request);
 	for (const input of [{ requestMessageIds: [] }, { requestMessageIds: [" "] }, { requestMessageIds: [request.requestMessageId, "unknown-suffix"] }]) {
 		await assert.rejects(h.wait("invalid-" + JSON.stringify(input), input), /invalid_input|unknown_identity/);
@@ -508,7 +534,7 @@ test("explicit Wait rejects all invalid selections before renewing any Request d
 	const ordinary = await h.message(h.requester, "ordinary", { operation: "send", targetAgent: "responder", content: "Hello" });
 	assert.ok("messageId" in ordinary);
 	await assert.rejects(h.wait("wrong-kind", { requestMessageIds: [ordinary.messageId] }), /wrong_message_kind/);
-	const foreign = await h.message(h.responder, "foreign", { operation: "request", targetAgent: "requester", question: "Foreign" });
+	const foreign = await h.message(h.responder, "foreign", { title: "Fixture request", operation: "request", targetAgent: "requester", question: "Foreign" });
 	assert.ok("requestMessageId" in foreign);
 	await assert.rejects(h.wait("foreign-selection", { requestMessageIds: [foreign.requestMessageId] }), /wrong_participant/);
 	await h.message(h.requester, "cancel-lost", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdraw" });
@@ -517,12 +543,12 @@ test("explicit Wait rejects all invalid selections before renewing any Request d
 
 test("queued Steer Requests form an admission-ordered batch past a blocked Deferred head", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
-	await h.message(h.requester, "initial", { operation: "request", targetAgent: "responder", question: "Initial", deliveryMode: "steer" });
+	await h.message(h.requester, "initial", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Initial", deliveryMode: "steer" });
 	h.responder.blocked = true;
-	const deferred = await h.message(h.requester, "deferred-head", { operation: "request", targetAgent: "responder", question: "Deferred" });
+	const deferred = await h.message(h.requester, "deferred-head", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Deferred" });
 	const ids: string[] = [];
 	for (const id of ["steer-one", "steer-two"]) {
-		const receipt = await h.message(h.requester, id, { operation: "request", targetAgent: "responder", question: id, deliveryMode: "steer" });
+		const receipt = await h.message(h.requester, id, { title: "Fixture request", operation: "request", targetAgent: "responder", question: id, deliveryMode: "steer" });
 		assert.ok("requestMessageId" in receipt);
 		ids.push(receipt.requestMessageId);
 	}
@@ -542,7 +568,7 @@ test("queued Steer Requests form an admission-ordered batch past a blocked Defer
 test("Answer rejects unknown, undelivered, cancelled and wrong-responder Requests", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	h.responder.blocked = true;
-	const request = await h.message(h.requester, "undelivered", { operation: "request", targetAgent: "responder", question: "Pending" });
+	const request = await h.message(h.requester, "undelivered", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Pending" });
 	assert.ok("requestMessageId" in request);
 	await assert.rejects(h.message(h.responder, "answer-undelivered", { operation: "answer", requestId: request.requestMessageId, answer: "Invalid" }), /has not been delivered/);
 	await assert.rejects(h.message(h.requester, "answer-wrong-responder", { operation: "answer", requestId: request.requestMessageId, answer: "Invalid" }), /wrong_participant/);
@@ -563,6 +589,7 @@ for (const resolution of ["answer", "cancel"] as const) test(`parked selected Wa
 	const ids: string[] = [];
 	for (const name of ["A", "B", "C"]) {
 		const receipt = await h.message(h.requester, name, {
+			title: "Fixture request",
 			operation: "request", targetAgent: "responder", question: name, deliveryMode: "steer",
 		});
 		assert.ok("requestMessageId" in receipt);
@@ -595,16 +622,16 @@ for (const resolution of ["answer", "cancel"] as const) test(`parked selected Wa
 test("parked Wait preserves Steer Request order across preemption reservation and the next batch", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	const upstream = h.addRecipient("upstream");
-	const foreground = await h.message(upstream, "foreground", { operation: "request", targetAgent: "requester", question: "Current duty" });
+	const foreground = await h.message(upstream, "foreground", { title: "Fixture request", operation: "request", targetAgent: "requester", question: "Current duty" });
 	assert.ok("requestMessageId" in foreground);
-	const dependency = await h.message(h.requester, "dependency", { operation: "request", targetAgent: "responder", question: "Await this Answer" });
+	const dependency = await h.message(h.requester, "dependency", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Await this Answer" });
 	assert.ok("requestMessageId" in dependency);
 	h.requester.blocked = true;
-	const deferred = await h.message(upstream, "deferred", { operation: "request", targetAgent: "requester", question: "Unrelated Deferred" });
+	const deferred = await h.message(upstream, "deferred", { title: "Fixture request", operation: "request", targetAgent: "requester", question: "Unrelated Deferred" });
 	assert.ok("requestMessageId" in deferred);
 	const ids: string[] = [];
 	for (const name of ["first", "second", "third"]) {
-		const receipt = await h.message(upstream, name, { operation: "request", targetAgent: "requester", question: name, deliveryMode: "steer" });
+		const receipt = await h.message(upstream, name, { title: "Fixture request", operation: "request", targetAgent: "requester", question: name, deliveryMode: "steer" });
 		assert.ok("requestMessageId" in receipt);
 		ids.push(receipt.requestMessageId);
 	}

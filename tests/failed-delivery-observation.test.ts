@@ -25,7 +25,7 @@ test("a failed Request remains blocked throughout unrelated recipient activity",
 		isIncomingRequest: true,
 		deliveryItem: {
 			source: { agentId: "requester", entryId: "source", toolCallId: "call" },
-			projection: { kind: "request", requestMessageId: "request", fromAgentId: "requester", question: "Work" },
+			projection: { title: "Fixture request", kind: "request", requestMessageId: "request", fromAgentId: "requester", question: "Work" },
 		},
 		inspectProof: () => proof,
 	}, new Error("Recipient Run ended before Delivery proof"));

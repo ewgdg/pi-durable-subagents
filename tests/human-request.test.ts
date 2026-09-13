@@ -659,7 +659,7 @@ for (const completion of ["answer", "interrupt", "shutdown"] as const) {
 		}));
 		const children: string[] = [];
 		for (let index = 0; index < 2; index++) {
-			const input = { request: "Ask the human for a decision." };
+			const input = { title: "Fixture request", request: "Ask the human for a decision." };
 			const toolCallId = `spawn-question-${index}`;
 			host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", input, { id: toolCallId }), { stopReason: "toolUse" }));
 			const receipt = await view.spawn(toolCallId, input);
@@ -749,7 +749,7 @@ async function spawnLiveChild(
 	host.model.setResponses([
 		fauxAssistantMessage("The Creation Request remains available for an Agent Answer."),
 	]);
-	const input = { request: "Open Human Requests when later instructed." };
+	const input = { title: "Fixture request", request: "Open Human Requests when later instructed." };
 	const toolCallId = `spawn-human-request-child-${view.children().length}`;
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(

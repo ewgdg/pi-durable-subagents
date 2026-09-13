@@ -89,6 +89,7 @@ test("/agents presents the live Agent's native interactive mode while Owner stay
 		"agent_spawn",
 		"spawn-live-agent-view",
 		{
+			title: "Fixture request",
 			request: "Remain available for direct input from the Agent view.",
 			label: "Viewed Worker",
 		},
@@ -238,6 +239,7 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 		"agent_spawn",
 		"spawn-throwing-agent-editor",
 		{
+			title: "Fixture request",
 			request: "Remain available so the Owner can trigger the editor failure.",
 			label: "Throwing Editor Worker",
 		},
@@ -295,6 +297,7 @@ test("a real child render failure closes the view and restores Owner input", asy
 		"agent_spawn",
 		"spawn-throwing-agent-render",
 		{
+			title: "Fixture request",
 			request: "Remain available so the Owner can trigger the render failure.",
 			label: "Throwing Render Worker",
 		},
@@ -354,6 +357,7 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 		"agent_spawn",
 		"spawn-startup-modal-agent-view",
 		{
+			title: "Fixture request",
 			request: "Wait for the startup modal, then report readiness.",
 			label: "Startup Modal Worker",
 		},
@@ -412,6 +416,7 @@ test("a selected Agent whose runtime initialization fails opens a read-only post
 		physicalDisplay: true,
 	});
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Remain visible after this process Runtime cannot initialize.",
 		label: "Startup Failure Worker",
 		config: {
@@ -470,6 +475,7 @@ test("an unexpected child-process exit closes the exact selected view", async (t
 		"agent_spawn",
 		"spawn-passive-failure-worker",
 		{
+			title: "Fixture request",
 			request: "Become Dormant before passive Runtime preparation fails.",
 			label: "Passive Failure Worker",
 		},
@@ -530,6 +536,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 		await releaseProcessAgentViewProbe(probe.releasePath);
 	});
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Settle before the Owner submits a successor turn.",
 		label: "Preflight Retention Worker",
 	};
@@ -658,7 +665,7 @@ test("termination discards selected native input already in prompt preflight", {
 		host.session,
 		"agent_spawn",
 		"spawn-preflight-termination-worker",
-		{ request: "Remain live for selected termination.", label: "Termination Fence Worker" },
+		{ title: "Fixture request", request: "Remain live for selected termination.", label: "Termination Fence Worker" },
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
 	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "live"));
@@ -743,6 +750,7 @@ test("termination fences selected input between participant handling and Agent a
 		fauxAssistantMessage("Remain live before the admission fence."),
 	]);
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Remain live for admission fencing.",
 		label: "Admission Fence Worker",
 	};
@@ -814,7 +822,7 @@ test("a handled Dormant Agent input can return to Owner after prompt preflight",
 		host.session,
 		"agent_spawn",
 		"spawn-handled-preflight-worker",
-		{ request: "Settle before handled input.", label: "Handled Preflight Worker" },
+		{ title: "Fixture request", request: "Settle before handled input.", label: "Handled Preflight Worker" },
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
 	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "live"));
@@ -879,6 +887,7 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 		"agent_spawn",
 		"spawn-dormant-agent-view",
 		{
+			title: "Fixture request",
 			request: "Become Dormant before the Owner inspects this transcript.",
 			label: "Dormant Worker",
 		},
@@ -1017,6 +1026,7 @@ test("detached Dormant compaction retains its Runtime until queued input starts 
 		"agent_spawn",
 		"spawn-dormant-compaction-worker",
 		{
+			title: "Fixture request",
 			request: "Become Dormant before compaction starts.",
 			label: "Dormant Compaction Worker",
 		},
@@ -1111,6 +1121,7 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 		"agent_spawn",
 		"spawn-dormant-command-message-agent",
 		{
+			title: "Fixture request",
 			request: "Become Dormant before command-driven startup.",
 			label: "Dormant Command Worker",
 		},
@@ -1191,6 +1202,7 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 		"agent_spawn",
 		"spawn-dormant-runtime-modal",
 		{
+			title: "Fixture request",
 			request: "Settle before the Owner selects this Dormant Agent.",
 			label: "Dormant Runtime Modal Worker",
 		},
@@ -1256,6 +1268,7 @@ test("closing a Dormant session_start modal cancels view initialization without 
 		await activeView?.close();
 	});
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Become Dormant before testing startup cancellation.",
 		label: "Startup Close Worker",
 	};
@@ -1385,6 +1398,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 		fauxAssistantMessage("Cleanup Delivery completes if startup is not canceled."),
 	]);
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Become Dormant before unselected Message startup.",
 		label: "Unselected Startup Worker",
 	};
@@ -1475,13 +1489,13 @@ test("/agents switches the mounted durable view between independent child modes"
 		host.session,
 		"agent_spawn",
 		"spawn-first-switch-target",
-		{ request: "Remain available as the first switch target.", label: "First Target" },
+		{ title: "Fixture request", request: "Remain available as the first switch target.", label: "First Target" },
 	);
 	const secondSpawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
 		"spawn-second-switch-target",
-		{ request: "Remain available as the second switch target.", label: "Second Target" },
+		{ title: "Fixture request", request: "Remain available as the second switch target.", label: "Second Target" },
 	);
 	const firstAgentId = (firstSpawn.details as { agentId: string }).agentId;
 	const secondAgentId = (secondSpawn.details as { agentId: string }).agentId;
@@ -1581,7 +1595,7 @@ test("later Runtime preparations load current file-backed child configuration wi
 		host.session,
 		"agent_spawn",
 		"spawn-original-resource-view",
-		{ request: "Retain the original extension mode.", label: "Original Resource" },
+		{ title: "Fixture request", request: "Retain the original extension mode.", label: "Original Resource" },
 	);
 	const firstAgentId = (firstSpawn.details as { agentId: string }).agentId;
 	await waitForCondition(async () =>
@@ -1593,7 +1607,7 @@ test("later Runtime preparations load current file-backed child configuration wi
 		host.session,
 		"agent_spawn",
 		"spawn-replacement-resource-view",
-		{ request: "Load the replacement extension mode.", label: "Replacement Resource" },
+		{ title: "Fixture request", request: "Load the replacement extension mode.", label: "Replacement Resource" },
 	);
 	const secondAgentId = (secondSpawn.details as { agentId: string }).agentId;
 	await waitForCondition(async () =>
@@ -1674,6 +1688,7 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		"agent_spawn",
 		"spawn-failing-agent-view",
 		{
+			title: "Fixture request",
 			request: "Prepare for a terminal failure while the durable Agent view remains open.",
 			label: "Failing Worker",
 		},
@@ -1779,6 +1794,7 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 		"agent_spawn",
 		"spawn-repeated-successor-worker",
 		{
+			title: "Fixture request",
 			request: "Wait for selection before the initial exact Run fails.",
 			label: "Repeated Successor Worker",
 		},
@@ -1909,6 +1925,7 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 		"agent_spawn",
 		"spawn-message-successor-view",
 		{
+			title: "Fixture request",
 			request: "Fail while selected before ordinary Message delivery.",
 			label: "Successor Worker",
 		},

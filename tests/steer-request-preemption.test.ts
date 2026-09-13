@@ -39,6 +39,7 @@ test("a Steer Request preempting Agent Wait commits one Delivery across turn_end
 					id: "wait-for-preempting-child",
 				}), { stopReason: "toolUse" })
 				: fauxAssistantMessage(fauxToolCall("agent_spawn", {
+					title: "Fixture request",
 					request: "Ask for a format decision, then complete the work.",
 				}, { id: "spawn-preempting-child" }), { stopReason: "toolUse" });
 		}
@@ -52,6 +53,7 @@ test("a Steer Request preempting Agent Wait commits one Delivery across turn_end
 		if (text.includes("request-child-decision")) return fauxAssistantMessage("Waiting for the decision.");
 		await requestGate;
 		return fauxAssistantMessage(fauxToolCall("agent_message", {
+			title: "Fixture request",
 			operation: "request", targetAgent: ownerId, question, deliveryMode: "steer",
 		}, { id: "request-child-decision" }), { stopReason: "toolUse" });
 	};

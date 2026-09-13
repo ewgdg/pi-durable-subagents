@@ -142,6 +142,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			fauxToolCall(
 				"agent_spawn",
 				{
+					title: "Fixture request",
 					request: "Inspect the coordination boundary and report what is observable.",
 					description: "Inspects one coordination boundary",
 				},
@@ -347,6 +348,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	assert.deepEqual(JSON.parse(delivery.content as string), {
 		messages: [
 			{
+				title: "Fixture request",
 				kind: "request",
 				requestMessageId: expectedRequestId,
 				fromAgentId: host.session.sessionId,
@@ -381,6 +383,7 @@ test("a conversation fork copies only completed parent context before its child 
 	assert.ok(parentSessionFile);
 
 	const receipt = await harness.spawn("spawn-conversation-fork", {
+		title: "Fixture request",
 		request: "Continue from the completed parent conversation.",
 		conversation: "fork",
 		label: "continuation",
@@ -454,6 +457,7 @@ test("copied coordination evidence grants no authority or obligations to a conve
 	});
 	const parentTranscript = harness.host.session.sessionManager;
 	const historicalInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.host.session.sessionId,
 		question: "Historical parent Request evidence.",
@@ -480,6 +484,7 @@ test("copied coordination evidence grants no authority or obligations to a conve
 	const inheritedDelivery = createMessageDelivery([{
 		source: inheritedInboundSource,
 		projection: {
+			title: "Fixture request",
 			kind: "request",
 			requestMessageId: inheritedInboundRequestId,
 			fromAgentId: inheritedInboundSource.agentId,
@@ -494,6 +499,7 @@ test("copied coordination evidence grants no authority or obligations to a conve
 	);
 
 	const receipt = await harness.spawn("spawn-with-historical-coordination", {
+		title: "Fixture request",
 		request: "Do not acquire authority or obligations from copied coordination evidence.",
 		conversation: "fork",
 	});
@@ -563,6 +569,7 @@ test("a conversation fork keeps the parent provider prefix cache-affine", async 
 		processVisibleModel: true,
 	});
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Continue from this exact provider prefix.",
 		conversation: "fork" as const,
 	};
@@ -676,6 +683,7 @@ for (const conversation of [undefined, "fork"] as const) {
 		});
 		const view = coordinator.forAgent(identity.agentId);
 		const spawnInput = {
+			title: "Fixture request",
 			request: "Inspect the configured child Run.",
 			...(conversation === undefined ? {} : { conversation }),
 			template: "research-agent",
@@ -839,6 +847,7 @@ test("a catalogued model under an unconfigured provider fails before Agent Ident
 	const configuredModelId = `${provider}/${cataloguedModel.id}`;
 
 	const receipt = await harness.spawn("spawn-unconfigured-provider", {
+		title: "Fixture request",
 		request: "This request must never acquire a child.",
 		config: {
 			model: { id: configuredModelId, thinking: "off" },
@@ -862,6 +871,7 @@ test("invalid default-child metadata fails before Agent Identity", async (t) => 
 			fauxToolCall(
 				"agent_spawn",
 				{
+					title: "Fixture request",
 					request: "This request must never acquire a child.",
 					description: "\n",
 				},
@@ -914,6 +924,7 @@ test("ambiguous selected skills fail before Agent Identity", async (t) => {
 			fauxToolCall(
 				"agent_spawn",
 				{
+					title: "Fixture request",
 					request: "This request must never acquire a child.",
 					config: { skills: ["colliding-skill"] },
 				},
@@ -954,6 +965,7 @@ test("an untrusted effective cwd cannot contribute selected project resources", 
 	new ProjectTrustStore(harness.host.services.agentDir).set(effectiveCwd, false);
 
 	const receipt = await harness.spawn("spawn-untrusted-project-resource", {
+		title: "Fixture request",
 		request: "This request must never acquire a child.",
 		config: {
 			cwd: "untrusted-project",
@@ -993,6 +1005,7 @@ test("effective cwd honors Pi's default project-trust policy", async (t) => {
 	);
 
 	const receipt = await harness.spawn("spawn-default-trusted-project", {
+		title: "Fixture request",
 		request: "Use the policy-trusted skill.",
 		config: {
 			cwd: "default-trusted-project",
@@ -1303,6 +1316,7 @@ test("post-commit conversation-fork prefix mutation is an invariant violation", 
 	try {
 		await assert.rejects(
 			() => harness.spawn("spawn-mutated-fork-prefix", {
+				title: "Fixture request",
 				request: "Reject the mutated prefix.",
 				conversation: "fork",
 			}),
@@ -1333,6 +1347,7 @@ test("duplicate conversation-fork handoff evidence is an invariant violation", a
 	try {
 		await assert.rejects(
 			() => harness.spawn("spawn-duplicate-fork-handoff", {
+				title: "Fixture request",
 				request: "Reject the duplicate handoff.",
 				conversation: "fork",
 			}),
@@ -1351,6 +1366,7 @@ test("forged Creation Request Delivery evidence is an invariant violation", asyn
 				JSON.stringify({
 					messages: [
 						{
+							title: "Fixture request",
 							kind: "request",
 							requestMessageId: "wrong-request",
 							fromAgentId: identity.directSpawnerAgentId,
@@ -1393,16 +1409,19 @@ test("Agent observation search composes metadata, phase, identity, scope, and bo
 		beforeRunStart: () => "confirmed_failure",
 	});
 	const reviewerReceipt = await harness.spawn("search-dormant-reviewer", {
+		title: "Fixture request",
 		request: "Review the API contract.",
 		label: "Dormant Reviewer",
 		description: "Reviews API contracts",
 	});
 	const builderReceipt = await harness.spawn("search-dormant-builder", {
+		title: "Fixture request",
 		request: "Build the API contract.",
 		label: "Dormant Builder",
 		description: "Builds API contracts",
 	});
 	const apiBuilderReceipt = await harness.spawn("search-dormant-api-builder", {
+		title: "Fixture request",
 		request: "Build the API contract.",
 		label: "API Builder",
 		description: "Builds API contracts",
@@ -1648,7 +1667,7 @@ async function createCoordinatorHarness(
 		coordinator,
 		async spawn(
 			toolCallId: string,
-			input: AgentSpawnInput = { request: `Creation Request for ${toolCallId}` },
+			input: AgentSpawnInput = { title: "Fixture request", request: `Creation Request for ${toolCallId}` },
 		): Promise<AgentSpawnReceipt> {
 			host.session.sessionManager.appendMessage(
 				fauxAssistantMessage(
@@ -1668,7 +1687,7 @@ async function createCoordinatorHarness(
 					toolCallIds.map((toolCallId) =>
 						fauxToolCall(
 							"agent_spawn",
-							{ request: `Creation Request for ${toolCallId}` },
+							{ title: "Fixture request", request: `Creation Request for ${toolCallId}` },
 							{ id: toolCallId },
 						),
 					),
@@ -1678,6 +1697,7 @@ async function createCoordinatorHarness(
 			const agentIds: string[] = [];
 			for (const toolCallId of toolCallIds) {
 				const receipt = await view.spawn(toolCallId, {
+					title: "Fixture request",
 					request: `Creation Request for ${toolCallId}`,
 				});
 				assert.ok("agentId" in receipt && typeof receipt.agentId === "string");

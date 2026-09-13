@@ -63,6 +63,7 @@ for (const earlierNativeInput of [false, true]) test(`a Deferred Request after a
 					id: "wait-for-preempting-child",
 				}), { stopReason: "toolUse" })
 				: fauxAssistantMessage(fauxToolCall("agent_spawn", {
+					title: "Fixture request",
 					request: "Ask for a format decision, then complete the work.",
 				}, { id: "spawn-preempting-child" }), { stopReason: "toolUse" });
 		}
@@ -70,6 +71,7 @@ for (const earlierNativeInput of [false, true]) test(`a Deferred Request after a
 			return text.includes("request-second-decision")
 				? fauxAssistantMessage("Waiting for the second decision.")
 				: fauxAssistantMessage(fauxToolCall("agent_message", {
+					title: "Fixture request",
 					operation: "request", targetAgent: ownerId, question: secondQuestion,
 					contextPreparation: { workScale: "small", contextDependence: "high" },
 				}, { id: "request-second-decision" }), { stopReason: "toolUse" });
@@ -84,6 +86,7 @@ for (const earlierNativeInput of [false, true]) test(`a Deferred Request after a
 		if (text.includes("request-child-decision")) return fauxAssistantMessage("Waiting for the decision.");
 		await requestGate;
 		return fauxAssistantMessage(fauxToolCall("agent_message", {
+			title: "Fixture request",
 			operation: "request", targetAgent: ownerId, question,
 		}, { id: "request-child-decision" }), { stopReason: "toolUse" });
 	};

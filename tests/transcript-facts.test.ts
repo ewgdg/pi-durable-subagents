@@ -42,6 +42,7 @@ test("incremental facts equal clean reconstruction across appends, compaction an
 			fauxToolCall(
 				"agent_message",
 				{
+					title: "Fixture request",
 					operation: "request",
 					targetAgent: "facts",
 					question: "Retain this obligation.",
@@ -56,6 +57,7 @@ test("incremental facts equal clean reconstruction across appends, compaction an
 		{
 			source,
 			projection: {
+				title: "Fixture request",
 				kind: "request",
 				requestMessageId: deriveMessageIdentity(source),
 				fromAgentId: "facts",

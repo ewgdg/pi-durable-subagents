@@ -19,7 +19,7 @@ import type { WorkflowResumeActivation } from "../src/coordination/workflow-reco
 test("recovery schedules original Requests and Messages once, preserving context preparation", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	h.responder.blocked = true;
-	const request = await h.message(h.requester, "request", { operation: "request", targetAgent: "responder", question: "Original", contextPreparation: { workScale: "medium", contextDependence: "high" } });
+	const request = await h.message(h.requester, "request", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Original", contextPreparation: { workScale: "medium", contextDependence: "high" } });
 	const message = await h.message(h.requester, "message", { operation: "send", targetAgent: "responder", content: "Original message" });
 	await h.recover();
 	h.responder.blocked = false;
@@ -38,7 +38,7 @@ test("recovery schedules original Requests and Messages once, preserving context
 
 test("recovery sends a committed Answer to its original requester and does not activate completed work", { timeout: 5_000 }, async t => {
 	const h = harness(t);
-	const request = await h.message(h.requester, "request", { operation: "request", targetAgent: "responder", question: "Original" });
+	const request = await h.message(h.requester, "request", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Original" });
 	assert.ok("requestMessageId" in request);
 	h.requester.blocked = true;
 	const answer = await h.message(h.responder, "answer", { operation: "answer", requestId: request.requestMessageId, answer: "Completed" });
@@ -57,7 +57,7 @@ test("recovery sends a committed Answer to its original requester and does not a
 test("recovery coalesces held scheduling and suppresses cancelled Requests before dispatch", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	h.responder.blocked = true;
-	const request = await h.message(h.requester, "request", { operation: "request", targetAgent: "responder", question: "Original" });
+	const request = await h.message(h.requester, "request", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Original" });
 	assert.ok("requestMessageId" in request);
 	const receipt = await h.resume();
 	assert.equal(receipt.outstandingRequests[0]?.status, "delivery_scheduled");
@@ -104,12 +104,12 @@ test("unrelated unavailable evidence does not pollute the Owner view or prevent 
 
 test("nested recovery preserves attention and Agent-owned outbound dependencies", { timeout: 5_000 }, async t => {
 	const h = harness(t);
-	const first = await h.message(h.requester, "first", { operation: "request", targetAgent: "responder", question: "Outer work" });
-	const reverse = await h.message(h.responder, "reverse", { operation: "request", targetAgent: "requester", question: "Need a decision" });
+	const first = await h.message(h.requester, "first", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Outer work" });
+	const reverse = await h.message(h.responder, "reverse", { title: "Fixture request", operation: "request", targetAgent: "requester", question: "Need a decision" });
 	h.responder.settle();
 	h.requester.settle();
 	await flush();
-	const nested = await h.message(h.requester, "nested", { operation: "request", targetAgent: "responder", question: "Clarify before decision" });
+	const nested = await h.message(h.requester, "nested", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Clarify before decision" });
 	assert.ok("requestMessageId" in first && "requestMessageId" in reverse && "requestMessageId" in nested);
 	h.responder.stop();
 	await h.recover();
@@ -134,8 +134,8 @@ test("nested recovery preserves attention and Agent-owned outbound dependencies"
 test("concurrent resume calls coalesce admission and report pending capacity explicitly", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	h.responder.blocked = true;
-	await h.message(h.requester, "first", { operation: "request", targetAgent: "responder", question: "First" });
-	await h.message(h.requester, "second", { operation: "request", targetAgent: "responder", question: "Second" });
+	await h.message(h.requester, "first", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "First" });
+	await h.message(h.requester, "second", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Second" });
 	await h.recover();
 	h.policy.publish(Object.freeze({ ...h.policy.current(), maxPendingDeliveriesPerAgent: 1 }));
 	const receipts = await Promise.all([h.resume(), h.resume()]);
@@ -148,7 +148,7 @@ test("concurrent resume calls coalesce admission and report pending capacity exp
 test("cancellation committed after the snapshot suppresses stale delivery admission", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	h.responder.blocked = true;
-	const request = await h.message(h.requester, "request", { operation: "request", targetAgent: "responder", question: "Original" });
+	const request = await h.message(h.requester, "request", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Original" });
 	assert.ok("requestMessageId" in request);
 	await h.recover();
 	const original = h.messages.resumeMessage.bind(h.messages);
@@ -177,7 +177,7 @@ test("a dormant Agent with only delivered ordinary Messages is not proactively r
 test("a failed durable transcript read is indeterminate rather than guessed as undelivered work", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	h.responder.blocked = true;
-	await h.message(h.requester, "unavailable", { operation: "request", targetAgent: "responder", question: "Need verified proof" });
+	await h.message(h.requester, "unavailable", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Need verified proof" });
 	await h.recover();
 	h.responder.record.transcript = new AgentTranscript({ read() { throw new Error("evidence_unavailable: unreadable transcript"); } });
 	const receipt = await h.resume();
@@ -190,7 +190,7 @@ test("a failed durable transcript read is indeterminate rather than guessed as u
 test("blocked sibling successors continue the old foreground once, before or during recovery", { timeout: 5_000 }, async t => {
 	for (const timing of ["before", "during"] as const) {
 		const h = harness(t);
-		const old = await h.message(h.requester, "old", { operation: "request", targetAgent: "responder", question: "Old work" });
+		const old = await h.message(h.requester, "old", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Old work" });
 		assert.ok("requestMessageId" in old);
 		h.responder.stop();
 		await h.recover();
@@ -200,7 +200,7 @@ test("blocked sibling successors continue the old foreground once, before or dur
 		const sibling = async () => {
 			if (siblingAdmitted) return;
 			siblingAdmitted = true;
-			await h.message(h.requester, "sibling", { operation: "request", targetAgent: "responder", question: "Sibling work" });
+			await h.message(h.requester, "sibling", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Sibling work" });
 		};
 		if (timing === "before") await sibling();
 		const resume = () => resumeWorkflow({
@@ -423,7 +423,7 @@ async function flush() { for (let i = 0; i < 8; i++) await setImmediate(); }
 
 test("Owner recovery reports only its outbound Requests with target recovery status", { timeout: 5_000 }, async t => {
 	const h = harness(t);
-	const request = await h.message(h.requester, "scoped", { operation: "request", targetAgent: "responder", question: "Work" });
+	const request = await h.message(h.requester, "scoped", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Work" });
 	assert.ok("requestMessageId" in request);
 	const receipt = await h.resume();
 	assert.deepEqual(receipt.outstandingRequests, [{
@@ -439,11 +439,11 @@ function continuationViews(p: ReturnType<typeof runtimeParticipant>) {
 
 test("nested cyclic recovery finalizes recipient-relative views before dispatch without holding lanes", { timeout: 5_000 }, async t => {
 	const h = harness(t);
-	const outer = await h.message(h.requester, "outer-view", { operation: "request", targetAgent: "responder", question: "Outer" });
-	const inner = await h.message(h.responder, "inner-view", { operation: "request", targetAgent: "worker", question: "Inner" });
+	const outer = await h.message(h.requester, "outer-view", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Outer" });
+	const inner = await h.message(h.responder, "inner-view", { title: "Fixture request", operation: "request", targetAgent: "worker", question: "Inner" });
 	h.responder.settle();
 	await flush();
-	const reverse = await h.message(h.worker, "reverse-view", { operation: "request", targetAgent: "responder", deliveryMode: "steer", question: "Decision" });
+	const reverse = await h.message(h.worker, "reverse-view", { title: "Fixture request", operation: "request", targetAgent: "responder", deliveryMode: "steer", question: "Decision" });
 	assert.ok("requestMessageId" in outer && "requestMessageId" in inner && "requestMessageId" in reverse);
 	h.responder.stop(); h.worker.stop();
 	await h.recover();
@@ -474,7 +474,7 @@ test("nested cyclic recovery finalizes recipient-relative views before dispatch 
 test("scoped recovery reports held and failed admissions without claiming continuation", { timeout: 5_000 }, async t => {
 	for (const failure of ["held", "unavailable"] as const) {
 		const h = harness(t);
-		const request = await h.message(h.requester, "failure-view", { operation: "request", targetAgent: "responder", question: "Work" });
+		const request = await h.message(h.requester, "failure-view", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Work" });
 		assert.ok("requestMessageId" in request);
 		h.responder.stop(); await h.recover();
 		if (failure === "held") h.responder.blocked = true;
@@ -498,8 +498,8 @@ test("scoped recovery reports held and failed admissions without claiming contin
 
 test("a later activation failure still releases earlier continuations with truthful dependent status", { timeout: 5_000 }, async t => {
 	const h = harness(t);
-	await h.message(h.requester, "release-outer", { operation: "request", targetAgent: "responder", question: "Outer" });
-	const inner = await h.message(h.responder, "release-inner", { operation: "request", targetAgent: "worker", question: "Inner" });
+	await h.message(h.requester, "release-outer", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Outer" });
+	const inner = await h.message(h.responder, "release-inner", { title: "Fixture request", operation: "request", targetAgent: "worker", question: "Inner" });
 	assert.ok("requestMessageId" in inner);
 	h.responder.stop(); h.worker.stop(); await h.recover();
 	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
@@ -520,7 +520,7 @@ test("a later activation failure still releases earlier continuations with truth
 
 test("cancellation while continuation is gated suppresses stale runtime input", { timeout: 5_000 }, async t => {
 	const h = harness(t);
-	const request = await h.message(h.requester, "gated-cancel", { operation: "request", targetAgent: "responder", question: "Work" });
+	const request = await h.message(h.requester, "gated-cancel", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Work" });
 	assert.ok("requestMessageId" in request);
 	h.responder.stop(); await h.recover();
 	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
@@ -538,11 +538,11 @@ test("cancellation while continuation is gated suppresses stale runtime input", 
 test("unavailable outbound targets do not erase verified responder recovery", { timeout: 5_000 }, async t => {
 	for (const mode of ["running", "dormant"] as const) {
 		const h = harness(t);
-		const outer = await h.message(h.requester, "unrelated-outer", { operation: "request", targetAgent: "responder", question: "Outer" });
-		const inner = await h.message(h.responder, "unrelated-inner", { operation: "request", targetAgent: "worker", question: "Inner" });
+		const outer = await h.message(h.requester, "unrelated-outer", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Outer" });
+		const inner = await h.message(h.responder, "unrelated-inner", { title: "Fixture request", operation: "request", targetAgent: "worker", question: "Inner" });
 		assert.ok("requestMessageId" in outer && "requestMessageId" in inner);
 		if (mode === "dormant") {
-			await h.message(h.responder, "unrelated-reverse", { operation: "request", targetAgent: "requester", question: "Decision" });
+			await h.message(h.responder, "unrelated-reverse", { title: "Fixture request", operation: "request", targetAgent: "requester", question: "Decision" });
 			h.requester.stop(); h.responder.stop();
 		}
 		await h.recover();
@@ -573,8 +573,8 @@ test("Owner recovery returns only its recipient-relative view", { timeout: 5_000
 
 test("recovery releases every admitted recipient before reporting partial dispatch failure", { timeout: 5_000 }, async t => {
 	const h = harness(t);
-	await h.message(h.requester, "release-failure-outer", { operation: "request", targetAgent: "responder", question: "Outer" });
-	await h.message(h.responder, "release-failure-inner", { operation: "request", targetAgent: "worker", question: "Inner" });
+	await h.message(h.requester, "release-failure-outer", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Outer" });
+	await h.message(h.responder, "release-failure-inner", { title: "Fixture request", operation: "request", targetAgent: "worker", question: "Inner" });
 	h.responder.stop(); h.worker.stop(); await h.recover();
 	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
 	const released: string[] = [];
@@ -598,9 +598,9 @@ test("recovery releases every admitted recipient before reporting partial dispat
 test("non-Request recovery failures surface after admitted responders are released", { timeout: 5_000 }, async t => {
 	for (const [kind, stage] of [["message", "admission"], ["answer", "admission"], ["message", "inspection"], ["message", "enumeration"]] as const) {
 		const h = harness(t);
-		await h.message(h.requester, "non-request-outer", { operation: "request", targetAgent: "responder", question: "Work" });
+		await h.message(h.requester, "non-request-outer", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Work" });
 		if (kind === "answer") {
-			const request = await h.message(h.requester, "non-request-answered", { operation: "request", targetAgent: "worker", question: "Answer this" });
+			const request = await h.message(h.requester, "non-request-answered", { title: "Fixture request", operation: "request", targetAgent: "worker", question: "Answer this" });
 			assert.ok("requestMessageId" in request);
 			h.requester.blocked = true;
 			await h.message(h.worker, "non-request-answer", { operation: "answer", requestId: request.requestMessageId, answer: "Completed work" });
@@ -652,7 +652,7 @@ for (const operation of ["send", "request"] as const) {
 		const h = harness(t);
 		const input: AgentMessageInput = operation === "send"
 			? { operation, targetAgent: "Owner", content: "Not created" }
-			: { operation, targetAgent: "Owner", question: "Not created" };
+			: { title: "Fixture request", operation, targetAgent: "Owner", question: "Not created" };
 		const id = `ambiguous-${operation}`;
 		call(h.requester, id, "agent_message", input);
 		await assert.rejects(h.messages.execute("requester", id, input), /ambiguous_target/);

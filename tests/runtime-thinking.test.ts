@@ -21,7 +21,7 @@ test("thinking validators and schemas accept every Pi level, with inherit only a
 		const spawnLevel = runtimeLevel || thinking === "inherit";
 		assert.equal(isRuntimeThinkingLevel(thinking), runtimeLevel);
 		assert.equal(Check(RuntimeThinkingSchema, thinking), runtimeLevel);
-		const input = { request: "Work", config: { model: { thinking } } };
+		const input = { title: "Fixture request", request: "Work", config: { model: { thinking } } };
 		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), spawnLevel);
 		if (spawnLevel) {
 			assert.deepEqual(validateAgentSpawnInput(input), input);

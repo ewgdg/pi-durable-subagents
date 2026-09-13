@@ -36,6 +36,7 @@ test("native Owner clone closes an open Agent view and creates the replacement W
 			fauxAssistantMessage("The child remains available while Owner clone begins."),
 		]);
 		const spawn = await executeTool(host, "agent_spawn", "spawn-clone-viewed-child", {
+			title: "Fixture request",
 			request: "Remain available while the Owner clones from behind the Agent view.",
 		});
 		const childAgentId = (spawn as { agentId: string }).agentId;
@@ -184,7 +185,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			fauxAssistantMessage(
 				fauxToolCall(
 					"agent_spawn",
-					{ request: "Remain as a nested source Agent." },
+					{ title: "Fixture request", request: "Remain as a nested source Agent." },
 					{ id: "spawn-source-nested-child" },
 				),
 				{ stopReason: "toolUse" },
@@ -196,7 +197,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			host,
 			"agent_spawn",
 			"spawn-source-direct-child",
-			{ request: "Create a nested source Workflow for clone coverage." },
+			{ title: "Fixture request", request: "Create a nested source Workflow for clone coverage." },
 		);
 		const directChildId = (directSpawn as { agentId: string }).agentId;
 		const directCreationRequestId = (directSpawn as {
@@ -235,6 +236,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			"agent_message",
 			"request-source-child-before-clone",
 			{
+				title: "Fixture request",
 				operation: "request",
 				targetAgent: directChildId,
 				question: "What source-only result should remain unresolved?",
@@ -315,7 +317,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			host,
 			"agent_spawn",
 			"spawn-fork-only-child",
-			{ request: "Remain in the fresh fork Workflow." },
+			{ title: "Fixture request", request: "Remain in the fresh fork Workflow." },
 		);
 		const forkChildId = (forkSpawn as { agentId: string }).agentId;
 		const forkChildren = await executeTool(
@@ -374,7 +376,7 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 			host,
 			"agent_spawn",
 			"spawn-source-branch-child",
-			{ request: "Remain available in the source Workflow after its Owner forks." },
+			{ title: "Fixture request", request: "Remain available in the source Workflow after its Owner forks." },
 		);
 		const sourceChildId = (spawn as { agentId: string }).agentId;
 		await waitForAgentTranscript(

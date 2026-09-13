@@ -208,7 +208,7 @@ function harness(t: { after(fn: () => void): void }, boundaryHooks?: MessageBoun
 		get shutdown() { return state.shutdown; }, set shutdown(value: boolean) { state.shutdown = value; },
 		send: (operation: "send" | "request") => message("original", operation === "send"
 			? { operation, targetAgent: "recipient", content: "Work" }
-			: { operation, targetAgent: "recipient", question: "Work?" }),
+			: { title: "Fixture request", operation, targetAgent: "recipient", question: "Work?" }),
 		notices: () => author.manager.getEntries().flatMap(entry => entry.type === "custom_message" && entry.customType === CUSTOM_TYPE ? [JSON.parse(entry.content as string)] : []),
 	};
 }

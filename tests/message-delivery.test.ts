@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -99,6 +100,7 @@ test("Agent Request Delivery exposes requestMessageId as its correlation identit
 		toolCallId: "requester-call",
 	};
 	const projection = {
+		title: "Fixture request",
 		kind: "request" as const,
 		requestMessageId: "request-message",
 		fromAgentId: "requester-agent",
@@ -154,7 +156,7 @@ test("host-authored obligation reminders do not become Agent Message evidence", 
 		"agent-coordination.obligation-reminder",
 		JSON.stringify({
 			requestMessageId: "request-1",
-			requestSnippet: "Answer the pending Request.",
+			requestTitle: "Answer the pending Request.",
 			guidance:
 				"This Request still needs an Answer. Choose which outstanding Request to work on or answer; attention order does not prescribe execution order. Send each Answer as a standalone agent_message operation \"answer\" call, then end the turn without a summary.",
 		}),
@@ -223,8 +225,8 @@ test("committed receipts trust content for every Message kind while writers pres
 			targetAgentId: recipientAgentId, deliveryMode: "deferred" as const,
 			source: { agentId: "sender", entryId: "entry", toolCallId: "call" } };
 		const message: Message = kind === "message" ? { ...common, kind, origin: "agent_message", content: "intended" }
-			: kind === "request" ? { ...common, kind, origin: "agent_message", question: "intended" }
-			: kind === "answer" ? { ...common, kind, requestId: "request", answer: "intended" }
+			: kind === "request" ? { title: "Fixture request", ...common, kind, origin: "agent_message", question: "intended" }
+			: kind === "answer" ? { requestTitle: "Fixture request", ...common, kind, requestId: "request", answer: "intended" }
 			: { ...common, kind, requestId: "request", reason: "intended" };
 		const item = createMessageDeliveryItem(message);
 		const textKey = kind === "message" ? "content" : kind === "request" ? "question" : kind === "answer" ? "answer" : "reason";
@@ -255,15 +257,15 @@ test("Creation Request receipt needs identity, not reconstructed spawn question"
 	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: recipientAgentId });
 	const source = { agentId: "spawner", entryId: "spawn-entry", toolCallId: "spawn-call" };
 	const requestId = deriveMessageIdentity(source);
-	assert.deepEqual(createCreationRequestDeliveryItem({ requestId, fromAgentId: "spawner", source, question: "Intended spawn input" }),
-		{ source, projection: { kind: "request", requestMessageId: requestId, fromAgentId: "spawner", question: "Intended spawn input" } });
+	assert.deepEqual(createCreationRequestDeliveryItem({ title: "Fixture request", requestId, fromAgentId: "spawner", source, question: "Intended spawn input" }),
+		{ source, projection: { title: "Fixture request", kind: "request", requestMessageId: requestId, fromAgentId: "spawner", question: "Intended spawn input" } });
 	const entryId = manager.appendCustomMessageEntry("agent-coordination.message-delivery",
-		JSON.stringify({ messages: [{ kind: "request", requestMessageId: requestId,
+		JSON.stringify({ messages: [{ title: "Fixture request", kind: "request", requestMessageId: requestId,
 			fromAgentId: "spawner", question: "Committed question is authoritative." }] }), true, { messages: [source] });
-	const inspect = () => inspectCreationRequestDelivery({ recipientAgentId,
+	const inspect = () => inspectCreationRequestDelivery({ title: "Fixture request", recipientAgentId,
 		transcript: transcriptFromSessionManager(manager).inspect(), requestId, fromAgentId: "spawner", source });
 	assert.deepEqual(inspect().deliveryEvidence, { agentId: recipientAgentId, entryId });
-	assert.throws(() => inspectCreationRequestDelivery({ recipientAgentId,
+	assert.throws(() => inspectCreationRequestDelivery({ title: "Fixture request", recipientAgentId,
 		transcript: transcriptFromSessionManager(manager).inspect(), requestId: "unrelated", fromAgentId: "spawner", source }),
 		/Creation Request .* Delivery differs from its source/);
 	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: recipientAgentId });
@@ -274,13 +276,17 @@ test("committed Answer retrieval trusts text but preserves source and Request co
 	const manager = SessionManager.inMemory(process.cwd());
 	const requesterAgentId = manager.getSessionId();
 	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: requesterAgentId });
+	const requestEntryId = manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "request", targetAgent: "responder", title: "Fixture request", question: "Provide an Answer.",
+	}, { id: "request-call" }), { stopReason: "toolUse" }));
+	const requestId = deriveMessageIdentity({ agentId: requesterAgentId, entryId: requestEntryId, toolCallId: "request-call" });
 	const source = { agentId: "responder", entryId: "answer-entry", toolCallId: "answer-call" };
-	const answer = { kind: "answer" as const, messageId: deriveMessageIdentity(source),
-		requestId: "request", fromAgentId: "responder", targetAgentId: requesterAgentId, source,
+	const answer = { workflowId: "workflow", deliveryMode: "deferred" as const, requestTitle: "Fixture request", kind: "answer" as const, messageId: deriveMessageIdentity(source),
+		requestId, fromAgentId: "responder", targetAgentId: requesterAgentId, source,
 		answer: "Different original answer" };
 	const entryId = manager.appendMessage({ role: "toolResult", toolCallId: "retrieve",
 		toolName: "agent_message", content: [], isError: false, timestamp: Date.now(),
-		details: { disposition: "answer_delivered", requestMessageId: answer.requestId,
+		details: { requestTitle: "Fixture request", disposition: "answer_delivered", requestMessageId: answer.requestId,
 			answerId: answer.messageId, fromAgentId: answer.fromAgentId, answer: "Authoritative retrieved text", answerSource: source } });
 	assert.deepEqual(inspectAnswerDelivery({ requesterAgentId, transcript: transcriptFromSessionManager(manager).inspect(), answer }).deliveryEvidence,
 		{ agentId: requesterAgentId, entryId });

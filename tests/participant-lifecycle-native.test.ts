@@ -10,8 +10,8 @@ import type { ObligationFrame } from "../src/protocol/obligation-focus.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
 const frames: ObligationFrame[] = [
-	{ requestId: "request-a", requesterAgentId: "author-a", question: "OUTSTANDING_A" },
-	{ requestId: "request-b", requesterAgentId: "author-b", question: "OUTSTANDING_B" },
+	{ title: "Fixture request", requestId: "request-a", requesterAgentId: "author-a", question: "OUTSTANDING_A" },
+	{ title: "Fixture request", requestId: "request-b", requesterAgentId: "author-b", question: "OUTSTANDING_B" },
 ];
 
 function handlers(currentFrames: () => readonly ObligationFrame[]): ParticipantLifecycleHandlers {
@@ -62,6 +62,7 @@ for (const queuedInput of ["steer", "followUp", undefined] as const) {
 					pi.appendEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, { frames: currentFrames });
 					if (queuedInput) pi.sendUserMessage("QUEUED_DIRECTION: pause now.", { deliverAs: queuedInput });
 					return { content: [{ type: "text", text: "sent" }], details: {
+						requestTitle: "Fixture request",
 						messageId: "answer-a", requestMessageId: "request-a", messageStatus: "sent",
 					}, terminate: true };
 				},
@@ -101,6 +102,7 @@ test("native final Answer settles without a summary generation", { timeout: 5_00
 				currentFrames = [];
 				pi.appendEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, { frames: [] });
 				return { content: [{ type: "text", text: "sent" }], details: {
+					requestTitle: "Fixture request",
 					messageId: "answer-a", requestMessageId: "request-a", messageStatus: "sent",
 				}, terminate: true };
 			},

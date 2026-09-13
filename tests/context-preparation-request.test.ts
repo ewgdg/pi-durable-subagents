@@ -15,6 +15,7 @@ import {
 
 test("context preparation is an exact optional Agent Request field", () => {
 	const request = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: "recipient-agent",
 		question: "Continue the bounded implementation work.",
@@ -25,10 +26,12 @@ test("context preparation is an exact optional Agent Request field", () => {
 	};
 	assert.deepEqual(validateAgentMessageInput(request), request);
 	assert.deepEqual(validateAgentMessageInput({
+		title: "Fixture request",
 		operation: "request",
 		targetAgent: "recipient-agent",
 		question: "Use ordinary Pi compaction behavior.",
 	}), {
+		title: "Fixture request",
 		operation: "request",
 		targetAgent: "recipient-agent",
 		question: "Use ordinary Pi compaction behavior.",
@@ -42,6 +45,7 @@ test("context preparation is an exact optional Agent Request field", () => {
 		{ workScale: "small", contextDependence: "low", extra: true },
 	]) {
 		assert.throws(() => validateAgentMessageInput({
+			title: "Fixture request",
 			operation: "request",
 			targetAgent: "recipient-agent",
 			question: "Reject incomplete preparation intent.",
@@ -68,6 +72,7 @@ test("context preparation is an exact optional Agent Request field", () => {
 		contextPreparation: { workScale: "small", contextDependence: "high" },
 	}), false);
 	assert.equal(sameAgentMessageInput(request, {
+		title: "Fixture request",
 		operation: "request",
 		targetAgent: request.targetAgent,
 		question: request.question,
@@ -79,6 +84,7 @@ test("committed preparation intent stays outside the model-visible Request proje
 	const workflowId = "working-zone-workflow";
 	const toolCallId = "prepared-request-call";
 	const input = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: "recipient-agent",
 		question: "Continue from the context you already acquired.",
@@ -108,6 +114,7 @@ test("committed preparation intent stays outside the model-visible Request proje
 	assert.deepEqual(createMessageDeliveryItem(message), {
 		source: { agentId: fromAgentId, entryId, toolCallId },
 		projection: {
+			title: "Fixture request",
 			kind: "request",
 			requestMessageId: message.messageId,
 			fromAgentId,

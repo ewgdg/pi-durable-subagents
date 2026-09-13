@@ -274,7 +274,7 @@ async function spawnRetainedChild(
 		host.session,
 		"agent_spawn",
 		toolCallId,
-		{ request: "Remain live for interactive host conformance." },
+		{ title: "Fixture request", request: "Remain live for interactive host conformance." },
 	);
 	assert.deepEqual(
 		{

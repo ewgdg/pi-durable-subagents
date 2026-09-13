@@ -45,7 +45,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Wait for direct coordination." },
+				{ title: "Fixture request", request: "Wait for direct coordination." },
 				{ id: "spawn-message-recipient" },
 			),
 			{ stopReason: "toolUse" },
@@ -206,7 +206,7 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Wait while Message evidence is inspected." },
+				{ title: "Fixture request", request: "Wait while Message evidence is inspected." },
 				{ id: "spawn-poll-recipient" },
 			),
 			{ stopReason: "toolUse" },
@@ -395,7 +395,7 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Remain busy until the retry race is admitted." },
+				{ title: "Fixture request", request: "Remain busy until the retry race is admitted." },
 				{ id: "spawn-busy-recipient" },
 			),
 			{ stopReason: "toolUse" },
@@ -546,13 +546,14 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "This Creation Request remains unscheduled." },
+				{ title: "Fixture request", request: "This Creation Request remains unscheduled." },
 				{ id: spawnToolCallId },
 			),
 			{ stopReason: "toolUse" },
 		),
 	);
 	const spawn = await view.spawn(spawnToolCallId, {
+		title: "Fixture request",
 		request: "This Creation Request remains unscheduled.",
 	});
 	assert.equal(spawn.spawnStatus, "created");
@@ -631,6 +632,7 @@ test("Messages and Requests accept an exact label or unique Agent ID suffix", as
 			content: "Resolve this exact Agent label.",
 		},
 		{
+			title: "Fixture request",
 			operation: "request" as const,
 			targetAgent: harness.childId.slice(-8),
 			question: "Resolve this unique Agent ID suffix.",
@@ -665,6 +667,7 @@ test("ordinary Agent labels use its coordination neighborhood while ID suffixes 
 	});
 	const siblingSpawnCallId = "spawn-owner-labeled-sibling";
 	const siblingSpawnInput = {
+		title: "Fixture request",
 		request: "Remain outside the caller's label neighborhood.",
 		label: "Owner",
 	};
@@ -713,6 +716,7 @@ test("Agent Message rejects duplicate labels instead of choosing one recipient",
 	const duplicateLabel = harness.view.status(harness.childId).label;
 	const spawnToolCallId = "spawn-duplicate-label-recipient";
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Remain dormant as the duplicate-label target.",
 		label: duplicateLabel,
 	};
@@ -787,6 +791,7 @@ test("retry keeps the Agent resolved by the original selector after labels becom
 
 	const spawnToolCallId = "spawn-later-duplicate-label";
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Create ambiguity after the target is fixed.",
 		label,
 	};
@@ -850,6 +855,7 @@ test("recipient Delivery keeps a selector target fixed when the author result is
 
 	const spawnToolCallId = "spawn-duplicate-after-result-loss";
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Duplicate the label after recipient proof exists.",
 		label,
 	};
@@ -1337,13 +1343,14 @@ test("only the original sender can poll a Message", async (t) => {
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Receive a Message but do not impersonate its sender." },
+				{ title: "Fixture request", request: "Receive a Message but do not impersonate its sender." },
 				{ id: "spawn-poll-authorization-child" },
 			),
 			{ stopReason: "toolUse" },
 		),
 	);
 	const spawnReceipt = await ownerView.spawn("spawn-poll-authorization-child", {
+		title: "Fixture request",
 		request: "Receive a Message but do not impersonate its sender.",
 	});
 	assert.ok("agentId" in spawnReceipt && typeof spawnReceipt.agentId === "string");
@@ -2369,13 +2376,14 @@ async function createDormantChildHarness(
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Remain dormant until an ordering probe arrives." },
+				{ title: "Fixture request", request: "Remain dormant until an ordering probe arrives." },
 				{ id: spawnToolCallId },
 			),
 			{ stopReason: "toolUse" },
 		),
 	);
 	const spawn = await view.spawn(spawnToolCallId, {
+		title: "Fixture request",
 		request: "Remain dormant until an ordering probe arrives.",
 	});
 	const childId = "agentId" in spawn ? spawn.agentId : undefined;

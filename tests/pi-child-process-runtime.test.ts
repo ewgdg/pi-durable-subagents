@@ -490,6 +490,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 				toolCallId: "omitted-request-call",
 			},
 			projection: {
+				title: "Fixture request",
 				kind: "request" as const,
 				requestMessageId: "omitted-request-call",
 				fromAgentId: "working-zone-requester",
@@ -523,6 +524,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 				toolCallId: "active-steer-call",
 			},
 			projection: {
+				title: "Fixture request",
 				kind: "request" as const,
 				requestMessageId: "active-steer-call",
 				fromAgentId: "working-zone-requester",
@@ -571,6 +573,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 				toolCallId: "declined-compaction-call",
 			},
 			projection: {
+				title: "Fixture request",
 				kind: "request" as const,
 				requestMessageId: "declined-compaction-call",
 				fromAgentId: "working-zone-requester",
@@ -615,6 +618,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 				toolCallId: "cancelled-preparation-call",
 			},
 			projection: {
+				title: "Fixture request",
 				kind: "request" as const,
 				requestMessageId: "cancelled-preparation-call",
 				fromAgentId: "working-zone-requester",
@@ -665,6 +669,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 				toolCallId: "prepared-request-call",
 			},
 			projection: {
+				title: "Fixture request",
 				kind: "request" as const,
 				requestMessageId: "prepared-request-call",
 				fromAgentId: "working-zone-requester",

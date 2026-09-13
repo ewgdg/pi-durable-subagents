@@ -38,7 +38,7 @@ test("Moderator reports return without human waiting and survive independent inc
 		return fauxAssistantMessage("Recovery complete; the report remains available.");
 	};
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Demonstrate an unresolved Answer obligation." }, { id: "spawn-report-case" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Demonstrate an unresolved Answer obligation." }, { id: "spawn-report-case" }), { stopReason: "toolUse" }),
 		...Array.from({ length: 12 }, () => route),
 	]);
 	const prompt = host.session.prompt("Create a report and recover independently.");

@@ -94,7 +94,7 @@ test("real child reminder admission defers active work and serializes clear vers
 				source: { agentId: "sender", entryId: kind + "-entry", toolCallId: kind + "-call" },
 				projection: kind === "message"
 					? { kind, messageId: kind + "-call", fromAgentId: "sender", content }
-					: { kind, requestMessageId: kind + "-call", fromAgentId: "sender", question: content },
+					: { title: "Fixture request", kind, requestMessageId: kind + "-call", fromAgentId: "sender", question: content },
 			}]);
 			const delivery = runtime.deliver({ kind: "custom", message, triggerTurn: true }, {
 				inspectCommit: () => SessionManager.open(sessionPath).getEntries().some(

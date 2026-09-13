@@ -8,10 +8,12 @@ import { validateAgentSpawnInput } from "../src/protocol/agent-spawn-input.ts";
 
 test("Agent Spawn accepts an unconfigured conversation fork", () => {
 	assert.deepEqual(validateAgentSpawnInput({
+		title: "Fixture request",
 		request: "Continue from the spawning conversation.",
 		conversation: "fork",
 		label: "continuation",
 	}), {
+		title: "Fixture request",
 		request: "Continue from the spawning conversation.",
 		conversation: "fork",
 		label: "continuation",
@@ -24,16 +26,18 @@ test("conversation forks accept independent Template and Runtime configuration",
 		{ config: { allowedTools: ["read"] } },
 		{ template: "reviewer", config: { allowedTools: ["read"] } },
 	]) {
-		const input = { request: "Continue with the selected setup.", conversation: "fork", ...configuration };
+		const input = { title: "Fixture request", request: "Continue with the selected setup.", conversation: "fork", ...configuration };
 		assert.deepEqual(validateAgentSpawnInput(input), input);
 	}
 });
 
 test("Agent Spawn accepts allowedTools as the tool capability ceiling", () => {
 	assert.deepEqual(validateAgentSpawnInput({
+		title: "Fixture request",
 		request: "Inspect the child Runtime.",
 		config: { allowedTools: ["read", "extension_tool"] },
 	}), {
+		title: "Fixture request",
 		request: "Inspect the child Runtime.",
 		config: { allowedTools: ["read", "extension_tool"] },
 	});
@@ -43,6 +47,7 @@ test("Agent Spawn accepts allowedTools as the tool capability ceiling", () => {
 	]) {
 		assert.throws(
 			() => validateAgentSpawnInput({
+				title: "Fixture request",
 				request: "Do not retain an obsolete tool field.",
 				config,
 			}),
@@ -54,6 +59,7 @@ test("Agent Spawn accepts allowedTools as the tool capability ceiling", () => {
 test("Agent Spawn rejects extension path arrays at input validation", () => {
 	assert.throws(
 		() => validateAgentSpawnInput({
+			title: "Fixture request",
 			request: "Inspect the child Runtime.",
 			config: { extensions: ["/extensions/arbitrary.ts"] },
 		}),
@@ -63,6 +69,7 @@ test("Agent Spawn rejects extension path arrays at input validation", () => {
 
 test("Agent Spawn validates independent system-prompt and context-file controls", () => {
 	assert.deepEqual(validateAgentSpawnInput({
+		title: "Fixture request",
 		request: "Use the native project instructions with a focused prompt.",
 		config: {
 			systemPrompt: "Focus on the assigned task.",
@@ -70,6 +77,7 @@ test("Agent Spawn validates independent system-prompt and context-file controls"
 			loadContextFiles: true,
 		},
 	}), {
+		title: "Fixture request",
 		request: "Use the native project instructions with a focused prompt.",
 		config: {
 			systemPrompt: "Focus on the assigned task.",
@@ -79,6 +87,7 @@ test("Agent Spawn validates independent system-prompt and context-file controls"
 	});
 	assert.throws(
 		() => validateAgentSpawnInput({
+			title: "Fixture request",
 			request: "A prompt mode needs a prompt body.",
 			config: { systemPromptMode: "replace" },
 		}),
@@ -86,6 +95,7 @@ test("Agent Spawn validates independent system-prompt and context-file controls"
 	);
 	assert.throws(
 		() => validateAgentSpawnInput({
+			title: "Fixture request",
 			request: "The aggregate context fields are obsolete.",
 			config: { projectContext: "obsolete" },
 		}),
@@ -95,11 +105,13 @@ test("Agent Spawn validates independent system-prompt and context-file controls"
 
 test("Agent Spawn validates model overrides with explicit inheritance", () => {
 	assert.deepEqual(validateAgentSpawnInput({
+		title: "Fixture request",
 		request: "Use an explicit model with inherited thinking.",
 		config: {
 			model: { id: "provider/model", thinking: "inherit" },
 		},
 	}), {
+		title: "Fixture request",
 		request: "Use an explicit model with inherited thinking.",
 		config: {
 			model: {
@@ -109,17 +121,20 @@ test("Agent Spawn validates model overrides with explicit inheritance", () => {
 		},
 	});
 	assert.deepEqual(validateAgentSpawnInput({
+		title: "Fixture request",
 		request: "Use an inherited model with explicit thinking.",
 		config: {
 			model: { id: "inherit", thinking: "max" },
 		},
 	}).config?.model, { id: "inherit", thinking: "max" });
 	assert.deepEqual(validateAgentSpawnInput({
+		title: "Fixture request",
 		request: "Explicitly inherit both values.",
 		config: { model: { id: "inherit", thinking: "inherit" } },
 	}).config?.model, { id: "inherit", thinking: "inherit" });
 	assert.throws(
 		() => validateAgentSpawnInput({
+			title: "Fixture request",
 			request: "Standalone thinking is obsolete.",
 			config: { thinking: "high" },
 		}),
@@ -129,12 +144,12 @@ test("Agent Spawn validates model overrides with explicit inheritance", () => {
 
 test("Agent Spawn schema and validation accept independently omitted model fields", () => {
 	for (const model of [{}, { id: "provider/model" }, { thinking: "high" }, { id: "inherit" }, { thinking: "inherit" }]) {
-		const input = { request: "Use selected defaults.", config: { model } };
+		const input = { title: "Fixture request", request: "Use selected defaults.", config: { model } };
 		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
 		assert.deepEqual(validateAgentSpawnInput(input), input);
 	}
 	for (const model of [{ id: "invalid" }, { thinking: "invalid" }, { extra: true }, { id: null }, { thinking: null }]) {
-		const input = { request: "Reject invalid configuration.", config: { model } };
+		const input = { title: "Fixture request", request: "Reject invalid configuration.", config: { model } };
 		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), false);
 		assert.throws(() => validateAgentSpawnInput(input), /invalid/);
 	}

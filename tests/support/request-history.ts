@@ -19,6 +19,7 @@ export function requestHistory() {
 	function request(from = requester, to = responder, delivered = true) {
 		const question = `Question ${++sequence}`;
 		const source = appendCall(from, `request-${sequence}`, {
+			title: "Fixture request",
 			operation: "request",
 			targetAgent: to.record.identity.agentId,
 			question,
@@ -32,6 +33,7 @@ export function requestHistory() {
 		if (delivered) appendDelivery(to.manager, {
 			source,
 			projection: {
+				title: "Fixture request",
 				kind: "request",
 				requestMessageId: requestId,
 				fromAgentId: from.record.identity.agentId,
@@ -47,6 +49,7 @@ export function requestHistory() {
 			answer: "Completed.",
 		});
 		appendResult(from.manager, source, {
+			requestTitle: "Fixture request",
 			messageId: deriveMessageIdentity(source),
 			requestMessageId: requestId,
 			messageStatus: "sent",
@@ -54,6 +57,7 @@ export function requestHistory() {
 		appendDelivery(to.manager, {
 			source,
 			projection: {
+				requestTitle: "Fixture request",
 				kind: "answer",
 				answerId: deriveMessageIdentity(source),
 				requestMessageId: requestId,

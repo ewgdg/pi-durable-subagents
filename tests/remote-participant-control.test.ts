@@ -27,11 +27,11 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	const calls: unknown[] = [];
 	const waitUpdates: unknown[] = [];
 	let waitProgressHandler: ((progress: {
-		waitingFor: readonly { requestMessageId: string; responderAgentId: string }[];
+		waitingFor: readonly { requestMessageId: string; requestTitle: string; responderAgentId: string }[];
 	}) => void) | undefined;
 	let waitProgressRemoved = false;
 	const waitProgress = {
-		waitingFor: [{ requestMessageId: "request-1", responderAgentId: "target" }],
+		waitingFor: [{ requestTitle: "Fixture request", requestMessageId: "request-1", responderAgentId: "target" }],
 	} as const;
 	const cancellation = new AbortController();
 	const request = (async (
@@ -302,6 +302,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 test("Owner dispatch publishes the admitted Agent Wait snapshot", async () => {
 	const progress = {
 		waitingFor: [{
+			requestTitle: "Fixture request",
 			requestMessageId: "remote-wait-request",
 			responderAgentId: "responder-agent",
 		}],

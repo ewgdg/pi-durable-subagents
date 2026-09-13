@@ -51,6 +51,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		fauxAssistantMessage("The child completed its initial Creation Request."),
 	]);
 	const spawned = await executeTool(host, "agent_spawn", "spawn-before-host-loss", {
+		title: "Fixture request",
 		request: "Complete initial work, then become dormant.",
 		label: "recovered-child",
 		config: { cwd: effectiveCwd },
@@ -74,6 +75,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 			fauxToolCall(
 				"agent_spawn",
 				{
+					title: "Fixture request",
 					request: "Remain a verified nested descendant after restart.",
 					label: "recovered-grandchild",
 				},
@@ -190,6 +192,7 @@ test("a fresh Owner host rediscovers a conversation-fork child without copied ob
 	const historicalDelivery = createMessageDelivery([{
 		source: historicalSource,
 		projection: {
+			title: "Fixture request",
 			kind: "request",
 			requestMessageId: historicalRequestId,
 			fromAgentId: historicalSource.agentId,
@@ -212,6 +215,7 @@ test("a fresh Owner host rediscovers a conversation-fork child without copied ob
 		),
 	]);
 	const spawned = await executeTool(host, "agent_spawn", "spawn-fork-before-host-loss", {
+		title: "Fixture request",
 		request: "Continue with inherited conversation before host loss.",
 		conversation: "fork",
 		label: "recovered-fork",
@@ -300,6 +304,7 @@ test("a fresh Owner host rediscovers a conversation-fork child without copied ob
 		return fauxAssistantMessage("Configured fork recovery observed.");
 	}]);
 	await executeTool(reopened, "agent_message", "restart-configured-fork", {
+		title: "Fixture request",
 		operation: "request",
 		targetAgent: spawned.agentId,
 		question: "Verify the configured fork after cold recovery.",
@@ -321,10 +326,12 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		fauxAssistantMessage("Independent child settled."),
 	]);
 	const first = await executeTool(host, "agent_spawn", "spawn-conflicted-child", {
+		title: "Fixture request",
 		request: "Become the conflicted subtree root.",
 		label: "conflicted-root",
 	}) as { agentId: string };
 	const independent = await executeTool(host, "agent_spawn", "spawn-independent-child", {
+		title: "Fixture request",
 		request: "Remain independently verifiable.",
 		label: "independent-child",
 	}) as { agentId: string };
@@ -344,6 +351,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	await host.runtime.dispose();
 	const ownerTranscript = SessionManager.open(ownerSessionFile);
 	const outboundRequestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: first.agentId,
 		question: "Remain waiting even when the responder transcript is quarantined.",
@@ -380,7 +388,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Remain foreign to the active Workflow." },
+				{ title: "Fixture request", request: "Remain foreign to the active Workflow." },
 				{ id: "spawn-foreign-candidate" },
 			),
 			{ stopReason: "toolUse" },
@@ -404,6 +412,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 
 	const firstTranscript = SessionManager.open(firstFile);
 	const inboundRequestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: host.session.sessionId,
 		question: "Remain answer-owed even when the requester transcript is quarantined.",
@@ -426,6 +435,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		{
 			source: inboundSource,
 			projection: {
+				title: "Fixture request",
 				kind: "request",
 				requestMessageId: inboundRequestId,
 				fromAgentId: first.agentId,
@@ -448,7 +458,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Remain dependent on the conflicted root." },
+				{ title: "Fixture request", request: "Remain dependent on the conflicted root." },
 				{ id: "spawn-dependent-grandchild" },
 			),
 			{ stopReason: "toolUse" },
@@ -598,6 +608,7 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 		"agent_spawn",
 		"spawn-cold-dormant-inspection-child",
 		{
+			title: "Fixture request",
 			request: "Keep this Creation Request unresolved across host loss.",
 			label: "cold-dormant-inspection-child",
 		},
@@ -666,6 +677,7 @@ test("cold successor retains captured template rules after rename and recovers r
 		fauxAssistantMessage("Initial work settled without answering the Creation Request."),
 	]);
 	const spawned = await executeTool(host, "agent_spawn", "spawn-residual-request-child", {
+		title: "Fixture request",
 		request: "Keep this Creation Request unresolved across host loss.",
 		template: "residual-agent",
 		label: "residual-child",
@@ -780,6 +792,7 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 		fauxAssistantMessage("The self Request is delivered but remains unanswered."),
 	]);
 	const request = await executeTool(host, "agent_message", "self-request-before-branch", {
+		title: "Fixture request",
 		operation: "request",
 		targetAgent: host.session.sessionId,
 		question: "Remain unresolved on an abandoned physical branch.",
@@ -858,10 +871,12 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 		fauxAssistantMessage("Second ordered child settled."),
 	]);
 	const first = await executeTool(host, "agent_spawn", "spawn-physical-first", {
+		title: "Fixture request",
 		request: "Remain first in structural order.",
 		label: "physical-first",
 	}) as { agentId: string };
 	const second = await executeTool(host, "agent_spawn", "spawn-physical-second", {
+		title: "Fixture request",
 		request: "Become most recent in the dormant roster.",
 		label: "recent-second",
 	}) as { agentId: string };
@@ -927,7 +942,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Settle while still owing this Creation Request." },
+				{ title: "Fixture request", request: "Settle while still owing this Creation Request." },
 				{ id: "spawn-cold-moderator-trigger" },
 			),
 			{ stopReason: "toolUse" },
@@ -1077,6 +1092,7 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		"agent_spawn",
 		"spawn-exhausted-attention-before-reopen",
 		{
+			title: "Fixture request",
 			request: "Settle while still owing this Creation Request.",
 			label: "Affected Agent",
 		},
@@ -1231,7 +1247,7 @@ test(`workflow_resume reactivates ${nested ? "nested" : "delivered"} unanswered 
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, implicitModeratorResponses: false });
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Pause before restart." }, { id: "pause-resume" }), { stopReason: "toolUse" })]);
-	const spawned = await executeTool(host, "agent_spawn", "resume-child", { request: "Recover this interrupted work." }) as { agentId: string };
+	const spawned = await executeTool(host, "agent_spawn", "resume-child", { title: "Fixture request", request: "Recover this interrupted work." }) as { agentId: string };
 	const file = await waitForSessionFile(workflowSessionDirectory(host), spawned.agentId);
 	await waitForTranscriptEntry(file, entry => entry.type === "message" && entry.message.role === "assistant");
 	const ownerFile = host.session.sessionManager.getSessionFile()!;
@@ -1243,11 +1259,11 @@ test(`workflow_resume reactivates ${nested ? "nested" : "delivered"} unanswered 
 		const appendRequest = (from: SessionManager, to: SessionManager, toolCallId: string, question: string) => {
 			const fromAgentId = from.getSessionId();
 			const targetAgentId = to.getSessionId();
-			const entryId = from.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: targetAgentId, question }, { id: toolCallId }), { stopReason: "toolUse" }));
+			const entryId = from.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", { title: "Fixture request", operation: "request", targetAgent: targetAgentId, question }, { id: toolCallId }), { stopReason: "toolUse" }));
 			const source = { agentId: fromAgentId, entryId, toolCallId };
 			const requestMessageId = deriveMessageIdentity(source);
 			from.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId, content: [{ type: "text", text: "sent" }], details: { requestMessageId, targetAgentId, messageStatus: "sent" }, isError: false, timestamp: Date.now() });
-			const delivery = createMessageDelivery([{ source, projection: { kind: "request", requestMessageId, fromAgentId, question } }]);
+			const delivery = createMessageDelivery([{ source, projection: { title: "Fixture request", kind: "request", requestMessageId, fromAgentId, question } }]);
 			to.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
 			return requestMessageId;
 		};
@@ -1293,7 +1309,7 @@ for (const boundary of ["before_request_delivery", "after_answer_commitment"] as
 		const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, implicitModeratorResponses: false });
 		await bindTestOwnerHost(host, "tui");
 		host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Pause." }, { id: "pause-boundary" }), { stopReason: "toolUse" })]);
-		const spawned = await executeTool(host, "agent_spawn", "boundary-spawn", { request: "Original boundary work." }) as { agentId: string; requestMessageId: string };
+		const spawned = await executeTool(host, "agent_spawn", "boundary-spawn", { title: "Fixture request", request: "Original boundary work." }) as { agentId: string; requestMessageId: string };
 		const file = await waitForSessionFile(workflowSessionDirectory(host), spawned.agentId);
 		await waitForTranscriptEntry(file, entry => entry.type === "message" && entry.message.role === "assistant");
 		const ownerFile = host.session.sessionManager.getSessionFile()!;
@@ -1310,7 +1326,7 @@ for (const boundary of ["before_request_delivery", "after_answer_commitment"] as
 				operation: "answer", requestId: spawned.requestMessageId, answer: "Original committed Answer.",
 			}, { id: toolCallId }), { stopReason: "toolUse" }));
 			manager.appendMessage({ role: "toolResult", toolCallId, toolName: "agent_message", content: [{ type: "text", text: "Committed" }],
-				details: { messageId: deriveMessageIdentity({ agentId: spawned.agentId, entryId, toolCallId }), requestMessageId: spawned.requestMessageId, messageStatus: "sent" },
+				details: { requestTitle: "Fixture request", messageId: deriveMessageIdentity({ agentId: spawned.agentId, entryId, toolCallId }), requestMessageId: spawned.requestMessageId, messageStatus: "sent" },
 				isError: false, timestamp: Date.now() });
 		}
 		const reopened = await reopenOwner(t, host, ownerFile, { implicitModeratorResponses: false });
@@ -1410,8 +1426,8 @@ async function createHostWithDurableModelBroker(
 function implicitOperationalResponse(context: Context): string | undefined {
 	const latestMessage = JSON.stringify(context.messages.at(-1));
 	if (
-		latestMessage.includes("requestSnippet") &&
-		latestMessage.includes("You still owe an Answer to this Request.")
+		latestMessage.includes("requestTitle") &&
+		latestMessage.includes("This Request still needs an Answer.")
 	) return "I remain settled after the automatic Answer reminder.";
 	return isImplicitModeratorRequest(context)
 		? "I will wait for explicit Moderator work."
@@ -1600,7 +1616,7 @@ async function writeCyclicCandidates(
 			message: fauxAssistantMessage(
 				fauxToolCall(
 					"agent_spawn",
-					{ request: "Complete the cyclic authority fixture." },
+					{ title: "Fixture request", request: "Complete the cyclic authority fixture." },
 					{ id: candidate.spawnToolCallId },
 				),
 				{ stopReason: "toolUse" },

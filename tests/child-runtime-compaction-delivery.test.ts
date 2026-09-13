@@ -22,6 +22,7 @@ import { createTestOwnerHost } from "./support/pi-host.ts";
 const preparation: WorkingZonePreparation = {
 	intent: { workScale: "large", contextDependence: "low" },
 	prospectiveRequest: {
+		title: "Fixture request",
 		kind: "request",
 		requestMessageId: "prepared-request",
 		fromAgentId: "requester",

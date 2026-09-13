@@ -43,7 +43,7 @@ for (const failure of ["admission rejection", "renamed working directory"] as co
 		if (failure === "renamed working directory") {
 			const cwd = join(harness.host.cwd, "responder-project");
 			await mkdir(cwd);
-			const spawnInput = { request: "Wait for work in this project.", config: { cwd } };
+			const spawnInput = { title: "Fixture request", request: "Wait for work in this project.", config: { cwd } };
 			harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
 				fauxToolCall("agent_spawn", spawnInput, { id: "spawn-with-project-cwd" }), { stopReason: "toolUse" },
 			));
@@ -53,7 +53,7 @@ for (const failure of ["admission rejection", "renamed working directory"] as co
 			await rename(cwd, `${cwd}-renamed`);
 		}
 		const before = retentionCount(harness.view.status().run, "awaiting_answer");
-		const input = { operation: "request" as const, targetAgent: harness.childId, question: "This work was never admitted." };
+		const input = { title: "Fixture request", operation: "request" as const, targetAgent: harness.childId, question: "This work was never admitted." };
 		const toolCallId = "request-definite-non-admission";
 		harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
 			fauxToolCall("agent_message", input, { id: toolCallId }), { stopReason: "toolUse" },
@@ -97,6 +97,7 @@ test("Request commitment retains its requester and Delivery obligates its respon
 	assert.equal(harness.view.status(harness.childId).run.phase, "dormant");
 
 	const input = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Which exact transcript fact proves the release handoff?",
@@ -158,6 +159,7 @@ test("Request commitment retains its requester and Delivery obligates its respon
 	assert.deepEqual(JSON.parse(delivery.content as string), {
 		messages: [
 			{
+				title: "Fixture request",
 				kind: "request",
 				requestMessageId: requestId,
 				fromAgentId: harness.host.session.sessionId,
@@ -209,6 +211,7 @@ test("a prepared continuation Request crosses retry scheduling into child workin
 	]);
 	const toolCallId = "prepared-continuation-request";
 	const input = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Continue issue 83 using the relevant context already acquired.",
@@ -273,6 +276,7 @@ test("a prepared continuation Request crosses retry scheduling into child workin
 	assert.ok(delivery?.type === "custom_message");
 	assert.deepEqual(JSON.parse(delivery.content as string), {
 		messages: [{
+			title: "Fixture request",
 			kind: "request",
 			requestMessageId: receipt.requestMessageId,
 			fromAgentId: harness.host.session.sessionId,
@@ -298,6 +302,7 @@ test("an active responder rejects ordinary Message authorship to its requester w
 				content: "This provisional finding must not enter the Answer route.",
 			}, { id: rejectedCallId }),
 			fauxToolCall("agent_message", {
+				title: "Fixture request",
 				operation: "request",
 				targetAgent: harness.host.session.sessionId,
 				question: "Which requester decision is required before the curated Answer?",
@@ -491,6 +496,7 @@ test("a Steer Request reaches an occupied responder and cancelling the earlier R
 
 	const firstCallId = "serial-request-first";
 	const firstInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Hold the incoming Request slot.",
@@ -535,6 +541,7 @@ test("a Steer Request reaches an occupied responder and cancelling the earlier R
 
 	const secondCallId = "serial-request-second-steer";
 	const secondInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Bring this Request to attention while the earlier one remains outstanding.",
@@ -640,6 +647,7 @@ test("an explicit Answer resolves its named Request and releases queued Deferred
 
 	const authorRequest = async (toolCallId: string, question: string) => {
 		const input = {
+			title: "Fixture request",
 			operation: "request" as const,
 			targetAgent: harness.childId,
 			question,
@@ -738,6 +746,7 @@ test("status reports exact Request retention multiplicity", async (t) => {
 	for (const suffix of ["first", "second"]) {
 		const toolCallId = `request-retention-${suffix}`;
 		const input = {
+			title: "Fixture request",
 			operation: "request" as const,
 			targetAgent: harness.childId,
 			question: `Retain the ${suffix} exact Request.`,
@@ -816,6 +825,7 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 	});
 	const requestToolCallId = "request-before-lost-retry-confirmation";
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Retry this same Request while its initial admission is uncertain.",
@@ -865,6 +875,7 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 test("only the requester may cancel and only the responder may Answer", async (t) => {
 	const harness = await createDormantChildHarness(t);
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Keep participant authority fixed by this Request.",
@@ -977,6 +988,7 @@ test("Answer commitment survives lost scheduling confirmation", async (t) => {
 		},
 	});
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Report the first canonical Answer only.",
@@ -1098,6 +1110,7 @@ test("Answer commitment survives lost scheduling confirmation", async (t) => {
 		"Answer obligation remains until the native tool result commits",
 	);
 	assert.deepEqual(firstResult.message.details, {
+		requestTitle: "Fixture request",
 		messageId: answerId,
 		requestMessageId: requestId,
 		messageStatus: "unknown",
@@ -1157,6 +1170,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 			operation === "answer" ? "confirmed_failure" : undefined,
 	});
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Return the committed Answer through Request retry.",
@@ -1242,6 +1256,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 		throw new Error("Answer result did not commit");
 	}
 	assert.deepEqual(answerResult.message.details, {
+		requestTitle: "Fixture request",
 		messageId: answerId,
 		requestMessageId: requestId,
 		messageStatus: "not_sent",
@@ -1258,6 +1273,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	);
 	const retrieval = await harness.view.message(retryToolCallId, retryInput);
 	assert.deepEqual(retrieval, {
+		requestTitle: "Fixture request",
 		disposition: "answer_delivered",
 		requestMessageId: requestId,
 		answerId,
@@ -1287,6 +1303,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	);
 	const repeated = await harness.view.message(repeatedRetryCallId, retryInput);
 	assert.deepEqual(repeated, {
+		requestTitle: "Fixture request",
 		disposition: "answer_already_delivered",
 		requestMessageId: requestId,
 		answerId,
@@ -1306,6 +1323,7 @@ test("Agent Wait retrieves an outstanding Answer and rejects a join once none re
 	});
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-lost-answer-wait");
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Return the committed Answer through Agent Wait.",
@@ -1393,12 +1411,14 @@ test("Agent Wait retrieves an outstanding Answer and rejects a join once none re
 	);
 	assert.deepEqual(progress, {
 		waitingFor: [{
+			requestTitle: "Fixture request",
 			requestMessageId: requestId,
 			responderAgentId: harness.childId,
 		}],
 	});
 	assert.deepEqual(result, {
 		answers: [{
+			requestTitle: "Fixture request",
 			disposition: "answer_delivered",
 			requestMessageId: requestId,
 			answerId: deriveMessageId(answerSource),
@@ -1546,6 +1566,7 @@ test("Agent Wait joins every outstanding Request in authoring order", async (t) 
 
 	const authorRequest = async (toolCallId: string, question: string) => {
 		const input = {
+			title: "Fixture request",
 			operation: "request" as const,
 			targetAgent: harness.childId,
 			question,
@@ -1602,11 +1623,13 @@ test("Agent Wait excludes Requests authored after its call in the same tool batc
 	});
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-wait-boundary");
 	const firstRequestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Answer the Request before the Wait boundary.",
 	};
 	const laterRequestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Remain outside the preceding Wait boundary.",
@@ -1697,6 +1720,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 	});
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-held-answer-wait");
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Commit an Answer while its direct Delivery is held.",
@@ -1788,6 +1812,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 	assert.deepEqual(result, {
 		answers: [
 			{
+				requestTitle: "Fixture request",
 				disposition: "answer_delivered",
 				requestMessageId: requestId,
 				answerId,
@@ -1848,6 +1873,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 		),
 	);
 	assert.deepEqual(await harness.view.message(retryToolCallId, retryInput), {
+		requestTitle: "Fixture request",
 		disposition: "answer_already_delivered",
 		requestMessageId: requestId,
 		answerId,
@@ -1900,6 +1926,7 @@ test("Request retry retrieval retires a queued direct Answer Delivery before it 
 		afterSteerFreeze: () => commitRetryRetrieval?.(),
 	});
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Commit an Answer while retry wins its direct Delivery freeze.",
@@ -1977,6 +2004,7 @@ test("Request retry retrieval retires a queued direct Answer Delivery before it 
 	);
 	const result = await harness.view.message(retryToolCallId, retryInput);
 	assert.deepEqual(result, {
+		requestTitle: "Fixture request",
 		disposition: "answer_delivered",
 		requestMessageId: requestId,
 		answerId,
@@ -2045,6 +2073,7 @@ test("a retired Delivery dispatch callback cannot bypass a later queued Message"
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-stale-dispatch-wait");
 	ownerAgentId = harness.host.session.sessionId;
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Answer, then send a separate follow-up Message.",
@@ -2252,6 +2281,7 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 	ownerAgentId = harness.host.session.sessionId;
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-rearbitrated-wait");
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Let the reserved direct Answer Delivery commit before Agent Wait.",
@@ -2423,6 +2453,7 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 	const committedWaitResult = {
 		answers: [
 			{
+				requestTitle: "Fixture request",
 				disposition: "answer_already_delivered" as const,
 				requestMessageId: requestId,
 				answerId,
@@ -2471,6 +2502,7 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-resolved-fence-wait");
 	const requestToolCallId = "request-before-fenced-wait";
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Commit an Answer before the requester wait is fenced.",
@@ -2595,6 +2627,7 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 	const ownerAgentId = harness.host.session.sessionId;
 	const selectedRequestToolCallId = "request-before-preemption-fence";
 	const selectedRequestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Remain unanswered while preemption loses its exact Run.",
@@ -2640,6 +2673,7 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 			fauxToolCall(
 				"agent_message",
 				{
+					title: "Fixture request",
 					operation: "request",
 					targetAgent: ownerAgentId,
 					question: "Preempt the wait before its exact Run is fenced.",
@@ -2741,6 +2775,7 @@ test("Agent Wait parks the Owner Run until the pending Answer commits", async (t
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-capacity-wait");
 	const requestToolCallId = "request-before-capacity-wait";
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Answer only after the requester parks its execution.",
@@ -2897,6 +2932,7 @@ test("primary input in a selected child preempts Agent Wait before its next mode
 				fauxToolCall(
 					"agent_message",
 					{
+						title: "Fixture request",
 						operation: "request",
 						targetAgent: ownerAgentId!,
 						question: "Remain unanswered while the child receives human direction.",
@@ -2979,6 +3015,7 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 	const originalRequestToolCallId = "request-before-reverse-preemption";
 	const originalQuestion = "Ask the requester for one decision before answering.";
 	const originalRequestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: originalQuestion,
@@ -3070,6 +3107,7 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 			fauxToolCall(
 				"agent_message",
 				{
+					title: "Fixture request",
 					operation: "request",
 					targetAgent: ownerAgentId,
 					question: reverseQuestion,
@@ -3161,6 +3199,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 	ownerAgentId = harness.host.session.sessionId;
 	const spawnThirdPartyToolCallId = "spawn-third-party-requester";
 	const spawnThirdPartyInput = {
+		title: "Fixture request",
 		request: "Wait for a trigger, then ask the Owner an unrelated Request.",
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -3180,6 +3219,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 
 	const selectedRequestToolCallId = "request-selected-other-responder";
 	const selectedRequestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Remain unanswered while a third party asks for attention.",
@@ -3264,6 +3304,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 			fauxToolCall(
 				"agent_message",
 				{
+					title: "Fixture request",
 					operation: "request",
 					targetAgent: ownerAgentId,
 					question: thirdPartyQuestion,
@@ -3386,6 +3427,7 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 	ownerAgentId = harness.host.session.sessionId;
 	const selectedRequestToolCallId = "request-before-completion-race";
 	const selectedRequestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Commit the selected Answer at the inbound Request race boundary.",
@@ -3459,6 +3501,7 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 			toolName: "agent_message",
 			content: [{ type: "text", text: "Selected Answer committed." }],
 			details: {
+				requestTitle: "Fixture request",
 				messageId: deriveMessageId(selectedAnswerSource),
 				requestMessageId: selectedRequestId,
 				messageStatus: "not_sent",
@@ -3470,7 +3513,7 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 	};
 
 	const spawnThirdPartyToolCallId = "spawn-race-third-party";
-	const spawnThirdPartyInput = { request: "Ask an independent Request when triggered." };
+	const spawnThirdPartyInput = { title: "Fixture request", request: "Ask an independent Request when triggered." };
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_spawn", spawnThirdPartyInput, {
@@ -3520,6 +3563,7 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 			fauxToolCall(
 				"agent_message",
 				{
+					title: "Fixture request",
 					operation: "request",
 					targetAgent: ownerAgentId as string,
 					question: "This inbound Request reaches the answer race boundary.",
@@ -3572,6 +3616,7 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 	assert.equal(waitResult.message.isError, false);
 	assert.deepEqual(waitResult.message.details, {
 		answers: [{
+			requestTitle: "Fixture request",
 			disposition: "answer_delivered",
 			requestMessageId: selectedRequestId,
 			answerId: deriveMessageId(selectedAnswerSource),
@@ -3603,6 +3648,7 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-fallback-wait");
 	const requestToolCallId = "request-before-fallback-reconciliation";
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Leave this Request unanswered until transcript reconciliation.",
@@ -3677,6 +3723,7 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 		toolName: "agent_message",
 		content: [{ type: "text", text: "Answer committed without return scheduling." }],
 		details: {
+			requestTitle: "Fixture request",
 			messageId: deriveMessageId(answerSource),
 			requestMessageId: requestId,
 			messageStatus: "not_sent",
@@ -3697,6 +3744,7 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 	assert.equal(waitEntry.message.isError, false, JSON.stringify(waitEntry.message.content));
 	assert.deepEqual(waitEntry.message.details, {
 		answers: [{
+			requestTitle: "Fixture request",
 			disposition: "answer_delivered",
 			requestMessageId: requestId,
 			answerId: deriveMessageId(answerSource),
@@ -3715,6 +3763,7 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 			operation === "cancel" ? "confirmation_lost" : undefined,
 	});
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "This Request will be abandoned before Delivery.",
@@ -3902,6 +3951,7 @@ test("Cancellation delivered to a busy responder suppresses its queued Request",
 	await activeGenerationStarted;
 
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "This queued Request must be suppressed.",
@@ -3996,6 +4046,7 @@ test("Cancellation delivered to a busy responder suppresses its queued Request",
 test("Cancellation Delivery wins the responder lane before a later Answer", async (t) => {
 	const harness = await createDormantChildHarness(t);
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Wait until Cancellation arrives before attempting an Answer.",
@@ -4121,6 +4172,7 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 			operation === "answer" ? "confirmed_failure" : undefined,
 	});
 	const requestInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Commit an Answer before its return Delivery is available.",
@@ -4396,6 +4448,7 @@ test("a Creation Request occupies the same incoming Request slot", async (t) => 
 
 	const ordinaryCallId = "request-behind-creation-slot";
 	const ordinaryInput = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Wait behind the active Creation Request.",
@@ -4497,6 +4550,7 @@ test("residual inspection rejects an Answer result naming an unknown Request", a
 		toolName: "agent_message",
 		content: [{ type: "text", text: "Answer scheduling failed." }],
 		details: {
+			requestTitle: "Fixture request",
 			messageId: answerId,
 			requestMessageId: "x".repeat(43),
 			messageStatus: "not_sent",
@@ -4521,6 +4575,7 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 			fauxToolCall(
 				"agent_message",
 				{
+					title: "Fixture request",
 					operation: "request",
 					targetAgent: harness.host.session.sessionId,
 					question: "Answer after this exact requester Run has failed.",
@@ -4698,6 +4753,7 @@ async function createDormantChildHarness(
 	view = coordinator.forAgent(identity.agentId);
 	const spawnToolCallId = "spawn-request-responder";
 	const spawnInput = {
+		title: "Fixture request",
 		request: "Remain dormant until a correlated Request arrives.",
 	};
 	host.session.sessionManager.appendMessage(
@@ -4785,7 +4841,7 @@ async function spawnDormantSibling(
 	harness: DormantChildHarness,
 	toolCallId: string,
 ): Promise<string> {
-	const input = { request: "Remain dormant as an unrelated Message recipient." };
+	const input = { title: "Fixture request", request: "Remain dormant as an unrelated Message recipient." };
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_spawn", input, { id: toolCallId }),
@@ -4804,6 +4860,7 @@ async function authorOwnerRequest(
 	toolCallId: string,
 ): Promise<{ requestMessageId: string }> {
 	const input = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: harness.childId,
 		question: "Resolve this active Answer Obligation.",

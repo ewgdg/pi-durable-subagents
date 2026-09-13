@@ -39,6 +39,7 @@ host.model.setResponses([
 	fauxAssistantMessage("The detached child settles after its startup banner."),
 ]);
 const spawnResult = await executeTool(host.session, "agent_spawn", "pty-detached-spawn", {
+	title: "Fixture request",
 	request: "Remain live after your detached session_start.",
 	label: "Detached Child",
 });

@@ -9,6 +9,7 @@ import type { WorkingZonePreparation } from "../src/runtime/agent-runtime-host.t
 const preparation: WorkingZonePreparation = {
 	intent: { workScale: "large", contextDependence: "low" },
 	prospectiveRequest: {
+		title: "Fixture request",
 		kind: "request",
 		requestMessageId: "prepared-request",
 		fromAgentId: "requester-agent",

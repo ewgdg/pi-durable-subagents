@@ -466,6 +466,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 	]);
 
 	const spawned = await executeOwnerTool(host, "agent_spawn", "spawn-policy-child", {
+		title: "Fixture request",
 		request: "Remain available for prospective delivery-capacity checks.",
 	});
 	const childAgentId = (spawned as { agentId: string }).agentId;

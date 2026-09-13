@@ -43,7 +43,7 @@ test("initial Moderator startup counts as progress before native agent.start and
 		additionalExtensionPaths: [fileURLToPath(new URL("./fixtures/moderator-startup-gate.ts", import.meta.url))],
 	});
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Demonstrate a stalled obligation." },
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Demonstrate a stalled obligation." },
 			{ id: "spawn-for-startup-progress" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Delegated."),
 		fauxAssistantMessage("Still owe an Answer."),
@@ -117,7 +117,7 @@ test("termination queued behind Moderator startup cannot resurrect its Run", { t
 		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
 	});
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Demonstrate a stalled obligation." },
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Demonstrate a stalled obligation." },
 			{ id: "spawn-for-startup-termination" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Delegated."),
 		fauxAssistantMessage("Still owe an Answer."),

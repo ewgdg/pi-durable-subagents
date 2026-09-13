@@ -91,12 +91,14 @@ test("expanded Message Delivery shows each human-readable type and complete body
 	const requesterAgentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
 	const projections: ModelVisibleMessage[] = [
 		{
+			title: "Fixture request",
 			kind: "request",
 			requestMessageId: "request-one",
 			fromAgentId: requesterAgentId,
 			question: "Review the complete request body, including this final clause.",
 		},
 		{
+			requestTitle: "Fixture request",
 			kind: "answer",
 			answerId: "answer-one",
 			requestMessageId: "request-one",

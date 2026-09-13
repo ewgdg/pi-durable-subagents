@@ -741,6 +741,7 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 	const toolCallId = "resumed-agent-spawn";
 	const expandedMarker = "EXPANDED_ONLY_RESUMED_AGENT_SPAWN";
 	const input = {
+		title: "Fixture request",
 		request: "Verify historical Agent Spawn rendering after interactive resume.",
 		label: "Resumed Spawn Widget",
 	};
@@ -917,6 +918,7 @@ function routeCliRepeatResponse(context: Context): AssistantMessage {
 	}
 	return fauxAssistantMessage(
 		fauxToolCall("agent_spawn", {
+			title: "Fixture request",
 			request: "Remain available for repeated CLI Agent view attachment.",
 			label: "CLI Repeat Worker",
 		}, { id: "cli-repeat-spawn" }),

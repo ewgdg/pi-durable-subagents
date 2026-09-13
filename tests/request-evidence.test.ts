@@ -24,6 +24,7 @@ for (const outcome of [
 		const author = history.requester;
 		const toolCallId = "initial-request";
 		const entryId = author.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+			title: "Fixture request",
 			operation: "request", targetAgent: "responder", question: "Only admitted or uncertain work remains outstanding.",
 		}, { id: toolCallId })));
 		const requestMessageId = deriveMessageIdentity({ agentId: "requester", entryId, toolCallId });
@@ -92,6 +93,7 @@ test("Answer Delivery rejects a Retrieval that reuses its source for another Req
 		evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 		[],
 	);
+	const differentRequestId = history.request();
 	history.requester.manager.appendMessage({
 		role: "toolResult",
 		toolCallId: "conflicting-retrieval",
@@ -100,8 +102,9 @@ test("Answer Delivery rejects a Retrieval that reuses its source for another Req
 		isError: false,
 		timestamp: Date.now(),
 		details: {
+			requestTitle: "Fixture request",
 			disposition: "answer_delivered",
-			requestMessageId: "different-request",
+			requestMessageId: differentRequestId,
 			answerId: answer.messageId,
 			fromAgentId: answer.fromAgentId,
 			answer: answer.answer,
@@ -208,7 +211,7 @@ test("Creation Request lookup trusts loaded identity and creation input without 
 	const toolCallId = "spawn-worker";
 	const entryId = ownerSession.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", { request: "Review the result." }, { id: toolCallId }),
+			fauxToolCall("agent_spawn", { title: "Fixture request", request: "Review the result." }, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
@@ -222,7 +225,7 @@ test("Creation Request lookup trusts loaded identity and creation input without 
 		spawnSource: source,
 		metadata: { label: "Worker" },
 	};
-	child.creationInput = { request: "Review the result." };
+	child.creationInput = { title: "Fixture request", request: "Review the result." };
 	owner.transcript = new AgentTranscript({
 		read() {
 			throw new Error("Spawner history must not be revalidated");
@@ -244,6 +247,7 @@ test("Creation Request lookup trusts loaded identity and creation input without 
 	const requestId = deriveMessageIdentity(source);
 
 	assert.deepEqual(evidence.requireRequest(requestId), {
+		title: "Fixture request",
 		kind: "request",
 		origin: "agent_spawn",
 		messageId: requestId,

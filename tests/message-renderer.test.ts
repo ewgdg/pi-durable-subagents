@@ -86,6 +86,7 @@ test("send call marks steer delivery", () => {
 
 test("request call shows the [Request] badge and question preview", () => {
 	const rendered = renderCall({
+		title: "Fixture request",
 		operation: "request",
 		targetAgent,
 		question: "Please review the design proposal.",
@@ -98,6 +99,7 @@ test("request call shows the [Request] badge and question preview", () => {
 
 test("request call marks steer delivery", () => {
 	const rendered = renderCall({
+		title: "Fixture request",
 		operation: "request",
 		targetAgent,
 		question: "Please proceed immediately.",
@@ -188,6 +190,7 @@ test("expanded result exposes the complete structured receipt", () => {
 test("answer_delivered result shows the shared bounded answer preview with truncation", () => {
 	const answer = "The complete answer body ".repeat(20) + "Distinctive tail.";
 	const rendered = renderResult({
+		requestTitle: "Fixture request",
 		disposition: "answer_delivered",
 		requestMessageId: "request-one",
 		answerId: "answer-one",
@@ -289,10 +292,11 @@ test("Message results show a suffix collapsed and retain the full ID on expansio
 
 for (const expanded of [false, true]) test(`Answer uses the ordinary messaging receipt (expanded: ${expanded})`, () => {
 	const receipt = {
+		requestTitle: "Fixture request",
 		messageId: "answer", requestMessageId: "request", messageStatus: "sent",
 	} as const;
 	const rendered = renderAgentMessageResult({ content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }],
 		details: receipt }, { expanded, isPartial: false }, plainTheme).render(100).join("\n");
-	assert.equal(rendered.split("\n")[0]?.trimEnd(), "sent · answer");
+	assert.equal(rendered.split("\n")[0]?.trimEnd(), "sent · Fixture request · answer");
 	assert.equal(rendered.includes('"requestMessageId"'), expanded);
 });

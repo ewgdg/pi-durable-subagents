@@ -32,7 +32,7 @@ for (const ownerAnswered of [false, true]) {
 			}, { id: toolCallId }), { stopReason: "toolUse" }));
 			owner.manager.appendMessage({
 				role: "toolResult", toolCallId, toolName: "agent_message", content: [], isError: false, timestamp: Date.now(),
-				details: { messageId: deriveMessageIdentity({ agentId: "requester", entryId, toolCallId }),
+				details: { requestTitle: "Fixture request", messageId: deriveMessageIdentity({ agentId: "requester", entryId, toolCallId }),
 					requestMessageId: coreToOwner, messageStatus: "sent" },
 			});
 		}

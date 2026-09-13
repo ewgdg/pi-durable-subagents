@@ -188,6 +188,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 			message: {
 				customType: "agent-coordination.message-delivery",
 				content: JSON.stringify({ messages: [{
+					title: "Fixture request",
 					kind: "request",
 					requestMessageId: "request-1",
 					fromAgentId: "requester-1",
@@ -204,6 +205,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 			workingZonePreparation: {
 				intent: { workScale: "large", contextDependence: "high" },
 				prospectiveRequest: {
+					title: "Fixture request",
 					kind: "request",
 					requestMessageId: "request-1",
 					fromAgentId: "requester-1",
@@ -234,6 +236,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		toolCallId: "wait-call",
 		progress: {
 			waitingFor: [{
+				requestTitle: "Fixture request",
 				requestMessageId: "request-1",
 				responderAgentId: "responder-1",
 			}],
@@ -526,7 +529,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 			kind: "custom",
 			message: {
 				customType: "agent-coordination.obligation-reminder",
-				content: "{\"requestMessageId\":\"request-1\",\"requestSnippet\":\"Answer now.\"}",
+				content: "{\"requestMessageId\":\"request-1\",\"requestTitle\":\"Answer now.\"}",
 				display: true,
 			},
 			triggerTurn: true,

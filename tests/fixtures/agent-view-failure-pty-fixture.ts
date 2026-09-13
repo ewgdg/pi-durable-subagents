@@ -65,6 +65,7 @@ host.model.setResponses([
 const spawning = executeCommittedTool(
 	ownerSession,
 	appendToolSource(ownerSession, "agent_spawn", `pty-${failureKind}-failure-child`, {
+		title: "Fixture request",
 		request: "Remain live until the deterministic child UI failure.",
 		label: "PTY Failure Worker",
 	}),

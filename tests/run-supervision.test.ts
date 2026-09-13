@@ -284,6 +284,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	const heldAnswerText = "This Answer must wait behind the exact Hold.";
 	const heldCancellationText = "This Cancellation must wait behind the exact Hold.";
 	const heldRequest = await harness.messageAs(owner, "request-admitted-while-held", {
+		title: "Fixture request",
 		operation: "request",
 		targetAgent: child.agentId,
 		question: heldRequestText,
@@ -1011,7 +1012,7 @@ test("the registered agent_control tool authenticates structural committed input
 	host.model.setResponses([
 		fauxAssistantMessage("The tool-controlled child remains available."),
 	]);
-	const spawnInput = { request: "Remain available for registered Run control." };
+	const spawnInput = { title: "Fixture request", request: "Remain available for registered Run control." };
 	const spawnToolCallId = "spawn-tool-controlled-child";
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -1067,7 +1068,7 @@ test("/agents retains only the viewed exact Run and keeps Owner bound through cl
 	host.model.setResponses([
 		fauxAssistantMessage("The viewed child remains available."),
 	]);
-	const spawnInput = { request: "Remain live for durable Agent view retention." };
+	const spawnInput = { title: "Fixture request", request: "Remain live for durable Agent view retention." };
 	const spawnToolCallId = "spawn-view-retained-child";
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -1356,7 +1357,7 @@ async function createRunSupervisionHarness(
 			host.model.setResponses([
 				fauxAssistantMessage("The child is settled and ready for supervision."),
 			]);
-			const input = { request: "Remain available for exact Run supervision." };
+			const input = { title: "Fixture request", request: "Remain available for exact Run supervision." };
 			host.session.sessionManager.appendMessage(
 				fauxAssistantMessage(
 					fauxToolCall("agent_spawn", input, { id: toolCallId }),
@@ -1381,7 +1382,7 @@ async function createRunSupervisionHarness(
 			host.model.setResponses([
 				fauxAssistantMessage("The nested child is settled for supervision."),
 			]);
-			const input = { request: "Remain available as a nested supervised Agent." };
+			const input = { title: "Fixture request", request: "Remain available as a nested supervised Agent." };
 			parent.appendToolCall("agent_spawn", toolCallId, input);
 			const receipt = await parent.view.spawn(toolCallId, input);
 			assert.ok("agentId" in receipt && typeof receipt.agentId === "string");
@@ -1457,6 +1458,7 @@ async function createRunSupervisionHarness(
 			question: string,
 		) {
 			const input = {
+				title: "Fixture request",
 				operation: "request" as const,
 				targetAgent: ownerIdentity.agentId,
 				question,
@@ -1470,7 +1472,7 @@ async function createRunSupervisionHarness(
 			targetAgentId: string,
 			question: string,
 		) {
-			const input = { operation: "request" as const, targetAgent: targetAgentId, question };
+			const input = { title: "Fixture request", operation: "request" as const, targetAgent: targetAgentId, question };
 			appendCallerToolCall(caller, "agent_message", toolCallId, input);
 			return caller.view.message(toolCallId, input);
 		},

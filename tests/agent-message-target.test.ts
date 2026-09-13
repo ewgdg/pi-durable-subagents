@@ -238,6 +238,7 @@ test("a rejected ambiguous Request is not retained as canonical Request evidence
 	const authorSession = session(authorAgentId);
 	authorSession.appendMessage(fauxAssistantMessage(
 		fauxToolCall("agent_message", {
+			title: "Fixture request",
 			operation: "request",
 			targetAgent: "native-input-review",
 			question: "Review native input handling.",
@@ -275,6 +276,7 @@ test("an unresolved ambiguous Request stays out of relationship reconciliation",
 	const authorSession = session(authorAgentId);
 	authorSession.appendMessage(fauxAssistantMessage(
 		fauxToolCall("agent_message", {
+			title: "Fixture request",
 			operation: "request",
 			targetAgent: "native-input-review",
 			question: "Review native input handling.",
@@ -298,6 +300,7 @@ test("an error result plus Request Delivery remains contradictory evidence", () 
 	const targetAgentId = "first-review-agent";
 	const toolCallId = "contradictory-request";
 	const input = {
+		title: "Fixture request",
 		operation: "request" as const,
 		targetAgent: "native-input-review",
 		question: "Review native input handling.",
@@ -321,6 +324,7 @@ test("an error result plus Request Delivery remains contradictory evidence", () 
 	const delivery = createMessageDelivery([{
 		source,
 		projection: {
+			title: "Fixture request",
 			kind: "request",
 			requestMessageId: deriveMessageIdentity(source),
 			fromAgentId: authorAgentId,

@@ -63,7 +63,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Answer this Creation Request after completing the work." },
+				{ title: "Fixture request", request: "Answer this Creation Request after completing the work." },
 				{ id: "spawn-stalled-agent" },
 			),
 			{ stopReason: "toolUse" },
@@ -135,7 +135,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	assert.ok(reminders[0]?.type === "custom_message");
 	assert.deepEqual(JSON.parse(reminders[0].content as string), {
 		requestMessageId: deriveMessageIdentity(spawnSource),
-		requestSnippet: "Answer this Creation Request after completing the work.",
+		requestTitle: "Fixture request",
 		guidance:
 			"This Request still needs an Answer. Choose which outstanding Request to work on or answer; attention order does not prescribe execution order. Send each Answer as a standalone agent_message operation \"answer\" call, then end the turn without a summary.",
 	});
@@ -249,7 +249,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 test("an Answer triggered by the runtime reminder avoids Obligation Stall moderation", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	const routeReminderRecovery = (context: Context) => {
-		if (JSON.stringify(context.messages).includes("requestSnippet")) {
+		if (JSON.stringify(context.messages).includes("requestTitle")) {
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_message",
@@ -340,6 +340,7 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 			"agent_spawn",
 			"spawn-selected-obligation-stall",
 			{
+				title: "Fixture request",
 				request: "Settle while selected, then remain answer-obligated.",
 				label: "Selected Obligation Worker",
 			},
@@ -575,7 +576,7 @@ test("one failed provider request creates Run Failure without regenerating an an
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Answer this Creation Request after the exact Run fails." },
+				{ title: "Fixture request", request: "Answer this Creation Request after the exact Run fails." },
 				{ id: "spawn-run-failure-agent" },
 			),
 			{ stopReason: "toolUse" },
@@ -649,6 +650,7 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 				fauxToolCall(
 					"agent_message",
 					{
+						title: "Fixture request",
 						operation: "request",
 						targetAgent: host.session.sessionId,
 						question: "What outcome should I preserve?",
@@ -664,7 +666,7 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Ask the Owner one question, then wait for its Answer." },
+				{ title: "Fixture request", request: "Ask the Owner one question, then wait for its Answer." },
 				{ id: "spawn-owner-requester" },
 			),
 			{ stopReason: "toolUse" },
@@ -863,7 +865,7 @@ test("a successor clears Run Failure before its later Stall is handled separatel
 		);
 		if (
 			latestUser.includes("Start the successor Run.") ||
-			transcript.includes("requestSnippet")
+			transcript.includes("requestTitle")
 		) {
 			return fauxAssistantMessage("The successor settled without answering.");
 		}
@@ -1024,7 +1026,7 @@ test("Moderator Resolution is blocked while the Obligation Stall remains", async
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Leave this Answer obligation unresolved." },
+				{ title: "Fixture request", request: "Leave this Answer obligation unresolved." },
 				{ id: "spawn-resolution-blocker" },
 			),
 			{ stopReason: "toolUse" },
@@ -1081,7 +1083,7 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Settle with an Answer obligation for supervision." },
+				{ title: "Fixture request", request: "Settle with an Answer obligation for supervision." },
 				{ id: "spawn-moderator-control-target" },
 			),
 			{ stopReason: "toolUse" },
@@ -1201,7 +1203,7 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Leave this Answer obligation unresolved after termination." },
+				{ title: "Fixture request", request: "Leave this Answer obligation unresolved after termination." },
 				{ id: "spawn-terminated-stall-agent" },
 			),
 			{ stopReason: "toolUse" },
@@ -1282,7 +1284,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Leave an Answer obligation requiring Owner judgment." },
+				{ title: "Fixture request", request: "Leave an Answer obligation requiring Owner judgment." },
 				{ id: "spawn-moderator-escalation-case" },
 			),
 			{ stopReason: "toolUse" },
@@ -1295,6 +1297,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 				fauxToolCall(
 					"agent_message",
 					{
+						title: "Fixture request",
 						operation: "request",
 						targetAgent: host.session.sessionId,
 						question: "Should restoring this work take priority over current Owner work?",
@@ -1404,7 +1407,7 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Answer after the Owner sends one reminder." },
+				{ title: "Fixture request", request: "Answer after the Owner sends one reminder." },
 				{ id: "spawn-externally-cleared-agent" },
 			),
 			{ stopReason: "toolUse" },
@@ -1552,7 +1555,7 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ request: "Keep this Answer obligation until after one supervised resume." },
+				{ title: "Fixture request", request: "Keep this Answer obligation until after one supervised resume." },
 				{ id: "spawn-recurring-stall-agent" },
 			),
 			{ stopReason: "toolUse" },
@@ -1720,6 +1723,7 @@ assert.equal(target.messageStatus, "not_sent");
 				fauxToolCall(
 					"agent_message",
 					{
+						title: "Fixture request",
 						operation: "request",
 						targetAgent: target.agentId,
 						question: "Make progress while I remain obligated to the Owner.",
@@ -1833,6 +1837,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 					fauxToolCall(
 						"agent_message",
 						{
+							title: "Fixture request",
 							operation: "request",
 							targetAgent: second.agentId,
 							question: "Wait for my Answer while I wait for yours.",
@@ -1850,6 +1855,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 					fauxToolCall(
 						"agent_message",
 						{
+							title: "Fixture request",
 							operation: "request",
 							targetAgent: first.agentId,
 							question: "Return an Answer only after my dependency resolves.",
@@ -2003,6 +2009,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 				fauxToolCall(
 					"agent_message",
 					{
+						title: "Fixture request",
 						operation: "request",
 						targetAgent: second.agentId,
 						question: "Create the return dependency, then remain active.",
@@ -2020,6 +2027,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 				fauxToolCall(
 					"agent_message",
 					{
+						title: "Fixture request",
 						operation: "request",
 						targetAgent: first.agentId,
 						question: "Wait while my Run remains active.",
@@ -2104,7 +2112,7 @@ test("input, Human attention, selection, and Hold prevent a blocked Request-cycl
 			await bothRoots;
 			if (isPartner) return messages.includes('"id":"request-cycle-return"')
 				? fauxAssistantMessage("The partner is settled with a blocked dependency.")
-				: fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: participant.agentId, question: "Return this unrelated dependency." }, { id: "request-cycle-return" }), { stopReason: "toolUse" });
+				: fauxAssistantMessage(fauxToolCall("agent_message", { title: "Fixture request", operation: "request", targetAgent: participant.agentId, question: "Return this unrelated dependency." }, { id: "request-cycle-return" }), { stopReason: "toolUse" });
 
 			if (
 				latestUser.includes("Start the self-cycle probe.") &&
@@ -2114,6 +2122,7 @@ test("input, Human attention, selection, and Hold prevent a blocked Request-cycl
 					fauxToolCall(
 						"agent_message",
 						{
+							title: "Fixture request",
 							operation: "request",
 							targetAgent: partner.agentId,
 							question: "Wait for the other root to resolve this dependency.",
@@ -2412,7 +2421,7 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 		host.session,
 		"agent_spawn",
 		"spawn-failed-moderator-post-mortem-agent",
-		{ request: "Settle with an Answer obligation." },
+		{ title: "Fixture request", request: "Settle with an Answer obligation." },
 	);
 	await waitForCondition(async () => (await findModerators(host)).length === 2);
 	const moderators = await findModerators(host);
@@ -2806,7 +2815,7 @@ async function spawnFromView(
 	agentId: string;
 	requestMessageId: string;
 }> {
-	const input = { request };
+	const input = { title: "Fixture request", request };
 	session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_spawn", input, { id: toolCallId }),
@@ -3187,6 +3196,7 @@ test("blocked Delivery failure moderates an upstream obligated parent immediatel
 	});
 	host.model.setResponses([
 		fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			title: "Fixture request",
 			request: "Do the leaf work.", label: "Blocked Leaf",
 		}, { id: "spawn-blocked-leaf" }), { stopReason: "toolUse" }),
 		// Agent Wait explicitly renews undelivered Requests; settle instead to isolate moderation.
@@ -3243,7 +3253,7 @@ test("blocked Delivery deadline catches a silent leaf while its obligated parent
 		},
 	});
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Leaf work." }, { id: "silent-leaf" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Leaf work." }, { id: "silent-leaf" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "silent-leaf-wait" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Investigate the silent delivery."),
 	]);
@@ -3299,7 +3309,7 @@ test("blocked Delivery Moderator creation failure produces deduplicated Owner at
 		},
 	});
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Leaf work." }, { id: "unavailable-leaf" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Leaf work." }, { id: "unavailable-leaf" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Await the leaf."),
 	]);
 	await spawnFromView(host.session, owner, "unavailable-parent", "Delegate.");
@@ -3357,6 +3367,7 @@ test("blocked Delivery meaningful reservation resets its deadline and transcript
 	});
 	host.model.setResponses([
 		fauxAssistantMessage(fauxToolCall("agent_message", {
+			title: "Fixture request",
 			operation: "request", targetAgent: "Owner", question: "Decide this dependency.", deliveryMode: "steer",
 		}, { id: "steer-progress-request" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "steer-progress-wait" }), { stopReason: "toolUse" }),
@@ -3412,7 +3423,7 @@ async function createSilentLeafHarness(t: TestCleanupRegistrar, intervalMs = 100
 		},
 	});
 	harness.host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Leaf work." }, { id: "excluded-leaf" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Leaf work." }, { id: "excluded-leaf" }), { stopReason: "toolUse" }),
 		parkParent
 			? fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "excluded-leaf-wait" }), { stopReason: "toolUse" })
 			: fauxAssistantMessage("The leaf owns this work."),
@@ -3498,6 +3509,7 @@ test("blocked Delivery follows existing obligations and does not time active rec
 		const tag = messages.includes("First worker") ? "first" : "second";
 		if (!messages.includes(`"id":"request-${tag}-owner"`)) {
 			return fauxAssistantMessage(fauxToolCall("agent_message", {
+				title: "Fixture request",
 				operation: "request", targetAgent: "Owner", question: `Decide for ${tag} worker.`,
 			}, {id: `request-${tag}-owner`}), {stopReason: "toolUse"});
 		}
@@ -3532,8 +3544,8 @@ test("blocked Delivery upstream Human waiting excludes moderation without timing
 		},
 	});
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", {request: "Blocked leaf."}, {id: "human-leaf"}), {stopReason: "toolUse"}),
-		fauxAssistantMessage(fauxToolCall("ask_user", {question: "Choose whether to continue."}, {id: "human-blocked-parent"}), {stopReason: "toolUse"}),
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request",request: "Blocked leaf."}, {id: "human-leaf"}), {stopReason: "toolUse"}),
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Choose whether to continue."}, {id: "human-blocked-parent"}), {stopReason: "toolUse"}),
 	]);
 	await spawnFromView(host.session, owner, "human-wait-parent", "Delegate, then ask the Human.");
 	await waitForCondition(() => owner.humanAttention().length === 1);
@@ -3567,7 +3579,7 @@ test("blocked Delivery execution capacity wait leaves an obligated parked parent
 			if (!messages.includes('"id":"capacity-leaf-spawn"')) {
 				parentStarted = true;
 				await parentGate;
-				return fauxAssistantMessage(fauxToolCall("agent_spawn", {request: "capacity-leaf-work"}, {id: "capacity-leaf-spawn"}), {stopReason: "toolUse"});
+				return fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request",request: "capacity-leaf-work"}, {id: "capacity-leaf-spawn"}), {stopReason: "toolUse"});
 			}
 			return fauxAssistantMessage(fauxToolCall("agent_wait", {}, {id: "capacity-parent-wait"}), {stopReason: "toolUse"});
 		}
@@ -3632,7 +3644,7 @@ test("blocked Delivery detects a Creation Request stranded before scheduler admi
 		spawnBoundaryHooks: { beforeRunStart: () => ++starts > 1 ? "confirmed_failure" : undefined },
 	});
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", {request: "Never admitted leaf."}, {id: "pre-admission-leaf"}), {stopReason: "toolUse"}),
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request",request: "Never admitted leaf."}, {id: "pre-admission-leaf"}), {stopReason: "toolUse"}),
 		fauxAssistantMessage("The leaf remains responsible for the admitted work."),
 		fauxAssistantMessage("Investigate startup without retrying."),
 	]);
@@ -3794,7 +3806,7 @@ test("a settled Moderator receives one handling reminder turn and releases when 
 	});
 	let reminderTurn = false;
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Demonstrate abandoned handling." },
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Demonstrate abandoned handling." },
 			{ id: "spawn-for-moderator-reminder" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Delegated."),
 		fauxAssistantMessage("Still owe an Answer."),
@@ -3870,7 +3882,7 @@ test("clearing the incident before native reminder commitment suppresses deliver
 		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
 	});
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Demonstrate cleared handling." },
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Demonstrate cleared handling." },
 			{ id: "spawn-before-clear" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Delegated."),
 		fauxAssistantMessage("Still owe an Answer."),

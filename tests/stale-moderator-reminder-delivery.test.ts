@@ -165,7 +165,7 @@ for (const kind of ["message", "request"] as const) {
 					source: { agentId: "sender", entryId: "source", toolCallId: "ordinary" },
 					projection: kind === "message"
 						? { kind, messageId: "ordinary", fromAgentId: "sender", content }
-						: { kind, requestMessageId: "ordinary", fromAgentId: "sender", question: content },
+						: { title: "Fixture request", kind, requestMessageId: "ordinary", fromAgentId: "sender", question: content },
 				},
 			});
 			assert.equal(delivered.length, 0, "preparation still owns the dispatch reservation");

@@ -8,20 +8,19 @@ import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
 import {
 	createModelVisibleObligationReminder,
 	inspectObligationReminder,
-	MAX_OBLIGATION_REMINDER_SNIPPET_CODE_POINTS,
 	OBLIGATION_REMINDER_GUIDANCE,
 	obligationReminderDeliveryId,
 } from "../src/protocol/obligation-reminder.ts";
 
-test("Obligation Reminder contains one bounded Request snippet and durable correlation", () => {
-	const question = `  Finish   the required Answer after reviewing ${"evidence ".repeat(40)}  `;
+test("Obligation Reminder contains the exact Request title and durable correlation", () => {
+	const requestTitle = "Review the evidence";
 	const reminder = createModelVisibleObligationReminder({
 		requestMessageId: "request-1",
-		question,
+		requestTitle,
 	});
 	const content = JSON.parse(reminder.content) as {
 		requestMessageId: string;
-		requestSnippet: string;
+		requestTitle: string;
 		guidance: string;
 	};
 
@@ -30,16 +29,12 @@ test("Obligation Reminder contains one bounded Request snippet and durable corre
 	assert.deepEqual(Object.keys(content).sort(), [
 		"guidance",
 		"requestMessageId",
-		"requestSnippet",
+		"requestTitle",
 	]);
 	assert.equal(content.requestMessageId, "request-1");
 	assert.equal(content.guidance, OBLIGATION_REMINDER_GUIDANCE);
 	assert.equal(content.guidance, "This Request still needs an Answer. Choose which outstanding Request to work on or answer; attention order does not prescribe execution order. Send each Answer as a standalone agent_message operation \"answer\" call, then end the turn without a summary.");
-	assert.equal(content.requestSnippet.includes("  "), false);
-	assert.equal([...content.requestSnippet].length, MAX_OBLIGATION_REMINDER_SNIPPET_CODE_POINTS);
-	assert.equal(content.requestSnippet.endsWith("…"), true);
-	assert.equal(content.requestSnippet.includes("evidence evidence"), true);
-	assert.equal(reminder.content.includes(question.trim()), false);
+	assert.equal(content.requestTitle, requestTitle);
 	assert.equal(
 		obligationReminderDeliveryId("request-1"),
 		JSON.stringify(["obligation_reminder", "request-1"]),
@@ -54,7 +49,7 @@ test("Obligation Reminder inspection proves one exact runtime-authored Delivery"
 	});
 	const reminder = createModelVisibleObligationReminder({
 		requestMessageId: "request-2",
-		question: "Provide the exact Answer now.",
+		requestTitle: "Provide the exact Answer now.",
 	});
 	sessionManager.appendCustomMessageEntry(
 		reminder.customType,
@@ -68,7 +63,7 @@ test("Obligation Reminder inspection proves one exact runtime-authored Delivery"
 		recipientAgentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		requestMessageId: "request-2",
-		question: "Provide the exact Answer now.",
+		requestTitle: "Provide the exact Answer now.",
 	}), {
 		agentId: recipientAgentId,
 		entryId: delivery.id,
@@ -84,7 +79,7 @@ test("Obligation Reminder inspection proves one exact runtime-authored Delivery"
 			recipientAgentId,
 			transcript: transcriptFromSessionManager(sessionManager).inspect(),
 			requestMessageId: "request-2",
-			question: "Provide the exact Answer now.",
+			requestTitle: "Provide the exact Answer now.",
 		}),
 		/duplicate Deliveries/,
 	);

@@ -122,12 +122,14 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 
 	const requestText = tool.renderCall(
 		{
+			title: "Fixture request",
 			operation: "request",
 			targetAgent: receiverAgentId,
 			question: "Which boundary owns this result?",
 		},
 		plainTheme,
 		{ ...renderContext, args: {
+			title: "Fixture request",
 			operation: "request",
 			targetAgent: receiverAgentId,
 			question: "Which boundary owns this result?",
@@ -198,6 +200,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		{
 			content: [{ type: "text", text: "retrieved Answer" }],
 			details: {
+				requestTitle: "Fixture request",
 				disposition: "answer_delivered",
 				requestMessageId: "request-identity",
 				answerId: "answer-identity",
@@ -227,6 +230,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 	assert.ok(tool?.renderCall);
 	assert.ok(tool.renderResult);
 	const args = {
+		title: "Fixture request",
 		request: "Investigate the configured repository.",
 		template: "research-agent",
 		label: "Researcher",

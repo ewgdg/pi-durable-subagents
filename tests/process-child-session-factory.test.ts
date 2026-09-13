@@ -73,6 +73,7 @@ test("a dormant parent retains creation preset rules while descendant catalogues
 			},
 		},
 		creationInput: {
+			title: "Fixture request",
 			request: "Act as the dynamically configured parent.",
 			template: "dynamic-parent",
 		},
@@ -101,7 +102,7 @@ test("a dormant parent retains creation preset rules while descendant catalogues
 		const first = await factory.prepareOrdinaryRun({
 			agentId: "descendant",
 			parent: parentRecord,
-			spawnInput: { request: "Inherit the current parent configuration." },
+			spawnInput: { title: "Fixture request", request: "Inherit the current parent configuration." },
 		});
 		assert.equal(first.configuration.allowedTools.includes("read"), true);
 		assert.equal(first.configuration.allowedTools.includes("bash"), true);
@@ -123,7 +124,7 @@ test("a dormant parent retains creation preset rules while descendant catalogues
 		const second = await factory.prepareOrdinaryRun({
 			agentId: "descendant",
 			parent: parentRecord,
-			spawnInput: { request: "Inherit the current parent configuration." },
+			spawnInput: { title: "Fixture request", request: "Inherit the current parent configuration." },
 		});
 		assert.equal(second.configuration.allowedTools.includes("read"), true);
 		assert.equal(second.configuration.allowedTools.includes("bash"), true);
@@ -181,7 +182,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 			metadata: { label: "live-parent" },
 			creationPreset: null,
 		},
-		creationInput: { request: "Act as the live parent." },
+		creationInput: { title: "Fixture request", request: "Act as the live parent." },
 		host: {
 			effectiveRuntimeSnapshot: () => ({ ...synchronizedSnapshot, tools: ["read"] }),
 			async synchronizeRuntimeState() {
@@ -211,19 +212,19 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		const prepared = await factory.prepareOrdinaryRun({
 			agentId: "live-descendant",
 			parent: parentRecord,
-			spawnInput: { request: "Inherit current live state." },
+			spawnInput: { title: "Fixture request", request: "Inherit current live state." },
 		});
 		assert.equal(synchronizations, 1);
 		assert.equal(prepared.configuration.allowedTools.includes("bash"), true);
 		assert.equal(prepared.configuration.allowedTools.includes("read"), false);
 
 		const omitted = await factory.prepareOrdinaryRun({
-			agentId: "omitted", parent: parentRecord, spawnInput: { request: "Inherit" },
+			agentId: "omitted", parent: parentRecord, spawnInput: { title: "Fixture request", request: "Inherit" },
 			creationPreset: { systemPromptMode: "append", loadContextFiles: false, systemPrompt: "Fixed rules." },
 		});
 		const explicit = await factory.prepareOrdinaryRun({
 			agentId: "explicit", parent: parentRecord,
-			spawnInput: { request: "Inherit", config: { model: { id: "inherit", thinking: "inherit" }, extensions: "inherit" } },
+			spawnInput: { title: "Fixture request", request: "Inherit", config: { model: { id: "inherit", thinking: "inherit" }, extensions: "inherit" } },
 			creationPreset: { allowedTools: ["read"], extensions: "none", systemPromptMode: "replace", loadContextFiles: false, systemPrompt: "Fixed rules." },
 		});
 
@@ -246,7 +247,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		] as const) {
 			const restarted = await factory.prepareOrdinaryRun({
 				agentId: prepared.agentId, parent: parentRecord,
-				spawnInput: { request: "Inherit", ...(config === undefined ? {} : { config }) },
+				spawnInput: { title: "Fixture request", request: "Inherit", ...(config === undefined ? {} : { config }) },
 				creationPreset: prepared.creationPreset,
 			});
 			assert.deepEqual(restarted.configuration.model, { provider: "current-parent", modelId: "current-model" });
@@ -322,6 +323,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 	try {
 		const owner = coordinator.forAgent(identity.agentId);
 		const input = {
+			title: "Fixture request",
 			request: "Prove the process Runtime and inspect your coordinated status.",
 			template: "process-delegate",
 			config: {
@@ -436,6 +438,7 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 	try {
 		const owner = coordinator.forAgent(identity.agentId);
 		const input = {
+			title: "Fixture request",
 			request: "Materialize me before deterministic process startup failure.",
 			config: {
 				model: { id: "coordination-test/deterministic-owner", thinking: "inherit" as const },
@@ -541,6 +544,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	try {
 		const owner = coordinator.forAgent(identity.agentId);
 		const input = {
+			title: "Fixture request",
 			request: "Fail this answer-obligated process Run so Moderator retry is required.",
 			config: {
 				model: { id: `${broker.providerId}/${broker.modelId}`, thinking: "inherit" as const },
@@ -704,7 +708,7 @@ test("prefetched selections stay fixed until reload; captured presets outlive th
 		assert.deepEqual(snapshot.templates.map(({ name }) => name), ["implementator"]);
 		await rename(templatePath, join(root, "implementor.md"));
 		await writeFile(join(root, "implementor.md"), "---\nname: implementor\nallowedTools: bash\n---\nNew rules.");
-		const input = { request: "Implement", template: "implementator" };
+		const input = { title: "Fixture request", request: "Implement", template: "implementator" };
 		const first = await factory.prepareOrdinaryRun({ agentId: "first", parent: owner, spawnInput: input });
 		assert.equal(first.configuration.systemPrompt?.body, "Original rules.");
 		assert.deepEqual(first.creationPreset?.models, [
@@ -713,12 +717,12 @@ test("prefetched selections stay fixed until reload; captured presets outlive th
 		]);
 		assert.equal(first.configuration.allowedTools.includes("read"), true);
 		await assert.rejects(factory.prepareOrdinaryRun({
-			agentId: "too-early", parent: owner, spawnInput: { request: "Implement", template: "implementor" },
+			agentId: "too-early", parent: owner, spawnInput: { title: "Fixture request", request: "Implement", template: "implementor" },
 		}), /implementor is missing/);
 		const refreshed = await factory.captureTemplateSnapshotFor(owner);
 		assert.deepEqual(refreshed.templates.map(({ name }) => name), ["implementor"]);
 		const next = await factory.prepareOrdinaryRun({
-			agentId: "next", parent: owner, spawnInput: { request: "Implement", template: "implementor" },
+			agentId: "next", parent: owner, spawnInput: { title: "Fixture request", request: "Implement", template: "implementor" },
 		});
 		assert.equal(next.configuration.systemPrompt?.body, "New rules.");
 		const restarted = await factory.prepareOrdinaryRun({

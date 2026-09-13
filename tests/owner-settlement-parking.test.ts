@@ -40,6 +40,7 @@ for (const explicitWait of [false, true]) {
 			}
 			if (!serialized.includes("spawn-needs-human")) {
 				return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+					title: "Fixture request",
 					request: "Work until you need a human decision.",
 				}, { id: "spawn-needs-human" }), { stopReason: "toolUse" });
 			}
@@ -114,18 +115,18 @@ for (const independentFinishesFirst of [false, true]) {
 			}
 			if (child) {
 				if (!serialized.includes("spawn-progress-leaf")) {
-					return fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "LEAF_PROGRESS_WORK" },
+					return fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "LEAF_PROGRESS_WORK" },
 						{ id: "spawn-progress-leaf" }), { stopReason: "toolUse" });
 				}
 				parentWaiting = true;
 				return fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "wait-for-progress-leaf" }), { stopReason: "toolUse" });
 			}
 			if (!serialized.includes("spawn-progress-parent")) {
-				return fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "PARENT_PROGRESS_WORK" },
+				return fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "PARENT_PROGRESS_WORK" },
 					{ id: "spawn-progress-parent" }), { stopReason: "toolUse" });
 			}
 			if (!serialized.includes("spawn-independent-progress")) {
-				return fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "INDEPENDENT_PROGRESS_WORK" },
+				return fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "INDEPENDENT_PROGRESS_WORK" },
 					{ id: "spawn-independent-progress" }), { stopReason: "toolUse" });
 			}
 			return fauxAssistantMessage("The Owner has no independent work.");
@@ -184,6 +185,7 @@ test("Owner stays active through terminal child failure and Moderator recovery, 
 			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 invalid_request_error: deterministic child failure" });
 		}
 		if (!serialized.includes("spawn-to-fail")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			title: "Fixture request",
 			request: "Work until the controlled failure.",
 		}, { id: "spawn-to-fail" }), { stopReason: "toolUse" });
 		return fauxAssistantMessage("The Owner has delegated the work.");
@@ -214,6 +216,7 @@ test("terminating the last progressing child releases Owner parking without an A
 			return fauxAssistantMessage("Unused after termination.");
 		}
 		if (!serialized.includes("spawn-to-terminate")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			title: "Fixture request",
 			request: "Work in the background.",
 		}, { id: "spawn-to-terminate" }), { stopReason: "toolUse" });
 		return fauxAssistantMessage("Waiting for the background work.");
@@ -259,6 +262,7 @@ test("Owner stays parked while a supervisory resumed child executes in isolation
 			}, { id: "answer-resumed" }), { stopReason: "toolUse" });
 		}
 		if (!serialized.includes("spawn-to-resume")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			title: "Fixture request",
 			request: "Work until interrupted, then resume.",
 		}, { id: "spawn-to-resume" }), { stopReason: "toolUse" });
 		if (!serialized.includes("Resume the held child.")) return fauxAssistantMessage("Waiting for initial work.");
@@ -308,6 +312,7 @@ test("Owner parks for ordinary background work even after every Request was answ
 			}, { id: "answer-message-worker" }), { stopReason: "toolUse" });
 		}
 		if (!serialized.includes("spawn-message-worker")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			title: "Fixture request",
 			request: "Answer the creation work.",
 		}, { id: "spawn-message-worker" }), { stopReason: "toolUse" });
 		return fauxAssistantMessage("No Owner work remains.");

@@ -156,7 +156,7 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 	function addCreationRequest(childId: string): string {
 		const toolCallId = `spawn-${childId}`;
 		const entryId = host.session.sessionManager.appendMessage(fauxAssistantMessage(
-			fauxToolCall("agent_spawn", { request: `Complete ${childId}.` }, { id: toolCallId }),
+			fauxToolCall("agent_spawn", { title: "Fixture request", request: `Complete ${childId}.` }, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		));
 		const source = { agentId: identity.agentId, entryId, toolCallId };

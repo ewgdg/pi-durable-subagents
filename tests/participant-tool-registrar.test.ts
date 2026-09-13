@@ -34,7 +34,7 @@ test("registered Answer results remain canonical with and without other obligati
 	for (const remaining of [null, "remaining-request"]) {
 		await t.test(remaining ?? "no remaining Request", async (t) => {
 			const requestId = "r".repeat(43);
-			let receipt: { messageId: string; requestMessageId: string; messageStatus: "sent" };
+			let receipt: { messageId: string; requestMessageId: string; requestTitle: string; messageStatus: "sent" };
 			const host = await createRegistrarHost(t, "ordinary", {
 				...handlers,
 				async message() { return receipt; },
@@ -42,7 +42,7 @@ test("registered Answer results remain canonical with and without other obligati
 			const manager = host.session.sessionManager;
 			const agentId = manager.getSessionId();
 			manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
-			const frame = (id: string) => ({ requestId: id, requesterAgentId: "requester", question: "Finish the Request." });
+			const frame = (id: string) => ({ title: "Fixture request", requestId: id, requesterAgentId: "requester", question: "Finish the Request." });
 			manager.appendCustomEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, {
 				frames: [...(remaining ? [frame(remaining)] : []), frame(requestId)],
 			});
@@ -53,7 +53,7 @@ test("registered Answer results remain canonical with and without other obligati
 				{ stopReason: "toolUse" },
 			));
 			const source = { agentId, entryId, toolCallId };
-			receipt = { messageId: deriveMessageIdentity(source), requestMessageId: requestId, messageStatus: "sent" };
+			receipt = { requestTitle: "Fixture request", messageId: deriveMessageIdentity(source), requestMessageId: requestId, messageStatus: "sent" };
 			const result = await executeTool(host, "agent_message", toolCallId, input);
 			assert.equal(result.terminate, true);
 			assert.deepEqual(result.details, receipt, "Answer uses the unmodified standard messaging receipt");
@@ -63,7 +63,7 @@ test("registered Answer results remain canonical with and without other obligati
 			});
 			assert.equal(inspectAgentMessageAuthorResult({
 				authorAgentId: agentId, transcript: transcriptFromSessionManager(manager).inspect(),
-				source, input, requestId,
+				source, input, requestId, requestTitle: "Fixture request",
 			}), "canonical");
 		});
 	}
@@ -283,7 +283,7 @@ test("Agent Spawn schema accepts conversation forks and rejects extension path a
 	assert.equal(schema.type, "object");
 	assert.equal("anyOf" in schema, false);
 	assert.equal("allOf" in schema, false);
-	assert.deepEqual(schema.required, ["request"]);
+	assert.deepEqual(schema.required, ["title", "request"]);
 	assert.match(String(Reflect.get(schema.properties.conversation, "description") ?? ""), /independently of Runtime configuration/);
 	assert.equal(Reflect.get(schema.properties.description, "description"),
 		"Brief scope summary for display and Agent search; not task instructions.");
@@ -295,20 +295,24 @@ test("Agent Spawn schema accepts conversation forks and rejects extension path a
 		{ template: "reviewer", config: { allowedTools: ["read"] } },
 	]) {
 		assert.equal(Value.Check(schema, {
+			title: "Fixture request",
 			request: "Continue the completed conversation.",
 			conversation: "fork",
 			...configuration,
 		}), true);
 	}
 	assert.equal(Value.Check(schema, {
+		title: "Fixture request",
 		request: "Do not accept unknown conversation modes.",
 		conversation: "copy",
 	}), false);
 	assert.equal(Value.Check(schema, {
+		title: "Fixture request",
 		request: "Inspect the child Runtime.",
 		config: { extensions: "inherit" },
 	}), true);
 	assert.equal(Value.Check(schema, {
+		title: "Fixture request",
 		request: "Inspect the child Runtime.",
 		config: { extensions: ["/extensions/arbitrary.ts"] },
 	}), false);
@@ -457,16 +461,16 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_observe"), {
 		label: "Observe Agent",
-		description: "Passively observe an authorized Agent or search its authorized Agent scope.",
-		promptSnippet: "Observe exact status or search authorized Agents by metadata and Run phase.",
+		description: "Passively observe authorized Agents, search their metadata, or inspect your Request obligations.",
+		promptSnippet: "Observe Agent status/search, list your open incoming Requests, or inspect a full Request.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(moderator, "agent_observe"), {
 		label: "Observe Agent",
 		description:
-			"Passively observe any known Agent in this Workflow or search authorized Agent scopes.",
+			"Passively observe Workflow Agents, search authorized Agent scopes, or inspect your Request obligations.",
 		promptSnippet:
-			"Pull bounded status or search results for Workflow Agents relevant to diagnosis.",
+			"Pull Agent status/search results, list your open incoming Requests, or inspect a full Request.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_control"), {
@@ -514,6 +518,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 	const updates: unknown[] = [];
 	const waitProgress = {
 		waitingFor: [{
+			requestTitle: "Fixture request",
 			requestMessageId: "request-waiting",
 			responderAgentId: "child-agent",
 		}],
@@ -567,7 +572,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 	const samples = [
 		["agent_message", "call-message", { operation: "poll", messageId: "message-1" }, messageReceipt],
 		["agent_wait", "call-wait", {}, waitReceipt],
-		["agent_spawn", "call-spawn", { request: "Investigate." }, spawnReceipt],
+		["agent_spawn", "call-spawn", { title: "Fixture request", request: "Investigate." }, spawnReceipt],
 		[
 			"agent_observe",
 			"call-observe",

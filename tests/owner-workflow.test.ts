@@ -134,7 +134,7 @@ test("native Owner replacement closes every retained source Workflow process", a
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained until the Owner replaces its native session."),
 	]);
-	const spawnInput = { request: "Remain retained for native replacement." };
+	const spawnInput = { title: "Fixture request", request: "Remain retained for native replacement." };
 	const spawnToolCallId = "spawn-before-native-owner-replacement";
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -180,7 +180,7 @@ test("shutdown with an open Agent view closes it without rebinding stopped inter
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained while shutdown begins from this selection."),
 	]);
-	const spawnInput = { request: "Remain retained for selected-child shutdown." };
+	const spawnInput = { title: "Fixture request", request: "Remain retained for selected-child shutdown." };
 	const spawnToolCallId = "spawn-before-selected-child-shutdown";
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -223,7 +223,7 @@ test("orderly shutdown disposes retained child and Moderator processes plus Owne
 		fauxAssistantMessage("I settled while still owing the Creation Answer."),
 		fauxAssistantMessage("I remain retained as the active Moderator."),
 	]);
-	const spawnInput = { request: "Remain answer-obligated for shutdown proof." };
+	const spawnInput = { title: "Fixture request", request: "Remain answer-obligated for shutdown proof." };
 	const spawnToolCallId = "spawn-before-complete-shutdown";
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -282,7 +282,7 @@ test("child AgentSession patches cannot affect process shutdown or Owner disposa
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained for exhaustive shutdown cleanup."),
 	]);
-	const spawnInput = { request: "Remain retained for exhaustive shutdown cleanup." };
+	const spawnInput = { title: "Fixture request", request: "Remain retained for exhaustive shutdown cleanup." };
 	const spawnToolCallId = "spawn-before-failing-shutdown";
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(

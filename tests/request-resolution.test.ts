@@ -30,6 +30,7 @@ test("initial Request non-admission rejects contradictory Delivery while Spawn c
 	const author = history.requester;
 	const toolCallId = "rejected-request";
 	const entryId = author.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		title: "Fixture request",
 		operation: "request", targetAgent: "responder", question: "Unadmitted work.",
 	}, { id: toolCallId })));
 	const source = { agentId: "requester", entryId, toolCallId };
@@ -39,6 +40,7 @@ test("initial Request non-admission rejects contradictory Delivery while Spawn c
 		details: { requestMessageId: messageId, targetAgentId: "responder", messageStatus: "not_sent", reason: "target_unavailable" },
 	});
 	const message: Extract<Message, { kind: "request" }> = {
+		title: "Fixture request",
 		kind: "request", origin: "agent_message", messageId, fromAgentId: "requester", targetAgentId: "responder", workflowId: "requester",
 		source, deliveryMode: "deferred", question: "Unadmitted work.",
 	};
@@ -63,6 +65,7 @@ test("an Answer call resolves its target from the correlated delivered Request",
 		"agent-coordination.message-delivery",
 		JSON.stringify({
 			messages: [{
+				title: "Fixture request",
 				kind: "request",
 				requestMessageId: deriveMessageIdentity(requestSource),
 				fromAgentId: requesterAgentId,
@@ -118,6 +121,7 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 		toolName: "agent_message",
 		content: [{ type: "text", text: "Answer admitted." }],
 		details: {
+			requestTitle: "Fixture request",
 			messageId: answerId,
 			requestMessageId: "a".repeat(43),
 			messageStatus: "sent",
@@ -140,6 +144,7 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 		"agent-coordination.message-delivery",
 		JSON.stringify({
 			messages: [{
+				requestTitle: "Fixture request",
 				kind: "answer",
 				answerId,
 				requestMessageId: "b".repeat(43),
@@ -151,6 +156,7 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 		{ messages: [answerSource] },
 	);
 	const request: Extract<Message, { kind: "request" }> = {
+		title: "Fixture request",
 		kind: "request",
 		origin: "agent_message",
 		messageId: "b".repeat(43),
@@ -206,6 +212,7 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 		"agent-coordination.message-delivery",
 		JSON.stringify({
 			messages: [{
+				requestTitle: "Fixture request",
 				kind: "answer",
 				answerId,
 				requestMessageId: "b".repeat(43),
@@ -217,6 +224,7 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 		{ messages: [answerSource] },
 	);
 	const request = (messageId: string): Extract<Message, { kind: "request" }> => ({
+		title: "Fixture request",
 		kind: "request",
 		origin: "agent_message",
 		messageId,
@@ -274,14 +282,19 @@ test("native Answer Retrieval reconstructs result-less Answer correlation", () =
 		entryId: "answer-source-entry",
 		toolCallId: "answer-source-call",
 	};
+	const requestEntryId = requester.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "request", targetAgent: answerSource.agentId, title: "Fixture request", question: "Recover the Answer.",
+	}, { id: "retrieval-request-call" }), { stopReason: "toolUse" }));
+	const requestId = deriveMessageIdentity({ agentId: requesterAgentId, entryId: requestEntryId, toolCallId: "retrieval-request-call" });
 	requester.appendMessage({
 		role: "toolResult",
 		toolCallId: "retry-request-call",
 		toolName: "agent_message",
 		content: [{ type: "text", text: "Retrieved committed Answer." }],
 		details: {
+			requestTitle: "Fixture request",
 			disposition: "answer_delivered",
-			requestMessageId: "retrieved-request",
+			requestMessageId: requestId,
 			answerId: deriveMessageIdentity(answerSource),
 			fromAgentId: answerSource.agentId,
 			answer: "Recovered without an Answer author result.",
@@ -294,7 +307,7 @@ test("native Answer Retrieval reconstructs result-less Answer correlation", () =
 		requesterAgentId,
 		transcript: transcriptFromSessionManager(requester).inspect(),
 		source: answerSource,
-	}), "retrieved-request");
+	}), requestId);
 });
 
 test("Agent Wait result is requester-side Delivery proof for each returned Answer", () => {
@@ -312,6 +325,7 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 	const requestEntryId = requester.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
+				title: "Fixture request",
 				operation: "request",
 				targetAgent: answerSource.agentId,
 				question: "Return one Answer through Agent Wait.",
@@ -333,6 +347,7 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 	);
 	const waitResult = {
 		answers: [{
+			requestTitle: "Fixture request",
 			disposition: "answer_delivered",
 			requestMessageId,
 			answerId: deriveMessageIdentity(answerSource),
@@ -373,6 +388,7 @@ test("a completed Agent Wait rejects a Request authored after its call", () => {
 	const laterRequestEntryId = requester.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
+				title: "Fixture request",
 				operation: "request",
 				targetAgent: "later-responder",
 				question: "This Request is outside the prior Wait snapshot.",
@@ -392,6 +408,7 @@ test("a completed Agent Wait rejects a Request authored after its call", () => {
 	};
 	const forgedResult = {
 		answers: [{
+			requestTitle: "Fixture request",
 			disposition: "answer_delivered",
 			requestMessageId: laterRequestMessageId,
 			answerId: deriveMessageIdentity(answerSource),
@@ -628,6 +645,7 @@ for (const mismatch of ["missing", "extra", "reordered"] as const) test(`explici
 	}, { id: toolCallId }), { stopReason: "toolUse" }));
 	const returned = mismatch === "missing" ? ids.slice(0, 1) : mismatch === "extra" ? ids : ids.slice(0, 2).reverse();
 	const result = { answers: returned.map(requestMessageId => ({
+		requestTitle: "Fixture request",
 		disposition: "answer_already_delivered", requestMessageId, answerId: "answer-" + requestMessageId,
 		deliveryEvidence: { agentId: "requester", entryId: "delivery-" + requestMessageId },
 	})) };
