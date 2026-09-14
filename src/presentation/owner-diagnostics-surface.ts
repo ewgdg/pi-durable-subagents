@@ -4,28 +4,33 @@ import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 
 const BLOCKAGE_WIDGET_KEY = "agent-coordination.blockage";
-const BLOCKAGE_MESSAGE = "Subagent coordination blocked: saved coordination data is invalid; the protocol may have changed.";
+const BLOCKAGE_MESSAGE = "Subagent coordination blocked\nSaved coordination data is invalid; the protocol may have changed.";
 const PRESENTATION_ROWS = 2;
 
 export function showOwnerBlockage(ui: ExtensionUIContext, failure: OwnerRecoveryError | undefined): void {
 	ui.setWidget(BLOCKAGE_WIDGET_KEY, failure ? (_tui, theme) => {
-		const body = new Text(`⚠ ${BLOCKAGE_MESSAGE}\n/agents diagnostics — inspect the failure and recovery availability`, 0, 0);
+		const warning = new Text(`⚠ ${BLOCKAGE_MESSAGE}`, 0, 0);
+		const hints = new Text("/agents diagnostics", 0, 0);
+		const renderBody = (width: number) => [
+			...warning.render(width).map((line) => theme.fg("warning", line)),
+			...hints.render(width).map((line) => theme.fg("dim", line)),
+		];
 		return {
 			render(width: number) {
 				const boundedWidth = Math.max(1, Math.floor(width));
 				// Borders need one content column; on smaller terminals keep the
 				// warning readable rather than producing negative interior widths.
-				if (boundedWidth < 3) return body.render(boundedWidth)
-					.map((line) => theme.fg("warning", truncateToWidth(line, boundedWidth, "")));
+				if (boundedWidth < 3) return renderBody(boundedWidth)
+					.map((line) => truncateToWidth(line, boundedWidth, ""));
 				const padding = boundedWidth >= 5 ? " " : "";
 				const innerWidth = boundedWidth - 2 - padding.length * 2;
 				return [
-					`┌${"─".repeat(boundedWidth - 2)}┐`,
-					...body.render(innerWidth).map((line) => `│${padding}${truncateToWidth(line, innerWidth, "", true)}${padding}│`),
-					`└${"─".repeat(boundedWidth - 2)}┘`,
-				].map((line) => theme.fg("warning", line));
+					theme.fg("warning", `┌${"─".repeat(boundedWidth - 2)}┐`),
+					...renderBody(innerWidth).map((line) => `${theme.fg("warning", `│${padding}`)}${truncateToWidth(line, innerWidth, "", true)}${theme.fg("warning", `${padding}│`)}`),
+					theme.fg("warning", `└${"─".repeat(boundedWidth - 2)}┘`),
+				];
 			},
-			invalidate() { body.invalidate(); },
+			invalidate() { warning.invalidate(); hints.invalidate(); },
 		};
 	} : undefined);
 }

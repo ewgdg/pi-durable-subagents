@@ -98,11 +98,11 @@ test("short diagnostics fills every viewport cell with controls pinned to the bo
 
 test("blockage widget uses a warning-colored responsive box", () => {
 	let widget!: Component;
-	const colors: string[] = [];
+	const styles: Array<{ color: string; text: string }> = [];
 	const ui = { setWidget(_key: string, factory: unknown) {
 		assert.equal(typeof factory, "function");
 		widget = (factory as (tui: TUI, theme: Theme) => Component)({} as TUI, {
-			fg(color: string, text: string) { colors.push(color); return text; },
+			fg(color: string, text: string) { styles.push({ color, text }); return text; },
 		} as Theme);
 	} } as ExtensionUIContext;
 	showOwnerBlockage(ui, failure);
@@ -117,7 +117,11 @@ test("blockage widget uses a warning-colored responsive box", () => {
 	}
 	assert.match(widget.render(100).join("\n"), /Subagent coordination blocked/);
 	assert.doesNotMatch(widget.render(100).join("\n"), /workflow blocked/);
-	assert.ok(colors.length > 0 && colors.every((color) => color === "warning"));
+	const rendered = widget.render(100).join("\n");
+	assert.doesNotMatch(rendered, /inspect the failure|\/agents repair/);
+	assert.ok(styles.some(({ color, text }) => color === "dim" && text.trim() === "/agents diagnostics"));
+	assert.ok(styles.some(({ color, text }) => color === "warning" && text.trim() === "⚠ Subagent coordination blocked"));
+	assert.ok(styles.some(({ color, text }) => color === "warning" && text.startsWith("┌")));
 });
 
 test("clearing blockage removes only its own widget", () => {
