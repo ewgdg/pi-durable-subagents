@@ -82,3 +82,5 @@ An Owner `/reload` ends ordinary coordination Runs before admitting the newly lo
 - The latest valid Workflow Policy is retained if a reload policy is invalid. Template resources are captured afresh.
 
 This is a coordination replacement, not transcript repair. Repair-only Moderator activity (#129) and safe blocked Owner forking (#130) are separate features; neither may run through the suspended ordinary coordinator. Until those features exist, blocked reload offers the same diagnostics and native `/new` recovery as blocked cold admission.
+
+Deployment constraint: shutdown executes the cleanup implementation captured when the Workflow was initialized. Installing this change cannot strengthen an already-running coordinator's cleanup closure. For the first upgrade to this shutdown contract, stop active work and restart the host before relying on reload quiescence; an in-process upgrade from an earlier implementation is not a proven repair-safe snapshot.
