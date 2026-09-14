@@ -4,15 +4,16 @@ import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 
 const BLOCKAGE_WIDGET_KEY = "agent-coordination.blockage";
-const BLOCKAGE_MESSAGE = "Subagent coordination blocked\nSaved coordination data is invalid; the protocol may have changed.";
 const PRESENTATION_ROWS = 2;
 
 export function showOwnerBlockage(ui: ExtensionUIContext, failure: OwnerRecoveryError | undefined): void {
 	ui.setWidget(BLOCKAGE_WIDGET_KEY, failure ? (_tui, theme) => {
-		const warning = new Text(`⚠ ${BLOCKAGE_MESSAGE}`, 0, 0);
+		const heading = new Text("⚠ Subagent coordination blocked", 0, 0);
+		const explanation = new Text("Saved coordination data is invalid; the protocol may have changed.", 0, 0);
 		const hints = new Text("/agents diagnostics", 0, 0);
 		const renderBody = (width: number) => [
-			...warning.render(width).map((line) => theme.fg("warning", line)),
+			...heading.render(width).map((line) => theme.fg("warning", line)),
+			...explanation.render(width),
 			...hints.render(width).map((line) => theme.fg("dim", line)),
 		];
 		return {
@@ -30,7 +31,7 @@ export function showOwnerBlockage(ui: ExtensionUIContext, failure: OwnerRecovery
 					theme.fg("warning", `└${"─".repeat(boundedWidth - 2)}┘`),
 				];
 			},
-			invalidate() { warning.invalidate(); hints.invalidate(); },
+			invalidate() { heading.invalidate(); explanation.invalidate(); hints.invalidate(); },
 		};
 	} : undefined);
 }

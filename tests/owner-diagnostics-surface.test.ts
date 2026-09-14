@@ -121,6 +121,7 @@ test("blockage widget uses a warning-colored responsive box", () => {
 	assert.doesNotMatch(rendered, /inspect the failure|\/agents repair/);
 	assert.ok(styles.some(({ color, text }) => color === "dim" && text.trim() === "/agents diagnostics"));
 	assert.ok(styles.some(({ color, text }) => color === "warning" && text.trim() === "⚠ Subagent coordination blocked"));
+	assert.ok(!styles.some(({ text }) => text.includes("Saved coordination data")));
 	assert.ok(styles.some(({ color, text }) => color === "warning" && text.startsWith("┌")));
 });
 
