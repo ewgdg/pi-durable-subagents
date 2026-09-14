@@ -17,6 +17,19 @@ old work. Reset is not evidence that previous work completed or external effects
 were undone. It is distinct from Agent quarantine and from an Owner Fork into a
 new Workflow.
 
+### Fresh startup is required
+
+Reset must use a fresh host startup, not mutate coordination under running Agent
+Runtimes. Retain durable Agents and their conversations, but do not carry their
+native execution stacks or scheduler state through the reset. This is a design
+requirement, not a fallback if live reset proves difficult.
+
+The fresh host must establish that old affected transcript writers cannot
+continue, then capture cutoffs and establish the shared reset before ordinary
+coordination admission. A new process alone is not proof that old child writers
+have stopped. `/reload` and an in-process session replacement are not the reset
+mechanism. Reset remains an explicit action, not a side effect of every startup.
+
 This revises the direction originally requested in #131. Its partial-admission
 acceptance criteria have not been met or implemented. The separate
 [transcript repair proposal](workflow-transcript-repair-design.md) is not amended
@@ -40,11 +53,12 @@ Prefer an append-only declaration in the Owner transcript. Do not rewrite child
 transcripts, manufacture replacement Answers, or import the transcript repair
 proposal's multi-file replacement and rollback machinery.
 
-1. Obtain explicit human approval. Close ordinary coordination admission and
-   fence the old Runs and writers before choosing cutoffs. Preserve durable
-   Agents, not their executing native call stacks. A stale Runtime must not be
-   able to author a new call that appears to belong to the new scope.
-2. Capture a complete physical cutoff for each retained Agent, after fencing.
+1. Obtain explicit human approval and end the old host and its affected writers.
+   Enter the fresh host through explicit reset startup, with ordinary coordination
+   admission held closed. The reset-intent transport and exclusive-startup proof
+   remain to be specified; requesting reset is not its commit point.
+2. Capture a complete physical cutoff for each retained Agent after the old
+   writers have ended, including their final shutdown appends.
    An active conversation leaf or timestamp is not a cutoff: coordination reads
    include all branches. Validate retained identity and creation evidence
    separately; a reset does not repair missing or invalid identity.
@@ -61,12 +75,13 @@ proposal's multi-file replacement and rollback machinery.
    before it starts new work. Reconciliation checks real outcomes and issues
    fresh Requests for remaining work; reset itself does not replay old work.
 
-The cutoffs classify source invocations, not merely where their results land.
-A late result or Delivery for a pre-reset source remains historical even when
-appended after the declaration. Conversely, source classification cannot stop
-a stale Runtime from authoring a brand-new post-cutoff invocation: retiring or
-generation-fencing those writers is mandatory. If a late result cannot be
-unambiguously tied to its original source, it cannot authorize current work.
+Old completions and Deliveries committed during shutdown are captured on the
+historical side of the cutoffs. Do not support a hot-reset mode that lets old
+Runtime writers continue appending alongside fresh execution. If exclusive
+startup cannot be established, reset must not commit or admit new coordination.
+Post-reset operations must not adopt old sources merely because their native
+tool-call IDs match; retained bootstrap evidence grants no current Request,
+Answer, or Delivery authority.
 
 Reset cannot undo an external effect or prove that an orphaned external process
 stopped. Preserve that uncertainty for reconciliation rather than treating a
@@ -90,8 +105,9 @@ closed native Run as proof about the external world.
   [`request-resolution.ts`](../src/protocol/request-resolution.ts).
 - Current shutdown closes coordination admissions and discards scheduling, but
   does not prove every native transcript writer has ended. `/reload` does not
-  reread the native SessionManager from disk. The reset needs an established
-  writer/admission seam; a UI pause or marker alone is insufficient. See
+  reread the native SessionManager from disk. Fresh startup still needs an
+  established exclusive-startup and pre-admission seam; a UI pause, marker, or
+  second process alone is insufficient. See
   [session replacement research](research/pi-session-replacement.md).
 
 ## Focused failure cases for the eventual contract
@@ -100,10 +116,10 @@ closed native Run as proof about the external world.
   evidence without creating a fresh unanswered Request or claiming completion.
 - A rejected Request might represent performed work: no automatic resend and no
   assertion that its responsibility never existed.
-- An old result, Answer, cancellation, or Delivery arrives after commitment:
-  preserve it as history; no new obligation, resolution, or scheduler action.
-- A stale Runtime authors a new invocation after the cutoff, or a native
-  tool-call ID is reused: no stale work is accepted as current.
+- An old result, Answer, cancellation, or Delivery commits during shutdown:
+  capture it before the reset cutoff; no current obligation or resolution.
+- An old writer is still able to append: reset cannot commit. A retained old
+  native tool-call ID must not bind historical evidence to a new invocation.
 - A crash occurs before the shared commit or after it but before one Agent's
   explanatory message: no mixed coordination scopes on restart.
 - Branch selection, reload, and repeated resets cannot revive retired work.
