@@ -1,9 +1,9 @@
 # Request lifetime versus replay rejection and context-only marking
 
 Decision support for [#131](https://github.com/ewgdg/pi-durable-subagents/issues/131).
-**Rebuilt for the clarified alternative B. Weights and scores remain provisional;
-no alternative selected or implemented.** This comparison reopens the lifetime question behind the
-[explicit Workflow reset design](workflow-coordination-reset-design.md).
+**Alternative B selected; not implemented.** The weights and scores remain
+judgment-based decision support. The accepted direction is recorded in the
+[skip-and-mark replay design](coordination-replay-rejection-design.md).
 
 ## Alternatives
 
@@ -127,7 +127,7 @@ arithmetic and interpretation received an independent design cross-check.
 Under these weights, prefer **B: skip invalid records during replay and mark them
 informational, while retaining durable valid obligations**. Losing all duties on
 every restart is not necessary merely to tolerate malformed historical operations.
-This is a recommendation, not a recorded user selection or implementation approval.
+The user selected B. Implementation has not been undertaken or approved here.
 
 The decisive tradeoff is intact restart continuity versus removing obligation
 reconstruction altogether. If restart continuity has no value, move its 15% weight
@@ -151,5 +151,5 @@ map exist. Do not interpret the decimal totals as measured precision.
   uses it for current Request-attention presentation. This demonstrates a seam,
   not a completed historical-call projection.
 - Runtime code and documentation were inspected; no prototype, timing study, or
-  new regression test was run for this comparison. Implementation tasks remain
-  premature until lifetime and projection contracts are selected.
+  new regression test was run for this comparison. The direction is selected;
+  exact interfaces and affected operation contracts precede implementation tasks.

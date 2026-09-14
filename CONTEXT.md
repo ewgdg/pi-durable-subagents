@@ -13,8 +13,8 @@ The canonical interpretation of ordinary Identity evidence using the live Pi ses
 **Owner Fork**:
 A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
 
-**Workflow Reset**:
-A proposed explicit Workflow-wide discontinuity covering all prior coordination, including that of quarantined Agents, while preserving verified Agent identities, membership, and historical context for later work by the same Agents. Prior obligations cease governing current coordination without being represented as Answered, cancelled, or proof of completed work; reset coverage does not establish an unverified Agent's identity or availability.
+**Context-only Coordination**:
+Coordination material presented as information rather than current protocol-authoring input: Invalid when it fails declared record validation, or Inherited when it belongs to another Agent's copied scope. These distinct marks neither grant authority nor cancel an obligation established by valid records.
 
 **Protocol Identity**:
 A stable identity derived from the canonical Pi invocation that first creates a coordination fact, using the fact kind to keep identities from different domains distinct. Agent Identity uses the Pi session identity directly, and Workflow identity is the Workflow Owner's Agent identity.
