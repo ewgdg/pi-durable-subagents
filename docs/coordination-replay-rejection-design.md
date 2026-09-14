@@ -43,6 +43,15 @@ rather than blindly repeating the work.
 Existing identity, membership, and role requirements remain. This policy does
 not fabricate an Agent or repair arbitrary native transcript-container damage.
 
+Skipping invalid coordination records is not a Workflow admission failure and
+must not mark the Workflow unavailable or emit an admission-failure warning.
+Missing Request references handled by the selected rejection policy are not
+Workflow admission failures either. A rejection summary, if presented, is
+non-blocking. Genuine Owner/bootstrap failures, such as inability to establish
+required identity or invalid required startup configuration, still fail admission
+and retain their diagnostics. This is failure classification, not a redesign of
+warning presentation.
+
 ## Shared context-only marking
 
 Use compact ASCII markers with distinct structured reasons:
@@ -101,6 +110,9 @@ not redesign either or introduce a general repair engine.
   a valid Answer closes it without delivery, including after another replay.
 - A rejected Answer has no effect; no effects are reconstructed from its text.
 - Independently valid operations remain usable; no automatic Request resend.
+- Invalid-record rejection and its handled missing Request references do not
+  mark the Workflow unavailable or emit admission-failure warnings; genuine
+  Owner/bootstrap failures still do.
 - Missing-reference cases in retry, cancellation, Wait, and delivery have explicit
   outcomes consistent with the selected rejection policy.
 - The model receives clearly invalid/context-only call/result information without
