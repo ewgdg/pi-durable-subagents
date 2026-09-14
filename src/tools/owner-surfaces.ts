@@ -28,6 +28,8 @@ import {
 	type ParticipantCoordinationToolHandlers,
 } from "./participant-coordination-tools.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
+import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
+import { openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
 
 type AgentCoordinatorView =
 	| OrdinaryAgentCoordinatorView
@@ -58,11 +60,31 @@ export function deactivateOwnerAgentTools(pi: ExtensionAPI): void {
 export function registerAgentsCommand(
 	pi: ExtensionAPI,
 	resolveView: () => HumanPresentationCoordinatorView,
+	ownerAdmission?: OwnerRecoveryError | "admitted",
 ): void {
+	const admissionFailure = ownerAdmission === "admitted" ? undefined : ownerAdmission;
 	pi.registerCommand("agents", {
-		description: "Show Agents in the current Workflow",
-		getArgumentCompletions: getAgentsArgumentCompletions,
+		description: ownerAdmission ? "Show Agents or inspect coordination diagnostics" : "Show Agents in the current Workflow",
+		getArgumentCompletions: (prefix) => {
+			const completions = [
+				...(getAgentsArgumentCompletions(prefix) ?? []),
+				...(ownerAdmission && "diagnostics".startsWith(prefix.trim()) ? [{ value: "diagnostics", label: "diagnostics" }] : []),
+			];
+			return completions.length ? completions : null;
+		},
 		handler: async (args, ctx) => {
+			if (ownerAdmission && (args.trim() === "diagnostics" || (admissionFailure && !args.trim()))) {
+				if (ctx.mode !== "tui") return;
+				await openOwnerDiagnostics(ctx.ui, admissionFailure);
+				return;
+			}
+			if (admissionFailure) {
+				ctx.ui.notify("Subagent coordination workflow blocked. Use /agents diagnostics.", "warning");
+				return;
+			}
+			if (ownerAdmission && args.trim() && args.trim() !== "owner") {
+				throw new Error("Usage: /agents [owner|diagnostics]");
+			}
 			const commandMode = parseAgentsCommandArgument(args);
 			const view = resolveView();
 			await view.refreshTranscriptFacts();

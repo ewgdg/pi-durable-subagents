@@ -9,6 +9,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
+import { OwnerRecoveryError } from "./bootstrap/owner-recovery-error.ts";
+import { ProtocolInvariantError } from "./protocol/identities.ts";
+import { showOwnerBlockage } from "./presentation/owner-diagnostics-surface.ts";
 import type { OrdinaryAgentCoordinatorView } from "./coordination/workflow-coordinator.ts";
 import {
 	assertExtensionApiShape,
@@ -24,6 +27,7 @@ import {
 	activateOwnerAgentTools,
 	deactivateOwnerAgentTools,
 	registerOwnerAgentTools,
+	registerAgentsCommand,
 } from "./tools/owner-surfaces.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
@@ -79,10 +83,21 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			);
 			activateOwnerAgentTools(pi);
 			ownerAdmissionState = "admitted";
+			showOwnerBlockage(ctx.ui, undefined);
 		} catch (error) {
 			ownerAdmissionState = "failed";
+			resolveOwnerView = undefined;
 			deactivateOwnerAgentTools(pi);
-			throw error;
+			const failure = error instanceof OwnerRecoveryError ? error
+				: error instanceof ProtocolInvariantError ? new OwnerRecoveryError(
+					"Owner transcript recovery", ctx.sessionManager.getSessionId(),
+					ctx.sessionManager.getSessionFile(), error,
+				) : undefined;
+			if (!failure) throw error;
+			// A blocked Owner has no coordinator-backed commands. Keep diagnostics
+			// independent of that failed admission and out of restored chat history.
+			registerAgentsCommand(pi, resolveAdmittedOwnerView, failure);
+			showOwnerBlockage(ctx.ui, failure);
 		} finally {
 			settleOwnerAdmission();
 		}

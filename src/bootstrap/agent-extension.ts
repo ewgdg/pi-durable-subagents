@@ -116,7 +116,7 @@ export function bindHiddenOwnerAgentExtension(options: {
 	// Pi loads package extensions publicly. Once this session is authenticated as
 	// Owner, the same extension becomes its hidden identity-bound Owner surface.
 	ownerExtension.hidden = true;
-	registerAgentsCommand(pi, resolveView);
+	registerAgentsCommand(pi, resolveView, "admitted");
 	const lifecycleHandlers = participantLifecycleHandlers(resolveView);
 	const unbindPrimarySteeringAdmission = bindPrimarySteeringAdmission(
 		runtime.session,

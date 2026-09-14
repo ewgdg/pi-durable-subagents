@@ -7,6 +7,8 @@ import {
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
 
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+
 import piAgentCoordination from "../src/index.ts";
 import {
 	bindTestOwnerHost,
@@ -655,3 +657,73 @@ async function executeOwnerTool(
 	);
 	return result.details;
 }
+
+test("invalid committed Owner Request is contained with persistent diagnostics after startup and reload", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	const { callId, entryId } = appendInvalidOwnerRequest(host.session.sessionManager);
+	await bindTestOwnerHost(host, "tui");
+	for (const phase of ["startup", "reload"]) {
+		if (phase === "reload") await host.session.reload();
+		assertOwnerToolsRegisteredButInactive(host);
+		assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), [], phase);
+		const widget = host.ui.widgets.get("agent-coordination.blockage");
+		assert.ok(widget, phase);
+		const widgetText = Array.isArray(widget) ? widget.join("\n") : (widget as { render(width: number): string[] }).render(100).join("\n");
+		assert.match(widgetText, /Subagent coordination workflow blocked/);
+		assert.match(widgetText, /\/agents diagnostics/);
+		assert.doesNotMatch(widgetText, /\/fork/);
+		const command = host.session.extensionRunner.getCommand("agents");
+		assert.ok(command);
+		const opened = command.handler("diagnostics", host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1]);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const panel = host.ui.customSurfaces.at(-1);
+		assert.ok(panel);
+		const summary = panel.render(120).join("\n");
+		assert.match(summary, /Problem/);
+		assert.match(summary, /title/);
+		assert.match(summary, /Recovery/);
+		assert.match(summary, /unavailable/);
+		assert.doesNotMatch(summary, /at authoredFacts/);
+		assert.doesNotMatch(summary, /cleanup also failed/);
+		panel.handleInput?.("t");
+		const technical = panel.render(200).join("\n");
+		assert.match(technical, new RegExp(entryId));
+		assert.match(technical, new RegExp(callId));
+		assert.match(technical, /Transcript:/);
+		panel.handleInput?.("q");
+		await opened;
+	}
+	await host.runtime.dispose();
+});
+
+function appendInvalidOwnerRequest(sessionManager: SessionManager) {
+	sessionManager.appendCustomEntry("agent-coordination.identity", { agentId: sessionManager.getSessionId(), workflowId: sessionManager.getSessionId(), directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } });
+	const callId = "accepted-request-missing-title";
+	const entryId = sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "request", targetAgent: "helper", question: "A previously accepted Request",
+	}, { id: callId }), { stopReason: "toolUse" }));
+	sessionManager.appendMessage({
+		role: "toolResult", toolName: "agent_message", toolCallId: callId,
+		content: [{ type: "text", text: "sent" }],
+		details: { requestMessageId: "historical-request", targetAgentId: "helper", messageStatus: "sent" },
+		isError: false, timestamp: Date.now(),
+	});
+	return { callId, entryId };
+}
+
+test("resuming an invalid Owner in-process keeps diagnostics and native conversation usable", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	const target = SessionManager.create(host.cwd, join(host.cwd, "invalid-owner-session"));
+	appendInvalidOwnerRequest(target);
+	assert.deepEqual(await host.runtime.switchSession(target.getSessionFile()!), { cancelled: false });
+	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
+	assert.ok(host.ui.widgets.has("agent-coordination.blockage"));
+	assert.ok(host.runtime.session.extensionRunner.getCommand("agents"));
+	assert.equal(host.runtime.session.getActiveToolNames().includes("agent_message"), false);
+	host.model.setResponses([fauxAssistantMessage("Native conversation still works.")]);
+	await host.runtime.session.prompt("Continue ordinary conversation, not coordination.");
+	assert.equal(host.runtime.session.isStreaming, false);
+	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
+	await host.runtime.dispose();
+});

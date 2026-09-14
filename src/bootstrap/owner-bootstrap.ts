@@ -28,6 +28,8 @@ import {
 	installResolvedAgentActivityDock,
 } from "./agent-extension.ts";
 import { discoverColdWorkflow } from "./cold-host-discovery.ts";
+import { ProtocolInvariantError } from "../protocol/identities.ts";
+import { OwnerRecoveryError } from "./owner-recovery-error.ts";
 
 type InitializedWorkflow = {
 	coordinator: WorkflowCoordinator;
@@ -93,12 +95,6 @@ export async function initializeOwnerWorkflow(options: {
 		ownerIdentity: identity,
 		ownerSessionManager: runtime.session.sessionManager,
 	});
-	if (recoveredWorkflow.quarantinedCandidateCount > 0) {
-		ctx.ui.notify(
-			`${recoveredWorkflow.quarantinedCandidateCount} Agent transcript candidate${recoveredWorkflow.quarantinedCandidateCount === 1 ? " was" : "s were"} quarantined; independently verified Agents remain available.`,
-			"warning",
-		);
-	}
 	const coordinator = new WorkflowCoordinator(runtime, identity, {
 		entryModulePath,
 		operationalIncidentPresentation: new OperationalIncidentSurface(),
@@ -106,7 +102,24 @@ export async function initializeOwnerWorkflow(options: {
 		workflowPolicy: policy,
 		recoveredWorkflow,
 	});
-	await coordinator.initialize();
+	try {
+		await coordinator.initialize();
+	} catch (error) {
+		let cleanupError: unknown;
+		try {
+			// Admission has not installed lifecycle disposal yet. Release its partial
+			// coordinator here without disposing the still-usable native Pi session.
+			await coordinator.shutdown(async () => undefined);
+		} catch (failure) {
+			cleanupError = failure;
+		}
+		if (error instanceof ProtocolInvariantError) {
+			throw new OwnerRecoveryError("Owner coordination initialization", identity.agentId,
+				runtime.session.sessionManager.getSessionFile(), error, cleanupError);
+		}
+		if (cleanupError !== undefined) throw new AggregateError([error, cleanupError], "Owner admission and cleanup failed");
+		throw error;
+	}
 	let parkingBinding: OwnerSettlementParkingBinding | undefined;
 	let ownerReplacementPreparation: Promise<void> | undefined;
 	const prepareOwnerReplacement = () => {
@@ -146,5 +159,11 @@ export async function initializeOwnerWorkflow(options: {
 		policy,
 		prepareOwnerReplacement,
 	});
+	if (recoveredWorkflow.quarantinedCandidateCount > 0) {
+		ctx.ui.notify(
+			`${recoveredWorkflow.quarantinedCandidateCount} Agent transcript candidate${recoveredWorkflow.quarantinedCandidateCount === 1 ? " was" : "s were"} quarantined; independently verified Agents remain available.`,
+			"warning",
+		);
+	}
 	return resolveView;
 }
