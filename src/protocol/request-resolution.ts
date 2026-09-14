@@ -293,7 +293,7 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 		() => ({
 			sources: [] as AuthoredAgentMessageSource[],
 			requests: [] as AuthoredRequestSource[],
-			invalidCalls: [] as string[],
+			invalidCalls: [] as Array<{ source: ToolCallPointer; cause: unknown }>,
 			byMessage: new Map<string, AuthoredAgentMessageSource[]>(),
 			byCall: new Map<string, AuthoredAgentMessageSource[]>(),
 			cancellations: new Map<string, AuthoredAgentMessageSource[]>(),
@@ -308,8 +308,11 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 					input = validateAgentMessageInput(part.arguments);
 					if (input.operation === "poll" || input.operation === "retry") continue;
 					input = resolveAgentMessageReferences(transcript, { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id }, input);
-				} catch {
-					facts.invalidCalls.push(part.id);
+				} catch (cause) {
+					facts.invalidCalls.push({
+						source: { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id },
+						cause,
+					});
 					continue;
 				}
 				if (input.operation === "poll" || input.operation === "retry") continue;
@@ -341,7 +344,8 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 	);
 	// Invalid calls remain candidates until their native validation result commits.
 	// A cached absence cannot hide a later contradictory successful result.
-	for (const toolCallId of facts.invalidCalls) {
+	for (const { source, cause } of facts.invalidCalls) {
+		const { toolCallId } = source;
 		const results = coordinationEntries(transcript, authorAgentId, `result:${toolCallId}`).filter(
 			(entry) =>
 				entry.type === "message" &&
@@ -356,7 +360,9 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 			results[0].message.isError
 		)
 			continue;
-		throw new ProtocolInvariantError(`committed agent_message source ${toolCallId} is invalid`);
+		throw new ProtocolInvariantError(`committed agent_message source ${toolCallId} is invalid`, {
+			source, cause, transcriptPath: transcript.transcriptPath,
+		});
 	}
 	return facts;
 }

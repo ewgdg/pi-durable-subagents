@@ -139,6 +139,9 @@ export function validateAgentMessageInput(
 }
 
 function validateRequestSendInput(value: Record<string, unknown>): RequestSendInput {
+	if (!("title" in value)) {
+		throw new Error('invalid_input: Agent Request required field "title" is missing');
+	}
 	const keys = Object.keys(value).sort();
 	const expectedKeys = [
 		...(value.contextPreparation === undefined ? [] : ["contextPreparation"]),

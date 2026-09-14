@@ -15,9 +15,13 @@ export type ToolCallPointer = Readonly<{
 }>;
 
 export class ProtocolInvariantError extends Error {
-	constructor(message: string) {
-		super(`invariant_violation: ${message}`);
+	readonly source?: ToolCallPointer;
+	readonly transcriptPath?: string | null;
+	constructor(message: string, options?: ErrorOptions & { source?: ToolCallPointer; transcriptPath?: string | null }) {
+		super(`invariant_violation: ${message}`, options);
 		this.name = "ProtocolInvariantError";
+		this.source = options?.source;
+		this.transcriptPath = options?.transcriptPath;
 	}
 }
 

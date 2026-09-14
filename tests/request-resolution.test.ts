@@ -655,3 +655,27 @@ for (const mismatch of ["missing", "extra", "reordered"] as const) test(`explici
 		agentId: "requester", transcript: h.requester.record.transcript.inspect(), toolCallId,
 	}), /differs from its explicit Request selection/);
 });
+
+test("committed source failures preserve the original validation cause and exact evidence pointer", () => {
+	const manager = SessionManager.inMemory(process.cwd());
+	const agentId = manager.getSessionId();
+	const toolCallId = "accepted-request-without-title";
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
+	const entryId = manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "request", targetAgent: "helper", question: "Previously accepted",
+	}, { id: toolCallId })));
+	const transcript = transcriptFromSessionManager(manager);
+	assert.deepEqual(findAuthoredAgentMessageSources({ authorAgentId: agentId, transcript: transcript.inspect() }), []);
+	manager.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId,
+		content: [], details: { messageStatus: "sent" }, isError: false, timestamp: Date.now() });
+	assert.throws(() => findAuthoredAgentMessageSources({ authorAgentId: agentId, transcript: transcript.inspect() }),
+		(error: unknown) => {
+			assert.ok(error instanceof Error);
+			assert.match(error.message, /committed agent_message source .* is invalid/);
+			assert.ok(error.cause instanceof Error);
+			assert.match(error.cause.message, /required field "title" is missing/);
+			assert.deepEqual((error as Error & { source: unknown }).source, { agentId, entryId, toolCallId });
+			assert.equal((error as Error & { transcriptPath: unknown }).transcriptPath, null);
+			return true;
+		});
+});
