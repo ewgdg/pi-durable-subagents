@@ -76,9 +76,9 @@ commitment with a missing original Request, and the shared invalid/context-only
 presentation contract. It must establish the affected retry, cancellation, Wait,
 and delivery outcomes without reintroducing uncertainty reconstruction.
 
-**A separate fork issue is recommended, not yet created.** It should apply the
-shared representation to inherited coordination, including copied Request
-Deliveries, and put verified current identity first in model context. Preserve
+**[#134](https://github.com/ewgdg/pi-durable-subagents/issues/134) owns fork-side projection.**
+It applies the shared representation to inherited coordination, including copied
+Request Deliveries, and puts verified current identity first in model context. Preserve
 the durable Identity cutoff after copied history rather than moving it to the
 front of unchanged native protocol records. Classification follows all-branch
 scope, not the selected leaf; inherited valid calls must not be called invalid.
@@ -87,7 +87,7 @@ That fork change affects prompt-prefix reuse: the current Conversation Fork
 preserves the completed parent message prefix. Explicit identity and inherited
 marking favor clarity over that cache-affinity property. Keep the source
 transcripts and obligations unchanged; exact fork projection and cache behavior
-belong in the separate issue, not invalid-record replay.
+belong in #134, not invalid-record replay.
 
 Warning UX remains with #125 and repair mechanics with #129. This decision does
 not redesign either or introduce a general repair engine.
