@@ -128,6 +128,7 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 
 - [Owner Workflow](docs/owner-workflow.md) — activation and compatibility behavior
 - [Owner blockage diagnostics](docs/owner-blockage-diagnostics.md) — persistent admission failure status and `/agents diagnostics`
+- [Transcript repair design](docs/workflow-transcript-repair-design.md) — proposed Workflow-owned repair Moderator and validated replacement; not implemented
 - [Operational Incident moderation](docs/operational-incident-moderation.md) — trigger detection, bounded handling, Moderator authority, Resolution, and recovery
 - [Cold host recovery](docs/cold-host-recovery.md) — transcript discovery, quarantine, dormant rosters, and residual Requests
 - [Workflow Policy](docs/workflow-policy.md) — reloadable execution, delivery, and review limits

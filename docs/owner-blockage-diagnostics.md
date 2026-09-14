@@ -32,3 +32,8 @@ The fork appends a fresh Owner Identity cutoff only in the new session. Copied M
 Startup, in-process session resume, and repeated failed-admission `/reload` use the same blockage surface. Unlike a chat-only notification, the widget remains outside restored conversation history. Its border and heading use the theme’s warning foreground; the explanation uses regular text. Available commands share a compact dim hint row without descriptions; action explanations stay in diagnostics. The widget does not replace the editor. Previously healthy Workflows also revalidate on Owner resource reload, using fresh projections under the newly loaded code. See [reload revalidation](cold-host-recovery.md#owner-resource-reload). Resource reload is not transcript repair.
 
 Partial-recovery quarantined-Agent warnings remain separate from whole-Owner blockage. Their availability claim is emitted only after Owner initialization succeeds.
+
+The [Workflow-owned transcript repair proposal](workflow-transcript-repair-design.md)
+describes the separate repair-only bootstrap, writer exclusion, validated copies,
+approval, rollback, and native reopening under discussion in #129. It is not
+implemented and does not change the recovery availability described here.
