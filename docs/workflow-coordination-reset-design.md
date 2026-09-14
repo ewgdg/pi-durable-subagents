@@ -30,6 +30,18 @@ coordination admission. A new process alone is not proof that old child writers
 have stopped. `/reload` and an in-process session replacement are not the reset
 mechanism. Reset remains an explicit action, not a side effect of every startup.
 
+### Reset completes passively
+
+Nothing starts work automatically after reset: no Owner recovery turn, child
+continuation, Moderator investigation, or replayed Delivery. The human sends a
+new message to start the Owner. Opening the UI and presenting reset diagnostics
+are not permission to invoke a model.
+
+Reset guidance must be available to that first user-started Owner turn and to
+Agents when subsequently started through fresh input or coordination. Guidance
+itself must not trigger execution. Reset ends at ready for input, not at recovery
+work in progress.
+
 This revises the direction originally requested in #131. Its partial-admission
 acceptance criteria have not been met or implemented. The separate
 [transcript repair proposal](workflow-transcript-repair-design.md) is not amended
@@ -70,10 +82,11 @@ proposal's multi-file replacement and rollback machinery.
    commitment, no reset has occurred; after commitment, every admitted Agent
    must use it. Incomplete or uncertain commitment blocks admission until
    resolved rather than letting different Agents choose different scopes.
-5. Give the Owner recovery guidance. Leave ordinary children dormant until
-   deliberately resumed, and provide each resumed Agent with reset guidance
-   before it starts new work. Reconciliation checks real outcomes and issues
-   fresh Requests for remaining work; reset itself does not replay old work.
+5. Return to the Owner UI ready for human input, without starting any Agent work.
+   Make reset guidance available without triggering a turn. A new human message
+   starts the Owner; later Agent work follows fresh input or coordination, with
+   reset guidance before execution. Reconciliation checks real outcomes and
+   issues fresh Requests for remaining work; reset itself does not replay work.
 
 Old completions and Deliveries committed during shutdown are captured on the
 historical side of the cutoffs. Do not support a hot-reset mode that lets old
@@ -123,6 +136,9 @@ closed native Run as proof about the external world.
 - A crash occurs before the shared commit or after it but before one Agent's
   explanatory message: no mixed coordination scopes on restart.
 - Branch selection, reload, and repeated resets cannot revive retired work.
+- Successful reset starts no model turn, Delivery, child continuation, or
+  Moderator investigation. Reset guidance and UI navigation remain passive;
+  a new human message starts the Owner with the guidance available.
 - A dormant child requires pre-reset explicit Spawn configuration: identity and
   preparation remain usable without recreating its old Creation Request.
 - Fresh Requests, Answers, Wait, cancellation, and Run release operate normally
@@ -142,7 +158,7 @@ These are proposed behavioral tests, not tests already implemented or run.
   what happens when that evidence is itself invalid.
 - How historical obligations and unknown outcomes are inspected without
   reactivating them; how recovery guidance reaches every resumed Agent.
-- Whether resumption is explicit per Agent or part of reset, and how dormant
-  Agents and Moderators participate.
+- How retained Moderators' historical incident roles interact with later fresh
+  work; reset itself starts no Agent, including the Owner or any Moderator.
 - Approval, diagnostics, navigation independent of ordinary replay, and focused
   acceptance tests. Implementation tasks follow accepted contracts, not this outline.
