@@ -4,14 +4,30 @@ import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 
 const BLOCKAGE_WIDGET_KEY = "agent-coordination.blockage";
-const BLOCKAGE_MESSAGE = "Subagent coordination workflow blocked: saved coordination data is invalid; the protocol may have changed.";
+const BLOCKAGE_MESSAGE = "Subagent coordination blocked: saved coordination data is invalid; the protocol may have changed.";
 const PRESENTATION_ROWS = 2;
 
 export function showOwnerBlockage(ui: ExtensionUIContext, failure: OwnerRecoveryError | undefined): void {
-	ui.setWidget(BLOCKAGE_WIDGET_KEY, failure ? [
-		`⚠ ${BLOCKAGE_MESSAGE}`,
-		"/agents diagnostics — inspect the failure and recovery availability",
-	] : undefined);
+	ui.setWidget(BLOCKAGE_WIDGET_KEY, failure ? (_tui, theme) => {
+		const body = new Text(`⚠ ${BLOCKAGE_MESSAGE}\n/agents diagnostics — inspect the failure and recovery availability`, 0, 0);
+		return {
+			render(width: number) {
+				const boundedWidth = Math.max(1, Math.floor(width));
+				// Borders need one content column; on smaller terminals keep the
+				// warning readable rather than producing negative interior widths.
+				if (boundedWidth < 3) return body.render(boundedWidth)
+					.map((line) => theme.fg("warning", truncateToWidth(line, boundedWidth, "")));
+				const padding = boundedWidth >= 5 ? " " : "";
+				const innerWidth = boundedWidth - 2 - padding.length * 2;
+				return [
+					`┌${"─".repeat(boundedWidth - 2)}┐`,
+					...body.render(innerWidth).map((line) => `│${padding}${truncateToWidth(line, innerWidth, "", true)}${padding}│`),
+					`└${"─".repeat(boundedWidth - 2)}┘`,
+				].map((line) => theme.fg("warning", line));
+			},
+			invalidate() { body.invalidate(); },
+		};
+	} : undefined);
 }
 
 export function openOwnerDiagnostics(ui: ExtensionUIContext, failure?: OwnerRecoveryError): Promise<void> {
@@ -105,14 +121,17 @@ class OwnerDiagnosticsSurface implements Component {
 		const boundedWidth = Math.max(1, Math.floor(width));
 		const height = Math.max(1, Math.floor(this.tui.terminal.rows));
 		const body = this.#body.render(boundedWidth);
-		this.#viewportRows = Math.max(1, height - PRESENTATION_ROWS);
+		this.#viewportRows = Math.max(0, height - PRESENTATION_ROWS);
 		this.#maximumScrollTop = Math.max(0, body.length - this.#viewportRows);
 		this.#scrollTop = Math.min(this.#scrollTop, this.#maximumScrollTop);
+		const footer = this.theme.fg("dim", `q close · Esc close · ${this.#technical ? "s Summary" : "t Technical details"} · ↑/↓/wheel · PgUp/PgDn · Home/End`);
+		// Overlay composition covers only returned rows. Emit the whole viewport,
+		// including blank cells, so short diagnostics cannot expose underlying chat.
 		return [
-			this.theme.fg("accent", this.theme.bold(`${this.failure ? "Subagent coordination workflow blocked" : "Subagent coordination diagnostics"} · ${this.#technical ? "Technical details" : "Summary"}`)),
-			...body.slice(this.#scrollTop, this.#scrollTop + this.#viewportRows),
-			this.theme.fg("dim", `${this.#technical ? "s Summary" : "t Technical details"} · ↑/↓/wheel · PgUp/PgDn · Home/End · Esc/q close`),
-		].slice(0, height).map((line) => truncateToWidth(line, boundedWidth, ""));
+			...(height > 1 ? [this.theme.fg("accent", this.theme.bold(`${this.failure ? "Subagent coordination blocked" : "Subagent coordination diagnostics"} · ${this.#technical ? "Technical details" : "Summary"}`))] : []),
+			...Array.from({ length: this.#viewportRows }, (_, row) => body[this.#scrollTop + row] ?? ""),
+			footer,
+		].map((line) => truncateToWidth(line, boundedWidth, "", true));
 	}
 
 	handleInput(data: string): void {

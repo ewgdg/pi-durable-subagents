@@ -8,14 +8,15 @@ import { openOwnerDiagnostics, showOwnerBlockage } from "../src/presentation/own
 
 function harness(rows = 15) {
 	let component!: Component;
+	const terminal = { rows };
 	const ui = { custom<T>(factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (result: T) => void) => Component) {
 		return new Promise<T>((resolve) => {
-			component = factory({ terminal: { rows }, requestRender() {} } as unknown as TUI,
+			component = factory({ terminal, requestRender() {} } as unknown as TUI,
 				{ fg: (_color: string, text: string) => text, bold: (text: string) => text } as Theme,
 				{} as KeybindingsManager, resolve);
 		});
 	} } as unknown as ExtensionUIContext;
-	return { ui, get component() { return component; } };
+	return { ui, terminal, get component() { return component; } };
 }
 
 const failure = new OwnerRecoveryError("Owner coordination initialization", "owner", "/tmp/owner-transcript.jsonl",
@@ -79,6 +80,44 @@ test("healthy admission diagnostics does not claim an exhaustive audit", async (
 	assert.match(rendered, /not an exhaustive audit/);
 	h.component.handleInput?.("q");
 	await result;
+});
+
+test("short diagnostics fills every viewport cell with controls pinned to the bottom across resizing", { timeout: 5_000 }, async () => {
+	const h = harness(40);
+	const result = openOwnerDiagnostics(h.ui);
+	for (const [columns, rows] of [[100, 40], [20, 8], [8, 2], [1, 1], [100, 40]]) {
+		h.terminal.rows = rows;
+		const lines = h.component.render(columns);
+		assert.equal(lines.length, rows);
+		assert.ok(lines.every((line) => visibleWidth(line) === columns));
+		if (columns >= 8) assert.match(lines.at(-1)!, /q close/);
+	}
+	h.component.handleInput?.("q");
+	await result;
+});
+
+test("blockage widget uses a warning-colored responsive box", () => {
+	let widget!: Component;
+	const colors: string[] = [];
+	const ui = { setWidget(_key: string, factory: unknown) {
+		assert.equal(typeof factory, "function");
+		widget = (factory as (tui: TUI, theme: Theme) => Component)({} as TUI, {
+			fg(color: string, text: string) { colors.push(color); return text; },
+		} as Theme);
+	} } as ExtensionUIContext;
+	showOwnerBlockage(ui, failure);
+	for (const width of [100, 40, 12, 3, 1]) {
+		const lines = widget.render(width);
+		assert.ok(lines.every((line) => visibleWidth(line) <= width));
+		if (width >= 4) {
+			assert.ok(lines[0].startsWith("┌") && lines[0].endsWith("┐"));
+			assert.ok(lines.at(-1)!.startsWith("└") && lines.at(-1)!.endsWith("┘"));
+			assert.ok(lines.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│")));
+		}
+	}
+	assert.match(widget.render(100).join("\n"), /Subagent coordination blocked/);
+	assert.doesNotMatch(widget.render(100).join("\n"), /workflow blocked/);
+	assert.ok(colors.length > 0 && colors.every((color) => color === "warning"));
 });
 
 test("clearing blockage removes only its own widget", () => {

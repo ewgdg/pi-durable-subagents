@@ -73,13 +73,13 @@ export function registerAgentsCommand(
 			return completions.length ? completions : null;
 		},
 		handler: async (args, ctx) => {
-			if (ownerAdmission && (args.trim() === "diagnostics" || (admissionFailure && !args.trim()))) {
+			if (ownerAdmission && args.trim() === "diagnostics") {
 				if (ctx.mode !== "tui") return;
 				await openOwnerDiagnostics(ctx.ui, admissionFailure);
 				return;
 			}
 			if (admissionFailure) {
-				ctx.ui.notify("Subagent coordination workflow blocked. Use /agents diagnostics.", "warning");
+				ctx.ui.notify("Subagent coordination is unavailable. Use /agents diagnostics.", "warning");
 				return;
 			}
 			if (ownerAdmission && args.trim() && args.trim() !== "owner") {

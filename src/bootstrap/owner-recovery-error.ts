@@ -14,7 +14,7 @@ export class OwnerRecoveryError extends Error {
 		protocolError: ProtocolInvariantError,
 		cleanupError?: unknown,
 	) {
-		super("Subagent coordination workflow blocked", { cause: protocolError });
+		super("Subagent coordination blocked", { cause: protocolError });
 		this.name = "OwnerRecoveryError";
 		this.stage = stage;
 		this.agentId = agentId;

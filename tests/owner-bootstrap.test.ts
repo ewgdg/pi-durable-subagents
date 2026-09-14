@@ -669,7 +669,7 @@ test("invalid committed Owner Request is contained with persistent diagnostics a
 		const widget = host.ui.widgets.get("agent-coordination.blockage");
 		assert.ok(widget, phase);
 		const widgetText = Array.isArray(widget) ? widget.join("\n") : (widget as { render(width: number): string[] }).render(100).join("\n");
-		assert.match(widgetText, /Subagent coordination workflow blocked/);
+		assert.match(widgetText, /Subagent coordination blocked/);
 		assert.match(widgetText, /\/agents diagnostics/);
 		assert.doesNotMatch(widgetText, /\/fork/);
 		const command = host.session.extensionRunner.getCommand("agents");
@@ -726,4 +726,23 @@ test("resuming an invalid Owner in-process keeps diagnostics and native conversa
 	assert.equal(host.runtime.session.isStreaming, false);
 	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
 	await host.runtime.dispose();
+});
+
+test("plain agents reports unavailability without implicitly opening diagnostics", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	appendInvalidOwnerRequest(host.session.sessionManager);
+	await bindTestOwnerHost(host, "tui");
+	const command = host.session.extensionRunner.getCommand("agents")!;
+	const handled = command.handler("", host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1]);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	try {
+		assert.equal(host.ui.customSurfaces.length, 0);
+		assert.deepEqual(host.ui.notifications.at(-1), {
+			message: "Subagent coordination is unavailable. Use /agents diagnostics.", type: "warning",
+		});
+	} finally {
+		host.ui.customSurfaces.at(-1)?.handleInput?.("q");
+		await handled;
+		await host.runtime.dispose();
+	}
 });
