@@ -1,18 +1,37 @@
 # Workflow-owned transcript repair — proposed design
 
 Design for [#129](https://github.com/ewgdg/pi-durable-subagents/issues/129).
-**Not implemented; not yet accepted.** `/agents repair` remains unavailable.
+**Not implemented; repair mechanics remain proposed.** `/agents repair` remains unavailable.
 This document separates the proposed contract from existing behavior. It does not
 authorize an autonomous repair engine or implement a missing-title migration.
 
 ## Goal and recommendation
 
-Let a blocked, verified Owner ask a Moderator belonging to its own Workflow to
-prepare repaired transcript copies. The host, not the Moderator, proves that the
+Let a verified Owner with damaged coordination evidence ask a Moderator belonging
+to its own Workflow to prepare repaired transcript copies. The host, not the Moderator, proves that the
 copies validate, obtains approval, replaces the originals, and reopens the Owner
-from disk. Ordinary coordination remains disabled throughout repair.
+from disk. During the exclusive repair transaction, ordinary transcript writers
+are paused; outside it, availability is determined per operation rather than by
+the mere presence of invalid historical evidence.
 
-Recommended first scope:
+### Accepted availability direction
+
+Keep `/agents`, diagnostics, and verified Owner ↔ repair Moderator navigation
+available independently of ordinary coordination replay. Block operations that
+depend on unverified state; allow independently verified capabilities to remain
+usable without repair. Preserve rejected evidence and uncertainty rather than
+silently dropping entries or historical responsibilities.
+
+[#131 — partial admission](https://github.com/ewgdg/pi-durable-subagents/issues/131)
+owns uncertainty propagation, per-operation admission, and the shared verified
+identity/availability interface. This repair design depends on that contract,
+but does not implement it. When the affected scope cannot be established,
+broader blockage may still be necessary. The repair writer fence is a temporary
+consistency requirement, not a policy that any validation failure disables the
+plugin. These availability principles are accepted; the repair mechanics below
+still need the decisions listed at the end.
+
+### Proposed repair scope
 
 - One repair transaction per Workflow; one fresh repair-only Moderator per attempt.
 - Explicit human approval of the entire validated multi-file changeset. No
@@ -97,7 +116,18 @@ treated as a supported concurrent participant.
 
 ## Progress and human control
 
-`/agents repair` opens a host-owned surface available without Owner admission.
+`/agents` retains a host-owned navigation surface without requiring a healthy
+ordinary coordinator or refreshing its Message projections. It uses verified
+Owner identity, repair membership, and explicit availability facts from the
+shared partial-admission interface. It can select the Owner or this Workflow's
+repair Moderator, show diagnostics, and expose repair progress. Selection must
+not implicitly resume uncertain ordinary work or lift a writer fence. During
+repair the Owner view remains selectable, but conversation writes stay paused;
+the repair Moderator operates only on its permitted workspace. If identity is
+unverified, expose diagnostics and safe recovery rather than inventing rows or
+membership. Other Agent navigation is governed by the partial-admission design.
+
+`/agents repair` opens the repair surface without successful ordinary admission.
 It shows identity, current phase, paused-writer state, snapshot/proposal digests,
 Moderator progress and evidence, validation failures, and the last durable
 transaction outcome. Reopening this surface resumes inspection of the existing
@@ -125,6 +155,9 @@ attempt, and releases the writer fence only when originals are known unchanged
 relative to the post-drain snapshot.
 No automatic participant restart follows. Once application starts, Cancel cannot
 interrupt between replacements: finish the bounded apply-or-rollback path first.
+After safe cancellation, independently verified capabilities can become available
+again under the partial-admission contract; cancellation does not make rejected
+evidence valid or erase its limitations.
 Diagnostics remain readable during it. Safe fork/new can proceed after the
 transaction reaches a consistent state and the old session's stale writers are
 retired; never fork from an unverified mixture or claim rollback restored the
@@ -289,8 +322,10 @@ shortcut.
 
 Authorize only this transaction's exact Owner path and expected native identity
 through the blocked-admission switch guard. The authorization is single-use and
-does not permit arbitrary `/resume`, participant switching, or a fresh Workflow
-with fabricated membership. Other native cancellation handlers remain effective.
+does not permit arbitrary native `/resume`, native replacement with a participant
+session, or a fresh Workflow with fabricated membership. Owner ↔ repair Moderator
+presentation switching through `/agents` is separate from this transcript-reopening
+authorization. Other native cancellation handlers remain effective.
 
 Do not treat a fulfilled switch call as success. Require an explicit post-start
 acknowledgment from the new Owner bootstrap: the native session was reread, its
@@ -300,9 +335,11 @@ Keep native/ordinary writes fenced until that acknowledgment; release them only
 after the durable `admitted` record. Recovered participant Runs remain dormant.
 
 If switching is cancelled, throws, or admission fails, retire any partially
-opened writer first, roll back all originals, and reopen the restored Owner into
-blocked diagnostics. Successful rollback does not make the old in-memory
-session valid. If restored-session reopening also fails, keep application fenced
+opened writer first, roll back all originals, and reopen the restored Owner with
+diagnostics and fresh partial-admission evaluation. Only independently verified
+capabilities can return; the original damaged evidence still imposes its limits.
+Successful rollback does not make the old in-memory session valid. If
+restored-session reopening also fails, keep application fenced
 and display an out-of-band recovery report; a controlled host restart must
 reconcile the journal before attaching the original. Never retry automatically
 with the same consumed authorization or start an unrelated repair Workflow.
@@ -317,7 +354,9 @@ retired; safe fork additionally requires a verified, consistent Owner source.
 One repair module owns identity verification, writer-lease lifetime, snapshots,
 proposal sealing, approval, apply/rollback, and recovery journal reconciliation.
 Its interface is the host repair command/progress surface plus explicit human
-approve/cancel actions. Ordinary coordination calls no repair transforms. Pi
+approve/cancel actions. The navigation surface consumes the verified
+identity/availability interface without requiring ordinary Message replay.
+Ordinary coordination calls no repair transforms. Pi
 session replacement is the host seam; do not scatter repair exceptions across
 Message validators or give a Moderator raw coordinator access.
 
@@ -325,7 +364,9 @@ Before enabling writes, exercise these observable contracts with bounded tests:
 
 | Scenario | Required outcome |
 | --- | --- |
-| Invalid historical Request/Answer evidence, valid persisted Owner identity | Repair Moderator starts in that Workflow without replaying the bad evidence; ordinary tools stay disabled. |
+| Invalid historical Request/Answer evidence, valid persisted Owner identity | Repair Moderator starts in that Workflow without replaying bad evidence; dependent operations remain blocked and the repair transaction fences all ordinary writers. |
+| Ordinary admission fails while Owner/repair membership is verified | `/agents` and diagnostics remain available; Owner ↔ repair Moderator selection does not replay invalid Message history or resume uncertain work. |
+| No repair transaction, or safely cancelled repair | Independently verified operations remain usable under partial admission; rejected evidence and dependent-operation limitations remain visible. |
 | Missing/ambiguous identity, child, Moderator, or ephemeral source | No invented repair membership; diagnostic explains the refusal. |
 | Owner identity changes while quiescing | Frozen identity check refuses before repair Moderator bootstrap. |
 | Delayed child append, pending spawn, active Owner compaction, extension append, second host | Snapshot waits for proven retirement/exclusion or refuses; no lost write. |
@@ -356,8 +397,9 @@ research; no runtime or migration is changed.
    archived with the same Workflow but never silently promoted into ordinary
    incident moderation or routing?
 
-After those mechanics are accepted, create bounded native child issues under
-#129 for: host writer exclusion and journal preflight; repair identity/bootstrap
+After those mechanics and the shared interface from #131 are accepted, create
+bounded native child issues under #129 for: host writer exclusion and journal
+preflight; repair identity/bootstrap
 and reporting; read-only whole-Workflow validation; snapshot-bound review and
 transactional apply/rollback; native reopening and admission acknowledgment.
 Each should include its relevant tests above and depend on the host capability
