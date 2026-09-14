@@ -45,12 +45,20 @@ not fabricate an Agent or repair arbitrary native transcript-container damage.
 
 ## Shared context-only marking
 
-Use distinct reasons with a shared informational representation:
+Use compact ASCII markers with distinct structured reasons:
 
-| Mark | Meaning |
-| --- | --- |
-| **invalid · context-only** | The record failed declared validation; it has no protocol effect. |
-| **inherited · context-only** | The material belongs to another Agent's inherited scope; it may be entirely valid there. |
+| Mark | Reason | Meaning |
+| --- | --- | --- |
+| `!` | Invalid | The record failed declared validation; it has no protocol effect. |
+| `^` | Inherited | The material belongs to another Agent's inherited scope; it may be entirely valid there. |
+
+Include one legend in the existing coordination guidance:
+
+> History marks: `!` invalid, `^` inherited. Both are informational; neither cancels an existing obligation.
+
+Prefix each projected call/result group once, not every line or field. Keep the
+reason structured internally; the symbol is just its compact presentation. Do
+not repeat the legend beside each call or append reminder messages.
 
 The mark describes the affected material, not cancellation of a related valid
 obligation. Inherited material creates no duties for the new Agent and does not
@@ -97,6 +105,8 @@ not redesign either or introduce a general repair engine.
   outcomes consistent with the selected rejection policy.
 - The model receives clearly invalid/context-only call/result information without
   provider-invalid tool pairing or loss of unrelated assistant content.
+- Each call/result group uses one compact marker, with one shared legend instead
+  of repeated explanations.
 - Branch selection, compaction, or reload cannot turn rejected records into
   current protocol authority.
 - Neither marking nor viewing diagnostics starts a model turn.
