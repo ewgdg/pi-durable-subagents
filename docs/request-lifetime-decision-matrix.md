@@ -1,8 +1,8 @@
-# Request lifetime versus historical-context marking
+# Request lifetime versus replay rejection and context-only marking
 
 Decision support for [#131](https://github.com/ewgdg/pi-durable-subagents/issues/131).
-**Provisional weights and scores; no alternative selected or implemented.** This
-comparison reopens the lifetime question behind the
+**Scoring paused: the first matrix compared the wrong interpretation of B. No
+alternative selected or implemented.** This comparison reopens the lifetime question behind the
 [explicit Workflow reset design](workflow-coordination-reset-design.md).
 
 ## Alternatives
@@ -16,75 +16,65 @@ requires verified progress and fresh Requests, not automatic resend. Resource
 reload must not accidentally reset just one participant; its exact host-lifetime
 contract still needs design.
 
-**B — Mark historical calls informational.** Keep durable Request semantics and
-verified obligations, but render invalid or out-of-scope historical Request
-call/result pairs as informational model context. Presentation alone does not
-cancel an obligation; a valid Answer can still resolve it. This comparison does
-not silently include new partial-admission rules for invalid canonical evidence.
+**B — Reject invalid replay inputs and mark them informational.** Keep durable
+Request semantics, reject invalid historical calls as protocol-authoring inputs,
+and expose them as context-only information to the model. Continue admission
+using the remaining valid evidence. Skipping a call is not cancellation of an
+already established obligation; a valid correlated Answer can still resolve it.
+Original rejected evidence and diagnostics remain available.
 
-These are different layers, not mutually exclusive features. A can also use
-informational projection. To expose that distinction, the matrix scores A
-without assuming that projection has already been added.
+B changes protocol replay as well as presentation. It is not the narrower
+model-context-only transformation scored in the first matrix. Informational
+projection can also complement A, but B's replay policy needs its own evaluation.
 
-## Weighted comparison
+## Correction to the first comparison
 
-Scores are design judgments, not benchmarks: 1 is poor and 5 is strong. Higher
-scores for effort/risk mean a cheaper, lower-risk change. The provisional weights
-put 55% on tolerance of broken history and long-term simplicity, reflecting the
-discussion's emphasis on avoiding fragile recovery machinery.
+The earlier claim that marking cannot help admission was true only for a
+presentation-only transformation: current protocol readers would still inspect
+the unchanged invalid evidence before the model runs. The user intended replay
+to skip the invalid call as well. Under that proposal, admission can succeed;
+the first matrix's history-tolerance score and resulting ranking do not apply.
+The superseded scores and recommendation have therefore been removed rather
+than presented as a decision about the user's actual proposal.
 
-| Criterion | Weight | A: transient | B: marking only |
-| --- | ---: | ---: | ---: |
-| Tolerance of broken historical Request evidence | 30% | 4 | 1 |
-| Long-term implementation simplicity | 25% | 4 | 2 |
-| Continuity across host restarts | 15% | 1 | 5 |
-| Clarity of historical context to the model | 15% | 2 | 4 |
-| Low implementation effort/risk | 10% | 2 | 4 |
-| Live Request/Answer/Wait guarantees | 5% | 5 | 5 |
-| **Weighted score, out of 5** | **100%** | **3.10** | **2.80** |
+## Replay contract needed before rescoring
 
-Weighted score is the sum of each score times its fractional weight.
+- A verified delivered Request plus an unrelated invalid call: reject the invalid
+  call and preserve the Request's obligation. A later valid Answer resolves it.
+- An invalid attempted operation is not automatically cancellation of an existing
+  obligation, nor permission to resend its work.
+- If the rejected call is the only available source of a Request's identity or
+  correlation, specify what surviving evidence can establish that relationship.
+  Changing its display does not provide the missing proof.
+- If rejected Answer evidence may have resolved a valid Request, specify whether
+  resolution remains provable or the operation is treated as ineffective. Do not
+  silently confuse an unknown outcome with an established unanswered Request.
+- Define invalidity consistently across replay readers and model projection,
+  including dependent Delivery, Answer, cancellation, and Creation evidence.
+  This is the actual complexity to compare with A, not presentation cost alone.
 
-## Why these scores
+These are open design questions, not a claim that replay rejection is infeasible.
 
-- **History tolerance:** A removes the need to reconstruct old duties, but cannot
-  fix unreadable native transcripts or invalid identity/creation evidence. B's
-  model projection occurs after native context construction and does not change
-  protocol admission; malformed historical proof can still block coordination.
-- **Simplicity:** A removes cross-host obligation recovery, not live Answer/cancel
-  races, Wait, queue rules, or obligation-driven moderation. B retains that live
-  machinery and durable replay, and adds a presentation transformation.
-- **Restart continuity:** A deliberately loses runtime tracking of unfinished
-  responsibility on restart, including a healthy restart. B retains it when the
-  underlying evidence is verifiable; a score of 5 here is not a promise of
-  recovery from arbitrary corruption.
-- **Model clarity:** Lifetime changes alone do not identify each historical call
-  to the model. B directly addresses that confusion, but call/result pairing,
-  source identification, mixed assistant messages, and compaction summaries
-  prevent treating the projection as trivial or perfectly comprehensive.
-- **Change cost:** A changes an architectural guarantee and many consumers. B
-  has a narrower model-context seam, though it still requires careful provenance
-  handling and regression coverage.
-- **Live guarantees:** Both can retain explicit live obligations and joins. This
-  row does not credit A with guarantees across a host restart.
+## Proposed comparison weights
 
-## Sensitivity and recommendation
+Weights remain provisional and unapproved. Scores will be design judgments,
+not benchmarks: 1 is poor and 5 is strong. Higher effort/risk scores mean a
+cheaper, lower-risk change.
 
-The result is a modest preference, not a decisive numerical verdict. Move five
-weight points from history tolerance to restart continuity and the ranking flips:
-**A = 2.95, B = 3.00**. The important decision is whether cross-restart obligation
-tracking is a product requirement, not the second decimal place.
+| Criterion | Weight |
+| --- | ---: |
+| Tolerance of broken historical Request evidence | 30% |
+| Long-term implementation simplicity | 25% |
+| Continuity across host restarts | 15% |
+| Clarity of historical context to the model | 15% |
+| Low implementation effort/risk | 10% |
+| Live Request/Answer/Wait guarantees | 5% |
+| **Total** | **100%** |
 
-For the current emphasis on simplifying broken-history recovery, prefer A as the
-protocol direction and consider B as complementary model presentation for
-out-of-scope history. Do not automatically repeat historical work. If preserving
-responsibility across ordinary restarts is essential, retain durable Requests;
-B improves their presentation but still needs repair or explicit reset for
-unverifiable protocol evidence.
-
-No weight can make presentation-only marking satisfy a requirement to admit work
-despite failed protocol replay: that needs a separate recovery mechanism or a
-change to what evidence the protocol depends on.
+Neither A nor B can manufacture missing Agent identity or fix arbitrary unreadable
+native transcript containers. A removes cross-host duty reconstruction but keeps
+live Request machinery; B aims to preserve durable duties while refusing invalid
+operations. Compare those actual policies before selecting a direction.
 
 ## Evidence and limits
 
