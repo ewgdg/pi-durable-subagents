@@ -133,9 +133,9 @@ export function bindHiddenOwnerAgentExtension(options: {
 	registerParticipantLifecycle(pi, lifecycleHandlers, {
 		deferPrimaryInputQueued: false,
 	});
-	pi.on("session_shutdown", (event) => {
+	pi.on("session_shutdown", () => {
 		unbindPrimarySteeringAdmission();
-		if (event.reason !== "reload") return prepareOwnerReplacement();
+		return prepareOwnerReplacement();
 	});
 }
 

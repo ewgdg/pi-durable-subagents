@@ -3924,3 +3924,38 @@ function reminderTestDeferred<T>() {
 	const promise = new Promise<T>(done => { resolve = done; });
 	return { promise, resolve };
 }
+
+test("Owner reload stops active ordinary Moderators before fresh admission", { timeout: 5_000 }, async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
+	});
+	let entered!: () => void;
+	const moderatorEntered = new Promise<void>((resolve) => { entered = resolve; });
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	t.after(() => release());
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			title: "Reload Moderator", request: "Demonstrate an obligation stall.",
+		}, { id: "reload-moderator-spawn" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Delegated."),
+		fauxAssistantMessage("Settled without answering."),
+		fauxAssistantMessage("Settled again without answering."),
+		async () => { entered(); await gate; return fauxAssistantMessage("Late Moderator completion."); },
+	]);
+	const prompt = host.session.prompt("Delegate stalled work.");
+	await moderatorEntered;
+	const moderator = await waitForModerator(host);
+	await host.session.reload();
+	await prompt;
+	const afterShutdown = await readFile(moderator.path, "utf8");
+	release();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(await readFile(moderator.path, "utf8"), afterShutdown);
+	const observed = await executeAndCommitRegisteredTool(host.session, "agent_observe", "reloaded-moderator", {
+		operation: "status", agentId: moderator.id,
+	});
+	assert.equal((observed.details as { run: { phase: string } }).run.phase, "dormant");
+	assert.equal((await findModerators(host)).length, 1);
+	assert.ok(host.ui.notifications.some(({ message }) => message.includes("pending work remains dormant")));
+});

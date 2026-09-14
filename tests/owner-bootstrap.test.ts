@@ -9,6 +9,7 @@ import {
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import piAgentCoordination from "../src/index.ts";
 import {
 	bindTestOwnerHost,
@@ -463,55 +464,18 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 	await mkdir(policyDirectory, { recursive: true });
 	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 1}', "utf8");
 	await bindTestOwnerHost(host, "tui");
-	host.model.setResponses([
-		fauxAssistantMessage("Remain held so Workflow Policy reload can be observed."),
-	]);
-
-	const spawned = await executeOwnerTool(host, "agent_spawn", "spawn-policy-child", {
-		title: "Fixture request",
-		request: "Remain available for prospective delivery-capacity checks.",
-	});
-	const childAgentId = (spawned as { agentId: string }).agentId;
-	await executeOwnerTool(host, "agent_control", "hold-policy-child", {
-		operation: "interrupt",
-		agentId: childAgentId,
-	});
-	const first = await executeOwnerTool(host, "agent_message", "first-policy-message", {
-		operation: "send",
-		targetAgent: childAgentId,
-		content: "Occupy the initial policy capacity.",
-	});
-	assert.equal((first as { messageStatus: string }).messageStatus, "sent");
-	const initiallyRejected = await executeOwnerTool(
-		host,
-		"agent_message",
-		"initially-rejected-policy-message",
-		{
-			operation: "send",
-			targetAgent: childAgentId,
-			content: "Remain canonical after initial capacity rejection.",
-		},
-	);
-	assert.equal(
-		(initiallyRejected as { reason: string }).reason,
-		"capacity_exhausted",
-	);
+	const heldModel = createVoidDeferred();
+	t.after(() => heldModel.resolve());
+	host.model.setResponses(Array.from({ length: 2 }, () => async () => {
+		await heldModel.promise;
+		return fauxAssistantMessage("Held for policy checks.");
+	}));
 
 	const transcriptBeforeReload = structuredClone(host.session.sessionManager.getEntries());
 	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 2}', "utf8");
 	await host.session.reload();
 	assert.deepEqual(host.session.sessionManager.getEntries(), transcriptBeforeReload);
-	const admittedAfterRaise = await executeOwnerTool(
-		host,
-		"agent_message",
-		"admitted-after-policy-raise",
-		{
-			operation: "send",
-			targetAgent: childAgentId,
-			content: "Use the newly published second slot.",
-		},
-	);
-	assert.equal((admittedAfterRaise as { messageStatus: string }).messageStatus, "sent");
+	assert.ok(host.session.getActiveToolNames().includes("workflow_resume"));
 
 	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 0}', "utf8");
 	await host.session.reload();
@@ -519,13 +483,27 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 		host.services.diagnostics.at(-1)?.message,
 		"Workflow Policy maxPendingDeliveriesPerAgent must be a positive safe integer",
 	);
+	// Reload ends Runs rather than retaining volatile scheduling. Test the retained
+	// policy against a newly held participant, independent of delivery progress.
+	const fresh = await executeOwnerTool(host, "agent_spawn", "spawn-after-policy-reload", {
+		title: "Policy check", request: "Stay available for capacity checks.",
+	}) as { agentId: string };
+	await executeOwnerTool(host, "agent_control", "hold-after-policy-reload", {
+		operation: "interrupt", agentId: fresh.agentId,
+	});
+	for (let slot = 0; slot < 2; slot++) {
+		const admitted = await executeOwnerTool(host, "agent_message", `retained-policy-slot-${slot}`, {
+			operation: "send", targetAgent: fresh.agentId, content: `Occupy slot ${slot}`,
+		}) as { messageStatus: string };
+		assert.equal(admitted.messageStatus, "sent");
+	}
 	const rejectedAfterInvalidReload = await executeOwnerTool(
 		host,
 		"agent_message",
 		"rejected-after-invalid-policy-reload",
 		{
 			operation: "send",
-			targetAgent: childAgentId,
+			targetAgent: fresh.agentId,
 			content: "The preserved two-slot snapshot remains exhausted.",
 		},
 	);
@@ -655,6 +633,10 @@ async function executeOwnerTool(
 		undefined,
 		host.session.extensionRunner.createContext(),
 	);
+	host.session.sessionManager.appendMessage({
+		role: "toolResult", toolName, toolCallId, content: result.content,
+		details: result.details, isError: false, timestamp: Date.now(),
+	});
 	return result.details;
 }
 
@@ -745,4 +727,114 @@ test("plain agents reports unavailability without implicitly opening diagnostics
 		await handled;
 		await host.runtime.dispose();
 	}
+});
+
+test("healthy Owner becoming protocol-invalid is blocked on its first reload", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	appendInvalidOwnerRequest(host.session.sessionManager);
+	await host.session.reload();
+	assertOwnerToolsRegisteredButInactive(host);
+	assert.ok(host.ui.widgets.get("agent-coordination.blockage"));
+	const command = host.session.extensionRunner.getCommand("agents");
+	assert.ok(command);
+	const opened = command.handler("diagnostics", host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1]);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const panel = host.ui.customSurfaces.at(-1);
+	assert.ok(panel);
+	assert.match(panel.render(120).join("\n"), /title/);
+	panel.handleInput?.("q");
+	await opened;
+	await host.runtime.dispose();
+});
+
+for (const invalidate of [false, true]) {
+	test(`reload quiesces a running child before ${invalidate ? "blocking" : "restoring admission"}`, { timeout: 5_000 }, async (t) => {
+		const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+		await bindTestOwnerHost(host, "tui");
+		const entered = createVoidDeferred();
+		const release = createVoidDeferred();
+		t.after(() => release.resolve());
+		let modelCalls = 0;
+		host.model.setResponses([async () => {
+			modelCalls++;
+			entered.resolve();
+			await release.promise;
+			return fauxAssistantMessage("Completed after reload.");
+		}]);
+		const spawned = await executeOwnerTool(host, "agent_spawn", "reload-active-child", {
+			title: "Active reload", request: "Keep working while the Owner reloads.",
+		}) as { agentId: string; requestMessageId: string };
+		await entered.promise;
+		const observe = host.session.getToolDefinition("agent_observe")!;
+		const before = await observe.execute("before-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createContext());
+		const path = (before.details as { primaryEvidence: { transcriptPath: string } }).primaryEvidence.transcriptPath;
+		const staleMessage = host.session.getToolDefinition("agent_message")!;
+		if (invalidate) {
+			// Simulate evidence accepted by an older protocol while preserving the
+			// entry references/count seen by its cached transcript projections.
+			await executeOwnerTool(host, "agent_message", "reload-cached-request", {
+				operation: "request", targetAgent: spawned.agentId, title: "Previously valid", question: "A saved Request",
+			});
+			await observe.execute("prime-validation", { operation: "status" }, undefined, undefined, host.session.extensionRunner.createContext());
+			const source = host.session.sessionManager.getEntries().find((entry) =>
+				entry.type === "message" && entry.message.role === "assistant" &&
+				entry.message.content.some((part) => part.type === "toolCall" && part.id === "reload-cached-request"));
+			assert.ok(source?.type === "message" && source.message.role === "assistant");
+			const call = source.message.content.find((part) => part.type === "toolCall");
+			assert.ok(call?.type === "toolCall");
+			delete call.arguments.title;
+		}
+		await host.session.reload();
+		const settledEntries = SessionManager.open(path).getEntries();
+		release.resolve();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.deepEqual(SessionManager.open(path).getEntries(), settledEntries);
+		assert.equal(modelCalls, 1, "reload must not restart or replay child work");
+		await assert.rejects(() => staleMessage.execute("stale-send", {
+			operation: "send", targetAgent: spawned.agentId, content: "A stale callback",
+		}, undefined, undefined, host.session.extensionRunner.createContext()), /shutting_down/);
+		if (invalidate) {
+			assertOwnerToolsRegisteredButInactive(host);
+			assert.ok(host.ui.widgets.get("agent-coordination.blockage"));
+		} else {
+			assert.ok(host.session.getActiveToolNames().includes("workflow_resume"));
+			assert.ok(host.ui.notifications.some(({ message }) => message.includes("pending work remains dormant")));
+			const freshObserve = host.session.getToolDefinition("agent_observe")!;
+			const after = await freshObserve.execute("after-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createContext());
+			assert.equal((after.details as { run: { phase: string } }).run.phase, "dormant");
+			const request = await freshObserve.execute("request-after-reload", { operation: "request", requestId: spawned.requestMessageId }, undefined, undefined, host.session.extensionRunner.createContext());
+			assert.match(JSON.stringify(request.details), /Keep working while the Owner reloads/);
+		}
+		await host.runtime.dispose();
+	});
+}
+
+
+test("reload joins admitted spawn preparation before declaring its snapshot safe", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+	await bindTestOwnerHost(host, "tui");
+	const entered = createVoidDeferred();
+	const release = createVoidDeferred();
+	t.after(() => release.resolve());
+	const prepare = ProcessChildSessionFactory.prototype.prepareOrdinaryRun;
+	t.mock.method(ProcessChildSessionFactory.prototype, "prepareOrdinaryRun", async function (this: ProcessChildSessionFactory, ...args: Parameters<typeof prepare>) {
+		entered.resolve();
+		await release.promise;
+		return prepare.apply(this, args);
+	});
+	const spawning = executeOwnerTool(host, "agent_spawn", "spawn-during-reload", {
+		title: "Preparing", request: "Do not start after reload fencing.",
+	});
+	await entered.promise;
+	let reloaded = false;
+	const reload = host.session.reload().then(() => { reloaded = true; });
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(reloaded, false, "shutdown must join host-side writers, not just kill child processes");
+	release.resolve();
+	const receipt = await spawning as { spawnStatus: string };
+	await reload;
+	assert.equal(receipt.spawnStatus, "not_created");
+	assert.ok(host.session.getActiveToolNames().includes("agent_spawn"));
+	await host.runtime.dispose();
 });

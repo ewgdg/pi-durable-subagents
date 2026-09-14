@@ -306,8 +306,8 @@ class SessionFileTranscriptReader implements TranscriptReader {
 }
 
 const localTranscripts = new WeakMap<ReadonlySessionManager, AgentTranscript>();
-export function transcriptFromSessionManager(manager: ReadonlySessionManager): AgentTranscript {
-	let transcript = localTranscripts.get(manager);
+export function transcriptFromSessionManager(manager: ReadonlySessionManager, options?: { fresh: boolean }): AgentTranscript {
+	let transcript = options?.fresh ? undefined : localTranscripts.get(manager);
 	if (!transcript) {
 		transcript = new AgentTranscript(new SessionManagerTranscriptReader(manager));
 		localTranscripts.set(manager, transcript);
@@ -319,8 +319,8 @@ const fileTranscripts = new Map<string, WeakRef<AgentTranscript>>();
 const releasedFiles = new FinalizationRegistry<string>((path) => {
 	if (!fileTranscripts.get(path)?.deref()) fileTranscripts.delete(path);
 });
-export function transcriptFromSessionFile(path: string): AgentTranscript {
-	let transcript = fileTranscripts.get(path)?.deref();
+export function transcriptFromSessionFile(path: string, options?: { fresh: boolean }): AgentTranscript {
+	let transcript = options?.fresh ? undefined : fileTranscripts.get(path)?.deref();
 	if (!transcript) {
 		transcript = new AgentTranscript(new SessionFileTranscriptReader(path));
 		fileTranscripts.set(path, new WeakRef(transcript));

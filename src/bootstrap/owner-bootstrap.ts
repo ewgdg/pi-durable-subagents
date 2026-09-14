@@ -29,10 +29,10 @@ import {
 } from "./agent-extension.ts";
 import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { OwnerRecoveryError } from "./owner-recovery-error.ts";
 
 type InitializedWorkflow = {
-	coordinator: WorkflowCoordinator;
 	policy: WorkflowPolicyStore;
 	prepareOwnerReplacement(): Promise<void>;
 };
@@ -41,8 +41,8 @@ const WORKFLOW_REGISTRY_KEY = "__piAgentCoordinationOwnerWorkflows";
 const globalWorkflowRegistry = globalThis as typeof globalThis & {
 	[WORKFLOW_REGISTRY_KEY]?: WeakMap<AgentSession, InitializedWorkflow>;
 };
-// Resource reload re-registers surfaces but must keep one coordinator and one
-// shutdown owner for the retained native session.
+// Retain only the shutdown owner across module reload. New code must not trust
+// the previous coordinator or its cached protocol projections.
 const initializedWorkflows = (globalWorkflowRegistry[WORKFLOW_REGISTRY_KEY] ??= new WeakMap());
 
 export async function initializeOwnerWorkflow(options: {
@@ -60,34 +60,23 @@ export async function initializeOwnerWorkflow(options: {
 	);
 	const existing = initializedWorkflows.get(runtime.session);
 	if (existing) {
-		if (event.reason === "reload") {
-			const reloaded = await readWorkflowPolicy(runtime.services.agentDir);
-			if (reloaded.ok) {
-				existing.policy.publish(reloaded.snapshot);
-			} else {
-				runtime.services.diagnostics.push(reloaded.diagnostic);
-			}
-		}
-		await existing.coordinator.refreshAgentTemplateSnapshot(runtime.session.sessionId);
-		const resolveView = () => existing.coordinator.forAgent(runtime.session.sessionId);
-		installResolvedAgentActivityDock(ctx.ui, resolveView);
-		bindHiddenOwnerAgentExtension({
-			pi,
-			runtime,
-			bootstrapHandler,
-			resolveView,
-			prepareOwnerReplacement: existing.prepareOwnerReplacement,
-		});
-		return resolveView;
+		// Shutdown closes ordinary admission before its first await and joins all
+		// managed writers. Keep the registry entry on failure: another reload must
+		// not mistake failed cleanup for a repair-safe snapshot.
+		await existing.prepareOwnerReplacement();
+		initializedWorkflows.delete(runtime.session);
 	}
 	assertOwnerAgentExtensionBindingReady({ runtime, bootstrapHandler });
 
 	const initialPolicy = await readWorkflowPolicy(runtime.services.agentDir);
 	if (!initialPolicy.ok) {
 		runtime.services.diagnostics.push(initialPolicy.diagnostic);
-		throw new Error(initialPolicy.diagnostic.message);
+		if (!existing) throw new Error(initialPolicy.diagnostic.message);
 	}
-	const policy = new WorkflowPolicyStore(initialPolicy.snapshot);
+	const policy = new WorkflowPolicyStore(initialPolicy.ok
+		? initialPolicy.snapshot : existing!.policy.current());
+	// Admission always rebuilds projections, including when the host loader retains modules.
+	transcriptFromSessionManager(runtime.session.sessionManager, { fresh: true });
 	const identity = adoptOrValidateOwnerIdentity(runtime, {
 		allowCopiedCoordinationContext: event.reason === "fork",
 	});
@@ -125,7 +114,7 @@ export async function initializeOwnerWorkflow(options: {
 	const prepareOwnerReplacement = () => {
 		if (ownerReplacementPreparation) return ownerReplacementPreparation;
 		// Pi owns native Runtime disposal after awaited session shutdown handlers.
-		ownerReplacementPreparation = coordinator.shutdown(async () => undefined)
+		ownerReplacementPreparation = coordinator.shutdown(() => runtime.session.abort())
 			.finally(() => parkingBinding?.dispose());
 		return ownerReplacementPreparation;
 	};
@@ -155,10 +144,12 @@ export async function initializeOwnerWorkflow(options: {
 		},
 	});
 	initializedWorkflows.set(runtime.session, {
-		coordinator,
 		policy,
 		prepareOwnerReplacement,
 	});
+	if (existing && recoveredWorkflow.agents.length > 0) {
+		ctx.ui.notify("Workflow revalidated. Participant Runs were stopped for reload; pending work remains dormant. Check interrupted effects before using workflow_resume.", "warning");
+	}
 	if (recoveredWorkflow.quarantinedCandidateCount > 0) {
 		ctx.ui.notify(
 			`${recoveredWorkflow.quarantinedCandidateCount} Agent transcript candidate${recoveredWorkflow.quarantinedCandidateCount === 1 ? " was" : "s were"} quarantined; independently verified Agents remain available.`,

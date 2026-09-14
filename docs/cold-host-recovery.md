@@ -69,3 +69,16 @@ Recovery orders Agents by Agent ID and Messages within each Agent by physical au
 The call returns when recovery is admitted, not when the Workflow finishes. Its result contains only `workflowId` and the Owner-scoped `outstandingRequests`. Recovery still schedules work across the Workflow; internal scheduling outcomes are used to derive each recipient's view, not exposed as a separate global receipt. Admission is neither Delivery nor completion proof. Failures that cannot be represented on a verified Request—including Answer or ordinary Message recovery and unreadable Owner evidence—surface as tool errors after independent admissions and prepared-recipient releases. Dispatch-release failures also release every prepared recipient before reporting an error. Work may already be admitted or dispatched, so these errors do not imply rollback.
 
 Use per-Message retry for one original authored Message, `agent_wait` for a fresh join of all the caller's outstanding outbound Requests or an explicit selection, and `workflow_resume` for Owner-requested Workflow continuation. Recovery does not restore volatile Wait calls, Promises, or timers. A recovered responder may call a fresh Wait when its next decision requires its restored dependencies.
+
+
+## Owner resource reload
+
+An Owner `/reload` ends ordinary coordination Runs before admitting the newly loaded extension. The native Owner conversation/editor is retained, but the old coordinator is never reused as proof that saved data is valid. Fresh cold discovery and fresh transcript projections validate the relevant Owner, child, and Moderator evidence under the loaded protocol.
+
+- Admission and scheduling are fenced during shutdown and revalidation. Already-running children and ordinary Moderators are stopped, not allowed to keep writing behind disabled Owner tools.
+- In-flight work is interrupted, not replayed. After valid admission, recovered participants are dormant and pending Requests remain available. A warning explains that you must check interrupted external effects before using `workflow_resume`; no automatic successor startup or duplicate delivery is introduced by reload.
+- Invalid saved evidence uses the same persistent above-editor blockage and `/agents diagnostics` as cold admission, on the first reload. Independently unverified child candidates retain the cold-recovery quarantine policy.
+- Cleanup failure prevents replacement. The retained shutdown failure continues to fence later reload attempts; it is not evidence of a repair-safe snapshot. Pi/editor availability does not certify that unmanaged or failed-cleanup writers are gone.
+- The latest valid Workflow Policy is retained if a reload policy is invalid. Template resources are captured afresh.
+
+This is a coordination replacement, not transcript repair. Repair-only Moderator activity (#129) and safe blocked Owner forking (#130) are separate features; neither may run through the suspended ordinary coordinator. Until those features exist, blocked reload offers the same diagnostics and native `/new` recovery as blocked cold admission.

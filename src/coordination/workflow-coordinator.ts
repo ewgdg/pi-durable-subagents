@@ -268,6 +268,7 @@ export class WorkflowCoordinator {
 	#shutdownPromise: Promise<void> | undefined;
 	readonly #shutdownController = new AbortController();
 	#shuttingDown = false;
+	readonly #pendingSpawns = new Set<Promise<unknown>>();
 
 	constructor(
 		runtime: AgentSessionRuntime,
@@ -505,7 +506,13 @@ export class WorkflowCoordinator {
 		return Object.freeze({
 			...this.#agentView(agentId),
 			resumeWorkflow: (toolCallId) => this.#resumeWorkflow(agentId, toolCallId),
-			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
+			spawn: (toolCallId, input) => {
+				this.#assertAdmissionOpen();
+				const spawning = this.#spawner.spawn(agentId, toolCallId, input);
+				this.#pendingSpawns.add(spawning);
+				void spawning.finally(() => this.#pendingSpawns.delete(spawning)).catch(() => undefined);
+				return spawning;
+			},
 			agentTemplateSnapshot: () => this.#sessionFactory.agentTemplateSnapshotFor(
 				this.#requireAgent(agentId),
 			),
@@ -594,12 +601,18 @@ export class WorkflowCoordinator {
 				return () => this.#agentActivityChangeHandlers.delete(handler);
 			},
 			refreshAgentActivity: () => this.#notifyAgentActivityChanged(),
-			refreshTranscriptFacts: () => refreshAgentTranscripts(this.#agents.values()),
+			refreshTranscriptFacts: () => {
+				this.#assertAdmissionOpen();
+				return refreshAgentTranscripts(this.#agents.values());
+			},
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			search: (input) => this.#searchFor(agentId, input),
 			openIncomingRequests: () => this.#messages.openIncomingRequests(agentId),
 			inspectRequest: (requestId) => this.#messages.inspectRequest(agentId, requestId),
-			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
+			message: (toolCallId, input) => {
+				this.#assertAdmissionOpen();
+				return this.#messages.execute(agentId, toolCallId, input);
+			},
 			wait: (toolCallId, input, signal, onProgress) => {
 				this.#assertAdmissionOpen();
 				return this.#agentWaits.wait(agentId, toolCallId, input, signal, onProgress);
@@ -987,11 +1000,13 @@ export class WorkflowCoordinator {
 	#activityRefresh: Promise<void> | undefined;
 	#activityRefreshRequested = false;
 	#notifyAgentActivityChanged(): void {
+		if (this.#shuttingDown) return;
 		this.#activityRefreshRequested = true;
 		this.#activityRefresh ??= (async () => {
 			do {
 				this.#activityRefreshRequested = false;
 				await refreshAgentTranscripts(this.#agents.values());
+				if (this.#shuttingDown) return;
 				for (const handler of this.#agentActivityChangeHandlers) handler();
 			} while (this.#activityRefreshRequested);
 		})()
@@ -1509,14 +1524,19 @@ export class WorkflowCoordinator {
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
 		const cleanupErrors: unknown[] = [];
-		const children = [...this.#agents.values()].filter(
+		const children = () => [...this.#agents.values()].filter(
 			(record) => record.identity.agentId !== this.#ownerIdentity.agentId,
 		);
 		// Fence queued starts before awaiting any lane. A start already preparing its
 		// projection observes the same fence immediately after binding and cancels there.
 		collectSettledCleanupFailures(cleanupErrors, await Promise.allSettled(
-			children.map((record) => record.host.beginShutdown()),
+			children().map((record) => record.host.beginShutdown()),
 		));
+		// Host-side spawn handlers outlive their child's Control connection. Join
+		// their evidence writes outside Agent lanes, and include any newly committed
+		// records in cleanup. Moderator bootstrap has its own reconciliation lane.
+		await Promise.allSettled([...this.#pendingSpawns]);
+		await collectCleanupFailure(cleanupErrors, () => this.#operationalIncidents.reachSafeBoundary());
 		await collectCleanupFailure(
 			cleanupErrors,
 			() => this.#activeAgentView?.attachment.close(),
@@ -1526,7 +1546,7 @@ export class WorkflowCoordinator {
 			() => this.#operationalIncidents.shutdown(),
 		);
 		collectSettledCleanupFailures(cleanupErrors, await Promise.allSettled(
-			children.map((record) =>
+			children().map((record) =>
 				record.host.lane.run(() => this.#shutdownAgentInLane(record)),
 			),
 		));

@@ -329,7 +329,8 @@ export async function discoverColdWorkflow(options: {
 }
 
 async function readCandidate(path: string): Promise<Candidate> {
-	const transcript = transcriptFromSessionFile(path);
+	// Discovery is an admission audit, never a continuation of cached validation.
+	const transcript = transcriptFromSessionFile(path, { fresh: true });
 	let inspection;
 	try {
 		inspection = await transcript.refresh();
