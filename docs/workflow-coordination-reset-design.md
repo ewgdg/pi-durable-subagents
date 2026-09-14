@@ -4,6 +4,10 @@ Direction discussed for [#131](https://github.com/ewgdg/pi-durable-subagents/iss
 **High-level direction agreed; operation and transaction contracts remain open.
 Not implemented.** This document does not authorize runtime changes or implementation tasks.
 
+Later discussion reopened obligation lifetime: see the
+[transient Requests versus historical-context marking comparison](request-lifetime-decision-matrix.md).
+That comparison has not selected a replacement for the explicit reset design.
+
 ## Agreed direction
 
 Prefer one explicit Workflow-wide reset over partial admission of damaged
