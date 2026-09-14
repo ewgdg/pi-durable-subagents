@@ -17,6 +17,20 @@ old work. Reset is not evidence that previous work completed or external effects
 were undone. It is distinct from Agent quarantine and from an Owner Fork into a
 new Workflow.
 
+### Quarantine does not exclude reset coverage
+
+All Agents' old coordination is covered by the same reset, including quarantined
+Agents. Coverage must not be limited to the coordinator's currently admitted
+Agent roster or depend on successful replay of the damaged protocol evidence.
+There is no separate reset or re-entry process for quarantined Agents.
+
+Reset coverage and admission are distinct: capturing a quarantined transcript's
+cutoff does not establish its Agent identity or Workflow membership. Invalid
+identity or creation evidence can still prevent execution, but later repair must
+not resurrect pre-reset Requests, Creation Requests, Answers, or obligations.
+The reset representation must cover those historical sources even when their
+protocol interpretation is currently unavailable.
+
 ### Fresh startup is required
 
 Reset must use a fresh host startup, not mutate coordination under running Agent
@@ -49,7 +63,7 @@ by this discussion; repair can remain a separate continuity-preserving option.
 
 ## Proposed invariant
 
-All participating Agents use one current coordination scope. Earlier Requests,
+The whole Workflow uses one current coordination scope. Earlier Requests,
 Answers, cancellations, and Deliveries remain historical evidence but do not
 create current obligations or authorize current scheduling. Reset does not
 misrepresent those historical obligations as Answered or cancelled.
@@ -69,8 +83,11 @@ proposal's multi-file replacement and rollback machinery.
    Enter the fresh host through explicit reset startup, with ordinary coordination
    admission held closed. The reset-intent transport and exclusive-startup proof
    remain to be specified; requesting reset is not its commit point.
-2. Capture a complete physical cutoff for each retained Agent after the old
-   writers have ended, including their final shutdown appends.
+2. Capture complete physical cutoffs across the Workflow's transcript candidates,
+   including quarantined candidates, after the old writers have ended and made
+   their final shutdown appends. Coverage must be complete before declaring a
+   successful shared reset; do not silently skip a candidate because its
+   protocol evidence is invalid.
    An active conversation leaf or timestamp is not a cutoff: coordination reads
    include all branches. Validate retained identity and creation evidence
    separately; a reset does not repair missing or invalid identity.
@@ -136,6 +153,9 @@ closed native Run as proof about the external world.
 - A crash occurs before the shared commit or after it but before one Agent's
   explanatory message: no mixed coordination scopes on restart.
 - Branch selection, reload, and repeated resets cannot revive retired work.
+- An Agent is quarantined at reset and repaired later: it was covered by the
+  same reset, and admission cannot revive any pre-reset coordination. Including
+  its transcript in reset coverage does not invent identity or membership.
 - Successful reset starts no model turn, Delivery, child continuation, or
   Moderator investigation. Reset guidance and UI navigation remain passive;
   a new human message starts the Owner with the guidance available.
