@@ -1,8 +1,8 @@
 # Request lifetime versus replay rejection and context-only marking
 
 Decision support for [#131](https://github.com/ewgdg/pi-durable-subagents/issues/131).
-**Scoring paused: the first matrix compared the wrong interpretation of B. No
-alternative selected or implemented.** This comparison reopens the lifetime question behind the
+**Rebuilt for the clarified alternative B. Weights and scores remain provisional;
+no alternative selected or implemented.** This comparison reopens the lifetime question behind the
 [explicit Workflow reset design](workflow-coordination-reset-design.md).
 
 ## Alternatives
@@ -29,7 +29,8 @@ rejected evidence and diagnostics remain available as information.
 
 B changes protocol replay as well as presentation. It is not the narrower
 model-context-only transformation scored in the first matrix. Informational
-projection can also complement A, but B's replay policy needs its own evaluation.
+projection can also complement A; the matrix compares the proposals as defined
+above, rather than assuming A already includes B's per-call marking.
 
 ## Correction to the first comparison
 
@@ -74,26 +75,68 @@ when evaluating this simpler rejection policy. Other orphan operation kinds and
 exact validator/reader interfaces still need implementation-contract design, not
 an investigation into facts supposedly recoverable from rejected records.
 
-## Proposed comparison weights
+## Rebuilt weighted comparison
 
-Weights remain provisional and unapproved. Scores will be design judgments,
-not benchmarks: 1 is poor and 5 is strong. Higher effort/risk scores mean a
-cheaper, lower-risk change.
+The weights are unchanged from the first comparison and remain provisional and
+unapproved. Scores are design judgments, not benchmarks: 1 is poor and 5 is
+strong. Higher effort/risk scores mean a cheaper, lower-risk change.
 
-| Criterion | Weight |
-| --- | ---: |
-| Tolerance of broken historical Request evidence | 30% |
-| Long-term implementation simplicity | 25% |
-| Continuity across host restarts | 15% |
-| Clarity of historical context to the model | 15% |
-| Low implementation effort/risk | 10% |
-| Live Request/Answer/Wait guarantees | 5% |
-| **Total** | **100%** |
+| Criterion | Weight | A: transient | B: reject and mark |
+| --- | ---: | ---: | ---: |
+| Usable coordination despite invalid historical protocol records | 30% | 4 | 4 |
+| Long-term implementation simplicity | 25% | 4 | 3 |
+| Continuity of valid obligations across host restarts | 15% | 1 | 5 |
+| Model clarity about actionable versus informational history | 15% | 3 | 4 |
+| Low implementation effort/risk | 10% | 2 | 3 |
+| Live Request/Answer/Wait guarantees with valid records | 5% | 5 | 5 |
+| **Weighted score, out of 5** | **100%** | **3.25** | **3.85** |
 
-Neither A nor B can manufacture missing Agent identity or fix arbitrary unreadable
-native transcript containers. A removes cross-host duty reconstruction but keeps
-live Request machinery; B aims to preserve durable duties while refusing invalid
-operations. Compare those actual policies before selecting a direction.
+Weighted score is the sum of each score times its fractional weight. The
+arithmetic and interpretation received an independent design cross-check.
+
+## Score rationale and confidence
+
+- **History tolerance, tied:** A excludes previous-host coordination from its
+  current ledger; B skips invalid records and handles missing Request references
+  without blocking valid Answer commitment. Both can keep coordination usable.
+  This criterion does not require preserving the effects of invalid records.
+  Neither policy fixes arbitrary unreadable native files or invents Agent identity.
+- **Long-term simplicity, modest advantage to A:** A removes cross-host duty
+  reconstruction. B retains replay, with explicit rejection and orphan handling,
+  but no uncertainty graph. Both retain live Answer/cancel races, Wait, queue
+  eligibility, and obligation-based moderation; neither is message-only simplicity.
+- **Restart continuity, advantage to B:** A drops every obligation at host exit,
+  even with pristine history. B retains obligations supported by valid records.
+  Its score does not promise preservation of rejected effects or delivery of an
+  orphan Answer; those outcomes are deliberately outside its contract.
+- **Model clarity, provisional advantage to B:** A has a uniform previous-host
+  lifetime rule but still needs a clear session-boundary presentation. B labels
+  individual rejected calls directly. Both need to avoid confusing compacted or
+  branched context with current duties. This score is about model presentation,
+  not another score for replay tolerance.
+- **Implementation effort/risk, low-confidence advantage to B:** B is closer to
+  the existing durable model but changes replay, dependent consumers, orphan
+  commitment, and context projection. A changes the lifetime contract and startup
+  reconstruction more broadly. These are estimates, not measured change sizes.
+- **Live guarantees, tied:** Both retain structured live delegation, Answer
+  closure, and Wait in an uninterrupted host with valid records. Restart and
+  rejected-record cases are evaluated in their own rows, not penalized again here.
+
+## Recommendation and sensitivity
+
+Under these weights, prefer **B: skip invalid records during replay and mark them
+informational, while retaining durable valid obligations**. Losing all duties on
+every restart is not necessary merely to tolerate malformed historical operations.
+This is a recommendation, not a recorded user selection or implementation approval.
+
+The decisive tradeoff is intact restart continuity versus removing obligation
+reconstruction altogether. If restart continuity has no value, move its 15% weight
+to long-term simplicity (40%): **A = 3.70, B = 3.55**, so A wins narrowly. That is
+a different product preference, not an error in either design.
+
+The exact scores for clarity, conceptual simplicity, and change risk have limited
+confidence until concrete context examples and a bounded implementation change
+map exist. Do not interpret the decimal totals as measured precision.
 
 ## Evidence and limits
 
