@@ -19,9 +19,13 @@ contract still needs design.
 **B — Reject invalid replay inputs and mark them informational.** Keep durable
 Request semantics, reject invalid historical calls as protocol-authoring inputs,
 and expose them as context-only information to the model. Continue admission
-using the remaining valid evidence. Skipping a call is not cancellation of an
-already established obligation; a valid correlated Answer can still resolve it.
-Original rejected evidence and diagnostics remain available.
+using records that pass the declared data-shape validation. Rejected records
+have no protocol effect; do not reconstruct partial facts from them or introduce
+an uncertainty graph. Skipping a call is not cancellation of an already
+established obligation. An Answer can commit against an existing obligation even
+when the original Request was rejected; commitment resolves that obligation,
+without Answer Delivery when there is no corresponding Request. Original
+rejected evidence and diagnostics remain available as information.
 
 B changes protocol replay as well as presentation. It is not the narrower
 model-context-only transformation scored in the first matrix. Informational
@@ -37,23 +41,38 @@ the first matrix's history-tolerance score and resulting ranking do not apply.
 The superseded scores and recommendation have therefore been removed rather
 than presented as a decision about the user's actual proposal.
 
-## Replay contract needed before rescoring
+## Clarified replay contract for B
 
-- A verified delivered Request plus an unrelated invalid call: reject the invalid
-  call and preserve the Request's obligation. A later valid Answer resolves it.
-- An invalid attempted operation is not automatically cancellation of an existing
-  obligation, nor permission to resend its work.
-- If the rejected call is the only available source of a Request's identity or
-  correlation, specify what surviving evidence can establish that relationship.
-  Changing its display does not provide the missing proof.
-- If rejected Answer evidence may have resolved a valid Request, specify whether
-  resolution remains provable or the operation is treated as ineffective. Do not
-  silently confuse an unknown outcome with an established unanswered Request.
-- Define invalidity consistently across replay readers and model projection,
-  including dependent Delivery, Answer, cancellation, and Creation evidence.
-  This is the actual complexity to compare with A, not presentation cost alone.
+- Validate records against the defined data shapes. Skip invalid records during
+  replay and mark them context-only for the model. Rejection is not uncertainty
+  to propagate through the Workflow; invalid records simply contribute no effect.
+- Obligations established by valid records remain. An invalid attempted
+  operation neither cancels an obligation nor authorizes repeated external work.
+- A missing original Request does not invalidate a responder obligation already
+  established by a valid recipient-side Request Delivery.
+- Admit a valid Answer against that existing obligation without requiring the
+  skipped original Request. Answer commitment resolves the obligation. If there
+  is no corresponding Request, omit Answer Delivery rather than failing the
+  commitment or fabricating delivery proof.
+- A rejected Answer record has no discharge effect. Do not infer protocol facts
+  from the rejected record's apparent intent or from a previous schema accepting
+  it; model-visible history can still inform what work was performed.
 
-These are open design questions, not a claim that replay rejection is infeasible.
+Concrete replay example:
+
+```text
+Owner Request source Q fails validation -> skipped, displayed as information
+Responder's valid Delivery of Q         -> existing Answer obligation
+Responder commits a valid Answer to Q   -> obligation resolved
+Original Request Q is absent            -> no Answer Delivery
+```
+
+This defines the intended alternative for comparison; it is not implemented.
+It differs from the original #131 requirement to preserve uncertainty about
+rejected historical effects. Do not silently reimpose that earlier requirement
+when evaluating this simpler rejection policy. Other orphan operation kinds and
+exact validator/reader interfaces still need implementation-contract design, not
+an investigation into facts supposedly recoverable from rejected records.
 
 ## Proposed comparison weights
 
