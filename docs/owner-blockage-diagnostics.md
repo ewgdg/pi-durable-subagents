@@ -25,7 +25,9 @@ The panel does not append diagnostics to model conversation history. Terminal co
 
 ## Recovery availability
 
-Transcript repair and context-preserving Owner forking after blocked admission are not available in this build. Diagnostics therefore does not advertise `/agents repair` or `/fork` as working recovery actions. Keep the original session and inspect the retained evidence before planning repair. This feature does not edit historical Messages or accept obsolete protocol shapes.
+Native `/fork` preserves selected conversation in a fresh independent Workflow, and `/clone` copies the active branch, even after coordination admission fails—provided bootstrap successfully established the source as an Owner before the failure. Diagnostics explains this condition; failed or incomplete role identification explicitly refuses fork. Child Agents and Moderators still cannot fork. Native `/new` remains available for a clean Owner session.
+
+The fork appends a fresh Owner Identity cutoff only in the new session. Copied Messages, Requests, deliveries, and child relationships remain conversation context but grant no authority, pending obligations, or automatic continuation. The original transcript is unchanged and remains available for inspection. See [Owner fork and clone](owner-workflow.md#owner-fork-and-clone). Transcript repair is still unavailable; this feature does not edit historical Messages or accept obsolete protocol shapes.
 
 Startup, in-process session resume, and repeated failed-admission `/reload` use the same blockage surface. Unlike a chat-only notification, the widget remains outside restored conversation history. Its border and heading use the theme’s warning foreground; the explanation uses regular text. Available commands share a compact dim hint row without descriptions; action explanations stay in diagnostics. The widget does not replace the editor. Previously healthy Workflows also revalidate on Owner resource reload, using fresh projections under the newly loaded code. See [reload revalidation](cold-host-recovery.md#owner-resource-reload). Resource reload is not transcript repair.
 

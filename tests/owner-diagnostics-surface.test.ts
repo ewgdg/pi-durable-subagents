@@ -34,6 +34,8 @@ test("diagnostics separates summary from complete scrollable technical evidence"
 		h.component.handleInput?.("j");
 	}
 	assert.match(summary.join("\n"), /Recovery/);
+	assert.match(summary.join("\n"), /Native \/fork preserves selected conversation/);
+	assert.match(summary.join("\n"), /Owner role identification must have succeeded/);
 	assert.match(summary.join("\n"), /first encountered failure/);
 	assert.doesNotMatch(summary.join("\n"), /owner-transcript.jsonl|at TestContext|source-call/);
 	h.component.handleInput?.("t");

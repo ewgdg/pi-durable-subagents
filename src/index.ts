@@ -47,6 +47,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	const bridge = installInteractiveHostBridge(hostPi);
 	type OwnerAdmissionState = "pending" | "admitted" | "failed";
 	let ownerAdmissionState: OwnerAdmissionState = "pending";
+	let ownerIdentified = false;
 	let settleOwnerAdmission: () => void = () => {};
 	const ownerAdmissionSettled = new Promise<void>((resolve) => {
 		settleOwnerAdmission = resolve;
@@ -65,6 +66,8 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	registerOwnerAgentTools(pi, resolveAdmittedOwnerView);
 
 	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
+		ownerAdmissionState = "pending";
+		ownerIdentified = false;
 		deactivateOwnerAgentTools(pi);
 		try {
 			if (ctx.mode !== "tui" || !ctx.hasUI) return;
@@ -75,6 +78,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				entryModulePath: ENTRY_MODULE_PATH,
 				bootstrapHandler: bootstrapOwner,
 				event,
+				onOwnerIdentified: () => { ownerIdentified = true; },
 			});
 			registerOwnerAgentTools(
 				pi,
@@ -105,12 +109,22 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	pi.on("session_start", bootstrapOwner);
 	pi.on("session_before_fork", (_event, ctx) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) return;
-		return ownerAdmissionState === "admitted" ? undefined : { cancel: true };
+		if (ownerAdmissionState === "admitted") return;
+		// A failed protocol scan must not trap an identified Owner. The native
+		// replacement path still owns shutdown and the fresh Workflow cutoff.
+		if (ownerAdmissionState === "failed" && ownerIdentified) return;
+		if (ownerAdmissionState === "failed") {
+			ctx.ui.notify(
+				"Cannot fork this session: safe Workflow Owner identification did not complete. Child Agents and Moderators cannot fork; use native /new for a clean Owner session.",
+				"error",
+			);
+		}
+		return { cancel: true };
 	});
 	pi.on("session_before_switch", (event, ctx) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) return;
 		// A failed bootstrap must not trap the user in a session that cannot host
-		// coordination. Keep other replacements fenced until admission succeeds,
+		// coordination. Keep native /resume fenced until admission succeeds,
 		// but let native /new create a clean Owner transcript for recovery.
 		const canRecoverWithNewSession =
 			ownerAdmissionState === "failed" && event.reason === "new";

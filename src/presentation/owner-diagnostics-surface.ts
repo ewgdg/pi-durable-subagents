@@ -75,7 +75,9 @@ function summaryText(failure: OwnerRecoveryError | undefined): string {
 		"",
 		"Recovery",
 		"Transcript repair is unavailable in this build.",
-		"Context-preserving /fork recovery after blocked admission is unavailable in this build.",
+		"Native /fork preserves selected conversation in a new independent Workflow; /clone copies the active branch.",
+		"Owner role identification must have succeeded; otherwise fork is refused. Native /new remains available.",
+		"Copied coordination history grants no authority or pending obligations; the source transcript is unchanged.",
 		"Keep the original session; inspect technical details before planning a repair.",
 	].join("\n");
 }
