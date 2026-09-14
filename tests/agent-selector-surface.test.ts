@@ -410,7 +410,7 @@ test("focused Agent details use a stable four-row budget", async () => {
 	assert.match(researcherRendered, /researcher-full-identity/);
 	assert.match(
 		researcherRendered,
-		/Live · settled · input required · Retention answer owed ×2/,
+		/Live · settled · input required · answer owed ×2/,
 	);
 	assert.match(
 		researcherRendered,

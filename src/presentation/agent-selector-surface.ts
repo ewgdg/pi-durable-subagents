@@ -1049,10 +1049,10 @@ function formatDetailedRun(status: AgentRosterStatus): string {
 		];
 	const retention = run.retentionReasons.length === 0
 		? undefined
-		: `Retention ${run.retentionReasons.map(({ reason, count }) => [
+		: run.retentionReasons.map(({ reason, count }) => [
 			reason.replaceAll("_", " "),
 			count > 1 ? `×${count}` : undefined,
-		].filter(Boolean).join(" ")).join(", ")}`;
+		].filter(Boolean).join(" ")).join(", ");
 	return [...state, retention].filter(Boolean).join(" · ");
 }
 
