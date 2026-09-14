@@ -31,6 +31,23 @@ not resurrect pre-reset Requests, Creation Requests, Answers, or obligations.
 The reset representation must cover those historical sources even when their
 protocol interpretation is currently unavailable.
 
+### Shared markers and one authoritative commit
+
+Use one reset ID, a passive native boundary marker in every Workflow transcript
+candidate, and one authoritative commit in the Owner transcript referencing the
+complete marker set. This includes quarantined candidates. Local markers are
+inert preparation until the shared commit exists; they are not independent
+Agent resets. Write all required markers durably before committing the reset.
+
+Markers are stable anchors rather than byte offsets or line numbers that repair
+could shift. Later repair must preserve the committed markers and the division
+between historical and current coordination. If a required marker cannot be
+safely written, the reset cannot be declared successful. Safe native transcript
+access is required, but successful replay of old coordination is not.
+
+The record model is agreed; exact native schemas, exclusive-startup integration,
+and crash-durability details remain to be specified.
+
 ### Fresh startup is required
 
 Reset must use a fresh host startup, not mutate coordination under running Agent
@@ -75,24 +92,25 @@ this distinction.
 
 ## Candidate transaction — not yet accepted
 
-Prefer an append-only declaration in the Owner transcript. Do not rewrite child
-transcripts, manufacture replacement Answers, or import the transcript repair
-proposal's multi-file replacement and rollback machinery.
+Use the agreed append-only boundary markers and shared Owner commit. Do not
+rewrite child transcripts, manufacture replacement Answers, or import the
+transcript repair proposal's replacement and rollback machinery. The following
+startup sequence still has open integration details.
 
 1. Obtain explicit human approval and end the old host and its affected writers.
    Enter the fresh host through explicit reset startup, with ordinary coordination
    admission held closed. The reset-intent transport and exclusive-startup proof
    remain to be specified; requesting reset is not its commit point.
-2. Capture complete physical cutoffs across the Workflow's transcript candidates,
-   including quarantined candidates, after the old writers have ended and made
-   their final shutdown appends. Coverage must be complete before declaring a
+2. Append boundary markers with one reset ID across the Workflow's transcript
+   candidates, including quarantined candidates, after the old writers have
+   ended and made their final shutdown appends. Coverage must be complete before declaring a
    successful shared reset; do not silently skip a candidate because its
    protocol evidence is invalid.
    An active conversation leaf or timestamp is not a cutoff: coordination reads
    include all branches. Validate retained identity and creation evidence
    separately; a reset does not repair missing or invalid identity.
-3. Commit one declaration containing the shared scope and its participant
-   cutoffs before permitting new coordination. The physical representation and
+3. Durably commit one Owner declaration referencing the complete marker set
+   before permitting new coordination. The exact native record schemas and
    crash-durability mechanism remain to be specified. Per-Agent explanatory
    messages are derived from that declaration, not independent reset commits.
 4. Reconstruct current coordination from that shared declaration. Before its
@@ -116,6 +134,36 @@ Answer, or Delivery authority.
 Reset cannot undo an external effect or prove that an orphaned external process
 stopped. Preserve that uncertainty for reconciliation rather than treating a
 closed native Run as proof about the external world.
+
+## Branch-switching contract — proposed
+
+Reset scope follows physical, all-branch transcript history, not the selected
+conversation leaf or the ancestry of the next message. Read the latest valid
+shared commit and its boundary markers independently of native model context.
+A later malformed or uncertain commit cannot be silently skipped in favor of
+an older scope.
+
+Selecting a pre-reset branch changes what the model sees, not which coordination
+scope governs the Workflow. Pre-reset Requests remain historical even when they
+are visible on that branch. A new invocation appended after the committed reset
+belongs to current coordination even if its tree parent precedes the marker.
+Moving away from a post-reset Request's branch does not undo that Request either.
+
+The reset marker and its explanatory message need not be ancestors of the
+selected leaf. Before a later user-started turn, derive the necessary reset
+guidance from shared protocol state rather than trusting the selected branch to
+contain it. Branch selection itself does not authorize recovery or replay.
+
+In-place `/tree` navigation retains one session file. Owner fork/clone is
+different: it creates a new Workflow with fresh Owner Identity under the existing
+[Owner Fork contract](owner-workflow.md#owner-fork-and-clone). Copied source reset
+records cannot grant authority in the new Workflow.
+
+Pi's coding-agent README (Branching) and `docs/session-format.md` distinguish
+in-place branching, `getEntries()` (all entries), `getBranch()` (ancestry), and
+`buildContextEntries()` (active model context). Native custom entries persist
+without entering model context. This supports the separation above; the reset
+reader and guidance are not implemented yet.
 
 ## Repository constraints
 
@@ -152,7 +200,12 @@ closed native Run as proof about the external world.
   native tool-call ID must not bind historical evidence to a new invocation.
 - A crash occurs before the shared commit or after it but before one Agent's
   explanatory message: no mixed coordination scopes on restart.
-- Branch selection, reload, and repeated resets cannot revive retired work.
+- Select a pre-reset branch whose ancestry lacks the markers: retired Requests
+  stay historical and a newly appended Request uses the current scope.
+- Select a different branch after authoring a post-reset Request: its obligation
+  remains current. Branch switching is not coordination rollback.
+- Reload, compaction, and repeated resets preserve the current shared scope;
+  active context may omit reset guidance, but the next user-started turn has it.
 - An Agent is quarantined at reset and repaired later: it was covered by the
   same reset, and admission cannot revive any pre-reset coordination. Including
   its transcript in reset coverage does not invent identity or membership.
@@ -168,8 +221,8 @@ These are proposed behavioral tests, not tests already implemented or run.
 
 ## Contracts still to settle
 
-- Where the authoritative shared reset is recorded and how it identifies each
-  transcript's cutoff; no independently advancing per-Agent resets.
+- Exact native marker/commit schemas, complete candidate coverage, and durable
+  write ordering for the agreed marker set and authoritative Owner commit.
 - How old Runs, in-flight tools, queued Deliveries, and late results are fenced;
   reset cannot undo external effects of already-started work.
 - How interrupted reset, startup, session replacement, and reload reconstruct
