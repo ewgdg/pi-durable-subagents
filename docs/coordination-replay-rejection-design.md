@@ -1,8 +1,9 @@
 # Skip-and-mark coordination replay — selected design
 
 Design for [#131](https://github.com/ewgdg/pi-durable-subagents/issues/131).
-**Direction selected; not implemented.** Exact reader interfaces and affected
-operation contracts still need a bounded design pass before implementation tasks.
+**Implementation authorized by the user; contracts finalized below.** Execution
+and validation are tracked in `plans/active/131-coordination-replay-rejection.md`
+(moved to `plans/done/` on completion).
 
 ## Decision
 
@@ -123,4 +124,44 @@ not redesign either or introduce a general repair engine.
   current protocol authority.
 - Neither marking nor viewing diagnostics starts a model turn.
 
-These are design acceptance cases, not tests already implemented or run.
+## Final reader and operation contracts
+
+Replay validates each ordinary coordination record before applying any effects.
+One native call, one native result, or one complete custom Delivery envelope is
+the rejection unit; a malformed batch is rejected atomically. A shared reader
+boundary returns accepted data or a structured Invalid rejection with physical
+Agent/entry/call attribution and the validator diagnostic. Rejections are derived,
+read-only, deduplicated, all-branch evidence; they are not durable tombstones.
+Only declared record validation failures are caught. Unexpected implementation
+errors, identity/bootstrap failures, role/membership failures, and contradictions
+between otherwise valid canonical records remain errors. Missing ordinary Request
+references follow the explicit contracts below, not a catch-all exception policy.
+
+| Operation | Missing authored Request contract |
+| --- | --- |
+| Incoming inspection, obligation listing, reminders | Use independently valid recipient Delivery metadata, without reconstructing an authored Request. |
+| Answer | Commit against the delivered unresolved obligation. Preserve same-source idempotency; reject a second distinct Answer. When the authored Request is absent, return `disposition: committed`, `delivery: omitted`, `reason: request_source_unavailable` with Answer/Request identity and title. Do not enqueue Delivery, wake the requester, fabricate proof, or report delivery failure. |
+| Poll, retry, cancellation | A fresh operation targeting an absent authored Request fails locally with `unknown_identity`; no scheduling or cancellation effect. Historical orphan references cannot recreate the Request. |
+| Wait | Unselected snapshots include only valid authored outstanding Requests. An explicit missing selector fails locally with `unknown_identity`; never silently shrink an explicit join. Historical Wait intent is not replayed as a new Wait. |
+| Recovery and Delivery | Keep valid local obligations, but do not redeliver a missing source. A locally committed Answer remains resolved after restart and is not an outgoing Delivery candidate when its Request is absent. Independently valid delivered Cancellation remains local evidence. |
+
+Rejected Answer calls and results cannot discharge obligations through receipt
+text, focus snapshots, or earlier schema acceptance. A record's rejection never
+cascades into rejection of independently valid recipient Delivery. In particular,
+existence of the requester Agent does not imply existence of its Request source.
+
+The shared presentation interface accepts a structured `invalid` or `inherited`
+reason; #131 produces only `invalid`. For each affected native call/result group,
+project one informational group preserving source, call arguments, result content,
+and diagnostics. Remove both native sides of that group from model input, retain
+unrelated assistant content and valid sibling calls/results, and leave the source
+transcript untouched. A result surviving without its call in compacted context
+must also be informational, never a dangling tool result. Custom rejected records
+are similarly informational. Apply projection at the existing non-triggering
+model-context hook; do not add reminder turns. #134 owns inherited classification,
+fork context ordering, and cache-prefix changes.
+
+Regression seams are the existing public transcript readers, coordinator
+operations/recovery, and participant model-context hook. Tests exercise observable
+authority, obligations, receipts, pairing, and restart behavior rather than private
+projection state.
