@@ -38,6 +38,14 @@ export type AgentRequestReceipt =
 	Readonly<{ requestMessageId: string; targetAgentId: string }> & MessageSendOutcome;
 
 export type AgentAnswerReceipt =
+	| Readonly<{
+		disposition: "committed";
+		delivery: "omitted";
+		reason: "request_source_unavailable";
+		messageId: string;
+		requestMessageId: string;
+		requestTitle: string;
+	}>
 	| (Readonly<{
 		messageId: string;
 		requestMessageId: string;

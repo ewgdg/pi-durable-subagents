@@ -187,7 +187,9 @@ export class MessageCoordinator {
 
 	recoveryRequestIds(record: AgentRecord): readonly string[] {
 		return this.#requestEvidence.obligationFrames(record).flatMap(frame => {
-			const request = this.#requestEvidence.requireRequest(frame.requestId);
+			const request = this.#requestEvidence.findRequest(frame.requestId);
+			// Recovery may continue a retained duty; this is not Request redelivery.
+			if (!request) return [frame.requestId];
 			const resolution = this.#recoveryResolution(request);
 			return resolution.cancellation || resolution.answer ? [] : [frame.requestId];
 		});
@@ -279,12 +281,12 @@ export class MessageCoordinator {
 
 	requestSources(requestIds: readonly string[]): readonly ToolCallPointer[] {
 		return requestIds.map(
-			(requestId) => this.#requestEvidence.requireRequest(requestId).source,
+			(requestId) => this.#requestEvidence.requestMetadata(requestId).source,
 		);
 	}
 
 	requestTitle(requestId: string): string {
-		return this.#requestEvidence.requireRequest(requestId).title;
+		return this.#requestEvidence.requestMetadata(requestId).title;
 	}
 
 	// Re-arbitrate retrieval at the native commit edge so a direct Delivery that
@@ -403,13 +405,13 @@ export class MessageCoordinator {
 
 	requestTargetAgentIds(requestIds: readonly string[]): readonly string[] {
 		return requestIds.map(
-			(requestId) => this.#requestEvidence.requireRequest(requestId).targetAgentId,
+			(requestId) => this.#requestEvidence.requestMetadata(requestId).targetAgentId,
 		);
 	}
 
 	requestRelationships(requestIds: readonly string[]): readonly (UnresolvedAgentRequest & { requestTitle: string })[] {
 		return requestIds.map((requestId) => {
-			const request = this.#requestEvidence.requireRequest(requestId);
+			const request = this.#requestEvidence.requestMetadata(requestId);
 			return {
 				requestId,
 				requestTitle: request.title,
@@ -543,16 +545,15 @@ export class MessageCoordinator {
 			throw new Error("wrong_workflow: Message recipient is outside the sender Workflow");
 		}
 		if (message.kind === "message") {
-			const requestIds = await sender.host.lane.run(
-				() => this.#requestEvidence.obligationFrames(sender).map(frame => frame.requestId),
+			const frames = await sender.host.lane.run(
+				() => this.#requestEvidence.obligationFrames(sender),
 			);
-			for (const requestId of requestIds) {
-				const activeRequest = this.#requestEvidence.requireRequest(requestId);
-				if (activeRequest.fromAgentId === message.targetAgentId) {
+			for (const frame of frames) {
+				if (frame.requesterAgentId === message.targetAgentId) {
 					return {
 						disposition: "rejected",
 						reason: "answer_required",
-						requestMessageId: activeRequest.messageId,
+						requestMessageId: frame.requestId,
 					};
 				}
 			}
@@ -771,6 +772,11 @@ export class MessageCoordinator {
 		toolCallId: string,
 		input: AnswerInput,
 	): Promise<AgentAnswerReceipt> {
+		// Recipient Delivery establishes the duty independently of its rejected source.
+		// This branch never turns those local instructions into retryable authorship.
+		if (!this.#requestEvidence.findRequest(input.requestId)) {
+			return caller.host.lane.run(() => this.#answerWithoutRequestSource(caller, toolCallId, input));
+		}
 		const admitted = await caller.host.lane.run(async () => {
 			const repeatedAnswer = this.#requestEvidence.findAnswerBySource(
 				caller,
@@ -891,6 +897,29 @@ export class MessageCoordinator {
 		};
 	}
 
+	#answerWithoutRequestSource(caller: AgentRecord, toolCallId: string, input: AnswerInput): AgentAnswerReceipt {
+		const delivered = this.#requestEvidence.findDeliveredRequest(caller, input.requestId);
+		if (!delivered) throw new Error(`unknown_identity: delivered Request ${input.requestId}`);
+		const repeatedAnswer = this.#requestEvidence.findAnswerBySource(caller, toolCallId);
+		const existing = this.#requestEvidence.findLocalAnswer(caller, input.requestId);
+		if (existing) {
+			if (!repeatedAnswer) throw new Error(`invalid_state: Request ${input.requestId} is already answered`);
+			return { disposition: "already_answered", messageId: existing.messageId, answerId: existing.messageId,
+				requestMessageId: input.requestId, requestTitle: delivered.title };
+		}
+		if (this.#requestEvidence.isLocalCancellationDelivered(caller, input.requestId)) {
+			throw new Error(`invalid_state: Request ${input.requestId} was cancelled`);
+		}
+		const answer = resolveCommittedAnswer({
+			responderAgentId: caller.identity.agentId, transcript: caller.transcript.inspect(), toolCallId, providedInput: input,
+			request: { messageId: delivered.requestMessageId, fromAgentId: delivered.fromAgentId,
+				workflowId: caller.identity.workflowId, title: delivered.title },
+		});
+		this.#requestEvidence.rememberAdmittedAnswer(answer);
+		return { disposition: "committed", delivery: "omitted", reason: "request_source_unavailable",
+			messageId: answer.messageId, requestMessageId: input.requestId, requestTitle: delivered.title };
+	}
+
 	async #cancel(
 		caller: AgentRecord,
 		toolCallId: string,
@@ -994,6 +1023,9 @@ export class MessageCoordinator {
 		);
 		if (message.kind === "request") {
 			return this.#retryRequest(caller, message);
+		}
+		if (message.kind === "answer" && !this.#requestEvidence.findRequest(message.requestId)) {
+			throw new Error(`unknown_identity: Request ${message.requestId}`);
 		}
 		const recipient = this.#requireAgent(message.targetAgentId);
 		const retryIdentity = {
@@ -1373,7 +1405,11 @@ export class MessageCoordinator {
 
 	#reconcileAnswerDeliveries(requester: AgentRecord): void {
 		for (const requestId of requester.host.requestRelationshipIds("awaiting_answer")) {
-			const request = this.#requestEvidence.requireRequest(requestId);
+			const request = this.#requestEvidence.findRequest(requestId);
+			if (!request) {
+				requester.host.removeRetentionReason("awaiting_answer", requestId);
+				continue;
+			}
 			const answer = this.#requestEvidence.findAnswer(request);
 			if (!answer) continue;
 			if (answer.targetAgentId !== requester.identity.agentId) continue;
@@ -1392,7 +1428,8 @@ export class MessageCoordinator {
 	}
 
 	#isCancellationDelivered(requestId: string, responder: AgentRecord): boolean {
-		const request = this.#requestEvidence.requireRequest(requestId);
+		const request = this.#requestEvidence.findRequest(requestId);
+		if (!request) return this.#requestEvidence.isLocalCancellationDelivered(responder, requestId);
 		const cancellation = this.#requestEvidence.findCancellation(request);
 		return cancellation !== undefined &&
 			inspectMessageDelivery({

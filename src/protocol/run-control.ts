@@ -1,3 +1,5 @@
+import { readCoordinationRecord } from "./replay-rejection.ts";
+import { CoordinationRecordValidationError } from "./record-validation.ts";
 import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
 import type { EntryPointer } from "./message-delivery.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
@@ -55,9 +57,9 @@ export type RunControlReceipt =
 	| RunTerminationReceipt;
 
 export function validateRunControlInput(value: unknown): RunControlInput {
-	if (!isRecord(value)) throw new Error("invalid_input: Run control input must be an object");
+	if (!isRecord(value)) throw new CoordinationRecordValidationError("invalid_input: Run control input must be an object");
 	if (typeof value.agentId !== "string" || value.agentId.trim().length === 0) {
-		throw new Error("invalid_input: Run control Agent identity must not be blank");
+		throw new CoordinationRecordValidationError("invalid_input: Run control Agent identity must not be blank");
 	}
 	if (value.operation === "interrupt" && Object.keys(value).length === 2) {
 		return { operation: "interrupt", agentId: value.agentId };
@@ -73,7 +75,7 @@ export function validateRunControlInput(value: unknown): RunControlInput {
 	) {
 		return { operation: "resume", agentId: value.agentId, content: value.content };
 	}
-	throw new Error("invalid_input: invalid Run control input");
+	throw new CoordinationRecordValidationError("invalid_input: invalid Run control input");
 }
 
 export function resolveCommittedRunControl(options: {
@@ -140,9 +142,9 @@ export function findAuthoredSupervisoryResumeMessages(options: {
 			if (entry.type !== "message" || entry.message.role !== "assistant") return messages;
 			for (const part of entry.message.content) {
 				if (part.type !== "toolCall" || part.name !== "agent_control") continue;
-				let input: RunControlInput;
-				try { input = validateRunControlInput(part.arguments); }
-				catch { continue; } // Invalid native calls cannot author resume Messages.
+				const parsed = readCoordinationRecord(transcript, authorAgentId, entry, () => validateRunControlInput(part.arguments), part.id);
+				if (!parsed.accepted) continue;
+				const input = parsed.value;
 				if (input.operation !== "resume") continue;
 				messages.push(createSupervisoryResumeMessage({
 					workflowId, fromAgentId: authorAgentId, input,
@@ -162,7 +164,12 @@ export function inspectSupervisoryResumeAuthorResult(options: {
 	const { message, transcript, deliveryEvidence } = options;
 	const results = coordinationEntries(transcript, message.fromAgentId, `result:${message.source.toolCallId}`)
 		.filter(entry => entry.type === "message" && entry.message.role === "toolResult" &&
-			entry.message.toolName === "agent_control" && entry.message.toolCallId === message.source.toolCallId);
+			entry.message.toolName === "agent_control" && entry.message.toolCallId === message.source.toolCallId)
+		.filter(entry => {
+			if(entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError) return true;
+			const details = entry.message.details;
+			return readCoordinationRecord(transcript, message.fromAgentId, entry, () => validateSupervisoryResumeResultShape(details), message.source.toolCallId).accepted;
+		});
 	if (results.length > 1) throw new Error(`invariant_violation: Message ${message.messageId} has multiple author results`);
 	const result = results[0];
 	if (!result || result.type !== "message" || result.message.role !== "toolResult") {
@@ -186,4 +193,14 @@ export function inspectSupervisoryResumeAuthorResult(options: {
 		throw new Error(`invariant_violation: resume Message ${message.messageId} has a non-authoring result and Delivery`);
 	}
 	return created ? "canonical" : "not_created";
+}
+
+export function validateSupervisoryResumeResultShape(value: unknown): void {
+	if (!isRecord(value) || typeof value.agentId !== "string" || !value.agentId || typeof value.messageId !== "string" || !value.messageId)
+		throw new CoordinationRecordValidationError("Resume result has an invalid shape");
+	const keys = Object.keys(value).sort().join(",");
+	if (keys === "agentId,messageId,messageStatus" && value.messageStatus === "sent") return;
+	if (keys === "agentId,delivery,messageId,rejectionReason" && value.delivery === "rejected" &&
+		["not_held", "resume_slot_occupied", "target_unavailable"].includes(String(value.rejectionReason))) return;
+	throw new CoordinationRecordValidationError("Resume result has an invalid shape");
 }

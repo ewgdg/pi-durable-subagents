@@ -1,3 +1,7 @@
+import { findCallerRequestSource } from "./agent-wait.ts";
+import { validateAgentMessageResultShape } from "./message-result-shape.ts";
+import { CoordinationRecordValidationError } from "./record-validation.ts";
+import { readCoordinationRecord } from "./replay-rejection.ts";
 import { inspectSupervisoryResumeAuthorResult } from "./run-control.ts";
 import { resolveAgentMessageReferences } from "./message-reference.ts";
 import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
@@ -170,7 +174,7 @@ export function resolveCommittedAnswer(options: {
 	transcript: TranscriptInspection;
 	toolCallId: string;
 	providedInput: AnswerInput;
-	request: Extract<Message, { kind: "request" }>;
+	request: Pick<Extract<Message, { kind: "request" }>, "messageId" | "workflowId" | "fromAgentId" | "title">;
 }): Extract<Message, { kind: "answer" }> {
 	const {
 		responderAgentId,
@@ -376,7 +380,12 @@ function inspectMessageAuthorResult(options: {
 			entry.message.role === "toolResult" &&
 			entry.message.toolName === "agent_message" &&
 			entry.message.toolCallId === toolCallId,
-	);
+	).filter(entry => {
+		if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError) return true;
+		const details = entry.message.details;
+		return readCoordinationRecord(transcript, authorAgentId, entry,
+			() => validateAgentMessageResultShape(details, identity.kind === "message" ? "send" : identity.kind === "request_cancellation" ? "cancel" : identity.kind), toolCallId).accepted;
+	});
 	if (results.length > 1) {
 		throw new Error(
 			`invariant_violation: Message ${identity.messageId} has multiple author results`,
@@ -400,7 +409,10 @@ function inspectMessageAuthorResult(options: {
 			}
 			return "not_created";
 		}
-		validateMessageAuthorResult(result.message.details, identity);
+		const details = result.message.details;
+		const validated = readCoordinationRecord(transcript, authorAgentId, result,
+			() => validateMessageAuthorResult(details, identity), toolCallId);
+		if (!validated.accepted) return deliveryEvidence ? "canonical" : "indeterminate";
 		// Initial definitive non-admission authors no Request. Retry outcomes are
 		// separate tool calls and cannot withdraw an already-admitted Request.
 		if (
@@ -471,7 +483,7 @@ function validateMessageAuthorResult(
 ): void {
 	const { messageId } = message;
 	if (!isRecord(value)) {
-		throw new Error(
+		throw new CoordinationRecordValidationError(
 			`invariant_violation: Message ${messageId} author result has an invalid shape`,
 		);
 	}
@@ -484,9 +496,14 @@ function validateMessageAuthorResult(
 				message.kind === "request_cancellation"
 			? ["targetAgentId"]
 			: [];
-	if (value.messageStatus === "sent") {
+	if (message.kind === "answer" && value.disposition === "committed") {
+		if (!sameStringList(keys, ["delivery", "disposition", "messageId", "reason", "requestMessageId", "requestTitle"]) ||
+			value.delivery !== "omitted" || value.reason !== "request_source_unavailable") {
+			throw new CoordinationRecordValidationError(`invariant_violation: Message ${messageId} author result has an invalid shape`);
+		}
+	} else if (value.messageStatus === "sent") {
 		if (!sameStringList(keys, ["messageStatus", identityKey, ...correlationKeys].sort())) {
-			throw new Error(
+			throw new CoordinationRecordValidationError(
 				`invariant_violation: Message ${messageId} author result has an invalid shape`,
 			);
 		}
@@ -498,7 +515,7 @@ function validateMessageAuthorResult(
 			) ||
 			value.reason !== "confirmation_lost"
 		) {
-			throw new Error(
+			throw new CoordinationRecordValidationError(
 				`invariant_violation: Message ${messageId} author result has an invalid shape`,
 			);
 		}
@@ -512,12 +529,12 @@ function validateMessageAuthorResult(
 				value.reason !== "host_shutting_down" &&
 				value.reason !== "capacity_exhausted")
 		) {
-			throw new Error(
+			throw new CoordinationRecordValidationError(
 				`invariant_violation: Message ${messageId} author result has an invalid shape`,
 			);
 		}
 	} else {
-		throw new Error(
+		throw new CoordinationRecordValidationError(
 			`invariant_violation: Message ${messageId} author result has an invalid shape`,
 		);
 	}
@@ -657,6 +674,9 @@ function answerRetrievalFacts(options: {
 					!isRecord(entry.message.details)
 				)
 					continue;
+				const resultMessage = entry.message;
+				if (resultMessage.toolName === "agent_message" && !readCoordinationRecord(transcript, requesterAgentId,
+					entry, () => validateAgentMessageResultShape(resultMessage.details), resultMessage.toolCallId).accepted) continue;
 				const candidates =
 					entry.message.toolName === "agent_message" &&
 					entry.message.details.disposition === "answer_delivered"
@@ -669,6 +689,8 @@ function answerRetrievalFacts(options: {
 								})
 							: [];
 				for (const details of candidates) {
+					if (typeof details.requestMessageId === "string" && !findCallerRequestSource({ agentId: requesterAgentId,
+						transcript, requestMessageId: details.requestMessageId })) continue;
 					const expectedKeys = [
 						"answer",
 						"answerId",
@@ -729,12 +751,7 @@ function completedAgentWaitAnswers(options: {
 		transcript: options.transcript,
 		toolCallId: options.toolCallId,
 	});
-	if (inspection.state === "preempted") return [];
-	if (inspection.state !== "completed") {
-		throw new ProtocolInvariantError(
-			`Agent Wait ${options.toolCallId} successful result is not canonical`,
-		);
-	}
+	if (inspection.state !== "completed") return [];
 	return inspection.result.answers.filter(
 		(answer): answer is Extract<
 			AgentWaitAnswer,

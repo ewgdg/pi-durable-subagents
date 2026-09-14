@@ -1,3 +1,4 @@
+import { CoordinationRecordValidationError } from "./record-validation.ts";
 import type { AgentSpawnConfigurationInput } from "../templates/agent-configuration.ts";
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
 import {
@@ -17,6 +18,7 @@ export type AgentSpawnInput = Readonly<{
 }>;
 
 export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSpawnInput {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CoordinationRecordValidationError("invalid_input: coordination input must be an object");
 	requireExactKeys(value, [
 		"title",
 		"request",
@@ -27,19 +29,19 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 		...(value.config === undefined ? [] : ["config"]),
 	]);
 	if (typeof value.request !== "string" || value.request.length === 0) {
-		throw new Error("invalid_input: Agent Spawn request must not be empty");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn request must not be empty");
 	}
 	if (typeof value.title !== "string" || !value.title.trim()) {
-		throw new Error("invalid_input: Creation Request title must not be blank");
+		throw new CoordinationRecordValidationError("invalid_input: Creation Request title must not be blank");
 	}
 	const conversation = validateConversation(value.conversation);
 	const template = optionalString(value.template, "template");
 	if (template !== undefined) {
 		if (!isAgentTemplateName(template)) {
-			throw new Error("invalid_input: Agent Spawn template must be lowercase kebab-case");
+			throw new CoordinationRecordValidationError("invalid_input: Agent Spawn template must be lowercase kebab-case");
 		}
 		if (template === "moderator") {
-			throw new Error("invalid_input: Agent Spawn template moderator is reserved");
+			throw new CoordinationRecordValidationError("invalid_input: Agent Spawn template moderator is reserved");
 		}
 	}
 	const label = optionalString(value.label, "label");
@@ -58,12 +60,12 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 
 function validateConversation(value: unknown): "fork" | undefined {
 	if (value === undefined || value === "fork") return value;
-	throw new Error('invalid_input: Agent Spawn conversation must be "fork"');
+	throw new CoordinationRecordValidationError('invalid_input: Agent Spawn conversation must be "fork"');
 }
 
 function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	if (!isRecord(value)) {
-		throw new Error("invalid_input: Agent Spawn config must be an object");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn config must be an object");
 	}
 	requireExactKeys(value, [
 		...(value.model === undefined ? [] : ["model"]),
@@ -86,7 +88,7 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 		: validateExtensions(value.extensions);
 	const systemPrompt = value.systemPrompt;
 	if (systemPrompt !== undefined && typeof systemPrompt !== "string") {
-		throw new Error("invalid_input: Agent Spawn config.systemPrompt must be a string");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn config.systemPrompt must be a string");
 	}
 	const systemPromptMode = value.systemPromptMode;
 	if (
@@ -94,18 +96,18 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 		systemPromptMode !== "append" &&
 		systemPromptMode !== "replace"
 	) {
-		throw new Error(
+		throw new CoordinationRecordValidationError(
 			'invalid_input: Agent Spawn config.systemPromptMode must be "append" or "replace"',
 		);
 	}
 	if (systemPromptMode !== undefined && systemPrompt === undefined) {
-		throw new Error(
+		throw new CoordinationRecordValidationError(
 			"invalid_input: Agent Spawn config.systemPromptMode requires systemPrompt",
 		);
 	}
 	const loadContextFiles = value.loadContextFiles;
 	if (loadContextFiles !== undefined && typeof loadContextFiles !== "boolean") {
-		throw new Error("invalid_input: Agent Spawn config.loadContextFiles must be a boolean");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn config.loadContextFiles must be a boolean");
 	}
 	return {
 		...(model === undefined ? {} : { model }),
@@ -121,7 +123,7 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 
 function validateModel(value: unknown): NonNullable<AgentSpawnConfigurationInput["model"]> {
 	if (!isRecord(value)) {
-		throw new Error("invalid_input: Agent Spawn config.model must be an object");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn config.model must be an object");
 	}
 	requireExactKeys(value, [
 		...(value.id === undefined ? [] : ["id"]),
@@ -143,32 +145,32 @@ function validateModelId(value: unknown): string {
 	const id = requireNonEmptyString(value, "model.id");
 	const separator = id.indexOf("/");
 	if (separator <= 0 || separator === id.length - 1) {
-		throw new Error('invalid_input: Agent Spawn config.model.id must be provider/model or "inherit"');
+		throw new CoordinationRecordValidationError('invalid_input: Agent Spawn config.model.id must be provider/model or "inherit"');
 	}
 	return id;
 }
 
 function validateThinking(value: unknown): RuntimeThinkingLevel {
 	if (!isRuntimeThinkingLevel(value)) {
-		throw new Error("invalid_input: Agent Spawn config.thinking is invalid");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn config.thinking is invalid");
 	}
 	return value;
 }
 
 function validateExtensions(value: unknown): "inherit" | "none" {
 	if (value === "inherit" || value === "none") return value;
-	throw new Error(
+	throw new CoordinationRecordValidationError(
 		'invalid_input: Agent Spawn config.extensions must be "inherit" or "none"',
 	);
 }
 
 function validateStringList(value: unknown, field: string): readonly string[] {
 	if (!Array.isArray(value)) {
-		throw new Error(`invalid_input: Agent Spawn config.${field} must be a string array`);
+		throw new CoordinationRecordValidationError(`invalid_input: Agent Spawn config.${field} must be a string array`);
 	}
 	const values = value.map((item) => requireNonEmptyString(item, field));
 	if (new Set(values).size !== values.length) {
-		throw new Error(`invalid_input: Agent Spawn config.${field} contains duplicates`);
+		throw new CoordinationRecordValidationError(`invalid_input: Agent Spawn config.${field} contains duplicates`);
 	}
 	return values;
 }
@@ -176,14 +178,14 @@ function validateStringList(value: unknown, field: string): readonly string[] {
 function optionalString(value: unknown, field: string): string | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "string") {
-		throw new Error(`invalid_input: Agent Spawn ${field} must be a string`);
+		throw new CoordinationRecordValidationError(`invalid_input: Agent Spawn ${field} must be a string`);
 	}
 	return value;
 }
 
 function requireNonEmptyString(value: unknown, field: string): string {
 	if (typeof value !== "string" || value.length === 0 || value.includes("\0")) {
-		throw new Error(`invalid_input: Agent Spawn config.${field} is invalid`);
+		throw new CoordinationRecordValidationError(`invalid_input: Agent Spawn config.${field} is invalid`);
 	}
 	return value;
 }
@@ -192,7 +194,7 @@ function requireExactKeys(value: Record<string, unknown>, expectedKeys: readonly
 	const actual = Object.keys(value).sort();
 	const expected = [...expectedKeys].sort();
 	if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-		throw new Error("invalid_input: Agent Spawn input has an invalid shape");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn input has an invalid shape");
 	}
 }
 

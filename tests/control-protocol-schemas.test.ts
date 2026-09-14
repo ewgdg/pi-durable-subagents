@@ -19,6 +19,17 @@ import {
 
 const identity = { protocolVersion: 7, workflowId: "workflow", agentId: "agent" } as const;
 
+test("control transports local Answer commitment without fabricating Delivery proof", () => {
+	const schema = agentControlMethods["coordination.message"].response;
+	const receipt = { disposition: "committed", delivery: "omitted", reason: "request_source_unavailable",
+		messageId: "answer", requestMessageId: "request", requestTitle: "Preserved work" };
+	assert.ok(Check(schema, receipt));
+	assert.equal(Check(schema, { ...receipt, delivery: "delivered" }), false);
+	assert.equal(Check(schema, { ...receipt, deliveryEvidence: { agentId: "requester", entryId: "fabricated" } }), false);
+	assert.equal(Check(schema, { ...receipt, messageStatus: "sent" }), false);
+	assert.equal(Check(schema, { ...receipt, requestTitle: "" }), false);
+});
+
 test("Request observation schemas keep lists compact and inspection complete", () => {
 	const schema = agentControlMethods["coordination.observe"];
 	const summary = { requestMessageId: "request", requesterAgentId: "requester", title: "Verify storage" };

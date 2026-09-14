@@ -6,10 +6,142 @@ import { MessageCoordinator, type AgentMessageInput, type MessageBoundaryHooks }
 import { AgentWaitCoordinator, type AgentWaitBoundaryHooks } from "../src/coordination/agent-waits.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
-import { inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
+import { createMessageDelivery, inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
 import type { AgentRuntimeHost, AgentRunHandle, AgentRuntimeDelivery, AgentRunEndCause } from "../src/runtime/agent-runtime-host.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { participant } from "./support/request-history.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+import { resumeWorkflow } from "../src/coordination/workflow-resume.ts";
+
+for (const sourcePresent of [false, true]) test(`a delivered Request with ${sourcePresent ? "rejected" : "absent"} source can be answered locally across replay without Delivery`, { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const requestId = appendOrphanRequest(h, sourcePresent);
+	await h.recover(true);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [requestId]);
+	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), []);
+	assert.deepEqual(h.messages.recoveryRequestIds(h.responder.record), [requestId]);
+	assert.deepEqual(h.messages.inspectRequest("responder", requestId), {
+		requestMessageId: requestId, requesterAgentId: "requester", responderAgentId: "responder",
+		title: "Preserved work", question: "Use the delivered instructions.",
+	});
+	const blocked = await h.message(h.responder, "orphan-send", { operation: "send", targetAgent: "requester", content: "Premature update" });
+	assert.deepEqual(blocked, { disposition: "rejected", reason: "answer_required", requestMessageId: requestId });
+	const input = { operation: "answer" as const, requestId: requestId.slice(-12), answer: "Completed work." };
+	const receipt = await h.message(h.responder, "orphan-answer", input);
+	assert.ok("disposition" in receipt && receipt.disposition === "committed");
+	assert.equal("delivery" in receipt && receipt.delivery, "omitted");
+	assert.equal("reason" in receipt && receipt.reason, "request_source_unavailable");
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	assert.deepEqual(h.deliveries(h.requester), []);
+	assert.deepEqual(h.requester.dispatches, []);
+	await h.recover(true);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	assert.deepEqual(h.messages.recoveryRequestIds(h.responder.record), []);
+	assert.equal(h.messages.recoveryMessage("responder", "messageId" in receipt ? receipt.messageId : ""), undefined);
+	const recovery = await resumeWorkflow({ workflowId: "requester", ownerAgentId: "requester",
+		agents: new Map([h.requester, h.responder].map(p => [p.record.identity.agentId, p.record])),
+		quarantinedAgentIds: new Set(), messages: h.messages,
+		async activate() { throw new Error("Resolved local work must not activate again"); },
+	});
+	assert.deepEqual(recovery.outstandingRequests, []);
+	const repeated = await h.messages.execute("responder", "orphan-answer", input);
+	assert.equal("disposition" in repeated && repeated.disposition, "already_answered");
+	await assert.rejects(h.message(h.responder, "duplicate-orphan-answer", { ...input, requestId }), /already answered/);
+	assert.ok("messageId" in receipt);
+	await assert.rejects(h.message(h.responder, "retry-local-answer", { operation: "retry", messageId: receipt.messageId }), /unknown_identity/);
+	assert.deepEqual(h.deliveries(h.requester), []);
+});
+
+test("missing-source retry cancellation and Wait stay local while independent work remains usable", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const requestId = appendOrphanRequest(h);
+	await h.recover(true);
+	for (const operation of ["poll", "retry", "cancel"] as const) {
+		const input = operation === "cancel"
+			? { operation, requestMessageId: requestId, reason: "Cannot withdraw absent authorship" }
+			: { operation, messageId: requestId };
+		await assert.rejects(h.message(h.requester, `orphan-${operation}`, input), /unknown_identity/);
+	}
+	await assert.rejects(h.wait("orphan-selected-wait", { requestMessageIds: [requestId] }), /unknown_identity/);
+	await assert.rejects(h.wait("orphan-unselected-wait"), /requires at least one outstanding/);
+	await h.recover(true);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [requestId]);
+	assert.deepEqual(h.deliveries(h.requester), []);
+	const continued: string[] = [];
+	const recovery = await resumeWorkflow({ workflowId: "requester", ownerAgentId: "requester",
+		agents: new Map([h.requester, h.responder].map(p => [p.record.identity.agentId, p.record])),
+		quarantinedAgentIds: new Set(), messages: h.messages,
+		async activate(record, requestIds) {
+			continued.push(...requestIds);
+			return { agentId: record.identity.agentId, requestIds, disposition: "skipped", reason: "already_running" };
+		},
+	});
+	assert.deepEqual(recovery.outstandingRequests, []);
+	assert.deepEqual(continued, [requestId], "continuation retains the duty without redelivering its source");
+	assert.equal(h.deliveries(h.responder).length, 1);
+	const valid = await h.message(h.requester, "independent-request", { operation: "request", title: "Independent", targetAgent: "responder", question: "Still usable", deliveryMode: "steer" });
+	assert.ok("requestMessageId" in valid);
+	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), [valid.requestMessageId]);
+	const waiting = h.wait("independent-only-wait");
+	await flush();
+	await h.message(h.responder, "independent-answer", { operation: "answer", requestId: valid.requestMessageId, answer: "Independent work completed." });
+	await h.tick();
+	const joined = await waiting;
+	assert.ok("answers" in joined);
+	assert.deepEqual(joined.answers.map(answer => answer.requestMessageId), [valid.requestMessageId]);
+	h.commitWait("independent-only-wait", joined);
+});
+
+for (const rejectedPart of ["call", "result"] as const) test(`a rejected Answer ${rejectedPart} cannot discharge a preserved recipient obligation`, { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const requestId = appendOrphanRequest(h, false);
+	const toolCallId = "rejected-answer";
+	const entryId = h.responder.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "answer", requestId, answer: rejectedPart === "call" ? "" : "Previously accepted work",
+	}, { id: toolCallId })));
+	commit(h.responder, toolCallId, "agent_message", {
+		messageId: deriveMessageIdentity({ agentId: "responder", entryId, toolCallId }),
+		requestMessageId: requestId, requestTitle: "Preserved work",
+		messageStatus: rejectedPart === "result" ? "invalid-status" : "sent",
+	});
+	await h.recover(true);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [requestId]);
+	assert.deepEqual(h.messages.openIncomingRequests("responder").requests.map(request => request.requestMessageId), [requestId]);
+	const receipt = await h.message(h.responder, "valid-answer-after-rejection", { operation: "answer", requestId, answer: "Reused the historical work and verified it." });
+	assert.equal("disposition" in receipt && receipt.disposition, "committed");
+	await h.recover(true);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	assert.deepEqual(h.deliveries(h.requester), []);
+});
+
+test("independent Cancellation Delivery closes an obligation whose Request source is absent", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const requestId = appendOrphanRequest(h, false);
+	const source = { agentId: "requester", entryId: "cancel-entry", toolCallId: "cancel-call" };
+	const delivery = createMessageDelivery([{ source, projection: {
+		kind: "request_cancellation", cancellationId: deriveMessageIdentity(source), requestMessageId: requestId,
+		fromAgentId: "requester", reason: "This work is no longer required.",
+	} }]);
+	h.responder.manager.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
+	await h.recover(true);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	await assert.rejects(h.message(h.responder, "answer-after-orphan-cancel", { operation: "answer", requestId, answer: "Too late" }), /was cancelled/);
+});
+
+function appendOrphanRequest(h: ReturnType<typeof harness>, sourcePresent = true): string {
+	const toolCallId = "rejected-request-source";
+	const entryId = sourcePresent ? h.requester.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "request", targetAgent: "responder", question: "Missing mandatory title",
+	}, { id: toolCallId }))) : "absent-source-entry";
+	const source = { agentId: "requester", entryId, toolCallId };
+	const requestMessageId = deriveMessageIdentity(source);
+	if (sourcePresent) commit(h.requester, toolCallId, "agent_message", { requestMessageId, targetAgentId: "responder", messageStatus: "sent" });
+	const delivery = createMessageDelivery([{ source, projection: {
+		kind: "request", requestMessageId, fromAgentId: "requester", title: "Preserved work", question: "Use the delivered instructions.",
+	} }]);
+	h.responder.manager.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
+	return requestMessageId;
+}
 
 test("fresh Wait restores a lost original Request after passive coordinator recovery and completes with Answer proof", async (t) => {
 	const h = harness(t);
@@ -930,7 +1062,8 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 			return p;
 		},
 		get messages() { return messages; },
-		async recover() {
+		async recover(freshTranscripts = false) {
+			if (freshTranscripts) for (const p of participants) p.record.transcript = transcriptFromSessionManager(p.manager, { fresh: true });
 			waits.shutdown();
 			for (const p of participants) messages.discardSchedulingInLane(p.record);
 			messages.shutdownDeliveryProgress();

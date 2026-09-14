@@ -1,3 +1,4 @@
+import { CoordinationRecordValidationError } from "./record-validation.ts";
 import type { ToolCallPointer } from "./identities.ts";
 import type { EntryPointer } from "./moderator-input.ts";
 import { isDeepStrictEqual } from "node:util";
@@ -55,7 +56,7 @@ export function validateModeratorControlInput(
 	value: unknown,
 ): ModeratorControlInput {
 	if (!isRecord(value)) {
-		throw new Error("invalid_input: Moderator control input must be an object");
+		throw new CoordinationRecordValidationError("invalid_input: Moderator control input must be an object");
 	}
 	if (value.operation === "renew_review_deadline") {
 		if (
@@ -71,7 +72,7 @@ export function validateModeratorControlInput(
 			(value.nextReviewInMs as number) <= 0 ||
 			!isNonEmptyString(value.rationale)
 		) {
-			throw new Error("invalid_input: Moderator review renewal input is invalid");
+			throw new CoordinationRecordValidationError("invalid_input: Moderator review renewal input is invalid");
 		}
 		return {
 			operation: "renew_review_deadline",
@@ -87,10 +88,10 @@ export function validateModeratorControlInput(
 		...(value.evidencePointers === undefined ? [] : ["evidencePointers"]),
 	];
 	if (!hasExactKeys(value, expectedKeys) || value.operation !== "resolve") {
-		throw new Error("invalid_input: Moderator control input has an invalid shape");
+		throw new CoordinationRecordValidationError("invalid_input: Moderator control input has an invalid shape");
 	}
 	if (!isNonEmptyString(value.summary) || !isNonEmptyString(value.rationale)) {
-		throw new Error(
+		throw new CoordinationRecordValidationError(
 			"invalid_input: Moderator Resolution requires summary and rationale",
 		);
 	}
@@ -99,7 +100,7 @@ export function validateModeratorControlInput(
 		evidencePointers !== undefined &&
 		(!Array.isArray(evidencePointers) || !evidencePointers.every(isEvidencePointer))
 	) {
-		throw new Error("invalid_input: Moderator Resolution evidence pointers are invalid");
+		throw new CoordinationRecordValidationError("invalid_input: Moderator Resolution evidence pointers are invalid");
 	}
 	return {
 		operation: "resolve",

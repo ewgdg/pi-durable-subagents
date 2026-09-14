@@ -47,6 +47,16 @@ function renderResult(
 		.join("\n");
 }
 
+test("locally committed Answer reports omitted Delivery without claiming send or failure", () => {
+	const rendered = renderResult({
+		disposition: "committed", delivery: "omitted", reason: "request_source_unavailable",
+		messageId: "local-answer", requestMessageId: "missing-request", requestTitle: "Preserved work",
+	}, false, 100);
+	assert.match(rendered, /committed · delivery omitted · Preserved work/);
+	assert.match(rendered, /request_source_unavailable/);
+	assert.doesNotMatch(rendered, /not_sent|unknown|delivered/);
+});
+
 test("send call shows the [Send] badge, compact target identity, and bounded content preview", () => {
 	const rendered = renderCall({
 		operation: "send",

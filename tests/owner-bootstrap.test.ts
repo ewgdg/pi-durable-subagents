@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	fauxAssistantMessage,
@@ -11,6 +11,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import piAgentCoordination from "../src/index.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -329,6 +331,63 @@ test("a resumed Owner admits coordination evidence after its Identity cutoff", a
 	await reopened.runtime.dispose();
 });
 
+test("cold Owner admission skips off-branch invalid coordination and retains independent recipient obligations", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	const ownerId = host.session.sessionId;
+	const ownerFile = host.session.sessionManager.getSessionFile()!;
+	const spawnCallId = "cold-evidence-child";
+	const spawnEntryId = host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", {
+		title: "Evidence child", request: "Preserve this child's identity without starting work.", label: "Evidence child",
+	}, { id: spawnCallId }), { stopReason: "toolUse" }));
+	const directory = join(host.session.sessionManager.getSessionDir(), "pi-agent-coordination", Buffer.from(ownerId, "utf8").toString("base64url"));
+	await host.runtime.dispose();
+	// A child Identity commits its Creation Request atomically. Cold admission
+	// must verify this native evidence without starting a child model process.
+	const child = SessionManager.create(host.cwd, directory);
+	const childId = child.getSessionId();
+	const identityEntry = child.appendCustomEntry("agent-coordination.identity", {
+		agentId: childId, workflowId: ownerId, directSpawnerAgentId: ownerId,
+		spawnSource: { agentId: ownerId, entryId: spawnEntryId, toolCallId: spawnCallId },
+		creationPreset: null, metadata: { label: "Evidence child" },
+	});
+	const toolCallId = "off-branch-request-missing-title";
+	const entryId = child.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "request", targetAgent: ownerId, question: "Previously accepted without a title",
+	}, { id: toolCallId }), { stopReason: "toolUse" }));
+	const source = { agentId: childId, entryId, toolCallId };
+	const requestMessageId = deriveMessageIdentity(source);
+	child.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId,
+		content: [{ type: "text", text: "Original receipt" }], isError: false, timestamp: Date.now(),
+		details: { requestMessageId, targetAgentId: ownerId, messageStatus: "sent" },
+	});
+	child.branch(identityEntry);
+	child.appendCustomEntry("selected-leaf", { note: "Invalid coordination remains on another physical branch." });
+	assert.equal(child.getBranch().some(entry => entry.id === entryId), false);
+	const owner = SessionManager.open(ownerFile);
+	const delivered = createMessageDelivery([{ source, projection: {
+		kind: "request", requestMessageId, fromAgentId: childId, title: "Preserved recipient work", question: "Use these independent delivered instructions.",
+	} }]);
+	owner.appendCustomMessageEntry(delivered.customType, delivered.content, delivered.display, delivered.details);
+	const originalChildEvidence = await readFile(child.getSessionFile()!, "utf8");
+	const reopened = await createUnboundTestOwnerHost(t, piAgentCoordination, { cwd: host.cwd, agentDir: host.services.agentDir, sessionFile: ownerFile });
+	await bindTestOwnerHost(reopened, "tui");
+	for (const phase of ["startup", "reload"]) {
+		if (phase === "reload") await reopened.session.reload();
+		assert.ok(reopened.session.getActiveToolNames().includes("agent_message"), phase);
+		assert.equal(reopened.ui.widgets.has("agent-coordination.blockage"), false, phase);
+		assert.deepEqual(reopened.services.diagnostics.filter(item => item.type === "error"), [], phase);
+		assert.equal(reopened.ui.notifications.some(({ message }) => /unavailable|blocked|quarantined|admission.*fail/i.test(message)), false, phase);
+		const observe = reopened.session.getToolDefinition("agent_observe")!;
+		const obligations = await observe.execute(`obligations-${phase}`, { operation: "obligations" }, undefined, undefined, reopened.session.extensionRunner.createContext());
+		assert.deepEqual(obligations.details, { requests: [{ requestMessageId, requesterAgentId: childId, title: "Preserved recipient work" }] });
+		const status = await observe.execute(`child-${phase}`, { operation: "status", agentId: childId }, undefined, undefined, reopened.session.extensionRunner.createContext());
+		assert.equal((status.details as { run: { phase: string } }).run.phase, "dormant");
+		assert.equal(await readFile(child.getSessionFile()!, "utf8"), originalChildEvidence);
+	}
+	await reopened.runtime.dispose();
+});
+
 test("resource reload rebinds the hidden Owner Agent extension", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	await bindTestOwnerHost(host, "tui");
@@ -640,9 +699,9 @@ async function executeOwnerTool(
 	return result.details;
 }
 
-test("invalid committed Owner Request is contained with persistent diagnostics after startup and reload", { timeout: 5_000 }, async (t) => {
+test("conflicting valid Owner Deliveries retain admission-failure diagnostics after startup and reload", { timeout: 5_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
-	const { callId, entryId } = appendInvalidOwnerRequest(host.session.sessionManager);
+	appendConflictingOwnerDelivery(host.session.sessionManager);
 	await bindTestOwnerHost(host, "tui");
 	for (const phase of ["startup", "reload"]) {
 		if (phase === "reload") await host.session.reload();
@@ -662,15 +721,14 @@ test("invalid committed Owner Request is contained with persistent diagnostics a
 		assert.ok(panel);
 		const summary = panel.render(120).join("\n");
 		assert.match(summary, /Problem/);
-		assert.match(summary, /title/);
+		assert.match(summary, /duplicate Deliveries/);
 		assert.match(summary, /Recovery/);
 		assert.match(summary, /unavailable/);
 		assert.doesNotMatch(summary, /at authoredFacts/);
 		assert.doesNotMatch(summary, /cleanup also failed/);
 		panel.handleInput?.("t");
 		const technical = panel.render(200).join("\n");
-		assert.match(technical, new RegExp(entryId));
-		assert.match(technical, new RegExp(callId));
+		assert.match(technical, /duplicate Deliveries/);
 		assert.match(technical, /Transcript:/);
 		panel.handleInput?.("q");
 		await opened;
@@ -678,26 +736,32 @@ test("invalid committed Owner Request is contained with persistent diagnostics a
 	await host.runtime.dispose();
 });
 
-function appendInvalidOwnerRequest(sessionManager: SessionManager) {
-	sessionManager.appendCustomEntry("agent-coordination.identity", { agentId: sessionManager.getSessionId(), workflowId: sessionManager.getSessionId(), directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } });
-	const callId = "accepted-request-missing-title";
+function appendConflictingOwnerDelivery(sessionManager: SessionManager) {
+	const agentId = sessionManager.getSessionId();
+	sessionManager.appendCustomEntry("agent-coordination.identity", { agentId, workflowId: agentId, directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } });
+	const callId = "duplicate-valid-delivery-source";
 	const entryId = sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
-		operation: "request", targetAgent: "helper", question: "A previously accepted Request",
+		operation: "request", targetAgent: agentId, title: "Conflicting valid delivery", question: "One source cannot have two recipient Deliveries.",
 	}, { id: callId }), { stopReason: "toolUse" }));
-	sessionManager.appendMessage({
-		role: "toolResult", toolName: "agent_message", toolCallId: callId,
-		content: [{ type: "text", text: "sent" }],
-		details: { requestMessageId: "historical-request", targetAgentId: "helper", messageStatus: "sent" },
+	const source = { agentId, entryId, toolCallId: callId };
+	const messageId = deriveMessageIdentity(source);
+	sessionManager.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: callId,
+		content: [{ type: "text", text: "sent" }], details: { requestMessageId: messageId, targetAgentId: agentId, messageStatus: "sent" },
 		isError: false, timestamp: Date.now(),
 	});
-	return { callId, entryId };
+	const delivery = createMessageDelivery([{ source, projection: {
+		kind: "request", requestMessageId: messageId, fromAgentId: agentId,
+		title: "Conflicting valid delivery", question: "One source cannot have two recipient Deliveries.",
+	} }]);
+	// Both records pass schema validation; their contradiction must still fail admission.
+	for (let copy = 0; copy < 2; copy++) sessionManager.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
 }
 
-test("resuming an invalid Owner in-process keeps diagnostics and native conversation usable", { timeout: 5_000 }, async (t) => {
+test("resuming an Owner with conflicting valid Deliveries keeps diagnostics and native conversation usable", { timeout: 5_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	const target = SessionManager.create(host.cwd, join(host.cwd, "invalid-owner-session"));
-	appendInvalidOwnerRequest(target);
+	appendConflictingOwnerDelivery(target);
 	assert.deepEqual(await host.runtime.switchSession(target.getSessionFile()!), { cancelled: false });
 	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
 	assert.ok(host.ui.widgets.has("agent-coordination.blockage"));
@@ -712,7 +776,7 @@ test("resuming an invalid Owner in-process keeps diagnostics and native conversa
 
 test("plain agents reports unavailability without implicitly opening diagnostics", { timeout: 5_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
-	appendInvalidOwnerRequest(host.session.sessionManager);
+	appendConflictingOwnerDelivery(host.session.sessionManager);
 	await bindTestOwnerHost(host, "tui");
 	const command = host.session.extensionRunner.getCommand("agents")!;
 	const handled = command.handler("", host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1]);
@@ -729,10 +793,10 @@ test("plain agents reports unavailability without implicitly opening diagnostics
 	}
 });
 
-test("healthy Owner becoming protocol-invalid is blocked on its first reload", { timeout: 5_000 }, async (t) => {
+test("healthy Owner gaining conflicting valid Deliveries is blocked on its first reload", { timeout: 5_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
-	appendInvalidOwnerRequest(host.session.sessionManager);
+	appendConflictingOwnerDelivery(host.session.sessionManager);
 	await host.session.reload();
 	assertOwnerToolsRegisteredButInactive(host);
 	assert.ok(host.ui.widgets.get("agent-coordination.blockage"));
@@ -742,14 +806,14 @@ test("healthy Owner becoming protocol-invalid is blocked on its first reload", {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	const panel = host.ui.customSurfaces.at(-1);
 	assert.ok(panel);
-	assert.match(panel.render(120).join("\n"), /title/);
+	assert.match(panel.render(120).join("\n"), /duplicate Deliveries/);
 	panel.handleInput?.("q");
 	await opened;
 	await host.runtime.dispose();
 });
 
 for (const invalidate of [false, true]) {
-	test(`reload quiesces a running child before ${invalidate ? "blocking" : "restoring admission"}`, { timeout: 5_000 }, async (t) => {
+	test(`reload quiesces a running child before ${invalidate ? "skipping a rejected historical Request" : "restoring admission"}`, { timeout: 5_000 }, async (t) => {
 		const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
 		await bindTestOwnerHost(host, "tui");
 		const entered = createVoidDeferred();
@@ -794,18 +858,14 @@ for (const invalidate of [false, true]) {
 		await assert.rejects(() => staleMessage.execute("stale-send", {
 			operation: "send", targetAgent: spawned.agentId, content: "A stale callback",
 		}, undefined, undefined, host.session.extensionRunner.createContext()), /shutting_down/);
-		if (invalidate) {
-			assertOwnerToolsRegisteredButInactive(host);
-			assert.ok(host.ui.widgets.get("agent-coordination.blockage"));
-		} else {
-			assert.ok(host.session.getActiveToolNames().includes("workflow_resume"));
-			assert.ok(host.ui.notifications.some(({ message }) => message.includes("pending work remains dormant")));
-			const freshObserve = host.session.getToolDefinition("agent_observe")!;
-			const after = await freshObserve.execute("after-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createContext());
-			assert.equal((after.details as { run: { phase: string } }).run.phase, "dormant");
-			const request = await freshObserve.execute("request-after-reload", { operation: "request", requestId: spawned.requestMessageId }, undefined, undefined, host.session.extensionRunner.createContext());
-			assert.match(JSON.stringify(request.details), /Keep working while the Owner reloads/);
-		}
+		assert.equal(host.ui.widgets.has("agent-coordination.blockage"), false);
+		assert.ok(host.session.getActiveToolNames().includes("workflow_resume"));
+		assert.ok(host.ui.notifications.some(({ message }) => message.includes("pending work remains dormant")));
+		const freshObserve = host.session.getToolDefinition("agent_observe")!;
+		const after = await freshObserve.execute("after-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createContext());
+		assert.equal((after.details as { run: { phase: string } }).run.phase, "dormant");
+		const request = await freshObserve.execute("request-after-reload", { operation: "request", requestId: spawned.requestMessageId }, undefined, undefined, host.session.extensionRunner.createContext());
+		assert.match(JSON.stringify(request.details), /Keep working while the Owner reloads/);
 		await host.runtime.dispose();
 	});
 }

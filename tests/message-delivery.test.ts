@@ -1,3 +1,4 @@
+import { inspectCoordinationRejections } from "../src/protocol/replay-rejection.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -204,16 +205,11 @@ test("one Delivery batch cannot repeat a Message source", () => {
 		{ messages: [source, source] },
 	);
 
-	assert.throws(
-		() => inspectStandaloneMessageDelivery({
-			recipientAgentId,
-			transcript: transcriptFromSessionManager(sessionManager).inspect(),
-			source,
-			identity: { kind: projection.kind, messageId: projection.messageId, fromAgentId: projection.fromAgentId },
-			subject: "Message repeated-message",
-		}),
-		/Message Delivery repeats a source/,
-	);
+	const transcript = transcriptFromSessionManager(sessionManager).inspect();
+	assert.equal(inspectStandaloneMessageDelivery({ recipientAgentId, transcript, source,
+		identity: { kind: projection.kind, messageId: projection.messageId, fromAgentId: projection.fromAgentId },
+		subject: "Message repeated-message" }).deliveryEvidence, undefined);
+	assert.match(inspectCoordinationRejections(transcript, recipientAgentId)[0]!.diagnostic, /repeats a source/);
 });
 
 test("committed receipts trust content for every Message kind while writers preserve it", () => {
@@ -307,9 +303,14 @@ test("receipt trust does not relax exact schemas, visibility or duplicate policy
 			scenario !== "hidden", { messages: [source] });
 		if (scenario === "duplicate") manager.appendCustomMessageEntry(
 			"agent-coordination.message-delivery", content, true, { messages: [source] });
-		assert.throws(() => inspectStandaloneMessageDelivery({ recipientAgentId,
-			transcript: transcriptFromSessionManager(manager).inspect(), source, identity, subject: "Message" }),
-			scenario === "extra-field" ? /invalid shape/ : scenario === "hidden" ? /model-visible/ : /duplicate Deliveries/);
+		const transcript = transcriptFromSessionManager(manager).inspect();
+		const inspect = () => inspectStandaloneMessageDelivery({ recipientAgentId, transcript, source, identity, subject: "Message" });
+		if (scenario === "duplicate") assert.throws(inspect, /duplicate Deliveries/);
+		else {
+			assert.equal(inspect().deliveryEvidence, undefined);
+			assert.match(inspectCoordinationRejections(transcript, recipientAgentId)[0]!.diagnostic,
+				scenario === "extra-field" ? /invalid shape/ : /model-visible/);
+		}
 	}
 });
 
@@ -349,5 +350,7 @@ test("delivery projection still rejects unknown current-scope coordination entri
 	const manager = SessionManager.inMemory(process.cwd());
 	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: manager.getSessionId() });
 	manager.appendCustomEntry("agent-coordination.unknown", {});
-	assert.throws(() => inspectMessageDeliveries({ recipientAgentId: manager.getSessionId(), transcript: transcriptFromSessionManager(manager).inspect() }), /unexpected current-scope coordination entry agent-coordination\.unknown/);
+	const transcript = transcriptFromSessionManager(manager).inspect();
+	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId: manager.getSessionId(), transcript }), []);
+	assert.match(inspectCoordinationRejections(transcript, manager.getSessionId())[0]!.diagnostic, /unexpected current-scope coordination entry agent-coordination\.unknown/);
 });

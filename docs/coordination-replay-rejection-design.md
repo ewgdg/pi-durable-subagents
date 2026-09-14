@@ -1,9 +1,9 @@
 # Skip-and-mark coordination replay — selected design
 
 Design for [#131](https://github.com/ewgdg/pi-durable-subagents/issues/131).
-**Implementation authorized by the user; contracts finalized below.** Execution
-and validation are tracked in `plans/active/131-coordination-replay-rejection.md`
-(moved to `plans/done/` on completion).
+**Implemented with explicit user authorization beyond the design-only issue.**
+Execution and validation are recorded in
+`plans/done/131-coordination-replay-rejection.md`.
 
 ## Decision
 
@@ -150,6 +150,15 @@ text, focus snapshots, or earlier schema acceptance. A record's rejection never
 cascades into rejection of independently valid recipient Delivery. In particular,
 existence of the requester Agent does not imply existence of its Request source.
 
+Historical focus snapshots have no obligation authority: they cannot introduce,
+rewrite, remove, or resurrect a Request duty. On each execution, the coordinator
+verifies the outstanding set across retained transcripts. The context hook keeps
+a volatile exclusion of locally retained duties already resolved by that verified
+evidence (including requester Answer Delivery before the local result). This
+exclusion is refreshed at startup, applies to attention/continuation only, and
+does not suppress newly delivered Requests. No new durable focus snapshot is
+written, and no snapshot is used as a substitute for accepted source evidence.
+
 The shared presentation interface accepts a structured `invalid` or `inherited`
 reason; #131 produces only `invalid`. For each affected native call/result group,
 project one informational group preserving source, call arguments, result content,
@@ -157,9 +166,18 @@ and diagnostics. Remove both native sides of that group from model input, retain
 unrelated assistant content and valid sibling calls/results, and leave the source
 transcript untouched. A result surviving without its call in compacted context
 must also be informational, never a dangling tool result. Custom rejected records
-are similarly informational. Apply projection at the existing non-triggering
+are similarly informational. Preserve image content as typed image blocks, not
+base64 text. Emit each informational group after its complete native tool batch
+so valid sibling results remain adjacent to their native call message. Resolve
+marked results against physical source ownership, not merely a tool ID that could
+also occur in copied history. Apply projection at the existing non-triggering
 model-context hook; do not add reminder turns. #134 owns inherited classification,
 fork context ordering, and cache-prefix changes.
+
+If removing rejected calls leaves only signed native thinking, preserve that
+material inside the informational group instead of emitting a provider-invalid
+thinking-only assistant message. Valid sibling calls and ordinary assistant text
+keep their native representation.
 
 Regression seams are the existing public transcript readers, coordinator
 operations/recovery, and participant model-context hook. Tests exercise observable

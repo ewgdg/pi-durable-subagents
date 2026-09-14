@@ -1,3 +1,5 @@
+import { validateAgentMessageResultShape } from "./message-result-shape.ts";
+import { readCoordinationRecord } from "./replay-rejection.ts";
 import { resolveAgentMessageReferences } from "./message-reference.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
@@ -211,7 +213,12 @@ export function answerSourceResultRequestId(options: {
 			entry.message.role === "toolResult" &&
 			entry.message.toolName === "agent_message" &&
 			entry.message.toolCallId === options.source.toolCallId,
-	);
+	).filter(entry => {
+		if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError) return true;
+		const details = entry.message.details;
+		return readCoordinationRecord(options.transcript, options.source.agentId, entry,
+			() => validateAgentMessageResultShape(details, "answer"), options.source.toolCallId).accepted;
+	});
 	if (results.length > 1) {
 		throw new ProtocolInvariantError(
 			`Agent Answer source ${options.source.toolCallId} has multiple results`,
@@ -225,18 +232,9 @@ export function answerSourceResultRequestId(options: {
 	// An error result carries no authoritative correlation. Candidate Delivery
 	// inspection still enforces the error-result-plus-Delivery crash invariant.
 	if (result.message.isError) return undefined;
-	const details = result.message.details;
-	if (
-		typeof details !== "object" ||
-		details === null ||
-		!("requestMessageId" in details) ||
-		typeof details.requestMessageId !== "string" ||
-		details.requestMessageId.length === 0
-	) {
-		throw new ProtocolInvariantError(
-			`Agent Answer source ${options.source.toolCallId} has malformed correlation evidence`,
-		);
-	}
+	const details = result.message.details as Record<string, unknown>;
+	if (typeof details.requestMessageId !== "string" ||
+		!("messageStatus" in details || details.disposition === "committed" || details.disposition === "already_answered")) return undefined;
 	return details.requestMessageId;
 }
 
@@ -284,6 +282,12 @@ export function findAuthoredAgentMessageSources(options: {
 	return authoredFacts(options).sources;
 }
 
+export function authoredAgentMessagesByCall(options: {
+	authorAgentId: string; transcript: TranscriptInspection; toolCallId: string;
+}): readonly AuthoredAgentMessageSource[] {
+	return authoredFacts(options).byCall.get(options.toolCallId) ?? [];
+}
+
 function authoredFacts(options: { authorAgentId: string; transcript: TranscriptInspection }) {
 	const { transcript, authorAgentId } = options;
 	const facts = indexedState(transcript).project(
@@ -293,7 +297,6 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 		() => ({
 			sources: [] as AuthoredAgentMessageSource[],
 			requests: [] as AuthoredRequestSource[],
-			invalidCalls: [] as Array<{ source: ToolCallPointer; cause: unknown }>,
 			byMessage: new Map<string, AuthoredAgentMessageSource[]>(),
 			byCall: new Map<string, AuthoredAgentMessageSource[]>(),
 			cancellations: new Map<string, AuthoredAgentMessageSource[]>(),
@@ -303,17 +306,17 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 			if (entry.type !== "message" || entry.message.role !== "assistant") return facts;
 			for (const part of entry.message.content) {
 				if (part.type !== "toolCall" || part.name !== "agent_message") continue;
-				let input: AgentMessageInput;
+				const parsed = readCoordinationRecord(transcript, authorAgentId, entry,
+					() => validateAgentMessageInput(part.arguments), part.id);
+				if (!parsed.accepted) continue;
+				let input = parsed.value;
 				try {
-					input = validateAgentMessageInput(part.arguments);
-					if (input.operation === "poll" || input.operation === "retry") continue;
 					input = resolveAgentMessageReferences(transcript, { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id }, input);
-				} catch (cause) {
-					facts.invalidCalls.push({
-						source: { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id },
-						cause,
-					});
-					continue;
+				} catch (error) {
+					// An absent historical selector grants no authorship; it is not a
+					// malformed record and must not poison unrelated replay evidence.
+					if (error instanceof Error && /^(unknown_identity|ambiguous_target):/.test(error.message)) continue;
+					throw error;
 				}
 				if (input.operation === "poll" || input.operation === "retry") continue;
 				const source = {
@@ -342,28 +345,6 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 			return facts;
 		},
 	);
-	// Invalid calls remain candidates until their native validation result commits.
-	// A cached absence cannot hide a later contradictory successful result.
-	for (const { source, cause } of facts.invalidCalls) {
-		const { toolCallId } = source;
-		const results = coordinationEntries(transcript, authorAgentId, `result:${toolCallId}`).filter(
-			(entry) =>
-				entry.type === "message" &&
-				entry.message.role === "toolResult" &&
-				entry.message.toolName === "agent_message",
-		);
-		if (results.length === 0) continue;
-		if (
-			results.length === 1 &&
-			results[0]?.type === "message" &&
-			results[0].message.role === "toolResult" &&
-			results[0].message.isError
-		)
-			continue;
-		throw new ProtocolInvariantError(`committed agent_message source ${toolCallId} is invalid`, {
-			source, cause, transcriptPath: transcript.transcriptPath,
-		});
-	}
 	return facts;
 }
 
@@ -400,8 +381,8 @@ export function answerResultSources(options: {
 	);
 }
 
-function answerSourcesForRequest(options: {
-	request: Request;
+export function answerSourcesForRequest(options: {
+	request: Pick<Request, "messageId" | "fromAgentId" | "targetAgentId">;
 	requesterTranscript: TranscriptInspection;
 	responderTranscript: TranscriptInspection;
 }): AuthoredAgentMessageSource[] {

@@ -1,3 +1,4 @@
+import { readCoordinationRecord } from "./replay-rejection.ts";
 import { resolveIncomingRequestReference } from "./obligation-focus.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
@@ -28,13 +29,12 @@ export function resolveMessageReference(
 				for (const part of entry.message.content) {
 					if (part.type !== "toolCall" || part.name !== toolName) continue;
 					if (toolName === "agent_spawn") {
-						try { validateAgentSpawnInput(part.arguments); }
-						catch { continue; }
+						if (!readCoordinationRecord(transcript, source.agentId, entry, () => validateAgentSpawnInput(part.arguments), part.id).accepted) continue;
 					}
 					if (toolName === "agent_message") {
-						let input: AgentMessageInput;
-						try { input = validateAgentMessageInput(part.arguments); }
-						catch { continue; } // Rejected native calls do not author Messages.
+						const parsed = readCoordinationRecord(transcript, source.agentId, entry, () => validateAgentMessageInput(part.arguments), part.id);
+						if (!parsed.accepted) continue;
+						const input = parsed.value;
 						if (input.operation === "poll" || input.operation === "retry") continue;
 					}
 					const pointer = { agentId: source.agentId, entryId: entry.id, toolCallId: part.id };

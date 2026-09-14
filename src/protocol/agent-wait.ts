@@ -1,3 +1,7 @@
+import { readCoordinationRecord } from "./replay-rejection.ts";
+import { validateAgentMessageInput } from "./agent-message-input.ts";
+import { validateAgentSpawnInput } from "./agent-spawn-input.ts";
+import { CoordinationRecordValidationError } from "./record-validation.ts";
 import { resolveMessageReference } from "./message-reference.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
@@ -82,7 +86,12 @@ export function inspectCommittedAgentWaitResult(options: {
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
 			entry.message.toolCallId === options.toolCallId,
-	);
+	).filter(entry => {
+		if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError || entry.message.toolName !== "agent_wait") return true;
+		const message = entry.message;
+		return readCoordinationRecord(options.transcript, options.agentId, entry,
+			() => validateAgentWaitResultRecord(message.details, message.content), message.toolCallId).accepted;
+	});
 	if (matches.length > 1) {
 		throw new ProtocolInvariantError(
 			`Agent Wait ${options.toolCallId} has multiple native results`,
@@ -100,26 +109,22 @@ export function inspectCommittedAgentWaitResult(options: {
 	if (match.message.isError) {
 		return { state: "interrupted", resultEntryId: match.id };
 	}
-	const result = validateAgentWaitResult(match.message.details);
-	if (
-		match.message.content.length !== 1 ||
-		match.message.content[0]?.type !== "text"
-	) {
-		throw new ProtocolInvariantError("Agent Wait result content has an invalid shape");
-	}
-	let content: unknown;
-	try {
-		content = JSON.parse(match.message.content[0].text);
-	} catch {
-		throw new ProtocolInvariantError("Agent Wait result content is not valid JSON");
-	}
-	if (!isDeepStrictEqual(content, result)) {
-		throw new ProtocolInvariantError("Agent Wait result content differs from its details");
-	}
+	const message = match.message;
+	const parsed = readCoordinationRecord(options.transcript, options.agentId, match,
+		() => validateAgentWaitResultRecord(message.details, message.content), options.toolCallId);
+	if (!parsed.accepted) return { state: "pending" };
+	const result = parsed.value;
+	const committed = resolveCommittedToolCall({ agentId: options.agentId, transcript: options.transcript, toolCallId: options.toolCallId, toolName: "agent_wait" });
+	const callEntry = options.transcript.entries.find(entry => entry.id === committed.source.entryId)!;
+	if (!readCoordinationRecord(options.transcript, options.agentId, callEntry,
+		() => validateAgentWaitInput(committed.input), options.toolCallId).accepted) return { state: "pending" };
 	const call = committedAgentWaitCall(options);
 	if ("disposition" in result) {
 		return { state: "preempted", resultEntryId: match.id };
 	}
+	// A result referencing an absent authored Request cannot restore that source.
+	if (result.answers.some(answer => !findCallerRequestSource({ agentId: options.agentId,
+		transcript: options.transcript, requestMessageId: answer.requestMessageId }))) return { state: "pending" };
 	// The native result materializes the live snapshot. Explicit selection also
 	// binds its membership, while every result must preserve caller source order.
 	if (call.input.requestMessageIds) {
@@ -129,7 +134,7 @@ export function inspectCommittedAgentWaitResult(options: {
 		}
 	}
 	const requestSources = result.answers.map(({ requestMessageId }) =>
-		findCallerRequestSource({
+		requireCallerRequestSource({
 			agentId: options.agentId,
 			transcript: options.transcript,
 			requestMessageId,
@@ -164,11 +169,11 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 		value.disposition === "preempted"
 	) return { disposition: "preempted" };
 	if (!isRecord(value) || !sameKeys(value, ["answers"]) || !Array.isArray(value.answers)) {
-		throw new ProtocolInvariantError("Agent Wait result has an invalid shape");
+		throw new CoordinationRecordValidationError("Agent Wait result has an invalid shape");
 	}
 	const answers = value.answers.map((candidate): AgentWaitAnswer => {
 		if (!isRecord(candidate) || typeof candidate.disposition !== "string") {
-			throw new ProtocolInvariantError("Agent Wait Answer has an invalid shape");
+			throw new CoordinationRecordValidationError("Agent Wait Answer has an invalid shape");
 		}
 		if (candidate.disposition === "answer_delivered") {
 			if (
@@ -181,10 +186,10 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 				typeof candidate.requestTitle !== "string" || !candidate.requestTitle.trim() ||
 				typeof candidate.answerId !== "string" ||
 				typeof candidate.fromAgentId !== "string" ||
-				typeof candidate.answer !== "string" || candidate.answer.length === 0 ||
-				candidate.answerId !== deriveMessageIdentity(candidate.answerSource) ||
-				candidate.fromAgentId !== candidate.answerSource.agentId
-			) throw new ProtocolInvariantError("Agent Wait delivered Answer is invalid");
+				typeof candidate.answer !== "string" || candidate.answer.length === 0
+			) throw new CoordinationRecordValidationError("Agent Wait delivered Answer is invalid");
+			if (candidate.answerId !== deriveMessageIdentity(candidate.answerSource) || candidate.fromAgentId !== candidate.answerSource.agentId)
+				throw new ProtocolInvariantError("Agent Wait delivered Answer identity is invalid");
 			return candidate as AgentWaitAnswer;
 		}
 		if (
@@ -196,7 +201,7 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 			typeof candidate.requestTitle !== "string" || !candidate.requestTitle.trim() ||
 			typeof candidate.answerId !== "string" || candidate.answerId.length === 0 ||
 			!isEntryPointer(candidate.deliveryEvidence)
-		) throw new ProtocolInvariantError("Agent Wait prior Answer Delivery is invalid");
+		) throw new CoordinationRecordValidationError("Agent Wait prior Answer Delivery is invalid");
 		return candidate as AgentWaitAnswer;
 	});
 	const requestIds = answers.map(({ requestMessageId }) => requestMessageId);
@@ -204,7 +209,7 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 		answers.length === 0 ||
 		requestIds.some((requestId) => requestId.length === 0) ||
 		new Set(requestIds).size !== requestIds.length
-	) throw new ProtocolInvariantError("Agent Wait result has invalid Request identities");
+	) throw new CoordinationRecordValidationError("Agent Wait result has invalid Request identities");
 	return { answers };
 }
 
@@ -214,7 +219,7 @@ export function callerRequestTitle(options: {
 	transcript: TranscriptInspection;
 	requestMessageId: string;
 }): string {
-	const source = findCallerRequestSource(options);
+	const source = requireCallerRequestSource(options);
 	const calls = coordinationEntries(options.transcript, options.agentId, `call:${source.toolCallId}`)
 		.flatMap(entry => entry.type === "message" && entry.message.role === "assistant"
 			? entry.message.content.filter(part => part.type === "toolCall" && part.id === source.toolCallId)
@@ -229,12 +234,12 @@ export function callerRequestTitle(options: {
 
 export function validateAgentWaitInput(value: unknown): AgentWaitInput {
 	if (!isRecord(value) || Object.keys(value).some(key => key !== "requestMessageIds")) {
-		throw new Error("invalid_input: Agent Wait accepts only requestMessageIds");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Wait accepts only requestMessageIds");
 	}
 	if (!("requestMessageIds" in value)) return {};
 	if (!Array.isArray(value.requestMessageIds) || value.requestMessageIds.length === 0 ||
 		value.requestMessageIds.some(id => typeof id !== "string" || id.trim().length === 0)) {
-		throw new Error("invalid_input: Agent Wait requestMessageIds must be a nonempty array of nonblank strings");
+		throw new CoordinationRecordValidationError("invalid_input: Agent Wait requestMessageIds must be a nonempty array of nonblank strings");
 	}
 	return { requestMessageIds: value.requestMessageIds };
 }
@@ -246,7 +251,7 @@ export function resolveAgentWaitSelection(
 	selectors: readonly string[],
 ): readonly string[] {
 	const ids = [...new Set(selectors.map(selector => resolveMessageReference(transcript, source, selector)))];
-	const sources = new Map(ids.map(requestMessageId => [requestMessageId, findCallerRequestSource({
+	const sources = new Map(ids.map(requestMessageId => [requestMessageId, requireCallerRequestSource({
 		agentId: source.agentId, transcript, requestMessageId,
 	})]));
 	for (const requestSource of sources.values()) {
@@ -271,11 +276,11 @@ function committedAgentWaitCall(options: {
 	return { source: committed.source, input: validateAgentWaitInput(committed.input) };
 }
 
-function findCallerRequestSource(options: {
+export function findCallerRequestSource(options: {
 	agentId: string;
 	transcript: TranscriptInspection;
 	requestMessageId: string;
-}): ToolCallPointer {
+}): ToolCallPointer | undefined {
 	const matches: ToolCallPointer[] = [];
 	for (const entry of coordinationEntries(options.transcript, options.agentId, "request-source")) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
@@ -283,8 +288,11 @@ function findCallerRequestSource(options: {
 			if (
 				part.type !== "toolCall" ||
 				(part.name !== "agent_spawn" &&
-					(part.name !== "agent_message" || part.arguments.operation !== "request"))
+					(part.name !== "agent_message" || part.arguments?.operation !== "request"))
 			) continue;
+			const parsed = readCoordinationRecord(options.transcript, options.agentId, entry,
+				() => part.name === "agent_spawn" ? validateAgentSpawnInput(part.arguments) : validateAgentMessageInput(part.arguments), part.id);
+			if (!parsed.accepted) continue;
 			const source = {
 				agentId: options.agentId,
 				entryId: entry.id,
@@ -293,12 +301,18 @@ function findCallerRequestSource(options: {
 			if (deriveMessageIdentity(source) === options.requestMessageId) matches.push(source);
 		}
 	}
-	if (matches.length !== 1) {
+	if (matches.length > 1) {
 		throw new ProtocolInvariantError(
 			`Agent Wait result Request ${options.requestMessageId} has ${matches.length} caller sources`,
 		);
 	}
-	return matches[0]!;
+	return matches[0];
+}
+
+function requireCallerRequestSource(options: Parameters<typeof findCallerRequestSource>[0]): ToolCallPointer {
+	const source = findCallerRequestSource(options);
+	if (!source) throw new Error(`unknown_identity: Request ${options.requestMessageId}`);
+	return source;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -327,4 +341,16 @@ function isEntryPointer(
 		sameKeys(value, ["agentId", "entryId"]) &&
 		typeof value.agentId === "string" && value.agentId.length > 0 &&
 		typeof value.entryId === "string" && value.entryId.length > 0;
+}
+
+/** A Wait receipt's model content and details are one atomic record. */
+export function validateAgentWaitResultRecord(details: unknown, content: unknown): AgentWaitResult {
+	const result = validateAgentWaitResult(details);
+	if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text" || typeof content[0].text !== "string")
+		throw new CoordinationRecordValidationError("Agent Wait result content has an invalid shape");
+	let parsed: unknown;
+	try { parsed = JSON.parse(content[0].text); }
+	catch { throw new CoordinationRecordValidationError("Agent Wait result content is not valid JSON"); }
+	if (!isDeepStrictEqual(parsed, result)) throw new CoordinationRecordValidationError("Agent Wait result content differs from its details");
+	return result;
 }

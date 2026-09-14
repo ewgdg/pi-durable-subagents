@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -25,15 +26,92 @@ import {
 } from "../src/pi-integration/participant-lifecycle.ts";
 
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
-import { inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
-import { obligationStack } from "../src/protocol/obligation-focus.ts";
+import { createMessageDelivery, inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { obligationStack, type ObligationFrame } from "../src/protocol/obligation-focus.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+
+test("context hook marks invalid coordination without starting a turn or rewriting native evidence", async () => {
+	const context = createExtensionContext();
+	const manager = context.sessionManager;
+	manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "request", targetAgent: "recipient", question: "Historical work without a title",
+	}, { id: "invalid-history" })));
+	manager.appendMessage({ role: "toolResult", toolCallId: "invalid-history", toolName: "agent_message",
+		content: [{ type: "text", text: "Historical result" }], isError: false, timestamp: 1 });
+	const original = JSON.stringify(manager.getEntries());
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, lifecycleHandlers({}));
+	const projected = await pi.emit("context", { type: "context", messages: manager.buildSessionContext().messages }, context);
+	assert.match(JSON.stringify(projected), /! /);
+	assert.match(JSON.stringify(projected), /Historical work without a title/);
+	assert.match(JSON.stringify(projected), /Historical result/);
+	assert.equal(pi.messages.length, 0);
+	assert.equal(context.notifications.length, 0);
+	assert.equal(JSON.stringify(manager.getEntries()), original);
+});
+
+test("verified startup reconciliation excludes already-proven Answers without durable snapshot authority", async () => {
+	const context = createExtensionContext();
+	const old = appendRequestDelivery(context.sessionManager, { requesterAgentId: "requester", title: "Previously answered", question: "Old work" });
+	const original = JSON.stringify(context.sessionManager.getEntries());
+	// The coordinator has independently verified recipient-side Answer proof;
+	// the responder's author result is absent after the delivery-before-result crash.
+	for (let restart = 0; restart < 2; restart++) {
+		const pi = new CapturedExtensionApi();
+		pi.api.appendEntry = (type, data) => { context.sessionManager.appendCustomEntry(type, data); };
+		registerParticipantLifecycle(pi.api, lifecycleHandlers({ async executionStarted() { return []; } }));
+		await pi.emit("agent_start", { type: "agent_start" }, context);
+		assert.equal(JSON.stringify(context.sessionManager.getEntries()), original, "startup reconciliation is not a durable obligation snapshot");
+		const projected = await pi.emit("context", { type: "context", messages: [] }, context);
+		assert.doesNotMatch(JSON.stringify(projected), new RegExp(old.requestId));
+		assert.equal(pi.messages.length, 0);
+	}
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, lifecycleHandlers({ async executionStarted() { return []; } }));
+	await pi.emit("agent_start", { type: "agent_start" }, context);
+	const next = appendRequestDelivery(context.sessionManager, { requesterAgentId: "requester", title: "Newly delivered", question: "New work" });
+	const projected = await pi.emit("context", { type: "context", messages: [] }, context);
+	assert.match(JSON.stringify(projected), new RegExp(next.requestId));
+	assert.doesNotMatch(JSON.stringify(projected), new RegExp(old.requestId));
+});
+
+test("a Request delivered during startup reconciliation is not hidden by an earlier coordinator snapshot", async () => {
+	const context = createExtensionContext();
+	const pi = new CapturedExtensionApi();
+	let release!: (frames: readonly ObligationFrame[]) => void;
+	const started = new Promise<readonly ObligationFrame[]>(resolve => { release = resolve; });
+	registerParticipantLifecycle(pi.api, lifecycleHandlers({ async executionStarted() { return started; } }));
+	const startup = pi.emit("agent_start", { type: "agent_start" }, context);
+	const next = appendRequestDelivery(context.sessionManager, { requesterAgentId: "requester", title: "Delivered during startup", question: "New work" });
+	release([]);
+	await startup;
+	const projected = await pi.emit("context", { type: "context", messages: [] }, context);
+	assert.match(JSON.stringify(projected), new RegExp(next.requestId));
+	assert.equal(pi.messages.length, 0);
+});
+
+test("locally committed omitted-Delivery Answer offers remaining work once", async () => {
+	const context = createExtensionContext();
+	appendRequestDelivery(context.sessionManager, { requesterAgentId: "requester", title: "Remaining work", question: "Keep going" });
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, lifecycleHandlers());
+	await pi.emit("turn_end", { type: "turn_end", toolResults: [{ ...toolResultMessage,
+		toolName: "agent_message", details: { messageId: "answer", requestMessageId: "finished",
+			disposition: "committed", delivery: "omitted", reason: "request_source_unavailable" },
+	}] }, context);
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
+	assert.equal(pi.messages.length, 1);
+	assert.match(String(pi.messages[0]!.message.content), /Remaining work/);
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
+	assert.equal(pi.messages.length, 1);
+});
 
 test("lifecycle Request presentation preserves recovery without becoming Delivery evidence", { timeout: 5_000 }, async () => {
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const agentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
-	const frame = { requestId: "current-request", requesterAgentId: "requester", title: "Finish current work", question: "Finish this Request." };
+	const frame = appendRequestDelivery(sessionManager, { requesterAgentId: "requester", title: "Finish current work", question: "Finish this Request." });
 	const pi = new CapturedExtensionApi();
 	pi.api.appendEntry = (customType, data) => { sessionManager.appendCustomEntry(customType, data); };
 	pi.api.sendMessage = (message) => {
@@ -54,7 +132,7 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 	assert.ok(presentation?.type === "custom_message" && presentation.display);
 	// Re-read the producer's committed records, rather than duplicating its custom type in a fixture.
 	const transcript = transcriptFromSessionManager(sessionManager).inspect();
-	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId: agentId, transcript }), []);
+	assert.equal(inspectMessageDeliveries({ recipientAgentId: agentId, transcript }).length, 1);
 	assert.deepEqual(obligationStack(transcript, agentId), [frame]);
 	await pi.emit("agent_start", { type: "agent_start" }, context);
 });
@@ -172,12 +250,12 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 });
 
 test("each execution presents titled open Requests without repeating bodies or selecting the next task", async () => {
+	const context = createExtensionContext();
 	const frames = [
-		{ requestId: "request-a", requesterAgentId: "author-a", title: "Complete storage", question: "Finish A" },
-		{ requestId: "request-b", requesterAgentId: "author-b", title: "Review integration", question: "Consider B" },
+		appendRequestDelivery(context.sessionManager, { requesterAgentId: "author-a", title: "Complete storage", question: "Finish A" }),
+		appendRequestDelivery(context.sessionManager, { requesterAgentId: "author-b", title: "Review integration", question: "Consider B" }),
 	];
 	const pi = new CapturedExtensionApi();
-	const context = createExtensionContext();
 	pi.api.appendEntry = (type, data) => { context.sessionManager.appendCustomEntry(type, data); };
 	registerParticipantLifecycle(pi.api, lifecycleHandlers({ async executionStarted() { return frames; } }));
 	await pi.emit("agent_start", { type: "agent_start" }, context);
@@ -200,9 +278,7 @@ for (const pending of [false, true]) test(`Answer offers one neutral continuatio
 	const pi = new CapturedExtensionApi();
 	const context = createExtensionContext();
 	context.hasPendingMessages = () => pending;
-	context.sessionManager.appendCustomEntry("agent-coordination.obligation-focus", { frames: [
-		{ requestId: "request-a", requesterAgentId: "author-a", title: "Complete remaining work", question: "Remaining A" },
-	] });
+	appendRequestDelivery(context.sessionManager, { requesterAgentId: "author-a", title: "Complete remaining work", question: "Remaining A" });
 	registerParticipantLifecycle(pi.api, lifecycleHandlers());
 	const answer = { ...toolResultMessage, toolName: "agent_message", details: {
 		messageId: "answer-b", requestMessageId: "request-b", messageStatus: "sent",
@@ -566,6 +642,15 @@ class CapturedExtensionApi {
 		assert.equal(handlers.length, 1, eventName);
 		return handlers[0]!(event as never, context);
 	}
+}
+
+function appendRequestDelivery(manager: SessionManager, frame: Omit<ObligationFrame, "requestId">): ObligationFrame {
+	const source = { agentId: frame.requesterAgentId, entryId: frame.title, toolCallId: frame.title };
+	const requestId = deriveMessageIdentity(source);
+	const delivery = createMessageDelivery([{ source, projection: { kind: "request", requestMessageId: requestId,
+		fromAgentId: frame.requesterAgentId, title: frame.title, question: frame.question } }]);
+	manager.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
+	return { ...frame, requestId };
 }
 
 function createExtensionContext(initialEditorText = "") {

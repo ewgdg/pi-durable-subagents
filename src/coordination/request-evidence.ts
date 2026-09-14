@@ -16,6 +16,7 @@ import {
 import {
 	compareCommittedToolCallOrder,
 	deriveMessageIdentity,
+	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
@@ -38,6 +39,7 @@ import {
 } from "../protocol/message-delivery.ts";
 import {
 	answerSourceDeliveryRequestId,
+	answerSourcesForRequest,
 	answerResultSources,
 	cancellationSourcesForRequest,
 	cancellationSourcesAfter,
@@ -169,6 +171,13 @@ export class RequestEvidence {
 	}
 
 	requireRequest(requestId: string): Request {
+		const request = this.findRequest(requestId);
+		if (request) return request;
+		throw new Error(`unknown_identity: Request ${requestId}`);
+	}
+
+	/** Authored authority only; recipient Delivery never recreates a missing source. */
+	findRequest(requestId: string): Request | undefined {
 		// A child's Identity already locates its Creation Request. Searching every
 		// history first makes each deadlock check reparse the whole workflow per child.
 		const creationRequest = this.#findCreationRequest(requestId);
@@ -221,7 +230,71 @@ export class RequestEvidence {
 				projection.kind === "request" &&
 				projection.requestMessageId === requestId,
 		);
+		return undefined;
+	}
+
+	/** Independently valid recipient evidence remains useful without authored authority. */
+	findDeliveredRequest(responder: AgentRecord, requestId: string) {
+		const deliveries = deliveriesForRequest({
+			recipientAgentId: responder.identity.agentId, transcript: responder.transcript.inspect(), requestId,
+		}).filter(delivery => delivery.projection.kind === "request");
+		if (deliveries.length > 1) throw new Error(`invariant_violation: Request ${requestId} has duplicate Deliveries`);
+		const delivery = deliveries[0];
+		if (!delivery || delivery.projection.kind !== "request") return undefined;
+		validateDeliveredMessageEvidence(delivery);
+		const requester = this.#requireAgent(delivery.projection.fromAgentId);
+		if (requester.identity.workflowId !== responder.identity.workflowId) {
+			throw new Error("wrong_workflow: delivered Request belongs to another Workflow");
+		}
+		return { ...delivery.projection, source: delivery.source, deliveryEvidence: delivery.deliveryEvidence };
+	}
+
+	requestMetadata(requestId: string): Pick<Request, "messageId" | "fromAgentId" | "targetAgentId" | "title" | "source"> {
+		const request = this.findRequest(requestId);
+		if (request) return request;
+		for (const responder of this.#agents.values()) {
+			const delivered = this.findDeliveredRequest(responder, requestId);
+			if (delivered) return {
+				messageId: requestId, fromAgentId: delivered.fromAgentId,
+				targetAgentId: responder.identity.agentId, title: delivered.title, source: delivered.source,
+			};
+		}
 		throw new Error(`unknown_identity: Request ${requestId}`);
+	}
+
+	findLocalAnswer(responder: AgentRecord, requestId: string): Answer | undefined {
+		const transcript = responder.transcript.inspect();
+		const delivered = deliveriesForRequest({ recipientAgentId: responder.identity.agentId, transcript, requestId })
+			.find(delivery => delivery.projection.kind === "request");
+		const requester = delivered ? this.#agents.get(delivered.projection.fromAgentId) : undefined;
+		const sources = requester ? answerSourcesForRequest({
+			request: { messageId: requestId, fromAgentId: requester.identity.agentId, targetAgentId: responder.identity.agentId },
+			requesterTranscript: requester.transcript.inspect(), responderTranscript: transcript,
+		}) : answerResultSources({ authorAgentId: responder.identity.agentId, transcript }).get(requestId) ?? [];
+		const canonical = sources.flatMap(({ source }) => {
+			const answer = this.#resolveAuthoredMessage(responder, deriveMessageIdentity(source));
+			return answer?.kind === "answer" ? [answer] : [];
+		});
+		if (canonical.length > 1) throw new Error(`invariant_violation: Request ${requestId} has multiple canonical Answers`);
+		const admitted = this.#admittedAnswersByRequest.get(requestId);
+		if (canonical[0] && admitted && canonical[0].messageId !== admitted.messageId) {
+			throw new Error(`invariant_violation: Request ${requestId} has conflicting admitted and canonical Answers`);
+		}
+		return canonical[0] ?? admitted;
+	}
+
+	isLocalCancellationDelivered(responder: AgentRecord, requestId: string): boolean {
+		const deliveries = deliveriesForRequest({ recipientAgentId: responder.identity.agentId, transcript: responder.transcript.inspect(), requestId });
+		const request = deliveries.find(delivery => delivery.projection.kind === "request");
+		if (!request) return false;
+		const cancellations = deliveries.filter(delivery => delivery.projection.kind === "request_cancellation");
+		for (const cancellation of cancellations) {
+			validateDeliveredMessageEvidence(cancellation);
+			if (cancellation.projection.fromAgentId !== request.projection.fromAgentId) {
+				throw new ProtocolInvariantError(`Request ${requestId} Cancellation Delivery is not from its requester`);
+			}
+		}
+		return cancellations.length > 0;
 	}
 
 	outstandingRequestIdsAt(author: AgentRecord, waitSource: ToolCallPointer, selectors?: readonly string[]): readonly string[] {
@@ -301,10 +374,15 @@ export class RequestEvidence {
 		}
 		const matchingIds = candidates.has(reference) ? [reference]
 			: [...candidates].filter(id => id.endsWith(reference));
-		const visible = matchingIds.flatMap(requestId => {
+		const visible = matchingIds.flatMap<RequestInspection>(requestId => {
 			const authored = this.#findBoundAuthoredRequest(agent, requestId);
 			if (!authored && !incoming.has(requestId)) return [];
-			const request = authored ?? this.#requireResponderRequest(agent, requestId);
+			const request = authored ?? this.findRequest(requestId);
+			if (!request) {
+				const delivered = this.findDeliveredRequest(agent, requestId);
+				return delivered ? [{ requestMessageId: requestId, requesterAgentId: delivered.fromAgentId,
+					responderAgentId: agentId, title: delivered.title, question: delivered.question }] : [];
+			}
 			const recipient = this.#agents.get(request.targetAgentId);
 			const deliveryEvidence = recipient ? this.#inspectRequestDelivery(request, recipient).deliveryEvidence : undefined;
 			const canonical = inspectCanonicalMessage({
@@ -316,18 +394,13 @@ export class RequestEvidence {
 			if (canonical.state === "indeterminate") {
 				throw new EvidenceUnavailableError(`Request ${requestId} has no canonical admission evidence`);
 			}
-			return [request];
+			return [{ requestMessageId: request.messageId, requesterAgentId: request.fromAgentId,
+				responderAgentId: request.targetAgentId, title: request.title, question: request.question }];
 		});
 		if (visible.length > 1) throw new Error(`ambiguous_target: Request ID suffix ${reference}`);
 		const request = visible[0];
 		if (!request) throw new Error(`unknown_identity: Request ${reference}`);
-		return {
-			requestMessageId: request.messageId,
-			requesterAgentId: request.fromAgentId,
-			responderAgentId: request.targetAgentId,
-			title: request.title,
-			question: request.question,
-		};
+		return request;
 	}
 
 	outstandingRequestIdsFor(agent: AgentRecord): readonly string[] {
@@ -507,10 +580,6 @@ export class RequestEvidence {
 		requestId: string,
 	): { awaiting: boolean; owed: boolean } {
 		const transcript = agent.transcript.inspect();
-		const answerSources =
-			answerResultSources({ authorAgentId: agent.identity.agentId, transcript }).get(requestId) ??
-			[];
-		if (answerSources.length) this.#requireResponderRequest(agent, requestId);
 		const localDeliveries = deliveriesForRequest({
 			recipientAgentId: agent.identity.agentId,
 			transcript,
@@ -548,7 +617,7 @@ export class RequestEvidence {
 						return true;
 					});
 					awaiting =
-						!this.#hasCanonicalAuthoredResolution(agent, requestId, "cancel") &&
+						!this.#hasCanonicalAuthoredCancellation(agent, requestId) &&
 						!delivered &&
 						retrievalsForRequest({
 							requesterAgentId: agent.identity.agentId,
@@ -561,8 +630,8 @@ export class RequestEvidence {
 		for (const delivery of localDeliveries) {
 			if (delivery.projection.kind !== "request") continue;
 			const requester = this.#agents.get(delivery.source.agentId);
-			if (requester) {
-				const incoming = this.requireRequest(requestId);
+			const incoming = requester ? this.findRequest(requestId) : undefined;
+			if (incoming) {
 				if (!this.#inspectRequestDelivery(incoming, agent).deliveryEvidence) continue;
 				const resolution = this.#inspectResolution(incoming);
 				const cancelled =
@@ -575,12 +644,8 @@ export class RequestEvidence {
 				owed = !resolution.answer && !cancelled;
 			} else {
 				validateDeliveredMessageEvidence(delivery);
-				const cancelled = localDeliveries.some((candidate) => {
-					if (candidate.projection.kind !== "request_cancellation") return false;
-					validateDeliveredMessageEvidence(candidate);
-					return true;
-				});
-				owed = !this.#hasCanonicalAuthoredResolution(agent, requestId, "answer") && !cancelled;
+				const cancelled = this.isLocalCancellationDelivered(agent, requestId);
+				owed = !this.findLocalAnswer(agent, requestId) && !cancelled;
 			}
 		}
 		return { awaiting, owed };
@@ -670,6 +735,11 @@ export class RequestEvidence {
 			);
 			if (target.state === "not_created") return undefined;
 		}
+		if (authored && (authored.input.operation === "answer" || authored.input.operation === "cancel")) {
+			const requestId = authored.input.operation === "answer" ? authored.input.requestId : authored.input.requestMessageId;
+			if (!this.findRequest(requestId)) return undefined;
+		}
+		if (!authored) return this.#findCreationRequest(messageId);
 		return this.requireCallerAuthoredMessage(author, messageId);
 	}
 
@@ -704,58 +774,14 @@ export class RequestEvidence {
 		});
 	}
 
-	#hasCanonicalAuthoredResolution(
-		author: AgentRecord,
-		requestId: string,
-		operation: "answer" | "cancel",
-	): boolean {
+	#hasCanonicalAuthoredCancellation(author: AgentRecord, requestId: string): boolean {
 		const transcript = author.transcript.inspect();
-		const sources =
-			operation === "cancel"
-				? cancellationSourcesForRequest({
-						authorAgentId: author.identity.agentId,
-						transcript,
-						requestId,
-					})
-				: (answerResultSources({ authorAgentId: author.identity.agentId, transcript }).get(
-						requestId,
-					) ?? []);
-		const canonical = sources.filter(({ source, input }) => {
-			if (operation === "answer") {
-				if (
-					input.operation !== "answer" ||
-					(answerSourceResultRequestId({
-						transcript: author.transcript.inspect(),
-						source,
-					}) ?? requestId) !== requestId
-				)
-					return false;
-				return (
-					inspectAgentMessageAuthorResult({
-						authorAgentId: author.identity.agentId,
-						transcript: author.transcript.inspect(),
-						source,
-						input,
-						requestId,
-						requestTitle: this.requireRequest(requestId).title,
-					}) === "canonical"
-				);
-			}
-			if (input.operation !== "cancel" || input.requestMessageId !== requestId) return false;
-			return (
-				inspectAgentMessageAuthorResult({
-					authorAgentId: author.identity.agentId,
-					transcript: author.transcript.inspect(),
-					source,
-					input,
-					resolvedTargetAgentId: this.requireRequest(requestId).targetAgentId,
-				}) === "canonical"
-			);
-		});
+		const canonical = cancellationSourcesForRequest({ authorAgentId: author.identity.agentId, transcript, requestId })
+			.filter(({ source, input }) => input.operation === "cancel" && input.requestMessageId === requestId &&
+				inspectAgentMessageAuthorResult({ authorAgentId: author.identity.agentId, transcript, source, input,
+					resolvedTargetAgentId: this.requireRequest(requestId).targetAgentId }) === "canonical");
 		if (canonical.length > 1) {
-			throw new Error(
-				`invariant_violation: Request ${requestId} has multiple canonical ${operation === "answer" ? "Answers" : "Cancellations"}`,
-			);
+			throw new Error(`invariant_violation: Request ${requestId} has multiple canonical Cancellations`);
 		}
 		return canonical.length === 1;
 	}
@@ -839,6 +865,26 @@ export class RequestEvidence {
 				transcript: author.transcript.inspect(),
 				source: authored.source,
 			});
+			if (!this.findRequest(answerInput.requestId)) {
+				const delivered = this.findDeliveredRequest(author, answerInput.requestId);
+				if (!delivered) return undefined;
+				if (resultRequestId !== undefined && resultRequestId !== answerInput.requestId) {
+					throw new Error("invariant_violation: Agent Answer result names a different Request");
+				}
+				const answer = resolveCommittedAnswer({
+					responderAgentId: author.identity.agentId, transcript: author.transcript.inspect(),
+					toolCallId: authored.source.toolCallId, providedInput: answerInput,
+					request: { messageId: delivered.requestMessageId, workflowId: author.identity.workflowId,
+						fromAgentId: delivered.fromAgentId, title: delivered.title },
+				});
+				// Delivery can win the crash window before the responder's native
+				// result. This observes existing proof; it never schedules a new Answer.
+				const requester = this.#requireAgent(delivered.fromAgentId);
+				const deliveryEvidence = inspectAnswerDelivery({ requesterAgentId: requester.identity.agentId,
+					transcript: requester.transcript.inspect(), answer }).deliveryEvidence;
+				return inspectCanonicalMessage({ message: answer, authorTranscript: author.transcript.inspect(), deliveryEvidence }).state === "canonical"
+					? answer : undefined;
+			}
 			if (resultRequestId !== undefined) {
 				this.#requireResponderRequest(author, resultRequestId);
 			}
@@ -888,7 +934,8 @@ export class RequestEvidence {
 			}
 			return matches[0];
 		}
-		const request = this.requireRequest(authored.input.requestMessageId);
+		const request = this.findRequest(authored.input.requestMessageId);
+		if (!request) return undefined;
 		return resolveCommittedCancellation({
 			requesterAgentId: author.identity.agentId,
 			transcript: author.transcript.inspect(),

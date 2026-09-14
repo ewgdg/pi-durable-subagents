@@ -270,7 +270,7 @@ export function entryKeys(entry: SessionEntry): string[] {
 					keys.push(`call:${part.id}`, `tool:${part.name}`);
 					if (
 						part.name === "agent_spawn" ||
-						(part.name === "agent_message" && part.arguments.operation === "request")
+						(part.name === "agent_message" && part.arguments?.operation === "request")
 					)
 						keys.push("request-source");
 				}

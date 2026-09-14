@@ -26,14 +26,16 @@ import {
 } from "./support/pi-host.ts";
 
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
-import { AGENT_IDENTITY_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
+import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
 import { inspectAgentMessageAuthorResult } from "../src/protocol/message.ts";
+import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 
 test("registered Answer results remain canonical with and without other obligations", { timeout: 5_000 }, async (t) => {
 	for (const remaining of [null, "remaining-request"]) {
 		await t.test(remaining ?? "no remaining Request", async (t) => {
-			const requestId = "r".repeat(43);
+			const requestSource = { agentId: "requester", entryId: "request", toolCallId: "request" };
+			const requestId = deriveMessageIdentity(requestSource);
 			let receipt: { messageId: string; requestMessageId: string; requestTitle: string; messageStatus: "sent" };
 			const host = await createRegistrarHost(t, "ordinary", {
 				...handlers,
@@ -42,10 +44,12 @@ test("registered Answer results remain canonical with and without other obligati
 			const manager = host.session.sessionManager;
 			const agentId = manager.getSessionId();
 			manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
-			const frame = (id: string) => ({ title: "Fixture request", requestId: id, requesterAgentId: "requester", question: "Finish the Request." });
-			manager.appendCustomEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, {
-				frames: [...(remaining ? [frame(remaining)] : []), frame(requestId)],
-			});
+			const requestSources = [...(remaining ? [{ ...requestSource, toolCallId: remaining }] : []), requestSource];
+			const delivery = createMessageDelivery(requestSources.map(source => ({ source, projection: {
+				kind: "request", requestMessageId: deriveMessageIdentity(source), fromAgentId: source.agentId,
+				title: "Fixture request", question: "Finish the Request.",
+			} })));
+			manager.appendCustomMessageEntry(delivery.customType, delivery.content, true, delivery.details);
 			const input = { operation: "answer" as const, requestId, answer: "Done." };
 			const toolCallId = "answer-result-roundtrip";
 			const entryId = manager.appendMessage(fauxAssistantMessage(
@@ -385,6 +389,9 @@ test("Message guidance keeps obligations separate from deliveryMode parameter ru
 	const guidance = message.promptGuidelines?.join("\n") ?? "";
 	assert.match(guidance, /creates one Answer obligation/);
 	assert.match(guidance, /attention, not execution order/);
+	const legend = "History marks: `!` invalid, `^` inherited. Both are informational; neither cancels an existing obligation.";
+	assert.equal(guidance.split(legend).length - 1, 1);
+	assert.match(guidance, /committed.*omitted/);
 	assert.doesNotMatch(guidance, /FIFO|may starve|Background Messages and Requests|Deferred Requests enter/);
 });
 

@@ -63,9 +63,13 @@ When agent_message returns messageStatus "sent", the Message was admitted for as
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation. Every Request requires a short, specific title identifying the work; its full body remains authoritative. Request ordering controls attention, not execution order: choose which delivered unresolved Request to work on or answer.
 
+History marks: \`!\` invalid, \`^\` inherited. Both are informational; neither cancels an existing obligation.
+
 While any Answer obligation remains, agent_message operation "send" to its requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
 
 agent_message operation "answer" requires requestId (any delivered unresolved Request ID or a unique case-sensitive suffix) and answer text. Use it as the only tool call in its turn. It resolves only the named obligation and ends the current model/tool loop. Any later continuation leaves the remaining work order to you. Do not add an assistant-message recap or summary.
+
+An Answer receipt with disposition "committed" and delivery "omitted" resolves the local obligation without Answer Delivery because the original Request source is unavailable. It is not failed commitment, Delivery proof, or permission to repeat the work.
 
 In your Answer, summarize completed work with enough context for the requester to avoid repeating it, e.g. relevant artifacts, checks or reviews already performed and their scope and outcomes, and remaining gaps.
 

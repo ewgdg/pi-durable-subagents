@@ -1,3 +1,5 @@
+import { CoordinationRecordValidationError } from "./record-validation.ts";
+import { readCoordinationRecord } from "./replay-rejection.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
@@ -70,8 +72,8 @@ export function resolveCommittedHumanRequest(options: {
 export function validateHumanRequestInput(
 	value: Record<string, unknown>,
 ): HumanRequestInput {
-	if (!sameKeys(value, ["question"])) {
-		throw new Error("invalid_input: Human Request input has an invalid shape");
+	if (!isRecord(value) || !sameKeys(value, ["question"])) {
+		throw new CoordinationRecordValidationError("invalid_input: Human Request input has an invalid shape");
 	}
 	return {
 		question: requireNonBlank(value.question, "Human Request question"),
@@ -83,7 +85,7 @@ export function validateHumanAnswer(
 	value: unknown,
 ): HumanAnswer {
 	if (!isRecord(value) || !sameKeys(value, ["answer", "requestId"])) {
-		throw new Error(`invalid_input: Human Answer ${requestId} has an invalid shape`);
+		throw new CoordinationRecordValidationError(`invalid_input: Human Answer ${requestId} has an invalid shape`);
 	}
 	if (value.requestId !== requestId) {
 		throw new Error(`invalid_correlation: Human Answer ${requestId} has invalid correlation`);
@@ -103,7 +105,12 @@ export function inspectCommittedHumanRequestResult(options: {
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
 			entry.message.toolCallId === options.request.source.toolCallId,
-	);
+	).filter(entry => {
+		if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError || entry.message.toolName !== "ask_user") return true;
+		const message = entry.message;
+		return readCoordinationRecord(options.transcript, options.request.requesterAgentId, entry,
+			() => validateHumanAnswerResult(message.details, message.content), message.toolCallId).accepted;
+	});
 	if (matches.length > 1) {
 		throw new ProtocolInvariantError(
 			`Human Request ${options.request.requestId} has multiple native results`,
@@ -121,41 +128,17 @@ export function inspectCommittedHumanRequestResult(options: {
 	if (match.message.isError) {
 		return { state: "interrupted", resultEntryId: match.id };
 	}
-	let answer: HumanAnswer;
-	try {
-		answer = validateHumanAnswer(options.request.requestId, match.message.details);
-	} catch (error) {
-		throw new ProtocolInvariantError(
-			`Human Answer ${options.request.requestId} is invalid: ${error instanceof Error ? error.message : String(error)}`,
-		);
-	}
-	if (
-		match.message.content.length !== 1 ||
-		match.message.content[0]?.type !== "text"
-	) {
-		throw new ProtocolInvariantError(
-			`Human Answer ${options.request.requestId} content has an invalid shape`,
-		);
-	}
-	let content: unknown;
-	try {
-		content = JSON.parse(match.message.content[0].text);
-	} catch {
-		throw new ProtocolInvariantError(
-			`Human Answer ${options.request.requestId} content is not valid JSON`,
-		);
-	}
-	if (!isDeepStrictEqual(content, answer)) {
-		throw new ProtocolInvariantError(
-			`Human Answer ${options.request.requestId} content differs from its details`,
-		);
-	}
+	const message = match.message;
+	const parsed = readCoordinationRecord(options.transcript, options.request.requesterAgentId, match,
+		() => validateHumanAnswerResult(message.details, message.content), message.toolCallId);
+	if (!parsed.accepted) return { state: "pending" };
+	const answer = validateHumanAnswer(options.request.requestId, parsed.value);
 	return { state: "answered", answer, resultEntryId: match.id };
 }
 
 function requireNonBlank(value: unknown, name: string): string {
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`invalid_input: ${name} must not be blank`);
+		throw new CoordinationRecordValidationError(`invalid_input: ${name} must not be blank`);
 	}
 	return value;
 }
@@ -167,4 +150,17 @@ function sameKeys(value: Record<string, unknown>, expected: readonly string[]): 
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function validateHumanAnswerResult(details: unknown, content: unknown): HumanAnswer {
+	if (!isRecord(details) || typeof details.requestId !== "string" || !details.requestId)
+		throw new CoordinationRecordValidationError("Human Answer result has an invalid shape");
+	const answer = validateHumanAnswer(details.requestId, details);
+	if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text" || typeof content[0].text !== "string")
+		throw new CoordinationRecordValidationError("Human Answer content has an invalid shape");
+	let parsed: unknown;
+	try { parsed = JSON.parse(content[0].text); }
+	catch { throw new CoordinationRecordValidationError("Human Answer content is not valid JSON"); }
+	if (!isDeepStrictEqual(parsed, answer)) throw new CoordinationRecordValidationError("Human Answer content differs from its details");
+	return answer;
 }

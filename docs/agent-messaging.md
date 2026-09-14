@@ -153,6 +153,20 @@ The coordinator validates the target and derives its recipient. Answer commitmen
 
 Use Answer as the only tool call in its turn. Its tool implementation returns the messaging receipt and `terminate: true`, ending that model/tool loop without a redundant assistant recap. The receipt carries `requestTitle` from the canonical Request alongside its IDs and actual scheduling status, usually `sent`. The responder supplies only the Request reference and Answer body, never a replacement title. Direct Answer delivery and Wait/retry retrieval use that same title; there is no designated next Request.
 
+If replay rejected the original Request source, an independently valid recipient
+Delivery still supplies the obligation and its title/question. A valid Answer can
+commit against it, returning `disposition: "committed"`, `delivery: "omitted"`, and
+`reason: "request_source_unavailable"` alongside `messageId`, `requestMessageId`,
+and `requestTitle`. This resolves the obligation after restart too, without
+claiming Answer Delivery or waking the requester. It is not a failed commitment
+or permission to repeat work. Fresh poll, retry, cancellation, and explicit Wait
+selection of a missing authored Request fail locally with `unknown_identity`;
+an unselected Wait considers only valid authored outstanding Requests.
+
+Historical record-shape rejections use one `!` marker per informational call/result
+group. The shared `^` marker means inherited, not invalid. Neither marker cancels
+an independently valid obligation. See the [replay rejection contract](coordination-replay-rejection-design.md).
+
 When delivered unresolved obligations remain after a newly committed Answer, the runtime offers one neutral continuation unless native input already provides one. Before each model generation, a compact ID/requester/title listing of the current outstanding set replaces earlier attention snapshots in context and leaves work order to the Agent. Full instructions remain available through Request inspection instead of being repeated in every snapshot. Input already consumed after Answer counts as that continuation opportunity. With no remaining obligations, Answer creates no summary turn. Pi can still continue queued input before `agent_settled`.
 
 Ordinary Messages to the requester of any unresolved obligation are rejected; use a reverse Request for a decision, or keep provisional findings local. Sending becomes available when no unresolved obligation owes that requester.

@@ -1,3 +1,4 @@
+import { inspectCoordinationRejections } from "../src/protocol/replay-rejection.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -530,10 +531,10 @@ test("a successful result cannot turn a malformed Agent Message into authored ev
 		content: [{ type: "text", text: "Message sent." }],
 		details: {}, isError: false, timestamp: Date.now(),
 	});
-	assert.throws(() => findAuthoredAgentMessageSources({
+	assert.deepEqual(findAuthoredAgentMessageSources({
 		authorAgentId: agentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
-	}), /committed agent_message source .* is invalid/);
+	}), []);
 });
 
 test("an answer-required rejection does not author a retryable Message", () => {
@@ -668,14 +669,9 @@ test("committed source failures preserve the original validation cause and exact
 	assert.deepEqual(findAuthoredAgentMessageSources({ authorAgentId: agentId, transcript: transcript.inspect() }), []);
 	manager.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId,
 		content: [], details: { messageStatus: "sent" }, isError: false, timestamp: Date.now() });
-	assert.throws(() => findAuthoredAgentMessageSources({ authorAgentId: agentId, transcript: transcript.inspect() }),
-		(error: unknown) => {
-			assert.ok(error instanceof Error);
-			assert.match(error.message, /committed agent_message source .* is invalid/);
-			assert.ok(error.cause instanceof Error);
-			assert.match(error.cause.message, /required field "title" is missing/);
-			assert.deepEqual((error as Error & { source: unknown }).source, { agentId, entryId, toolCallId });
-			assert.equal((error as Error & { transcriptPath: unknown }).transcriptPath, null);
-			return true;
-		});
+	assert.deepEqual(findAuthoredAgentMessageSources({ authorAgentId: agentId, transcript: transcript.inspect() }), []);
+	const rejected = inspectCoordinationRejections(transcript.inspect(), agentId).find(record => record.recordKind === "tool-call")!;
+	assert.match(rejected.diagnostic, /required field "title" is missing/);
+	assert.deepEqual(rejected.source, { agentId, entryId, toolCallId });
+	assert.equal(transcript.inspect().transcriptPath, null);
 });

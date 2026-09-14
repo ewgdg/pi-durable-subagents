@@ -1,3 +1,6 @@
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { readCoordinationRecord } from "./replay-rejection.ts";
+import { CoordinationRecordValidationError } from "./record-validation.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
@@ -49,16 +52,9 @@ export function inspectObligationReminder(options: {
 	const expected = reminderFor(options);
 	const matches: string[] = [];
 	for (const entry of coordinationEntries(options.transcript, options.recipientAgentId, `custom:${OBLIGATION_REMINDER_CUSTOM_TYPE}`)) {
-		if (
-			entry.type !== "custom_message" ||
-			entry.customType !== OBLIGATION_REMINDER_CUSTOM_TYPE
-		) continue;
-		if (!entry.display || typeof entry.content !== "string") {
-			throw new ProtocolInvariantError(
-				"Obligation Reminder must be model-visible JSON text",
-			);
-		}
-		const committed = parseObligationReminder(entry.content);
+		const parsed = readCoordinationRecord(options.transcript, options.recipientAgentId, entry, () => validateObligationReminderRecord(entry));
+		if (!parsed.accepted) continue;
+		const committed = parsed.value;
 		if (committed.requestMessageId !== options.requestMessageId) continue;
 		if (!isDeepStrictEqual(committed, expected)) {
 			throw new ProtocolInvariantError(
@@ -94,7 +90,7 @@ function parseObligationReminder(content: string): ObligationReminder {
 	try {
 		parsed = JSON.parse(content);
 	} catch {
-		throw new ProtocolInvariantError(
+		throw new CoordinationRecordValidationError(
 			"Obligation Reminder content is not valid JSON",
 		);
 	}
@@ -105,7 +101,7 @@ function parseObligationReminder(content: string): ObligationReminder {
 		typeof parsed.requestTitle !== "string" || !parsed.requestTitle.trim() ||
 		parsed.guidance !== OBLIGATION_REMINDER_GUIDANCE
 	) {
-		throw new ProtocolInvariantError("Obligation Reminder has an invalid shape");
+		throw new CoordinationRecordValidationError("Obligation Reminder has an invalid shape");
 	}
 	return {
 		requestMessageId: parsed.requestMessageId,
@@ -130,4 +126,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isProtocolString(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && !value.includes("\0");
+}
+
+export function validateObligationReminderRecord(entry: SessionEntry): ObligationReminder {
+	if (entry.type !== "custom_message" || entry.customType !== OBLIGATION_REMINDER_CUSTOM_TYPE || !entry.display || typeof entry.content !== "string")
+		throw new CoordinationRecordValidationError("ObligationReminder must be model-visible text");
+	return parseObligationReminder(entry.content);
 }

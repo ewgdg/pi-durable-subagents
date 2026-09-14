@@ -72,3 +72,24 @@ test("a new Owner identity cutoff excludes copied reports", () => {
 	manager.appendCustomEntry("agent-coordination.identity", { agentId: manager.getSessionId() });
 	assert.deepEqual(reports.history(), []);
 });
+
+test("rejected report records and read states preserve independent valid publications", async () => {
+	const { inspectCoordinationRejections } = await import("../src/protocol/replay-rejection.ts");
+	const manager = fixture();
+	manager.appendCustomEntry("agent-coordination.moderator-report", { ...input, reportId: "broken" });
+	const reports = store(manager);
+	const report = reports.publish(input, reporter, source);
+	manager.appendCustomEntry("agent-coordination.moderator-report-read", { reportId: report.reportId, readAt: 42 });
+	assert.deepEqual(reports.history(), [{ report }]);
+	const transcript = transcriptFromSessionManager(manager).inspect();
+	assert.equal(inspectCoordinationRejections(transcript, manager.getSessionId()).length, 2);
+	assert.deepEqual(store(SessionManager.open(manager.getSessionFile()!)).history(), [{ report }]);
+});
+
+test("report replay retains valid-record provenance and duplicate invariants", () => {
+	const manager = fixture();
+	const reports = store(manager);
+	const report = reports.publish(input, reporter, source);
+	manager.appendCustomEntry("agent-coordination.moderator-report", { ...report, reporter: { ...reporter, agentId: "other" } });
+	assert.throws(() => reports.history(), /reporter must match source Agent/);
+});

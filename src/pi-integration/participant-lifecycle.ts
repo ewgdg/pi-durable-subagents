@@ -1,7 +1,10 @@
-import { REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
+import { REQUEST_ATTENTION_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
 import { summarizeRequestObligations } from "../protocol/request-inspection.ts";
 import { transcriptFromSessionManager } from "./session-manager-transcript.ts";
+import { inspectCoordinationRejections } from "../protocol/replay-rejection.ts";
+import { projectCoordinationHistory } from "./coordination-history-context.ts";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -55,24 +58,40 @@ export function registerParticipantLifecycle(
 		deferPrimaryInputQueued?: boolean;
 	}> = {},
 ): void {
+	let reconciliation: { agentId: string; resolvedRequestIds: Set<string> } | undefined;
+	const currentFrames = (transcript: TranscriptInspection, agentId: string) =>
+		obligationStack(transcript, agentId).filter(frame =>
+			reconciliation?.agentId !== agentId || !reconciliation.resolvedRequestIds.has(frame.requestId));
 	// agent_start is the one awaited Pi boundary shared by native prompts,
 	// custom Delivery turns, queued continuations, and automatic retries.
 	pi.on("agent_start", async (_event, ctx) => {
+		const agentId = ctx.sessionManager.getSessionId();
+		const local = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), agentId);
+		// Freeze candidates before the coordinator await: a newer Delivery must
+		// not be suppressed by an earlier cross-process obligation snapshot.
+		const localRequestIds = local.map(frame => frame.requestId);
 		const frames = await handlers.executionStarted();
-		const local = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
-		if (JSON.stringify(local) !== JSON.stringify(frames)) {
-			// A requester may prove an Answer before its responder's result appended.
-			// Record that recovery boundary locally before any new model authorship.
-			pi.appendEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, { frames });
-		}
+		const owed = new Set(frames.map(frame => frame.requestId));
+		// The coordinator can verify requester-side Answer proof before the local
+		// author result exists. Reconcile attention for this execution, not durable
+		// authority: old focus snapshots must never resurrect or erase obligations.
+		reconciliation = { agentId, resolvedRequestIds: new Set(localRequestIds.filter(requestId => !owed.has(requestId))) };
 	});
 	// Context runs before every generation, including native queued turns and retries.
 	// A non-triggering sendMessage at agent_start would not flush until turn_end.
 	pi.on("context", (event, ctx) => {
-		const frames = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
+		const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
+		const agentId = ctx.sessionManager.getSessionId();
+		const rejections = inspectCoordinationRejections(transcript, agentId);
+		const frames = currentFrames(transcript, agentId);
 		// Replace earlier continuation snapshots so resolved Requests are not re-presented.
-		const messages = event.messages.filter(message =>
-			message.role !== "custom" || message.customType !== REQUEST_ATTENTION_CUSTOM_TYPE);
+		const messages = projectCoordinationHistory({
+			messages: event.messages.filter(message =>
+				message.role !== "custom" || message.customType !== REQUEST_ATTENTION_CUSTOM_TYPE),
+			transcript,
+			marks: rejections.map(rejection => ({ reason: rejection.reason,
+				record: { ...rejection.source, kind: rejection.recordKind }, diagnostic: rejection.diagnostic })),
+		});
 		return { messages: frames.length
 			? [...messages, { role: "custom" as const, ...requestPresentation(frames), timestamp: Date.now() }]
 			: messages };
@@ -124,14 +143,15 @@ export function registerParticipantLifecycle(
 			const details = result.details as Record<string, unknown> | undefined;
 			return result.toolName === "agent_message" && !result.isError &&
 				typeof details?.requestMessageId === "string" && typeof details?.messageId === "string" &&
-				typeof details?.messageStatus === "string";
+				(typeof details?.messageStatus === "string" ||
+					(details?.disposition === "committed" && details.delivery === "omitted"));
 		});
 		await handlers.safeBoundaryReached();
 	});
 	pi.on("agent_end", async (_event, ctx) => {
 		if (answeredLastTurn) {
 			answeredLastTurn = false;
-			const frames = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
+			const frames = currentFrames(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
 			// Answer ends its model/tool loop. Offer remaining work once, unless native
 			// input already provides a continuation; never choose the next task or spin at settlement.
 			if (frames.length && !ctx.hasPendingMessages()) presentRequests(pi, frames, true);

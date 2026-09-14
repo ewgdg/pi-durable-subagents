@@ -1,3 +1,6 @@
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { readCoordinationRecord } from "./replay-rejection.ts";
+import { CoordinationRecordValidationError } from "./record-validation.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE } from "./custom-entry-types.ts";
@@ -32,15 +35,17 @@ export function inspectModeratorObligationReminder(options: {
 }): EntryPointer | undefined {
 	const entries = coordinationEntries(options.transcript, options.moderatorAgentId,
 		`custom:${MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE}`).filter((entry) =>
-		entry.type === "custom_message" && entry.customType === MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE);
+		readCoordinationRecord(options.transcript, options.moderatorAgentId, entry, () => validateModeratorObligationReminderRecord(entry)).accepted);
 	if (entries.length > 1) {
 		throw new ProtocolInvariantError("Moderator Obligation Reminder has duplicate Deliveries");
 	}
 	const entry = entries[0];
 	if (!entry) return undefined;
-	if (entry.type !== "custom_message" || !entry.display ||
-		entry.content !== MODERATOR_OBLIGATION_REMINDER_GUIDANCE) {
-		throw new ProtocolInvariantError("Moderator Obligation Reminder contradicts its runtime-authored Delivery");
-	}
+
 	return { agentId: options.moderatorAgentId, entryId: entry.id };
+}
+
+export function validateModeratorObligationReminderRecord(entry: SessionEntry): void {
+	if (entry.type !== "custom_message" || !entry.display || entry.content !== MODERATOR_OBLIGATION_REMINDER_GUIDANCE)
+		throw new CoordinationRecordValidationError("Moderator Obligation Reminder has an invalid shape");
 }

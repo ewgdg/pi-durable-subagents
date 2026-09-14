@@ -1,8 +1,12 @@
+import { readCoordinationRecord } from "./replay-rejection.ts";
+import { CoordinationRecordValidationError } from "./record-validation.ts";
+import { authoredAgentMessagesByCall } from "./request-resolution.ts";
+import { inspectAgentMessageAuthorResult } from "./message.ts";
 import { OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { indexedState } from "../transcript/retained-transcript.ts";
-import { deliveriesAtEntry, inspectMessageDeliveries, validateDeliveredMessageEvidence } from "./message-delivery.ts";
-import type { ToolCallPointer } from "./identities.ts";
+import { deliveriesAtEntry, deliveriesForRequest, inspectMessageDeliveries, validateDeliveredMessageEvidence } from "./message-delivery.ts";
+import { ProtocolInvariantError, type ToolCallPointer } from "./identities.ts";
 
 export type ObligationFrame = Readonly<{
 	requestId: string;
@@ -11,7 +15,7 @@ export type ObligationFrame = Readonly<{
 	question: string;
 }>;
 
-/** Physical attention history survives compaction; snapshots preserve scheduling ancestry. */
+/** Accepted Delivery and resolution evidence retain local obligations across compaction. */
 export function obligationStack(
 	transcript: TranscriptInspection,
 	agentId: string,
@@ -22,11 +26,16 @@ export function obligationStack(
 		() => ({ frames: [] as ObligationFrame[], before: new Map<string, readonly ObligationFrame[]>() }),
 		(state, entry) => {
 			if (entry.type === "custom" && entry.customType === OBLIGATION_FOCUS_CUSTOM_TYPE) {
-				const value = entry.data as { frames?: ObligationFrame[] } | undefined;
-				if (!Array.isArray(value?.frames) || value.frames.some(frame =>
-					typeof frame.requestId !== "string" || typeof frame.requesterAgentId !== "string" || typeof frame.title !== "string" || !frame.title.trim() || typeof frame.question !== "string"
-				)) throw new Error("invariant_violation: invalid recovered obligation focus");
-				state.frames = [...value.frames];
+				// Historical attention snapshots are diagnostic context, never authority
+				// to invent, rewrite, discharge, or resurrect a delivered obligation.
+				readCoordinationRecord(transcript, agentId, entry, () => {
+					const value = entry.data as { frames?: ObligationFrame[] } | undefined;
+					if (!Array.isArray(value?.frames) || value.frames.some(frame =>
+						typeof frame !== "object" || frame === null || typeof frame.requestId !== "string" ||
+						typeof frame.requesterAgentId !== "string" || typeof frame.title !== "string" ||
+						!frame.title.trim() || typeof frame.question !== "string"
+					)) throw new CoordinationRecordValidationError("invariant_violation: invalid recovered obligation focus");
+				});
 			}
 			if (entry.type === "message" && entry.message.role === "assistant") {
 				state.before.set(entry.id, [...state.frames]);
@@ -38,16 +47,27 @@ export function obligationStack(
 					state.frames.push({ requestId: projection.requestMessageId,
 						requesterAgentId: projection.fromAgentId, title: projection.title, question: projection.question });
 				} else if (projection.kind === "request_cancellation") {
+					// Only original Delivery establishes who can withdraw this Request,
+					// even after its frame has already been resolved locally.
+					const request = deliveriesForRequest({ recipientAgentId: agentId, transcript,
+						requestId: projection.requestMessageId }).find(candidate => candidate.projection.kind === "request");
+					if (request && request.projection.fromAgentId !== projection.fromAgentId)
+						throw new ProtocolInvariantError("Request Cancellation Delivery names another requester");
 					state.frames = state.frames.filter(frame => frame.requestId !== projection.requestMessageId);
 				}
 			}
 			if (entry.type === "message" && entry.message.role === "toolResult" &&
 				entry.message.toolName === "agent_message" && !entry.message.isError) {
-				const result = entry.message.details as Record<string, unknown> | undefined;
-				// Only Answer receipts name both the authored Message and its Request.
-				if (result && typeof result.messageId === "string" && typeof result.requestMessageId === "string" &&
-					(typeof result.messageStatus === "string" || result.disposition === "already_answered")) {
-					state.frames = state.frames.filter(frame => frame.requestId !== result.requestMessageId);
+				for (const candidate of authoredAgentMessagesByCall({ authorAgentId: agentId, transcript, toolCallId: entry.message.toolCallId })) {
+					if (candidate.source.toolCallId !== entry.message.toolCallId || candidate.input.operation !== "answer") continue;
+					const input = candidate.input;
+					const frame = state.frames.find(frame => frame.requestId === input.requestId);
+					if (!frame) continue;
+					if (inspectAgentMessageAuthorResult({ authorAgentId: agentId, transcript,
+						source: candidate.source, input: candidate.input, requestId: frame.requestId,
+						requestTitle: frame.title }) === "canonical") {
+						state.frames = state.frames.filter(frame => frame.requestId !== input.requestId);
+					}
 				}
 			}
 			return state;

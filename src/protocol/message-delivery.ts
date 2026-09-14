@@ -1,3 +1,5 @@
+import { CoordinationRecordValidationError } from "./record-validation.ts";
+import { readCoordinationRecord } from "./replay-rejection.ts";
 import { MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE } from "./moderator-report.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
@@ -218,15 +220,14 @@ function readMessageDeliveries(options: {
 					entry.customType === DELIVERY_FAILURE_CUSTOM_TYPE
 				)
 					continue;
-				if (entry.type !== "custom_message" || entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE) {
-					throw new ProtocolInvariantError(
-						`unexpected current-scope coordination entry ${entry.customType}`,
-					);
-				}
-				if (!entry.display) {
-					throw new ProtocolInvariantError("Message Delivery must be model-visible");
-				}
-				const { sources, projections } = parseMessageDelivery(entry.details, entry.content);
+				const parsed = readCoordinationRecord(transcript, recipientAgentId, entry, () => {
+					if (entry.type !== "custom_message" || entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE)
+						throw new CoordinationRecordValidationError(`unexpected current-scope coordination entry ${entry.customType}`);
+					if (!entry.display) throw new CoordinationRecordValidationError("Message Delivery must be model-visible");
+					return parseMessageDelivery(entry.details, entry.content);
+				});
+				if (!parsed.accepted) continue;
+				const { sources, projections } = parsed.value;
 				for (let index = 0; index < sources.length; index += 1) {
 					const source = sources[index]!;
 					const projection = projections[index]!;
@@ -276,7 +277,7 @@ function parseMessageDelivery(
 	const sources = parseDeliverySources(details);
 	const projections = parseMessageDeliveryContent(content);
 	if (sources.length !== projections.length) {
-		throw new ProtocolInvariantError(
+		throw new CoordinationRecordValidationError(
 			"Message Delivery source and projection counts differ",
 		);
 	}
@@ -286,7 +287,7 @@ function parseMessageDelivery(
 function parseDeliverySources(value: unknown): ToolCallPointer[] {
 	const record = requireExactRecord(value, ["messages"], "Message Delivery details");
 	if (!Array.isArray(record.messages) || record.messages.length === 0) {
-		throw new ProtocolInvariantError("Message Delivery sources must not be empty");
+		throw new CoordinationRecordValidationError("Message Delivery sources must not be empty");
 	}
 	const sources = record.messages.map((source) => {
 		const pointer = requireExactRecord(
@@ -299,7 +300,7 @@ function parseDeliverySources(value: unknown): ToolCallPointer[] {
 			!isProtocolString(pointer.entryId) ||
 			!isProtocolString(pointer.toolCallId)
 		) {
-			throw new ProtocolInvariantError("Message Delivery source is invalid");
+			throw new CoordinationRecordValidationError("Message Delivery source is invalid");
 		}
 		return {
 			agentId: pointer.agentId,
@@ -312,7 +313,7 @@ function parseDeliverySources(value: unknown): ToolCallPointer[] {
 			sources.slice(index + 1).some((candidate) =>
 				sameToolCallPointer(sources[index]!, candidate))
 		) {
-			throw new ProtocolInvariantError("Message Delivery repeats a source");
+			throw new CoordinationRecordValidationError("Message Delivery repeats a source");
 		}
 	}
 	return sources;
@@ -320,24 +321,24 @@ function parseDeliverySources(value: unknown): ToolCallPointer[] {
 
 export function parseMessageDeliveryContent(value: unknown): readonly ModelVisibleMessage[] {
 	if (typeof value !== "string") {
-		throw new ProtocolInvariantError("Message Delivery content must be JSON text");
+		throw new CoordinationRecordValidationError("Message Delivery content must be JSON text");
 	}
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(value);
 	} catch {
-		throw new ProtocolInvariantError("Message Delivery content is not valid JSON");
+		throw new CoordinationRecordValidationError("Message Delivery content is not valid JSON");
 	}
 	const record = requireExactRecord(parsed, ["messages"], "Message Delivery content");
 	if (!Array.isArray(record.messages) || record.messages.length === 0) {
-		throw new ProtocolInvariantError("Message Delivery projections must not be empty");
+		throw new CoordinationRecordValidationError("Message Delivery projections must not be empty");
 	}
 	return record.messages.map(parseDeliveryProjection);
 }
 
 function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 	if (!isRecord(value)) {
-		throw new ProtocolInvariantError("Message Delivery projection has an invalid shape");
+		throw new CoordinationRecordValidationError("Message Delivery projection has an invalid shape");
 	}
 	if (value.kind === "message") {
 		const message = requireExactRecord(
@@ -350,7 +351,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 			!isProtocolString(message.fromAgentId) ||
 			!isProtocolString(message.content)
 		) {
-			throw new ProtocolInvariantError("Message Delivery projection is invalid");
+			throw new CoordinationRecordValidationError("Message Delivery projection is invalid");
 		}
 		return {
 			kind: "message",
@@ -371,7 +372,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 			!isProtocolString(request.title) || !request.title.trim() ||
 			!isProtocolString(request.question)
 		) {
-			throw new ProtocolInvariantError("Message Delivery projection is invalid");
+			throw new CoordinationRecordValidationError("Message Delivery projection is invalid");
 		}
 		return {
 			kind: "request",
@@ -394,7 +395,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 			!isProtocolString(answer.fromAgentId) ||
 			!isProtocolString(answer.answer)
 		) {
-			throw new ProtocolInvariantError("Message Delivery projection is invalid");
+			throw new CoordinationRecordValidationError("Message Delivery projection is invalid");
 		}
 		return {
 			kind: "answer",
@@ -417,7 +418,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 			!isProtocolString(cancellation.fromAgentId) ||
 			!isProtocolString(cancellation.reason)
 		) {
-			throw new ProtocolInvariantError("Message Delivery projection is invalid");
+			throw new CoordinationRecordValidationError("Message Delivery projection is invalid");
 		}
 		return {
 			kind: "request_cancellation",
@@ -427,7 +428,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 			reason: cancellation.reason,
 		};
 	}
-	throw new ProtocolInvariantError("Message Delivery projection has an invalid shape");
+	throw new CoordinationRecordValidationError("Message Delivery projection has an invalid shape");
 }
 
 function projectionIdentity(projection: ModelVisibleMessage): string {
@@ -449,7 +450,7 @@ function requireExactRecord(
 	subject: string,
 ): Record<string, unknown> {
 	if (!isRecord(value)) {
-		throw new ProtocolInvariantError(`${subject} has an invalid shape`);
+		throw new CoordinationRecordValidationError(`${subject} has an invalid shape`);
 	}
 	const actualKeys = Object.keys(value).sort();
 	const sortedExpectedKeys = [...expectedKeys].sort();
@@ -457,7 +458,7 @@ function requireExactRecord(
 		actualKeys.length !== sortedExpectedKeys.length ||
 		actualKeys.some((key, index) => key !== sortedExpectedKeys[index])
 	) {
-		throw new ProtocolInvariantError(`${subject} has an invalid shape`);
+		throw new CoordinationRecordValidationError(`${subject} has an invalid shape`);
 	}
 	return value;
 }

@@ -158,6 +158,7 @@ export function renderAgentMessageResult(
 		? receipt.messageStatus
 		: receipt.disposition;
 	let text = theme.fg(messageReceiptStatusColor(disposition), disposition);
+	if ("delivery" in receipt && receipt.delivery === "omitted") text += theme.fg("dim", " · delivery omitted");
 	if ("requestTitle" in receipt) {
 		text += theme.fg("customMessageLabel", ` · ${boundedToolPreview(receipt.requestTitle)}`);
 	}
@@ -191,6 +192,7 @@ export function renderAgentMessageResult(
 	if (!options.expanded && "reason" in receipt) {
 		container.addChild(new Text(
 			theme.fg(
+				"disposition" in receipt && receipt.disposition === "committed" ? "dim" :
 				"messageStatus" in receipt && receipt.messageStatus === "not_sent"
 					? "error"
 					: "warning",
@@ -219,6 +221,7 @@ export function messageReceiptStatusColor(disposition: string): ThemeColor {
 		case "request_delivered":
 		case "already_answered":
 		case "already_cancelled":
+		case "committed":
 			return "success";
 		case "rejected":
 			return "error";

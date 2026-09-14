@@ -16,7 +16,17 @@ A Moderator candidate instead requires one strict model-visible Moderator Input 
 
 Following Direct Spawner edges must reach the active Owner without a cycle. Direct children use the physical order of their canonical spawn calls, including multiple calls in one assistant entry; timestamps, filenames, scan order, and Agent IDs do not affect structural order.
 
-Malformed, unreadable, incomplete, foreign, cyclic, duplicate, and source-conflicting candidates are quarantined with descendants whose authority depends on them. Independently verified subtrees remain available. Admission emits one bounded Owner warning and never repairs, rewrites, removes, or appends to candidate transcripts. Operations that name identifiable quarantined proof fail with `evidence_unavailable`; unrelated unknown identities remain `unknown_identity`.
+Malformed identity/bootstrap, unreadable, incomplete, foreign, cyclic, duplicate, and source-conflicting candidates are quarantined with descendants whose authority depends on them. Independently verified subtrees remain available. Admission emits one bounded Owner warning and never repairs, rewrites, removes, or appends to candidate transcripts. Operations that name identifiable quarantined proof fail with `evidence_unavailable`; unrelated unknown identities remain `unknown_identity`.
+
+Ordinary coordination records that fail declared data-shape validation are different:
+replay skips them without quarantining the Agent or failing Workflow admission.
+The same rule covers every physical branch and survives compaction and reload.
+Original evidence and structured validation diagnostics remain available; model
+context presents rejected call/result groups once with `!`, without native orphan
+tool results or a new model turn. `^` is reserved for inherited material, not an
+alias for invalid. Identity, membership, role, and contradictions between otherwise
+valid canonical records remain strict. See the
+[rejection contract](coordination-replay-rejection-design.md).
 
 ## Dormant Agents and `/agents`
 
@@ -31,7 +41,15 @@ Before every newly started Run proceeds, the host inspects complete physical cur
 - `awaiting_answer` is initialized for each canonical Request authored by the Agent that has neither a canonical requester Cancellation nor Answer Delivery.
 - `answer_owed` is initialized for each canonical Request delivered to the Agent that has neither a canonical Answer commit nor Cancellation Delivery.
 
-Creation Requests use the same predicates after verified child Identity makes them canonical. Durable Request Delivery, Answer, and Cancellation evidence reconstruct outstanding obligations, attention ordering, and Agent-owned outbound dependencies. Startup records a local focus reconciliation when requester-side Answer proof preceded the responder result, before new model authorship. Recovered relationships are exact Request-keyed Run Retention Reasons; they are not a durable or Workflow-global obligation store.
+Creation Requests use the same predicates after verified child Identity makes them canonical. Durable Request Delivery, Answer, and Cancellation evidence reconstruct outstanding obligations, attention ordering, and Agent-owned outbound dependencies. Before new model authorship, startup reconciles model attention against the coordinator's verified obligations, including requester-side Answer proof that preceded the responder result. This reconciliation is volatile and refreshed on every execution; historical focus snapshots grant no obligation authority. Recovered relationships are exact Request-keyed Run Retention Reasons; they are not a durable or Workflow-global obligation store.
+
+A valid recipient Request Delivery preserves its Answer obligation even when the
+authored Request source is rejected. Answer commitment can resolve that local
+obligation using the delivered metadata; with no authored Request, no new Answer
+Delivery is scheduled. Rejected Answers cannot discharge obligations through old
+receipts or focus snapshots. Missing-source Requests are not reconstructed for
+retry, cancellation, Wait, or Workflow continuation; skipping is neither
+cancellation nor permission to repeat external work.
 
 Quarantining a peer does not erase relationships that the verified Agent's own transcript proves. Those local Retention Reasons return, while an operation that needs the quarantined peer's source transcript fails with `evidence_unavailable`.
 
@@ -77,7 +95,7 @@ An Owner `/reload` ends ordinary coordination Runs before admitting the newly lo
 
 - Admission and scheduling are fenced during shutdown and revalidation. Already-running children and ordinary Moderators are stopped, not allowed to keep writing behind disabled Owner tools.
 - In-flight work is interrupted, not replayed. After valid admission, recovered participants are dormant and pending Requests remain available. A warning explains that you must check interrupted external effects before using `workflow_resume`; no automatic successor startup or duplicate delivery is introduced by reload.
-- Invalid saved evidence uses the same persistent above-editor blockage and `/agents diagnostics` as cold admission, on the first reload. Independently unverified child candidates retain the cold-recovery quarantine policy.
+- Genuine admission failures use the same persistent above-editor blockage and `/agents diagnostics` as cold admission, on the first reload. Ordinary record-shape rejections remain non-blocking; independently unverified child candidates retain the cold-recovery quarantine policy.
 - Cleanup failure prevents replacement. The retained shutdown failure continues to fence later reload attempts; it is not evidence of a repair-safe snapshot. Pi/editor availability does not certify that unmanaged or failed-cleanup writers are gone.
 - The latest valid Workflow Policy is retained if a reload policy is invalid. Template resources are captured afresh.
 

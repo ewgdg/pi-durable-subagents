@@ -1,3 +1,6 @@
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { readCoordinationRecord } from "./replay-rejection.ts";
+import { CoordinationRecordValidationError } from "./record-validation.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
@@ -58,14 +61,9 @@ export function inspectRunFailureRecovery(options: {
 }): EntryPointer | undefined {
 	const matches: string[] = [];
 	for (const entry of coordinationEntries(options.transcript, options.moderatorAgentId, `custom:${RUN_FAILURE_RECOVERY_CUSTOM_TYPE}`)) {
-		if (
-			entry.type !== "custom_message" ||
-			entry.customType !== RUN_FAILURE_RECOVERY_CUSTOM_TYPE
-		) continue;
-		if (!entry.display || typeof entry.content !== "string") {
-			throw new ProtocolInvariantError("Run Failure Recovery must be model-visible JSON text");
-		}
-		const committed = parseRunFailureRecovery(entry.content);
+		const parsed = readCoordinationRecord(options.transcript, options.moderatorAgentId, entry, () => validateRunFailureRecoveryRecord(entry));
+		if (!parsed.accepted) continue;
+		const committed = parsed.value;
 		if (!isDeepStrictEqual(committed, options.recovery)) {
 			throw new ProtocolInvariantError(
 				"Run Failure Recovery contradicts its runtime-authored delivery",
@@ -86,7 +84,7 @@ function parseRunFailureRecovery(content: string): RunFailureRecovery {
 	try {
 		parsed = JSON.parse(content);
 	} catch {
-		throw new ProtocolInvariantError("Run Failure Recovery content is not valid JSON");
+		throw new CoordinationRecordValidationError("Run Failure Recovery content is not valid JSON");
 	}
 	if (!isRecord(parsed) || !hasExactKeys(parsed, [
 		"trigger",
@@ -95,7 +93,7 @@ function parseRunFailureRecovery(content: string): RunFailureRecovery {
 		"requiredAction",
 		"guidance",
 	])) {
-		throw new ProtocolInvariantError("Run Failure Recovery has an invalid shape");
+		throw new CoordinationRecordValidationError("Run Failure Recovery has an invalid shape");
 	}
 	const trigger = parsed.trigger;
 	const recovery = parsed.recovery;
@@ -115,7 +113,7 @@ function parseRunFailureRecovery(content: string): RunFailureRecovery {
 		parsed.requiredAction !== "resolve" ||
 		parsed.guidance !== RUN_FAILURE_RECOVERY_DIRECTIVE
 	) {
-		throw new ProtocolInvariantError("Run Failure Recovery is invalid");
+		throw new CoordinationRecordValidationError("Run Failure Recovery is invalid");
 	}
 	return {
 		trigger: {
@@ -153,4 +151,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isProtocolString(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && !value.includes("\0");
+}
+
+export function validateRunFailureRecoveryRecord(entry: SessionEntry): RunFailureRecovery {
+	if (entry.type !== "custom_message" || entry.customType !== RUN_FAILURE_RECOVERY_CUSTOM_TYPE || !entry.display || typeof entry.content !== "string")
+		throw new CoordinationRecordValidationError("RunFailureRecovery must be model-visible text");
+	return parseRunFailureRecovery(entry.content);
 }
