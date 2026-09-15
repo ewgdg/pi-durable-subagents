@@ -46,6 +46,7 @@ Concrete design challenge: while delivery awaits a late before-start hook, anoth
 - The user explicitly approved repair of the baseline scheduler type error (`deliveryCommitted` was removed). A public progress regression failed before switching to `committedMessageIds`.
 - Process validation exposed a real native-input forwarding regression: selected-child first input forwards through the coordinator while its original input handler awaits. The correction correlates the handoff to the exact transient input submission and forces the original input handled, including failed acknowledgment. The real selected-child `/reload` test now passes through transformed native input on both generations. Owner forwarding and mismatched child sequences have focused coverage; arbitrary nested input remains rejected.
 - Three selected Owner parking assertions also fail on the unmodified base; two fixtures omit required Spawn titles. Keep those unrelated repairs out of this PR and report the validation limits.
+- Both selected held-child supervision tests (`a native human editor Message clears its exact Hold for one isolated turn` and `a failed native human resume dispatch leaves its exact Hold retryable`) also fail on the unmodified base during initial child spawn, before reaching native resumption.
 
 ## Acceptance evidence
 
