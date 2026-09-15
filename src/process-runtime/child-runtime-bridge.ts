@@ -31,6 +31,12 @@ import {
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
+	bindSessionStartup,
+	isStartupPreparationBusy,
+	registerSessionStartup,
+	type SessionStartupAdmission,
+} from "../pi-integration/session-startup.ts";
+import {
 	installAgentActivityDock,
 	type AgentActivitySnapshot,
 	type AgentActivitySource,
@@ -83,6 +89,7 @@ type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
 	turnCompaction: ChildTurnCompactionGateway;
+	startupAdmission: SessionStartupAdmission;
 	reminderAdmission: ModeratorReminderAdmission;
 	pendingDeliveries: Map<string, () => Promise<void>>;
 	deliveryExecution: AsyncLocalStorage<DeliveryExecution>;
@@ -123,6 +130,7 @@ const childControls = (
 
 const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	let state: ChildControlState | undefined;
+	registerSessionStartup(pi);
 	const resolveAgentLabel = (agentId: string) =>
 		state?.currentBinding?.activity.agentLabel(agentId);
 	registerMessageDeliveryRenderer(pi, resolveAgentLabel);
@@ -477,6 +485,7 @@ export function createChildRuntimeBinding(
 	let disposed = false;
 	const activity = new RemoteAgentActivitySource(agentId);
 	const deliveryExecution = new AsyncLocalStorage<DeliveryExecution>();
+	const startupAdmission = bindSessionStartup(runtime.session);
 	const agent = runtime.session.agent;
 	const originalPrompt = agent.prompt;
 	// AgentSession awaits extension agent_start hooks before its subscribers.
@@ -503,7 +512,7 @@ export function createChildRuntimeBinding(
 	const reminderAdmission = new ModeratorReminderAdmission({
 		admit: operation => turnCompaction.admit(operation),
 		prepare: () => turnCompaction.prepareIdleCustomTurn(),
-		isIdle: () => runtime.session.isIdle,
+		isIdle: () => runtime.session.isIdle && !startupAdmission.isPreparing,
 		async commit(signal) {
 			const delivery = {
 				kind: "custom" as const,
@@ -511,7 +520,10 @@ export function createChildRuntimeBinding(
 				triggerTurn: true,
 			};
 			const proof = observeDeliveryCommit(runtime, context.sessionManager, delivery, signal);
-			const completion = runtime.session.sendCustomMessage(delivery.message, { triggerTurn: true });
+			const { completion } = startupAdmission.dispatchCustom(delivery.message, { triggerTurn: true }, () => {
+				signal.throwIfAborted();
+				turnCompaction.signal.throwIfAborted();
+			});
 			void completion.then(
 				() => queueMicrotask(() => proof.settle(false)),
 				error => proof.reject(error),
@@ -542,6 +554,7 @@ export function createChildRuntimeBinding(
 		context,
 		runtime,
 		turnCompaction,
+		startupAdmission,
 		reminderAdmission,
 		pendingDeliveries: new Map(),
 		deliveryExecution,
@@ -570,6 +583,7 @@ export function createChildRuntimeBinding(
 			reminderAdmission.cancel();
 			turnCompaction.dispose();
 			if (agent.prompt === trackedPrompt) agent.prompt = originalPrompt;
+			startupAdmission.dispose();
 			deliveryExecution.disable();
 			removeInputLifecycleObserver();
 			inputSubmissionAcknowledgment.dispose();
@@ -616,6 +630,10 @@ async function handleOwnerRequest(
 			const { deliveryId, delivery } = request.payload;
 			let commit: ReturnType<typeof observeDeliveryCommit> | undefined;
 			const execution: DeliveryExecution = { admitted: false, finished: false, started: false };
+			const admissionCancellation = new AbortController();
+			const admissionSignal = AbortSignal.any([
+				request.signal, binding.turnCompaction.signal, admissionCancellation.signal,
+			]);
 			let completionTracked = false;
 			const finish = () => {
 				execution.finished = true;
@@ -623,6 +641,7 @@ async function handleOwnerRequest(
 				binding.turnCompaction.completeDelivery(deliveryId);
 			};
 			const cancel = async () => {
+				admissionCancellation.abort(new Error(`child_turn_admission_cancelled: ${deliveryId}`));
 				binding.turnCompaction.cancelDelivery(deliveryId);
 				if (request.signal.aborted) commit?.reject(requestCancellationError(request.signal));
 				if (!execution.signal) return;
@@ -640,25 +659,27 @@ async function handleOwnerRequest(
 			binding.pendingDeliveries.set(deliveryId, cancel);
 			request.signal.addEventListener("abort", onAbort, { once: true });
 			try {
-				const admission = await binding.turnCompaction.admitDelivery(deliveryId, async checkpoint => {
-					request.signal.throwIfAborted();
+				const admitDelivery = () => binding.turnCompaction.admitDelivery(deliveryId, async checkpoint => {
+					admissionSignal.throwIfAborted();
 					await binding.turnCompaction.waitForCompaction();
 					checkpoint();
 					if (binding.runtime.session.isIdle && delivery.kind === "custom" && delivery.triggerTurn) {
 						await binding.turnCompaction.prepareIdleCustomTurn(delivery.workingZonePreparation);
 					}
 					checkpoint();
-					request.signal.throwIfAborted();
-					commit = observeDeliveryCommit(binding.runtime, binding.context.sessionManager, delivery, binding.turnCompaction.signal);
+					admissionSignal.throwIfAborted();
+					const dispatchCommit = observeDeliveryCommit(binding.runtime, binding.context.sessionManager, delivery, binding.turnCompaction.signal);
+					commit = dispatchCommit;
 					const dispatch = () => {
 						checkpoint();
-						request.signal.throwIfAborted();
+						admissionSignal.throwIfAborted();
 						// Active queue admission belongs to this actual native execution.
 						execution.signal = binding.runtime.session.agent.signal;
-						execution.admitted = delivery.kind === "custom";
+						execution.admitted = delivery.kind === "custom" && !binding.runtime.session.isIdle;
 						return binding.deliveryExecution.run(execution, () =>
-							dispatchDelivery(binding.runtime, delivery, () => {
+							dispatchDelivery(binding, delivery, () => {
 								checkpoint();
+								admissionSignal.throwIfAborted();
 								execution.admitted = true;
 							})
 						);
@@ -669,11 +690,26 @@ async function handleOwnerRequest(
 					// Native queue acceptance is not execution completion. Capture the
 					// session's settlement after dispatch, never preparation's earlier cycle.
 					const completion = dispatched.completion.then(() => binding.runtime.session.waitForIdle());
-					void completion.catch(error => commit?.reject(error));
+					void completion.catch(error => dispatchCommit.reject(error));
 					await Promise.race([dispatched.preflight, completion]);
 					checkpoint();
-					return { completion, commit, modelCycleStarted: !binding.runtime.session.isIdle };
+					return { completion, commit: dispatchCommit, modelCycleStarted: !binding.runtime.session.isIdle };
 				});
+				let admission: Awaited<ReturnType<typeof admitDelivery>>;
+				for (;;) {
+					try {
+						admission = await admitDelivery();
+						break;
+					} catch (error) {
+						if (delivery.kind !== "custom" || !isStartupPreparationBusy(error)) throw error;
+						commit?.settle(false);
+						commit = undefined;
+						// Native input may own startup while waiting for this compaction
+						// gate. Release the gate before waiting, then preserve the original
+						// custom queue mode when retrying this uncommitted admission.
+						await waitForStartupRelease(error.whenReleased, admissionSignal);
+					}
+				}
 				const { completion } = admission;
 				completionTracked = true;
 				commit = admission.commit;
@@ -934,18 +970,15 @@ function sequenceQueueIntention<T>(
 }
 
 function dispatchDelivery(
-	runtime: AgentSessionRuntime,
+	binding: ChildRuntimeBinding,
 	delivery: AgentRuntimeDelivery,
 	checkpoint: () => void,
 ): Readonly<{ completion: Promise<void>; preflight: Promise<void> }> {
 	if (delivery.kind === "custom") {
-		return {
-			completion: runtime.session.sendCustomMessage(delivery.message, {
-				triggerTurn: delivery.triggerTurn,
-				...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
-			}),
-			preflight: Promise.resolve(),
-		};
+		return binding.startupAdmission.dispatchCustom(delivery.message, {
+			triggerTurn: delivery.triggerTurn,
+			...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+		}, checkpoint);
 	}
 	const content = typeof delivery.content === "string"
 		? [{ type: "text" as const, text: delivery.content }]
@@ -957,7 +990,7 @@ function dispatchDelivery(
 		resolvePreflight = resolve;
 	});
 	return {
-		completion: runtime.session.prompt(text, {
+		completion: binding.runtime.session.prompt(text, {
 			expandPromptTemplates: false,
 			source: "extension",
 			...(images.length === 0 ? {} : { images }),
@@ -976,6 +1009,21 @@ function dispatchDelivery(
 		}),
 		preflight,
 	};
+}
+
+async function waitForStartupRelease(released: Promise<void>, signal: AbortSignal): Promise<void> {
+	signal.throwIfAborted();
+	let abort!: () => void;
+	const cancelled = new Promise<never>((_resolve, reject) => {
+		abort = () => reject(signal.reason);
+		signal.addEventListener("abort", abort, { once: true });
+	});
+	try {
+		await Promise.race([released, cancelled]);
+		signal.throwIfAborted();
+	} finally {
+		signal.removeEventListener("abort", abort);
+	}
 }
 
 function observeDeliveryCommit(
