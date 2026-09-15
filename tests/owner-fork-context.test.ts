@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { prepareBranchEntries, SessionManager, type SessionBeforeCompactEvent, type SessionBeforeTreeEvent } from "@earendil-works/pi-coding-agent";
-import { projectOwnerForkBranch, projectOwnerForkCompaction, projectOwnerForkContext } from "../src/pi-integration/owner-fork-context.ts";
+import { projectOwnerForkBranch, projectOwnerForkCompaction, projectParticipantHistoryContext } from "../src/pi-integration/owner-fork-context.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 
 test("Owners without inherited model history receive no identity block or summary instructions", () => {
@@ -13,7 +13,7 @@ test("Owners without inherited model history receive no identity block or summar
 		appendOwnerIdentity(manager);
 		const leaf = manager.appendMessage({ role: "user", content: "Current work only", timestamp: 1 });
 		const transcript = transcriptFromSessionManager(manager).inspect();
-		assert.deepEqual(projectOwnerForkContext({ transcript, messages: transcript.context.messages }), transcript.context.messages);
+		assert.deepEqual(projectParticipantHistoryContext({ transcript, messages: transcript.context.messages }), transcript.context.messages);
 		const preparation: SessionBeforeCompactEvent["preparation"] = {
 			messagesToSummarize: [...transcript.context.messages], turnPrefixMessages: [],
 			isSplitTurn: false, firstKeptEntryId: leaf, tokensBefore: 100,
@@ -42,7 +42,7 @@ test("inherited history stays attributed on a pre-Identity branch without an Own
 	manager.branch(oldLeaf);
 	const before = JSON.stringify(manager.getEntries());
 	const transcript = transcriptFromSessionManager(manager).inspect();
-	const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
+	const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
 	assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity|Inherited source Agents/);
 	assert.equal(projected.filter(message => message.role === "toolResult").length, 0);
 	assert.equal(projected.filter(message => message.role === "assistant").length, 1);
@@ -54,7 +54,7 @@ test("inherited history stays attributed on a pre-Identity branch without an Own
 	assert.equal(text.split("^ ").length - 1, 2);
 	assert.doesNotMatch(text, /! /);
 	assert.equal(JSON.stringify(manager.getEntries()), before);
-	assert.deepEqual(projectOwnerForkContext({ transcript, messages: projected }), projected);
+	assert.deepEqual(projectParticipantHistoryContext({ transcript, messages: projected }), projected);
 });
 
 test("new native calls appended beneath an inherited branch stay current across branch switches", () => {
@@ -68,7 +68,7 @@ test("new native calls appended beneath an inherited branch stay current across 
 	for (const leaf of [currentLeaf, oldLeaf, currentLeaf]) {
 		manager.branch(leaf);
 		const transcript = transcriptFromSessionManager(manager).inspect();
-		const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
+		const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
 		assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity/);
 		assert.doesNotMatch(JSON.stringify(projected), /\^ /);
 		if (leaf === currentLeaf) assert.deepEqual(projected.at(-1), current);
@@ -84,7 +84,7 @@ test("inherited summaries and orphan results retained after compaction remain at
 	appendOwnerIdentity(manager);
 	const transcript = transcriptFromSessionManager(manager).inspect();
 	assert.equal(transcript.context.messages.some(message => message.role === "assistant"), false);
-	const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
+	const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
 	assert.equal(projected.some(message => message.role === "toolResult" || message.role === "compactionSummary"), false);
 	assert.match(JSON.stringify(projected), /Retained source result/);
 	assert.match(JSON.stringify(projected), /Source summary: finish source duties/);
@@ -100,7 +100,7 @@ test("multiple inherited identities retain per-source attribution without trusti
 	}
 	appendOwnerIdentity(manager);
 	const transcript = transcriptFromSessionManager(manager).inspect();
-	const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
+	const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
 	assert.match(JSON.stringify(projected[0]), /"agentId":"original-owner"/);
 	assert.match(JSON.stringify(projected[1]), /"agentId":"intermediate-owner"/);
 	assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity/);
@@ -111,7 +111,7 @@ test("without a canonical current Owner Identity projection does not invent Owne
 	manager.appendCustomEntry("agent-coordination.identity", { agentId: "copied-owner" });
 	manager.appendMessage({ role: "user", content: "No current identity", timestamp: 1 });
 	const transcript = transcriptFromSessionManager(manager).inspect();
-	assert.deepEqual(projectOwnerForkContext({ transcript, messages: transcript.context.messages }), transcript.context.messages);
+	assert.deepEqual(projectParticipantHistoryContext({ transcript, messages: transcript.context.messages }), transcript.context.messages);
 });
 
 test("native history before any source Identity stays explicitly unattributed", () => {
@@ -120,7 +120,7 @@ test("native history before any source Identity stays explicitly unattributed", 
 	manager.appendCustomEntry("agent-coordination.identity", { agentId: "later-source-owner" });
 	appendOwnerIdentity(manager);
 	const transcript = transcriptFromSessionManager(manager).inspect();
-	const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
+	const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
 	const marked = projected.find(message => message.role === "custom" && message.customType === "agent-coordination.context-only");
 	assert.ok(marked?.role === "custom" && Array.isArray(marked.content));
 	const text = marked.content.find(part => part.type === "text");

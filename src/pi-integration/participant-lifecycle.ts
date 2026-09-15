@@ -3,7 +3,7 @@ import { obligationStack, type ObligationFrame } from "../protocol/obligation-fo
 import { summarizeRequestObligations } from "../protocol/request-inspection.ts";
 import { transcriptFromSessionManager } from "./session-manager-transcript.ts";
 import { inspectCoordinationRejections } from "../protocol/replay-rejection.ts";
-import { projectOwnerForkBranch, projectOwnerForkCompaction, projectOwnerForkContext } from "./owner-fork-context.ts";
+import { projectOwnerForkBranch, projectOwnerForkCompaction, projectParticipantHistoryContext } from "./owner-fork-context.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type {
 	ExtensionAPI,
@@ -85,7 +85,7 @@ export function registerParticipantLifecycle(
 		const rejections = inspectCoordinationRejections(transcript, agentId);
 		const frames = currentFrames(transcript, agentId);
 		// Replace earlier continuation snapshots so resolved Requests are not re-presented.
-		const messages = projectOwnerForkContext({
+		const messages = projectParticipantHistoryContext({
 			messages: event.messages,
 			transcript,
 			marks: rejections.map(rejection => ({ reason: rejection.reason,

@@ -10,17 +10,18 @@ import { projectCoordinationHistory, type CoordinationHistoryMark } from "./coor
 const SUMMARY_GUIDANCE_CUSTOM_TYPE = "agent-coordination.history-guidance";
 const UNKNOWN_SOURCE_AGENT = "unknown (unattributed history)";
 
-/** Admission has verified the Owner; branch selection must not hide its physical cutoff. */
-export function projectOwnerForkContext(options: {
+/** Project corrupted records for any participant and inherited history for Owners. */
+export function projectParticipantHistoryContext(options: {
 	messages: AgentMessage[];
 	transcript: TranscriptInspection;
 	marks?: readonly CoordinationHistoryMark[];
 }): AgentMessage[] {
-	const scope = ownerForkScope(options.transcript);
+	const scope = inspectInheritedOwnerHistory(options.transcript);
 	return projectCoordinationHistory({ ...options, marks: [...(scope?.marks ?? []), ...(options.marks ?? [])] });
 }
 
-function ownerForkScope(transcript: TranscriptInspection) {
+// Use the admitted Owner's physical cutoff even when the selected branch omits it.
+function inspectInheritedOwnerHistory(transcript: TranscriptInspection) {
 	const cutoff = transcript.entries.findLastIndex(entry => bootstrapAgent(entry) === transcript.sessionId);
 	const identity = transcript.entries[cutoff];
 	if (identity?.type !== "custom" || identity.customType !== AGENT_IDENTITY_CUSTOM_TYPE) return undefined;
@@ -59,12 +60,12 @@ function ownerForkScope(transcript: TranscriptInspection) {
 
 /** Pi summaries bypass `context`; change only the transient native preparation. */
 export function projectOwnerForkCompaction(preparation: SessionBeforeCompactEvent["preparation"], transcript: TranscriptInspection): void {
-	const scope = ownerForkScope(transcript);
+	const scope = inspectInheritedOwnerHistory(transcript);
 	if (!scope) return;
 	// Native compaction does not receive tool guidance. Supply the same rule only
 	// to its transient input; normal turns get it from coordination guidance.
 	const projectSummaryMessages = (messages: AgentMessage[]): AgentMessage[] => [
-		...projectOwnerForkContext({ transcript, messages: messages.filter(message =>
+		...projectParticipantHistoryContext({ transcript, messages: messages.filter(message =>
 			message.role !== "custom" || message.customType !== SUMMARY_GUIDANCE_CUSTOM_TYPE) }),
 		{ role: "custom", customType: SUMMARY_GUIDANCE_CUSTOM_TYPE, display: false,
 			content: COORDINATION_HISTORY_GUIDANCE, timestamp: scope.timestamp },
@@ -77,7 +78,7 @@ export function projectOwnerForkCompaction(preparation: SessionBeforeCompactEven
 	// by a fork must not be offered as the new Owner's unqualified prior duties.
 	const previous = transcript.activeBranch.findLast(entry => entry.type === "compaction");
 	if (previous?.type !== "compaction" || preparation.previousSummary !== previous.summary) return;
-	const projected = projectOwnerForkContext({ transcript, messages: [{
+	const projected = projectParticipantHistoryContext({ transcript, messages: [{
 		role: "compactionSummary", summary: previous.summary, tokensBefore: previous.tokensBefore,
 		timestamp: Date.parse(previous.timestamp),
 	}] });
@@ -90,7 +91,7 @@ export function projectOwnerForkCompaction(preparation: SessionBeforeCompactEven
 
 /** Keep native branch tools/file tracking; annotate only transient, same-type copies. */
 export function projectOwnerForkBranch(preparation: SessionBeforeTreeEvent["preparation"], transcript: TranscriptInspection): string | undefined {
-	const scope = ownerForkScope(transcript);
+	const scope = inspectInheritedOwnerHistory(transcript);
 	if (!scope) return undefined;
 	const entryMarks = new Map<string, CoordinationHistoryMark[]>();
 	for (const mark of scope.marks) {
