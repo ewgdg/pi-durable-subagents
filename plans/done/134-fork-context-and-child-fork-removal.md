@@ -1,5 +1,10 @@
 # Fork context clarity and child-fork removal
 
+Follow-up decision: the model-facing Owner identity block was removed as redundant
+with inherited markers and shared guidance. Durable Identity/provenance records,
+source attribution, and native summary guidance remain. The plan below records the
+original implementation; `docs/owner-workflow.md` describes the current behavior.
+
 ## Goal and intention
 
 Implement #134 on top of #131's shared context-only projection. Owner fork/clone must retain clear current identity and inherited provenance across branches without changing durable evidence or obligations. Remove the child Conversation Fork mode whose prefix-preservation advantage this projection supersedes.

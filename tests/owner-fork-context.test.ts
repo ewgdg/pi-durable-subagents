@@ -29,7 +29,7 @@ test("Owners without inherited model history receive no identity block or summar
 	}
 });
 
-test("Owner identity leads inherited groups even on a branch before the current Identity", () => {
+test("inherited history stays attributed on a pre-Identity branch without an Owner identity block", () => {
 	const manager = SessionManager.inMemory();
 	manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
 	manager.appendMessage(fauxAssistantMessage([
@@ -43,9 +43,7 @@ test("Owner identity leads inherited groups even on a branch before the current 
 	const before = JSON.stringify(manager.getEntries());
 	const transcript = transcriptFromSessionManager(manager).inspect();
 	const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
-	assert.match(JSON.stringify(projected[0]), /Current Agent identity/);
-	assert.match(JSON.stringify(projected[0]), new RegExp(manager.getSessionId()));
-	assert.doesNotMatch(JSON.stringify(projected[0]), /Copied conversation|not current responsibilities|Preserve this distinction|only current-scope/);
+	assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity|Inherited source Agents/);
 	assert.equal(projected.filter(message => message.role === "toolResult").length, 0);
 	assert.equal(projected.filter(message => message.role === "assistant").length, 1);
 	const text = JSON.stringify(projected);
@@ -71,7 +69,7 @@ test("new native calls appended beneath an inherited branch stay current across 
 		manager.branch(leaf);
 		const transcript = transcriptFromSessionManager(manager).inspect();
 		const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
-		assert.match(JSON.stringify(projected[0]), new RegExp(manager.getSessionId()));
+		assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity/);
 		assert.doesNotMatch(JSON.stringify(projected), /\^ /);
 		if (leaf === currentLeaf) assert.deepEqual(projected.at(-1), current);
 	}
@@ -103,9 +101,9 @@ test("multiple inherited identities retain per-source attribution without trusti
 	appendOwnerIdentity(manager);
 	const transcript = transcriptFromSessionManager(manager).inspect();
 	const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
-	assert.match(JSON.stringify(projected[1]), /"agentId":"original-owner"/);
-	assert.match(JSON.stringify(projected[2]), /"agentId":"intermediate-owner"/);
-	assert.match(JSON.stringify(projected[0]), new RegExp(manager.getSessionId()));
+	assert.match(JSON.stringify(projected[0]), /"agentId":"original-owner"/);
+	assert.match(JSON.stringify(projected[1]), /"agentId":"intermediate-owner"/);
+	assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity/);
 });
 
 test("without a canonical current Owner Identity projection does not invent Owner authority", () => {
@@ -145,8 +143,7 @@ test("compaction annotates inherited previous summaries and split-turn input wit
 		settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 1 },
 	};
 	projectOwnerForkCompaction(preparation, transcript);
-	assert.match(JSON.stringify(preparation.messagesToSummarize[0]), /Current Agent identity/);
-	assert.match(JSON.stringify(preparation.turnPrefixMessages[0]), /Current Agent identity/);
+	assert.doesNotMatch(JSON.stringify(preparation), /Current Agent identity|agent-coordination.current-identity/);
 	assert.match(JSON.stringify(preparation.messagesToSummarize), /not current responsibilities/);
 	assert.match(JSON.stringify(preparation.turnPrefixMessages), /not current responsibilities/);
 	assert.match(preparation.previousSummary!, /^\^ /);
@@ -156,7 +153,7 @@ test("compaction annotates inherited previous summaries and split-turn input wit
 	assert.equal(JSON.stringify(transcript.entries), before);
 	const projected = structuredClone(preparation);
 	projectOwnerForkCompaction(preparation, transcript);
-	assert.deepEqual(preparation, projected, "repeated preparation must not accumulate identity or guidance");
+	assert.deepEqual(preparation, projected, "repeated preparation must not accumulate guidance");
 });
 
 test("branch annotation preserves native file tracking, summaries, and user summary instructions", () => {
@@ -176,7 +173,7 @@ test("branch annotation preserves native file tracking, summaries, and user summ
 	} as SessionBeforeTreeEvent["preparation"];
 	const instructions = projectOwnerForkBranch(preparation, transcript);
 	assert.match(instructions!, /Preserve my chosen summary focus/);
-	assert.match(instructions!, /Current Agent identity/);
+	assert.doesNotMatch(instructions!, /Current Agent identity|Inherited source Agents/);
 	assert.match(instructions!, /not current responsibilities/);
 	const native = prepareBranchEntries(preparation.entriesToSummarize);
 	assert.deepEqual([...native.fileOps.read], ["source.txt"]);

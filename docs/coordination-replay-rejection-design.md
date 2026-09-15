@@ -93,13 +93,13 @@ and delivery outcomes without reintroducing uncertainty reconstruction.
 
 **[#134](https://github.com/ewgdg/pi-durable-subagents/issues/134) owns fork-side projection.**
 It applies the shared representation to inherited coordination, including copied
-Request Deliveries, and puts verified current identity first in model context. Preserve
-the durable Identity cutoff after copied history rather than moving it to the
-front of unchanged native protocol records. Classification follows all-branch
-scope, not the selected leaf; inherited valid calls must not be called invalid.
+Request Deliveries. Markers and shared guidance provide model orientation; there
+is no separate Owner identity block. Preserve the durable Identity cutoff after
+copied history. Classification follows all-branch scope, not the selected leaf;
+inherited valid calls must not be called corrupted records merely because they were copied.
 
-Fork projection changes prompt-prefix reuse: identity-first context and inherited
-marking favor clarity over the former prefix-preservation advantage. Child
+Fork projection changes prompt-prefix reuse: inherited marking favors clarity
+over the former prefix-preservation advantage. Child
 Conversation Fork is removed; Owner fork/clone remain supported. Source
 transcripts and obligations stay unchanged. See [Owner fork and clone](owner-workflow.md#owner-fork-and-clone)
 for the projection and summary behavior; these remain separate from invalid-record replay.

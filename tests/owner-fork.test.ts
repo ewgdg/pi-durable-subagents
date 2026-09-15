@@ -42,21 +42,20 @@ test("Owner fork projection survives native branch navigation, reload, and anoth
 		assert.equal(fork.sessionManager.getBranch().some(entry => entry.type === "custom" &&
 			entry.customType === "agent-coordination.identity" && (entry.data as { agentId: string }).agentId === fork.sessionId), false);
 		const projectionChecks: Array<() => void> = [];
-		const verifyProjection = (ownerId: string) => (context: Context) => {
+		const verifyProjection = (context: Context) => {
 			projectionChecks.push(() => {
-				assert.match(JSON.stringify(context.messages[0]), /Current Agent identity/);
-				assert.match(JSON.stringify(context.messages[0]), new RegExp(ownerId));
+				assert.doesNotMatch(JSON.stringify(context.messages), /Current Agent identity|Inherited source Agents/);
 				assert.match(JSON.stringify(context.messages), /\^ .*source-observation/);
 				assert.equal(context.messages.some(message => message.role === "toolResult" && message.toolCallId === "source-observation"), false);
 			});
 			return fauxAssistantMessage("Current Owner understands historical provenance.");
 		};
-		host.model.setResponses([verifyProjection(fork.sessionId)]);
+		host.model.setResponses([verifyProjection]);
 		await fork.prompt("Continue on the old branch as the new Owner.");
 		await fork.waitForIdle();
 		await fork.reload();
-		host.model.setResponses([verifyProjection(fork.sessionId)]);
-		await fork.prompt("Verify identity after reload.");
+		host.model.setResponses([verifyProjection]);
+		await fork.prompt("Verify inherited provenance after reload.");
 		await fork.waitForIdle();
 		await executeTool(host, "agent_observe", "reforked-current-observation", { operation: "status" });
 		await host.runtime.fork(fork.sessionManager.getLeafId()!, { position: "at" });
@@ -69,9 +68,9 @@ test("Owner fork projection survives native branch navigation, reload, and anoth
 				assert.ok(group);
 				assert.equal(JSON.parse(group.slice(2)).source.agentId, fork.sessionId);
 			});
-			return verifyProjection(secondFork.sessionId)(context);
+			return verifyProjection(context);
 		}]);
-		await secondFork.prompt("Verify another fork's identity.");
+		await secondFork.prompt("Verify another fork's inherited provenance.");
 		await secondFork.waitForIdle();
 		assert.equal(projectionChecks.length, 4);
 		for (const check of projectionChecks) check();
@@ -81,7 +80,7 @@ test("Owner fork projection survives native branch navigation, reload, and anoth
 	}
 });
 
-test("native Owner compaction receives identity and inherited provenance without changing source evidence", { timeout: 10_000 }, async t => {
+test("native Owner compaction receives inherited provenance and guidance without an identity block", { timeout: 10_000 }, async t => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		settings: { compaction: { enabled: false, reserveTokens: 256, keepRecentTokens: 1 } },
@@ -103,8 +102,7 @@ test("native Owner compaction receives identity and inherited provenance without
 		const verifySummary = (context: Context) => {
 			summaries++;
 			const text = JSON.stringify(context.messages);
-			assert.match(text, /Current Agent identity/);
-			assert.match(text, new RegExp(fork.sessionId));
+			assert.doesNotMatch(text, /Current Agent identity|Inherited source Agents/);
 			if (text.includes("summarized-source-observation")) {
 				assert.match(text, /\^ .*summarized-source-observation/);
 				inheritedObservationSeen = true;
@@ -141,8 +139,7 @@ test("native branch summary distinguishes inherited and current work on a pre-Id
 		host.model.setResponses([(context: Context) => {
 			summarized = true;
 			const text = JSON.stringify(context.messages);
-			assert.match(text, /Current Agent identity/);
-			assert.match(text, new RegExp(fork.sessionId));
+			assert.doesNotMatch(text, /Current Agent identity|Inherited source Agents/);
 			assert.match(text, /\^ .*inherited-branch-observation/);
 			assert.doesNotMatch(text, /\^ [^\n]*toolCallId[^\n]*current-branch-observation/);
 			assert.match(text, /Keep the user's summary focus/);

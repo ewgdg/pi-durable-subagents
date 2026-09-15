@@ -7,7 +7,6 @@ import { inspectOwnerForkProvenance } from "../protocol/fork-provenance.ts";
 import { COORDINATION_HISTORY_GUIDANCE } from "../presentation/coordination-history-guidance.ts";
 import { projectCoordinationHistory, type CoordinationHistoryMark } from "./coordination-history-context.ts";
 
-const CURRENT_IDENTITY_CUSTOM_TYPE = "agent-coordination.current-identity";
 const SUMMARY_GUIDANCE_CUSTOM_TYPE = "agent-coordination.history-guidance";
 const UNKNOWN_SOURCE_AGENT = "unknown (unattributed history)";
 
@@ -18,9 +17,7 @@ export function projectOwnerForkContext(options: {
 	marks?: readonly CoordinationHistoryMark[];
 }): AgentMessage[] {
 	const scope = ownerForkScope(options.transcript);
-	const messages = projectCoordinationHistory({ ...options, marks: [...(scope?.marks ?? []), ...(options.marks ?? [])] });
-	if (!scope) return messages;
-	return [scope.identityMessage, ...messages.filter(message => message.role !== "custom" || message.customType !== CURRENT_IDENTITY_CUSTOM_TYPE)];
+	return projectCoordinationHistory({ ...options, marks: [...(scope?.marks ?? []), ...(options.marks ?? [])] });
 }
 
 function ownerForkScope(transcript: TranscriptInspection) {
@@ -34,11 +31,6 @@ function ownerForkScope(transcript: TranscriptInspection) {
 	if (!inheritedEntries.some(entry => entry.type === "message" || entry.type === "custom_message" ||
 		entry.type === "compaction" || entry.type === "branch_summary")) return undefined;
 	const provenance = inspectOwnerForkProvenance(transcript);
-	const sourceAgentIds = [...new Set(provenance ? [...provenance.values()].filter((agentId): agentId is string => agentId !== null)
-		: transcript.header?.parentSession ? [] : inheritedEntries.flatMap(entry => {
-		const agentId = bootstrapAgent(entry);
-		return agentId ? [agentId] : [];
-	}))];
 	// Pre-bootstrap native conversation has no recorded Agent attribution. Never
 	// assign it the new Owner's authority or manufacture an Agent ID from a path.
 	let physicalSourceAgentId = UNKNOWN_SOURCE_AGENT;
@@ -62,13 +54,7 @@ function ownerForkScope(transcript: TranscriptInspection) {
 			mark("summary");
 		}
 	}
-	const identityMessage = {
-		role: "custom" as const, customType: CURRENT_IDENTITY_CUSTOM_TYPE, display: false,
-		content: `Current Agent identity: ${JSON.stringify({ agentId: transcript.sessionId, workflowId: transcript.sessionId, role: "Owner", directSpawnerAgentId: null })}.\nInherited source Agents: ${sourceAgentIds.length ? sourceAgentIds.join(", ") : "none recorded"}.`,
-		details: { agentId: transcript.sessionId, identityEntryId: identity.id, inheritedSourceAgentIds: sourceAgentIds },
-		timestamp: Date.parse(identity.timestamp),
-	};
-	return { marks, identityMessage };
+	return { marks, timestamp: Date.parse(identity.timestamp) };
 }
 
 /** Pi summaries bypass `context`; change only the transient native preparation. */
@@ -76,12 +62,12 @@ export function projectOwnerForkCompaction(preparation: SessionBeforeCompactEven
 	const scope = ownerForkScope(transcript);
 	if (!scope) return;
 	// Native compaction does not receive tool guidance. Supply the same rule only
-	// to its transient input, separate from the data-only identity block.
+	// to its transient input; normal turns get it from coordination guidance.
 	const projectSummaryMessages = (messages: AgentMessage[]): AgentMessage[] => [
 		...projectOwnerForkContext({ transcript, messages: messages.filter(message =>
 			message.role !== "custom" || message.customType !== SUMMARY_GUIDANCE_CUSTOM_TYPE) }),
 		{ role: "custom", customType: SUMMARY_GUIDANCE_CUSTOM_TYPE, display: false,
-			content: COORDINATION_HISTORY_GUIDANCE, timestamp: scope.identityMessage.timestamp },
+			content: COORDINATION_HISTORY_GUIDANCE, timestamp: scope.timestamp },
 	];
 	preparation.messagesToSummarize = projectSummaryMessages(preparation.messagesToSummarize);
 	if (preparation.turnPrefixMessages.length) {
@@ -95,7 +81,7 @@ export function projectOwnerForkCompaction(preparation: SessionBeforeCompactEven
 		role: "compactionSummary", summary: previous.summary, tokensBefore: previous.tokensBefore,
 		timestamp: Date.parse(previous.timestamp),
 	}] });
-	const marked = projected.find(message => message.role === "custom" && message.customType !== CURRENT_IDENTITY_CUSTOM_TYPE);
+	const marked = projected[0];
 	if (marked?.role === "custom") {
 		preparation.previousSummary = typeof marked.content === "string" ? marked.content
 			: marked.content.filter(part => part.type === "text").map(part => part.text).join("\n");
@@ -131,5 +117,5 @@ export function projectOwnerForkBranch(preparation: SessionBeforeTreeEvent["prep
 	});
 	// Pi retains the array, not an assignment to preparation.entriesToSummarize.
 	preparation.entriesToSummarize.splice(0, preparation.entriesToSummarize.length, ...projected);
-	return [preparation.customInstructions, scope.identityMessage.content, COORDINATION_HISTORY_GUIDANCE].filter(Boolean).join("\n\n");
+	return [preparation.customInstructions, COORDINATION_HISTORY_GUIDANCE].filter(Boolean).join("\n\n");
 }
