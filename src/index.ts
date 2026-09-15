@@ -21,6 +21,7 @@ import {
 	assertTypeboxModuleShape,
 } from "./pi-integration/host-shape.ts";
 import { registerHerdrQuestionAttention } from "./pi-integration/herdr-question-attention.ts";
+import { registerSessionStartup } from "./pi-integration/session-startup.ts";
 import { installInteractiveHostBridge } from "./pi-integration/interactive-host-bridge.ts";
 import { registerMessageDeliveryRenderer } from "./tools/message-delivery-renderer.ts";
 import {
@@ -35,6 +36,7 @@ const ENTRY_MODULE_PATH = import.meta.filename;
 const piAgentCoordination: ExtensionFactory = (pi) => {
 	let resolveOwnerView: (() => OrdinaryAgentCoordinatorView) | undefined;
 	assertExtensionApiShape(pi);
+	registerSessionStartup(pi);
 	registerHerdrQuestionAttention(pi, () => resolveOwnerView?.());
 	assertHostModuleShape(hostPi);
 	assertPiAiModuleShape(hostAi, hostPi.VERSION);

@@ -1,4 +1,5 @@
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
+import { bindSessionStartup, disposeSessionStartup, isStartupPreparationBusy } from "../pi-integration/session-startup.ts";
 import type { CommitModeratorReminderIfCurrent, ModeratorReminderOutcome } from "./agent-runtime-host.ts";
 import type {
 	AgentSession,
@@ -41,6 +42,7 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		services: AgentSessionServices;
 		projection: HostedAgentProjection | undefined;
 	}): InProcessHostedRuntime {
+		bindSessionStartup(options.session);
 		return new InProcessHostedRuntime({
 			session: options.session,
 			projection: options.projection,
@@ -166,21 +168,37 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 	}
 
 	async dispose(): Promise<void> {
+		disposeSessionStartup(this.#session);
 		await this.#session.dispose();
 	}
 
 	#dispatch(delivery: AgentRuntimeDelivery): Promise<void> {
 		return delivery.kind === "custom"
-			? this.#session.sendCustomMessage(delivery.message, {
-				triggerTurn: delivery.triggerTurn,
-				...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
-			})
+			? this.#dispatchCustom(delivery)
 			: this.#session.sendUserMessage(
 				typeof delivery.content === "string" ? delivery.content : [...delivery.content],
 				{
 					...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
 				},
 			);
+	}
+
+	async #dispatchCustom(delivery: Extract<AgentRuntimeDelivery, { kind: "custom" }>): Promise<void> {
+		const admission = bindSessionStartup(this.#session);
+		const cancellation = admission.signal;
+		for (;;) {
+			try {
+				await admission.dispatchCustom(delivery.message, {
+					triggerTurn: delivery.triggerTurn,
+					...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+				}, () => cancellation.throwIfAborted()).completion;
+				return;
+			} catch (error) {
+				if (!isStartupPreparationBusy(error)) throw error;
+				// Only retry uncommitted busy admission; never override handled input.
+				await error.whenReleased;
+			}
+		}
 	}
 
 	#sendAndConfirmTranscriptCommit(
