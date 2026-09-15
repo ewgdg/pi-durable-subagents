@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime.ts";
@@ -24,6 +24,20 @@ function deferred() {
 	return { promise, resolve };
 }
 
+async function within<T>(operation: Promise<T>): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([operation, new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(() => reject(new Error("Admission did not settle without unrelated preparation")), 300);
+		})]);
+	} finally { clearTimeout(timer); }
+}
+
+function onPreparation(pi: ExtensionAPI, phase: "input" | "before_agent_start", handler: () => void | Promise<void>) {
+	if (phase === "input") pi.on("input", handler);
+	else pi.on("before_agent_start", handler);
+}
+
 async function fixture(t: Parameters<typeof createTestOwnerHost>[0], extension: ExtensionFactory = () => {}) {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		fauxTokensPerSecond: 100_000, additionalExtensionFactories: [extension],
@@ -36,18 +50,19 @@ async function fixture(t: Parameters<typeof createTestOwnerHost>[0], extension: 
 	return { ...host, hosted: runtime, message, deliveries, deliver };
 }
 
-for (const rejected of ["handled", "missing model"] as const) {
+for (const rejected of ["handled", "missing auth"] as const) {
 	test(`${rejected} custom preflight leaves no Delivery or queued kickoff; explicit retry commits once`, { timeout: 5000 }, async t => {
 		let handled = rejected === "handled";
 		const host = await fixture(t, pi => { pi.on("input", () => handled ? { action: "handled" } : undefined); });
 		const model = host.session.model;
-		if (rejected === "missing model") host.session.agent.state.model = undefined;
+		assert.ok(model);
+		if (rejected === "missing auth") host.session.agent.state.model = { ...model, provider: "startup-no-auth" };
 		host.model.setResponses([fauxAssistantMessage("Retry accepted.")]);
-		await assert.rejects(host.deliver(), rejected === "handled" ? /custom_startup_not_started/ : /[Mm]odel/);
+		await assert.rejects(host.deliver(), rejected === "handled" ? /custom_startup_not_started/ : /API key|Authentication/);
 		assert.equal(host.deliveries().length, 0);
 		assert.equal(host.session.pendingMessageCount, 0);
 		handled = false;
-		if (rejected === "missing model") host.session.agent.state.model = model;
+		if (rejected === "missing auth") host.session.agent.state.model = model;
 		await host.deliver();
 		assert.equal(host.deliveries().length, 1);
 	});
@@ -59,7 +74,7 @@ for (const phase of ["input", "before_agent_start"] as const) {
 			let nested!: () => Promise<void>;
 			let nestedEntries = 0;
 			const host = await fixture(t, pi => {
-				pi.on(phase, async () => {
+				onPreparation(pi, phase, async () => {
 					nestedEntries++;
 					if (nestedEntries === 1) await assert.rejects(nested(), /startup_preparation_busy/);
 				});
@@ -80,7 +95,7 @@ for (const phase of ["input", "before_agent_start"] as const) {
 		t.after(() => { releasePreparation.resolve(); releaseModel.resolve(); });
 		let preparations = 0;
 		const host = await fixture(t, pi => {
-			pi.on(phase, async () => { preparations++; if (preparations === 1) { preparing.resolve(); await releasePreparation.promise; } });
+			onPreparation(pi, phase, async () => { preparations++; if (preparations === 1) { preparing.resolve(); await releasePreparation.promise; } });
 			pi.on("before_agent_start", () => ({ systemPrompt: "Original prepared prompt." }));
 		});
 		const contexts: Context[] = [];
@@ -109,7 +124,7 @@ for (const phase of ["input", "before_agent_start"] as const) {
 		const release = deferred();
 		t.after(release.resolve);
 		let block = true;
-		const host = await fixture(t, pi => { pi.on(phase, async () => { if (block) { preparing.resolve(); await release.promise; } }); });
+		const host = await fixture(t, pi => { onPreparation(pi, phase, async () => { if (block) { preparing.resolve(); await release.promise; } }); });
 		host.model.setResponses([fauxAssistantMessage("Retry completed.")]);
 		const rejected = assert.rejects(host.deliver(), /startup_admission_cancelled/);
 		await preparing.promise;
@@ -161,11 +176,61 @@ test("abort also fences a custom dispatch waiting for another prompt's preparati
 	await preparing.promise;
 	const delivery = assert.rejects(host.deliver(), /startup_admission_cancelled/);
 	await host.session.abort();
+	await within(delivery);
 	release.resolve();
 	await human;
-	await delivery;
 	assert.equal(host.deliveries().length, 0);
 	assert.equal(host.session.messages.length, 0);
+});
+
+test("Owner reminder returns busy while another prompt prepares and never joins its native queue", { timeout: 5000 }, async t => {
+	const preparing = deferred();
+	const release = deferred();
+	t.after(release.resolve);
+	const host = await fixture(t, pi => { pi.on("input", async () => { preparing.resolve(); await release.promise; }); });
+	host.model.setResponses([fauxAssistantMessage("Unrelated run.")]);
+	const human = host.session.prompt("unrelated work");
+	await preparing.promise;
+	assert.equal(await within(host.hosted.deliverModeratorReminder(commit => commit())), "busy");
+	release.resolve();
+	await human;
+	assert.equal(host.session.messages.some(message => message.role === "custom" && message.customType.includes("moderator-obligation-reminder")), false);
+});
+
+test("idle delivery composes with an existing public custom-message wrapper", { timeout: 5000 }, async t => {
+	const host = await fixture(t);
+	const original = host.session.sendCustomMessage;
+	const observed: unknown[] = [];
+	host.session.sendCustomMessage = (message, options) => {
+		observed.push(message);
+		return original.call(host.session, message, options);
+	};
+	host.model.setResponses([fauxAssistantMessage("Wrapper preserved.")]);
+	await host.deliver();
+	assert.deepEqual(observed, [host.message]);
+	assert.equal(host.deliveries().length, 1);
+});
+
+test("reload keeps late preparation excluded until the cancelled generation unwinds", { timeout: 5000 }, async t => {
+	const preparing = deferred();
+	const release = deferred();
+	t.after(release.resolve);
+	let first = true;
+	const host = await fixture(t, pi => { pi.on("before_agent_start", async () => {
+		if (first) { first = false; preparing.resolve(); await release.promise; return { systemPrompt: "Retired preparation." }; }
+		return { systemPrompt: "Current preparation." };
+	}); });
+	const retired = assert.rejects(host.deliver(), /startup_admission_cancelled/);
+	await preparing.promise;
+	await host.session.reload();
+	await assert.rejects(host.session.prompt("competing replacement"), /startup_preparation_busy/);
+	release.resolve();
+	await retired;
+	const prompts: string[] = [];
+	host.model.setResponses([context => { prompts.push(context.systemPrompt ?? ""); return fauxAssistantMessage("Current run."); }]);
+	await host.deliver();
+	assert.deepEqual(prompts, ["Current preparation."]);
+	assert.equal(host.deliveries().length, 1);
 });
 
 test("Owner reload restores composed wrappers and the next idle delivery prepares exactly once", { timeout: 5000 }, async t => {
