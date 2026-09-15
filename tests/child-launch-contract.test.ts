@@ -19,7 +19,11 @@ test("fresh launch contract detects an in-place update despite cached Owner modu
 	await publish(AGENT_CONTROL_PROTOCOL_VERSION, ChildProcessBootstrapSchema);
 	// Resume, cancellation-triggered delivery and Moderator preparation must not repair by retry.
 	for (let attempt = 0; attempt < 3; attempt++) {
-	await assert.rejects(guard.assertCompatible(), /Stop.*align.*restart/i);
+		await assert.rejects(guard.assertCompatible(), (error: Error) => {
+			assert.match(error.message, /Owner: report.*user immediately/);
+			assert.match(error.message, /stop active work, align.*restart the Pi host/);
+			return true;
+		});
 	}
 	await new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible();
 });

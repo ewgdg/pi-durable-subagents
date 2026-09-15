@@ -77,6 +77,13 @@ installed contract could not be verified, not that a version difference was
 proved. Bootstrap validation reports schema field failures without printing
 descriptor values or the connection token.
 
+These diagnostics instruct the Owner to report the failure and its safe details
+to the user immediately, stop child and Moderator launches, and guide the user to
+stop active work, align the installed packages, and restart the Pi host running
+the Workflow. Requests and transcripts must be preserved, and interrupted tool
+effects inspected after restart before `workflow_resume`. This is agent guidance
+carried by the error, not a separate automatic notification or host restart.
+
 The check is not an atomic installation lock: files can still change between
 verification and launch. It compares the bootstrap schema and protocol version,
 not every implementation detail. Semantic contract changes still require version

@@ -80,6 +80,8 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 		await assert.rejects(async () => bridge({ registerMessageRenderer() {} } as unknown as Parameters<typeof bridge>[0]), (error: Error) => {
 			assert.match(error.message, expected);
 			assert.match(error.message, /stop.*align.*restart/i);
+			assert.match(error.message, /Owner: report.*user immediately/);
+			assert.match(error.message, /restart the Pi host running this Workflow/);
 			assert.doesNotMatch(error.message, /SECRET-TOKEN|unused.sock/);
 			return true;
 		});
