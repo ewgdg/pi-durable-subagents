@@ -23,6 +23,8 @@ import { transcriptFromSessionManager } from "../src/pi-integration/session-mana
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
+import { discoverColdWorkflow } from "../src/bootstrap/cold-host-discovery.ts";
+import { workflowSessionDirectory } from "../src/runtime/workflow-session-directory.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -31,6 +33,59 @@ import { createProcessModelBroker } from "./support/process-model-broker.ts";
 
 const TEST_TIMEOUT_MS = 45_000;
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
+
+test("coordinator admits a skipped spawn as an observable dormant Agent without starting or rewriting it", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const manager = host.session.sessionManager;
+	const entryId = manager.appendMessage(
+		fauxAssistantMessage(fauxToolCall(
+			"agent_spawn",
+			{
+				request: "No title",
+				template: "removed-template",
+				config: { cwd: "/rejected" },
+			},
+			{ id: "rejected-spawn" },
+		)),
+	);
+	const child = SessionManager.create(
+		host.cwd,
+		workflowSessionDirectory(manager.getSessionDir(), identity.workflowId),
+	);
+	child.appendCustomEntry("agent-coordination.identity", {
+		agentId: child.getSessionId(),
+		workflowId: identity.workflowId,
+		directSpawnerAgentId: identity.agentId,
+		creationPreset: null,
+		spawnSource: {
+			agentId: identity.agentId,
+			entryId,
+			toolCallId: "rejected-spawn",
+		},
+		metadata: { label: "Recovered" },
+	});
+	child.appendMessage(fauxAssistantMessage("Persist"));
+	const path = child.getSessionFile()!;
+	const before = await readFile(path, "utf8");
+	const recoveredWorkflow = await discoverColdWorkflow({
+		ownerIdentity: identity,
+		ownerSessionManager: manager,
+	});
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		recoveredWorkflow,
+	});
+	try {
+		const status = coordinator.forAgent(identity.agentId).status(child.getSessionId());
+		assert.equal(status.run.phase, "dormant");
+		assert.equal(status.primaryEvidence.transcriptPath, path);
+		assert.equal(await readFile(path, "utf8"), before);
+	} finally {
+		await coordinator.shutdown(async () => host.runtime.dispose());
+	}
+});
 
 test("Owner tool inheritance uses active tools, including without an admitted snapshot", { timeout: TEST_TIMEOUT_MS }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
@@ -87,7 +142,7 @@ test("Owner tool inheritance uses active tools, including without an admitted sn
 	}
 });
 
-test("a dormant parent retains creation preset rules while descendant catalogues load current resources", async (t) => {
+for (const skippedSpawn of [false, true]) test(`a dormant parent retains creation preset rules while descendant catalogues load current resources (skipped spawn: ${skippedSpawn})`, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-dynamic-parent-runtime-"));
 	const templateRoot = join(root, "templates");
 	await mkdir(templateRoot);
@@ -127,7 +182,7 @@ test("a dormant parent retains creation preset rules while descendant catalogues
 				systemPromptMode: "append", loadContextFiles: true, systemPrompt: "",
 			},
 		},
-		creationInput: {
+		creationInput: skippedSpawn ? undefined : {
 			title: "Fixture request",
 			request: "Act as the dynamically configured parent.",
 			template: "dynamic-parent",
@@ -157,7 +212,11 @@ test("a dormant parent retains creation preset rules while descendant catalogues
 		const first = await factory.prepareOrdinaryRun({
 			agentId: "descendant",
 			parent: parentRecord,
-			spawnInput: { title: "Fixture request", request: "Inherit the current parent configuration." },
+			spawnInput: skippedSpawn ? undefined : {
+				title: "Fixture request",
+				request: "Inherit the current parent configuration.",
+			},
+			creationPreset: null,
 		});
 		assert.equal(first.configuration.tools.includes("read"), true);
 		assert.equal(first.configuration.tools.includes("bash"), true);

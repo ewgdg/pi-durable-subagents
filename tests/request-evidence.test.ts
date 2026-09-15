@@ -14,6 +14,58 @@ import { participant, requestHistory } from "./support/request-history.ts";
 import { inspectAnswerDelivery } from "../src/protocol/message.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 
+test("a recovered child with skipped spawn has no authored Creation Request but retains its delivered duty", () => {
+	const history = requestHistory();
+	const entryId = history.requester.manager.appendMessage(
+		fauxAssistantMessage(fauxToolCall(
+			"agent_spawn",
+			{ request: "Rejected missing title" },
+			{ id: "spawn" },
+		)),
+	);
+	const source = { agentId: "requester", entryId, toolCallId: "spawn" };
+	const requestId = deriveMessageIdentity(source);
+	history.responder.record.identity = {
+		agentId: "responder",
+		workflowId: "requester",
+		directSpawnerAgentId: "requester",
+		creationPreset: null,
+		spawnSource: source,
+		metadata: { label: "Responder" },
+	};
+	appendEvidenceDelivery(history.responder, {
+		source,
+		projection: {
+			kind: "request",
+			requestMessageId: requestId,
+			fromAgentId: "requester",
+			title: "Preserved duty",
+			question: "Complete the independently delivered work.",
+		},
+	});
+	for (const fresh of [false, true]) {
+		if (fresh) {
+			for (const participant of [history.requester, history.responder]) {
+				participant.record.transcript = transcriptFromSessionManager(
+					participant.manager,
+					{ fresh: true },
+				);
+			}
+		}
+		const evidence = new RequestEvidence(history.agents);
+		assert.equal(evidence.resolveRecoveryMessage(history.requester.record, requestId), undefined);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			[requestId],
+		);
+		assert.deepEqual(
+			evidence.openIncomingRequests(history.responder.record).requests
+				.map(request => request.requestMessageId),
+			[requestId],
+		);
+	}
+});
+
 test("orphan Request Cancellation Delivery still requires its original requester", () => {
 	const history = requestHistory();
 	const third = participant("third-agent");

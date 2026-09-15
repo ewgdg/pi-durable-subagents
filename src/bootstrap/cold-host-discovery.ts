@@ -30,6 +30,7 @@ import {
 	toolCallPointerKey,
 } from "../protocol/identities.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
+import { CoordinationRecordValidationError } from "../protocol/record-validation.ts";
 import {
 	transcriptFromSessionFile,
 	transcriptFromSessionManager,
@@ -39,7 +40,7 @@ import { workflowSessionDirectory } from "../runtime/workflow-session-directory.
 export type RecoveredOrdinaryAgent = Readonly<{
 	role: "ordinary";
 	identity: ChildAgentIdentity;
-	creationInput: AgentSpawnInput;
+	creationInput: AgentSpawnInput | undefined;
 	sessionPath: string;
 }>;
 
@@ -183,25 +184,33 @@ export async function discoverColdWorkflow(options: {
 			if (!sameToolCallPointer(committed.source, candidate.identity.spawnSource)) {
 				throw new Error("spawn pointer entry does not match");
 			}
-			const input = validateAgentSpawnInput(committed.input);
+			let input: AgentSpawnInput | undefined;
+			try {
+				input = validateAgentSpawnInput(committed.input);
+			} catch (error) {
+				// A rejected call is context-only; independently valid identity still admits the Agent.
+				if (!(error instanceof CoordinationRecordValidationError)) throw error;
+			}
 			const childInspection = await candidate.transcript.refresh();
 			validateChildIdentityBootstrap({
 				entries: childInspection.entries,
 				identity: candidate.identity,
 			});
-			const metadata = resolveOrdinaryAgentMetadata({
-				explicitLabel: input.label,
-				explicitDescription: input.description,
-				templateName: input.template,
-			});
-			const identityMetadata = {
-				label: candidate.identity.metadata.label,
-				...(candidate.identity.metadata.description === undefined
-					? {}
-					: { description: candidate.identity.metadata.description }),
-			};
-			if (!isDeepStrictEqual(metadata, identityMetadata)) {
-				throw new Error("child metadata contradicts its spawn source");
+			if (input) {
+				const metadata = resolveOrdinaryAgentMetadata({
+					explicitLabel: input.label,
+					explicitDescription: input.description,
+					templateName: input.template,
+				});
+				const identityMetadata = {
+					label: candidate.identity.metadata.label,
+					...(candidate.identity.metadata.description === undefined
+						? {}
+						: { description: candidate.identity.metadata.description }),
+				};
+				if (!isDeepStrictEqual(metadata, identityMetadata)) {
+					throw new Error("child metadata contradicts its spawn source");
+				}
 			}
 			candidate.spawnInput = input;
 			candidate.spawnOrder = physicalSpawnOrder(
@@ -248,7 +257,7 @@ export async function discoverColdWorkflow(options: {
 
 	const verifiedChildren = new Map<string, OrdinaryCandidate[]>();
 	for (const candidate of ordinaryCandidates) {
-		if (candidate.invalid || !candidate.spawnInput || !candidate.spawnOrder) continue;
+		if (candidate.invalid || !candidate.spawnOrder) continue;
 		const children = verifiedChildren.get(candidate.identity.directSpawnerAgentId) ?? [];
 		children.push(candidate);
 		verifiedChildren.set(candidate.identity.directSpawnerAgentId, children);
@@ -301,7 +310,7 @@ export async function discoverColdWorkflow(options: {
 			...ordered.map((candidate) => ({
 				role: "ordinary" as const,
 				identity: candidate.identity,
-				creationInput: candidate.spawnInput!,
+				creationInput: candidate.spawnInput,
 				sessionPath: candidate.path,
 			})),
 			...moderators.map((candidate) => ({
