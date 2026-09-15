@@ -16,6 +16,7 @@ import {
 	type OwnerSettlementParkingBinding,
 } from "../pi-integration/owner-settlement-parker.ts";
 import { adoptOrValidateOwnerIdentity } from "../protocol/owner-identity.ts";
+import { captureOwnerForkProvenance } from "../protocol/fork-provenance.ts";
 import { OperationalIncidentSurface } from "../presentation/operational-incident-surface.ts";
 import { OwnerPostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";
 import {
@@ -84,6 +85,7 @@ export async function initializeOwnerWorkflow(options: {
 	// Role identification is sufficient for an independent native fork, even if
 	// current-scope coordination evidence fails the admission that follows.
 	options.onOwnerIdentified();
+	await captureOwnerForkProvenance(runtime.session.sessionManager);
 	const recoveredWorkflow = await discoverColdWorkflow({
 		ownerIdentity: identity,
 		ownerSessionManager: runtime.session.sessionManager,
