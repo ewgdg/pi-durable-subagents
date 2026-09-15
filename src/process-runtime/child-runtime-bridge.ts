@@ -34,6 +34,7 @@ import {
 	bindSessionStartup,
 	isStartupPreparationBusy,
 	registerSessionStartup,
+	waitForStartupRelease,
 	type SessionStartupAdmission,
 } from "../pi-integration/session-startup.ts";
 import {
@@ -90,6 +91,7 @@ type ChildRuntimeBinding = {
 	runtime: AgentSessionRuntime;
 	turnCompaction: ChildTurnCompactionGateway;
 	startupAdmission: SessionStartupAdmission;
+	nativeInputHandoff?: { submissionSequence: number; transfer: () => void; transferred: boolean };
 	reminderAdmission: ModeratorReminderAdmission;
 	pendingDeliveries: Map<string, () => Promise<void>>;
 	deliveryExecution: AsyncLocalStorage<DeliveryExecution>;
@@ -370,7 +372,27 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			{ deferPrimaryInputQueued: false },
 		);
 		const handleInput: ChildRuntimeInputHandler = async (input, context) => {
-			const result = await participantInput(input, context);
+			const submissionSequence = currentState.nativeInputIdentity.current();
+			const transfer = input.source === "interactive" && input.streamingBehavior !== "followUp"
+				? binding.startupAdmission.captureInputHandoff()
+				: undefined;
+			const handoff = transfer && submissionSequence !== undefined
+				? { submissionSequence, transfer, transferred: false }
+				: undefined;
+			if (handoff) binding.nativeInputHandoff = handoff;
+			let result: Awaited<ReturnType<typeof participantInput>>;
+			try {
+				result = await participantInput(input, context);
+			} catch (error) {
+				if (!handoff?.transferred) throw error;
+				context.ui.notify(`Agent input failed: ${errorMessage(error)}`, "error");
+				result = { action: "handled" };
+			} finally {
+				if (binding.nativeInputHandoff === handoff) binding.nativeInputHandoff = undefined;
+			}
+			// The forwarded prompt owns this exact input now. Even a failed remote
+			// acknowledgment must not let the original input enter preparation again.
+			if (handoff?.transferred) return { action: "handled" };
 			if (
 				input.source === "extension" &&
 				result.action === "continue" &&
@@ -996,6 +1018,12 @@ function dispatchDelivery(
 	const preflight = new Promise<void>((resolve) => {
 		resolvePreflight = resolve;
 	});
+	const handoff = binding.nativeInputHandoff;
+	if (handoff && !handoff.transferred && delivery.forwardedInput?.submissionSequence === handoff.submissionSequence) {
+		checkpoint();
+		handoff.transfer();
+		handoff.transferred = true;
+	}
 	return {
 		completion: binding.runtime.session.prompt(text, {
 			expandPromptTemplates: false,
@@ -1016,21 +1044,6 @@ function dispatchDelivery(
 		}),
 		preflight,
 	};
-}
-
-async function waitForStartupRelease(released: Promise<void>, signal: AbortSignal): Promise<void> {
-	signal.throwIfAborted();
-	let abort!: () => void;
-	const cancelled = new Promise<never>((_resolve, reject) => {
-		abort = () => reject(signal.reason);
-		signal.addEventListener("abort", abort, { once: true });
-	});
-	try {
-		await Promise.race([released, cancelled]);
-		signal.throwIfAborted();
-	} finally {
-		signal.removeEventListener("abort", abort);
-	}
 }
 
 function observeDeliveryCommit(

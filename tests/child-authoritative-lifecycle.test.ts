@@ -5,6 +5,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import type { PiChildProcessLaunch, PiChildProcessRuntime, PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { createChildRuntimeBinding } from "../src/process-runtime/child-runtime-bridge.ts";
+import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { NativeInputSubmissionIdentity } from "../src/process-runtime/native-input-submission-identity.ts";
 import { TerminalInputSubmissionAcknowledger } from "../src/process-runtime/terminal-input-submission-acknowledger.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
@@ -248,3 +249,53 @@ test("Delivery cancellation remains correlated after transcript commit until dis
 	await delivery.completion;
 	assert.equal(aborted, true, "cancellation targets the actual native execution after transcript acknowledgment");
 });
+
+for (const matchesSubmission of [false, true]) {
+	test(`forwarded native input ${matchesSubmission ? "transfers its exact preparation once" : "cannot take another submission's preparation"}`, { timeout: 5_000 }, async t => {
+		let context!: ExtensionContext;
+		let attached!: Awaited<ReturnType<typeof attachRuntime>>;
+		let modelCalls = 0;
+		const host = await createTestOwnerHost(t, pi => {
+			registerSessionStartup(pi);
+			pi.on("session_start", (_event, ctx) => { context = ctx; });
+			pi.on("input", event => event.text === "native original"
+				? { action: "transform", text: "transformed native original" }
+				: undefined);
+			pi.on("input", async event => {
+				if (event.source !== "interactive" || event.text !== "transformed native original") return;
+				const { parent, binding } = attached;
+				const transfer = binding.startupAdmission.captureInputHandoff();
+				assert.ok(transfer);
+				const handoff = { submissionSequence: 7, transfer, transferred: false };
+				binding.nativeInputHandoff = handoff;
+				try {
+					const forwarded = parent.deliver({
+						kind: "user", content: event.text,
+						forwardedInput: { submissionSequence: matchesSubmission ? 7 : 8 },
+					}, { inspectCommit: () => true });
+					if (matchesSubmission) {
+						assert.equal(await forwarded.transcriptCommit, true);
+						await forwarded.completion;
+					} else {
+						await Promise.all([
+							assert.rejects(forwarded.completion, /startup_preparation_busy/),
+							assert.rejects(forwarded.transcriptCommit!, /startup_preparation_busy/),
+						]);
+					}
+					assert.equal(handoff.transferred, matchesSubmission);
+				} finally { binding.nativeInputHandoff = undefined; }
+				return { action: "handled" };
+			});
+		});
+		attached = await attachRuntime(host, context);
+		t.after(async () => { attached.binding.dispose(); await attached.parent.dispose(); });
+		host.model.setResponses([() => { modelCalls++; return fauxAssistantMessage("Forwarded input processed."); }]);
+		await host.session.prompt("native original");
+		assert.equal(modelCalls, matchesSubmission ? 1 : 0);
+		const inputs = host.session.messages.filter(message => message.role === "user");
+		assert.equal(inputs.length, matchesSubmission ? 1 : 0);
+		if (matchesSubmission) assert.deepEqual(inputs[0]!.content, [{ type: "text", text: "transformed native original" }]);
+		assert.equal(host.session.pendingMessageCount, 0);
+		assert.deepEqual(attached.events.filter(event => event.event === "runtime.fault"), []);
+	});
+}
