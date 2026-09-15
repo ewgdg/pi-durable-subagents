@@ -255,6 +255,7 @@ for (const matchesSubmission of [false, true]) {
 		let context!: ExtensionContext;
 		let attached!: Awaited<ReturnType<typeof attachRuntime>>;
 		let modelCalls = 0;
+		const inputErrors: unknown[] = [];
 		const host = await createTestOwnerHost(t, pi => {
 			registerSessionStartup(pi);
 			pi.on("session_start", (_event, ctx) => { context = ctx; });
@@ -264,11 +265,11 @@ for (const matchesSubmission of [false, true]) {
 			pi.on("input", async event => {
 				if (event.source !== "interactive" || event.text !== "transformed native original") return;
 				const { parent, binding } = attached;
-				const transfer = binding.startupAdmission.captureInputHandoff();
-				assert.ok(transfer);
-				const handoff = { submissionSequence: 7, transfer, transferred: false };
-				binding.nativeInputHandoff = handoff;
 				try {
+					const transfer = binding.startupAdmission.captureInputHandoff();
+					assert.ok(transfer);
+					const handoff = { submissionSequence: 7, transfer, transferred: false };
+					binding.nativeInputHandoff = handoff;
 					const forwarded = parent.deliver({
 						kind: "user", content: event.text,
 						forwardedInput: { submissionSequence: matchesSubmission ? 7 : 8 },
@@ -283,7 +284,8 @@ for (const matchesSubmission of [false, true]) {
 						]);
 					}
 					assert.equal(handoff.transferred, matchesSubmission);
-				} finally { binding.nativeInputHandoff = undefined; }
+				} catch (error) { inputErrors.push(error); }
+				finally { binding.nativeInputHandoff = undefined; }
 				return { action: "handled" };
 			});
 		});
@@ -291,6 +293,7 @@ for (const matchesSubmission of [false, true]) {
 		t.after(async () => { attached.binding.dispose(); await attached.parent.dispose(); });
 		host.model.setResponses([() => { modelCalls++; return fauxAssistantMessage("Forwarded input processed."); }]);
 		await host.session.prompt("native original");
+		assert.deepEqual(inputErrors, [], "Pi reports hook exceptions, so assert handoff failures outside the hook");
 		assert.equal(modelCalls, matchesSubmission ? 1 : 0);
 		const inputs = host.session.messages.filter(message => message.role === "user");
 		assert.equal(inputs.length, matchesSubmission ? 1 : 0);
