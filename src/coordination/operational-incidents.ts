@@ -795,7 +795,7 @@ export class OperationalIncidentCoordinator {
 				requestTitle,
 			}),
 			inspectProof,
-			isSuppressed: () => !this.#messages.hasUnsettledAnswerObligation(
+			isSuppressed: () => this.#isQuotaBlocked(recipient) || !this.#messages.hasUnsettledAnswerObligation(
 				recipient,
 				[requestId],
 			),
@@ -934,6 +934,7 @@ export class OperationalIncidentCoordinator {
 	): Promise<void> {
 		if (this.#isShuttingDown()) return;
 		if (handling.moderatorAgentId !== moderator.identity.agentId) return;
+		if (moderator.host.observe().suspension) return;
 		const sequence = moderator.host.latestStartedRunSequence();
 		this.#recordModeratorFailure(this.#reportContext(handling.snapshot), moderator, sequence > 0 ? { sequence } : undefined, failure);
 		if (!this.#conditionRemains(handling.snapshot)) {
@@ -1021,6 +1022,7 @@ export class OperationalIncidentCoordinator {
 		) {
 			return false;
 		}
+		if (this.#isQuotaBlocked(record)) return false;
 		// Moderator Requests may depend on another Moderator; ordinary incident
 		// detection keeps its existing non-Moderator dependency graph.
 		return !this.#operationReviews.hasUnresolvedAsynchronousCall(record.identity.agentId) &&
@@ -1041,6 +1043,7 @@ export class OperationalIncidentCoordinator {
 			messageId: moderatorObligationReminderDeliveryId(recipient.identity.agentId),
 			commitIfCurrent: commit => this.#reconciliationLane.run(async () => {
 				if (this.#handlingByKey.get(handling.snapshot.key) !== handling ||
+					this.#isQuotaBlocked(recipient) ||
 					handling.moderatorAgentId !== recipient.identity.agentId ||
 					!this.#conditionRemains(handling.snapshot)) return "suppressed";
 				// Clearance/resolve uses this same lane. Only native transcript ACK may
@@ -1051,6 +1054,7 @@ export class OperationalIncidentCoordinator {
 			customMessage: createModelVisibleModeratorObligationReminder(),
 			inspectProof,
 			isSuppressed: () => this.#handlingByKey.get(handling.snapshot.key) !== handling ||
+				this.#isQuotaBlocked(recipient) ||
 				handling.moderatorAgentId !== recipient.identity.agentId ||
 				!this.#conditionRemains(handling.snapshot),
 		}).then((admission) => {
@@ -1081,8 +1085,8 @@ export class OperationalIncidentCoordinator {
 	#conditionRemains(snapshot: OperationalConditionSnapshot): boolean {
 		if (snapshot.kind === "delivery_stall") return this.#observeDeliveryStalls().some(({ key }) => key === snapshot.key);
 		if (snapshot.kind === "operation_review") {
-			return this.#operationReviews.expiredReviews().some(
-				(review) => toolCallPointerKey(review.toolCall) === snapshot.key,
+			return this.#observeOperationReviews().some(
+				(review) => review.key === snapshot.key,
 			);
 		}
 		if (snapshot.kind === "obligation_stall") {
@@ -1155,7 +1159,8 @@ export class OperationalIncidentCoordinator {
 
 	#deliveryPathExcluded(record: AgentRecord): boolean {
 		const run = record.host.observe();
-		return (run.phase !== "dormant" && run.attention === "input_required") ||
+		return run.suspension !== undefined ||
+			(run.phase !== "dormant" && run.attention === "input_required") ||
 			record.host.hasRetentionReason("interactive_selection") ||
 			record.host.hasRetentionReason("interruption_hold");
 	}
@@ -1163,7 +1168,7 @@ export class OperationalIncidentCoordinator {
 	#observeOperationReviews(): readonly OperationReviewConditionSnapshot[] {
 		return this.#operationReviews.expiredReviews().flatMap((review) => {
 			const record = this.#agents.get(review.toolCall.agentId);
-			if (!record) return [];
+			if (!record || record.host.observe().suspension) return [];
 			const requestIds = [...this.#messages.answerObligationRequestIds(record)].sort();
 			if (requestIds.length === 0) return [];
 			return [{
@@ -1213,7 +1218,7 @@ export class OperationalIncidentCoordinator {
 
 	#isDeadlockEligible(record: AgentRecord): boolean {
 		const run = record.host.observe();
-		return run.phase === "live" &&
+		return !run.suspension && run.phase === "live" &&
 			run.work === "settled" &&
 			(run.attention === "none" || run.attention === "agent_wait") &&
 			!record.host.currentRunFailed() &&
@@ -1225,6 +1230,35 @@ export class OperationalIncidentCoordinator {
 				({ reason }) => reason === "awaiting_answer" || reason === "answer_owed" ||
 					(reason === "pending_delivery" && !this.#messages.hasDeliveryProgress(record)),
 			);
+	}
+
+	#isQuotaBlocked(record: AgentRecord): boolean {
+		const pending = [record];
+		const visited = new Set<string>();
+		let quotaReached = false;
+		while (pending.length) {
+			const current = pending.pop()!;
+			const agentId = current.identity.agentId;
+			if (visited.has(agentId)) continue;
+			visited.add(agentId);
+			if (current.host.observe().suspension) {
+				quotaReached = true;
+				continue;
+			}
+			const requests = this.#messages.unansweredRequestRelationships(
+				agentId, this.#messages.outstandingRequestIdsFor(current),
+			);
+			// A different runnable or stalled leaf must not be hidden by one quota
+			// descendant. Cycles may have a quota exit, but a quota-free cycle is
+			// still a deadlock; delivery/deadlock inspection remains edge-local.
+			if (requests.length === 0) return false;
+			for (const { targetAgentId } of requests) {
+				const target = this.#agents.get(targetAgentId);
+				if (!target) return false;
+				pending.push(target);
+			}
+		}
+		return quotaReached;
 	}
 
 	#hasExternalProgress(record: AgentRecord, path: Set<string>, includeModerators = false): boolean {
