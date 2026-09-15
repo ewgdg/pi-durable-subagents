@@ -649,8 +649,8 @@ test("bootstrap incompatibility diagnostics distinguish versions and safe field 
 	};
 	assert.doesNotThrow(() => validateChildProcessBootstrap(descriptor));
 	for (const [value, pattern] of [
-		[{ ...descriptor, protocolVersion: 7, tools: undefined }, /protocol_mismatch: expected 8, received 7/],
-		[{ ...descriptor, tools: undefined }, /schema_drift.*missing fields: tools/],
+		[{ ...descriptor, protocolVersion: 7, tools: undefined }, /protocol_mismatch: expected 8, received 7; missing fields: tools/],
+		[{ ...descriptor, tools: undefined }, /schema_drift: expected 8, received 8; missing fields: tools/],
 		[{ ...descriptor, tools: 42 }, /schema_drift.*invalid fields: tools/],
 		[{ ...descriptor, protocolVersion: "SECRET-TOKEN" }, /invalid fields: protocolVersion/],
 	] as const) {

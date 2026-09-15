@@ -28,5 +28,17 @@ test("same-version on-disk schema drift is rejected before Pi launch", { timeout
 	const root = await mkdtemp(join(tmpdir(), "pi-launch-contract-"));
 	const path = join(root, "schemas.mjs");
 	await writeFile(path, `export const AGENT_CONTROL_PROTOCOL_VERSION = ${AGENT_CONTROL_PROTOCOL_VERSION}; export const ChildProcessBootstrapSchema = ${JSON.stringify({ ...ChildProcessBootstrapSchema, required: [...ChildProcessBootstrapSchema.required!, "newRequiredField"] })};`);
-	await assert.rejects(new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible(), /schema_drift.*required fields/);
+	await assert.rejects(new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible(), /schema_drift: expected 8, received 8; missing fields: newRequiredField/);
+});
+
+test("same-version preflight names incompatible tools constraints without exposing schema values", { timeout: 10_000 }, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-launch-contract-"));
+	const path = join(root, "schemas.mjs");
+	const schema = { ...ChildProcessBootstrapSchema, properties: { ...ChildProcessBootstrapSchema.properties, tools: { type: "string", const: "SECRET-SCHEMA-VALUE" } } };
+	await writeFile(path, `export const AGENT_CONTROL_PROTOCOL_VERSION = 8; export const ChildProcessBootstrapSchema = ${JSON.stringify(schema)};`);
+	await assert.rejects(new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible(), (error: Error) => {
+		assert.match(error.message, /schema_drift: expected 8, received 8; missing fields: none; invalid fields: tools/);
+		assert.doesNotMatch(error.message, /SECRET-SCHEMA-VALUE/);
+		return true;
+	});
 });

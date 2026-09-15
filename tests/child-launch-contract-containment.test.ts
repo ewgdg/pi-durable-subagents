@@ -10,7 +10,7 @@ import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-co
 import { PiChildProcessRuntime, type StartPiChildProcessRuntimeOptions } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 
-test("incompatible resume and cancellation delivery admissions create no Runs or Moderator launch path", { timeout: 10_000 }, async (t) => {
+test("incompatible shared pending-delivery admission creates no Runs or Moderator launch path", { timeout: 10_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-contract-containment-"));
 	const schemaPath = join(root, "schemas.mjs");
 	await writeFile(schemaPath, "export const AGENT_CONTROL_PROTOCOL_VERSION = 9; export const ChildProcessBootstrapSchema = {};");

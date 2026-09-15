@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import { chmod } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-contract.ts";
+import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
 	fauxAssistantMessage,
@@ -1493,3 +1497,70 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 	}
 	throw new Error("Expected Run supervision condition was not reached");
 }
+
+test("workflow resume and cancellation retain canonical identities through a latched bootstrap mismatch", { timeout: 30_000 }, async (t) => {
+	const harness = await createRunSupervisionHarness(t);
+	t.after(() => harness.shutdown());
+	harness.host.model.setResponses([fauxAssistantMessage("The request remains unanswered.")]);
+	const spawnInput = { title: "Preserve this request", request: "Keep this request unanswered until the Owner decides." };
+	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", spawnInput, { id: "spawn-before-contract-change" })));
+	const spawned = await harness.ownerView.spawn("spawn-before-contract-change", spawnInput);
+	assert.ok("agentId" in spawned);
+	const child = {
+		agentId: spawned.agentId,
+		view: harness.coordinator.forAgent(spawned.agentId),
+		transcriptPath: harness.ownerView.status(spawned.agentId).primaryEvidence.transcriptPath!,
+	};
+	await waitForCondition(() => child.view.openIncomingRequests().requests.length > 0);
+	const [request] = child.view.openIncomingRequests().requests;
+	assert.ok(request);
+	const canonicalRequest = harness.ownerView.inspectRequest(request.requestMessageId);
+	await harness.control("terminate-before-contract-change", { operation: "terminate", agentId: child.agentId });
+	assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
+	const transcriptBefore = await readFile(child.transcriptPath, "utf8");
+	const allAgents = () => (["starting", "live", "ending", "dormant"] as const).flatMap(phase =>
+		harness.ownerView.search({ operation: "search", scope: "authorized", phase }).matches.map(agent => agent.agentId)
+	).sort();
+	const identitiesBefore = allAgents();
+	const root = await mkdtemp(join(tmpdir(), "pi-workflow-contract-"));
+	const schemaPath = join(root, "schemas.mjs");
+	await writeFile(schemaPath, "export const AGENT_CONTROL_PROTOCOL_VERSION = 9; export const ChildProcessBootstrapSchema = {};");
+	const guard = new ChildLaunchContractGuard(pathToFileURL(schemaPath));
+	const assertCompatible = ChildLaunchContractGuard.prototype.assertCompatible;
+	t.mock.method(ChildLaunchContractGuard.prototype, "assertCompatible", () => assertCompatible.call(guard));
+	let launches = 0;
+	t.mock.method(PiChildProcessRuntime, "launch", async () => {
+		launches++;
+		throw new Error("incompatible preparation reached process launch");
+	});
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const id = `workflow-resume-incompatible-${attempt}`;
+		harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("workflow_resume", {}, { id })));
+		const receipt = await harness.ownerView.resumeWorkflow(id);
+		const retained = receipt.outstandingRequests.find(item => item.requestMessageId === request.requestMessageId);
+		assert.ok(retained);
+		assert.match(retained.reason ?? "", /protocol_mismatch.*Stop.*align.*restart/);
+		assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
+		assert.deepEqual(harness.ownerView.inspectRequest(request.requestMessageId), canonicalRequest);
+	}
+	const owner = { session: harness.host.session, view: harness.ownerView };
+	const cancellation = await harness.messageAs(owner, "cancel-incompatible-request", {
+		operation: "cancel", requestMessageId: request.requestMessageId, reason: "Human withdrew the work; do not launch to repair packages.",
+	});
+	assert.ok("messageId" in cancellation && "messageStatus" in cancellation);
+	assert.equal(cancellation.messageStatus, "not_sent");
+	harness.host.session.sessionManager.appendMessage({ role: "toolResult", toolCallId: "cancel-incompatible-request", toolName: "agent_message", content: [], details: cancellation, isError: false, timestamp: Date.now() });
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const retry = await harness.messageAs(owner, `retry-incompatible-cancellation-${attempt}`, { operation: "retry", messageId: cancellation.messageId });
+		assert.equal("messageId" in retry && retry.messageId, cancellation.messageId);
+		assert.equal("messageStatus" in retry && retry.messageStatus, "not_sent");
+	}
+	const again = await harness.messageAs(owner, "cancel-incompatible-again", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Still withdrawn." });
+	assert.deepEqual(again, { disposition: "already_cancelled", cancellationMessageId: cancellation.messageId });
+	assert.equal(launches, 0);
+	assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
+	assert.deepEqual(allAgents(), identitiesBefore, "no Moderator or replacement Agent is created");
+	assert.equal(await readFile(child.transcriptPath, "utf8"), transcriptBefore, "no replay, cancellation Delivery, or Run evidence is fabricated");
+	assert.deepEqual(harness.ownerView.inspectRequest(request.requestMessageId), canonicalRequest);
+	assert.deepEqual(child.view.openIncomingRequests().requests, [request], "undelivered cancellation does not discharge the responder obligation");
+});

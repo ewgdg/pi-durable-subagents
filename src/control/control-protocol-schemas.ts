@@ -158,9 +158,6 @@ function bootstrapFailureDetail(value: unknown): string {
 	const descriptor = typeof value === "object" && value !== null && !Array.isArray(value)
 		? value as Record<string, unknown> : {};
 	const version = descriptor.protocolVersion;
-	if (typeof version === "number" && Number.isSafeInteger(version) && version !== AGENT_CONTROL_PROTOCOL_VERSION) {
-		return `control_bootstrap_protocol_mismatch: expected ${AGENT_CONTROL_PROTOCOL_VERSION}, received ${version}`;
-	}
 	const missing: string[] = [];
 	const invalid: string[] = [];
 	for (const [field, schema] of Object.entries(ChildProcessBootstrapSchema.properties)) {
@@ -168,7 +165,20 @@ function bootstrapFailureDetail(value: unknown): string {
 		else if (!Check(schema, descriptor[field])) invalid.push(field);
 	}
 	const extra = Object.keys(descriptor).some(field => !(field in ChildProcessBootstrapSchema.properties));
-	const category = version === AGENT_CONTROL_PROTOCOL_VERSION ? "schema_drift" : "invalid";
-	// Only schema-owned field names are reported; never descriptor values or unknown keys.
-	return `control_bootstrap_${category}: expected protocol ${AGENT_CONTROL_PROTOCOL_VERSION}; missing fields: ${missing.join(", ") || "none"}; invalid fields: ${invalid.join(", ") || "none"}${extra ? "; unexpected fields present" : ""}`;
+	return describeChildBootstrapFailure(AGENT_CONTROL_PROTOCOL_VERSION, version, missing, invalid, extra);
+}
+
+/** Values and unknown descriptor keys must never enter a bootstrap diagnostic. */
+export function describeChildBootstrapFailure(
+	expectedVersion: unknown,
+	receivedVersion: unknown,
+	missingFields: readonly string[],
+	invalidFields: readonly string[],
+	unexpectedFields = false,
+): string {
+	const validExpectedVersion = typeof expectedVersion === "number" && Number.isSafeInteger(expectedVersion);
+	const validVersion = typeof receivedVersion === "number" && Number.isSafeInteger(receivedVersion);
+	const category = !validExpectedVersion || !validVersion ? "invalid"
+		: receivedVersion === expectedVersion ? "schema_drift" : "protocol_mismatch";
+	return `control_bootstrap_${category}: expected ${validExpectedVersion ? expectedVersion : "invalid or missing"}, received ${validVersion ? receivedVersion : "invalid or missing"}; missing fields: ${missingFields.join(", ") || "none"}; invalid fields: ${invalidFields.join(", ") || "none"}${unexpectedFields ? "; unexpected fields present" : ""}`;
 }
