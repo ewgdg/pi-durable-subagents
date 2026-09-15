@@ -71,6 +71,70 @@ test("launch projects the real startup PTY through runtime admission", {
 	}
 });
 
+for (const outcome of ["admitted", "mismatch", "cancelled", "exited"] as const) {
+	test(`startup dialogs remain usable before initial tool admission: ${outcome}`, {
+		timeout: TEST_TIMEOUT_MS,
+		skip: process.platform === "win32",
+	}, async () => {
+		const options = await createLaunchOptions(`startup-dialog-${outcome}`, 0);
+		const launch = await PiChildProcessRuntime.launch({
+			...options,
+			configuration: { ...options.configuration, tools: ["read"] },
+			ownerEnvironment: {
+				...options.ownerEnvironment,
+				PROCESS_RUNTIME_STARTUP_DIALOG: "1",
+				PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify(outcome === "mismatch" ? [] : ["read"]),
+			},
+		});
+		let settled = false;
+		const readiness = launch.ready();
+		void readiness.then(() => { settled = true; }, () => { settled = true; });
+		const waitForDisplay = async (expected: string) => {
+			const deadline = Date.now() + TEST_TIMEOUT_MS;
+			while (!nativeChildDisplayText(launch).includes(expected)) {
+				assert.ok(Date.now() < deadline, `startup display missing ${expected}`);
+				await new Promise(resolve => setTimeout(resolve, 10));
+			}
+		};
+		try {
+			await attachNativeChildDisplay(launch);
+			await waitForDisplay("PROCESS_RUNTIME_STARTUP_INPUT");
+			assert.equal(settled, false, "startup input must not admit the initial tool selection");
+			launch.writeInput("startup answer\r");
+			await waitForDisplay("PROCESS_RUNTIME_STARTUP_OVERLAY startup answer");
+			assert.equal(settled, false, "startup overlay must not admit the initial tool selection");
+			if (outcome === "exited") {
+				process.kill(launch.pid, "SIGKILL");
+				await assert.rejects(readiness);
+			} else if (outcome === "cancelled") {
+				const cancellation = new Error("cancel while startup overlay waits");
+				const cleanup = launch.cancelInitialization(cancellation);
+				assert.ok(cleanup);
+				await assert.rejects(readiness, error => error === cancellation);
+				await cleanup;
+			} else {
+				launch.writeInput("\r");
+				if (outcome === "mismatch") {
+					await assert.rejects(readiness, /child_runtime_tools_mismatch: missing \["read"\], unexpected \[\]/);
+				} else {
+					const runtime = await readiness;
+					assert.deepEqual(runtime.snapshot.tools, ["read"]);
+					// Admission must not hide an already attached startup presentation.
+					launch.writeInput("/runtime-probe POST_STARTUP_INPUT_OK\r");
+					await waitForDisplay("INPUT=POST_STARTUP_INPUT_OK");
+				}
+			}
+			if (outcome !== "admitted") {
+				assert.equal(launch.disposed, true);
+				assert.throws(() => process.kill(launch.pid, 0), hasCode("ESRCH"));
+				await assert.rejects(lstat(dirname(launch.bootstrapPath)), hasCode("ENOENT"));
+			}
+		} finally {
+			await launch.dispose();
+		}
+	});
+}
+
 test("cancelling pending launch rejects exact readiness and bounds all startup cleanup", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
@@ -82,6 +146,8 @@ test("cancelling pending launch rejects exact readiness and bounds all startup c
 		const projection = createPiChildProcessProjection(launch);
 		const readiness = projection.ready();
 		void readiness.catch(() => undefined);
+		const attachment = launch.beginPhysicalTerminalAttachment(() => {});
+		void attachment.catch(() => undefined);
 		const pid = launch.pid;
 		const bootstrapPath = launch.bootstrapPath;
 		const cancellation = new Error("deterministic pending launch cancellation");
@@ -92,6 +158,7 @@ test("cancelling pending launch rejects exact readiness and bounds all startup c
 		assert.ok(cleanup);
 		assert.equal(projection.cancelInitialization(new Error("too late")), undefined);
 		await assert.rejects(readiness, (error) => error === cancellation);
+		await assert.rejects(attachment, /deterministic pending launch cancellation/);
 		await cleanup;
 		assert.equal(launch.disposed, true);
 		assert.throws(() => process.kill(pid, 0), hasCode("ESRCH"));
@@ -251,15 +318,6 @@ test("cancelled startup attachment stays hidden and retained child reattaches wi
 			PROCESS_RUNTIME_VISIBILITY_PROBE: join(dirname(options.sessionPath), "visibility-events"),
 		},
 	});
-	const visibility: boolean[] = [];
-	const observedRuntime = launch.ready().then(runtime => {
-		const setVisible = runtime.setPresentationVisible.bind(runtime);
-		runtime.setPresentationVisible = visible => {
-			visibility.push(visible);
-			return setVisible(visible);
-		};
-		return runtime;
-	});
 	const projection = createPiChildProcessProjection(launch);
 	const display = new xtermHeadless.Terminal({ cols: 80, rows: 60, allowProposedApi: true });
 	display.onData(data => launch.writeInput(data));
@@ -282,9 +340,7 @@ test("cancelled startup attachment stays hidden and retained child reattaches wi
 		await new Promise<void>(resolve => setImmediate(resolve));
 		const closing = cancelled.close();
 		await Promise.all([selecting, closing]);
-		const runtime = await observedRuntime;
-		assert.equal(visibility.at(-1), false, "cancelled admission must end hidden");
-		assert.ok(!visibility.includes(true), "cancelled pending show must be invalidated");
+		const runtime = await launch.ready();
 		// Owner was never suspended for an unprepared child.
 		assert.equal(ownerRestored, false);
 		const settled = new Promise<void>(resolve => {
@@ -294,6 +350,11 @@ test("cancelled startup attachment stays hidden and retained child reattaches wi
 		});
 		await runtime.channel.request("message.deliver", { deliveryId: "retained-work", delivery: { kind: "user", content: "CANCELLED_RETAINED_WORK" } });
 		await settled;
+		assert.doesNotMatch(
+			await readFile(join(dirname(options.sessionPath), "visibility-events"), "utf8"),
+			/^render$/m,
+			"cancelled attachment must keep completed work hidden until reattachment",
+		);
 		await retained.attach(projection);
 		const screen = () => Array.from({ length: display.rows }, (_, row) =>
 			display.buffer.active.getLine(display.buffer.active.viewportY + row)?.translateToString(true) ?? "").join("\n");

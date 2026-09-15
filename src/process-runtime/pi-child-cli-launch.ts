@@ -100,8 +100,8 @@ export function buildPiChildCliLaunch(options: {
 		"--extension",
 		bridgeExtensionPath,
 		...configuration.extensions.flatMap((path) => ["--extension", path]),
-		// Pi dispatches input by extension load order. Keep Control first while this
-		// input-only adapter runs after every inherited transform or rejection.
+		// Pi awaits session_start and dispatches input in extension load order.
+		// This tail marks startup complete and runs after inherited input preflights.
 		"--extension",
 		inputExtensionPath,
 		"--no-skills",

@@ -9,7 +9,10 @@ export type ChildRuntimeInputHandler = (
 	context: ExtensionContext,
 ) => Promise<InputEventResult> | InputEventResult;
 
-type ChildRuntimeInputRegistry = WeakMap<object, ChildRuntimeInputHandler>;
+type ChildRuntimeInputRegistry = WeakMap<object, {
+	input: ChildRuntimeInputHandler;
+	completeStartup(): Promise<void>;
+}>;
 
 const CHILD_RUNTIME_INPUT_REGISTRY_KEY = "__piAgentCoordinationChildRuntimeInputs";
 const globalChildRuntimeInputRegistry = globalThis as typeof globalThis & {

@@ -146,6 +146,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 	]);
 	assert.deepEqual(Object.keys(agentControlEvents), [
 		"runtime.ready",
+		"runtime.startupComplete",
 		"runtime.snapshot.changed",
 		"runtime.input.submissionAcknowledged",
 		"runtime.input.started",

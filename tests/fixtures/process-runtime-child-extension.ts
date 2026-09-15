@@ -196,6 +196,14 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		if (delayMilliseconds > 0) {
 			await new Promise((resolve) => setTimeout(resolve, delayMilliseconds));
 		}
+		if (process.env.PROCESS_RUNTIME_STARTUP_DIALOG === "1") {
+			const answer = await ctx.ui.input("PROCESS_RUNTIME_STARTUP_INPUT");
+			await ctx.ui.custom<void>((_tui, _theme, _keys, done) => ({
+				render: () => [`PROCESS_RUNTIME_STARTUP_OVERLAY ${answer}`],
+				invalidate() {},
+				handleInput(data) { if (data === "\r") done(); },
+			}), { overlay: true });
+		}
 		if (process.env.PROCESS_RUNTIME_INITIAL_TOOLS !== undefined) {
 			pi.setActiveTools(JSON.parse(process.env.PROCESS_RUNTIME_INITIAL_TOOLS));
 		}

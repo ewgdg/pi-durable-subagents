@@ -52,7 +52,7 @@ import {
 	CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE,
 } from "./child-process-environment.ts";
-import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
+import { childRuntimeInputs, type ChildRuntimeInputHandler } from "./child-runtime-input-registry.ts";
 import { ChildTurnCompactionGateway } from "./child-turn-compaction-gateway.ts";
 import { NativeInputSubmissionIdentity } from "./native-input-submission-identity.ts";
 import {
@@ -353,14 +353,14 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		);
 		currentState.currentBinding = binding;
 		currentState.shutdownStarted = false;
-		// The input-only extension is last in Pi load order. Replace its delegate on
+		// The tail extension is last in Pi load order. Replace its delegates on
 		// every bridge generation while keeping lifecycle and Control available first.
 		const participantInput = createParticipantInputHandler(
 			participantLifecycle,
 			completeDiscardedInput,
 			{ deferPrimaryInputQueued: false },
 		);
-		childRuntimeInputs.set(ctx.sessionManager, async (input, context) => {
+		const handleInput: ChildRuntimeInputHandler = async (input, context) => {
 			const result = await participantInput(input, context);
 			if (
 				input.source === "extension" &&
@@ -393,8 +393,24 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				result.action === "continue"
 			) deferPrimaryInputQueued(participantLifecycle, context);
 			return result;
-		});
+		};
 		const channel = currentState.channel;
+		childRuntimeInputs.set(ctx.sessionManager, {
+			input: handleInput,
+			async completeStartup() {
+				try {
+					await binding.publishRuntimeSnapshot();
+					// Reload reports current state but does not re-enforce the initial selection.
+					if (!retained) {
+						await channel.sendEvent("runtime.startupComplete", await runtimeSnapshot(binding.runtime, ctx));
+					}
+				} catch (error) {
+					await reportFault(channel, "runtime_startup_failed", error);
+					await channel.close().catch(() => undefined);
+					throw error;
+				}
+			},
+		});
 		try {
 			assertExpectedSession(binding.runtime, bootstrap);
 			if (!retained) {

@@ -102,7 +102,7 @@ export class PiChildProcessRuntime {
 	#exitResult: PtyExit | undefined;
 	#exitObserved = false;
 	#channelClosed = false;
-	#presentationRevision = 0;
+	readonly #presentation: ChildProcessPresentation;
 
 	readonly channel: PiChildRuntimeChannel;
 	readonly ready: PiChildRuntimeReady;
@@ -111,6 +111,7 @@ export class PiChildProcessRuntime {
 	readonly exited: Promise<PtyExit>;
 
 	private constructor(options: {
+		presentation: ChildProcessPresentation;
 		projection: PtyTerminalProjection;
 		admissionBroker: AgentControlAdmissionBroker<typeof agentControlProtocol>;
 		channel: PiChildRuntimeChannel;
@@ -121,6 +122,7 @@ export class PiChildProcessRuntime {
 		systemPromptArtifactPath: string | undefined;
 		eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
 	}) {
+		this.#presentation = options.presentation;
 		this.#projection = options.projection;
 		this.#admissionBroker = options.admissionBroker;
 		this.#eventHandlers = options.eventHandlers;
@@ -257,6 +259,10 @@ export class PiChildProcessRuntime {
 			// await. Own both rejections immediately; launch.ready() remains the caller's
 			// authoritative failure and cleanup boundary.
 			void bridgeReady.catch(() => undefined);
+			let settleStartupComplete!: (snapshot: PiChildRuntimeSnapshot) => void;
+			const startupComplete = new Promise<PiChildRuntimeSnapshot>((resolve) => {
+				settleStartupComplete = resolve;
+			});
 			let rejectStartupFault!: (error: Error) => void;
 			const startupFault = new Promise<never>((_resolve, reject) => {
 				rejectStartupFault = reject;
@@ -295,6 +301,7 @@ export class PiChildProcessRuntime {
 						}) ?? (() => undefined);
 					candidate.onEvent((event) => {
 						if (event.event === "runtime.ready") settleReady(event.payload);
+						if (event.event === "runtime.startupComplete") settleStartupComplete(event.payload);
 						if (event.event === "runtime.fault") {
 							rejectStartupFault(new Error(
 								`child_runtime_fault: ${event.payload.code}: ${event.payload.message}`,
@@ -305,6 +312,7 @@ export class PiChildProcessRuntime {
 					candidate.onClose((cause) => {
 						removePresentationChangeHandler();
 						rejectReady(cause);
+						rejectStartupFault(cause);
 					});
 				},
 			);
@@ -343,7 +351,7 @@ export class PiChildProcessRuntime {
 				bootstrapPath,
 				eventHandlers,
 				cleanup,
-				initialize: async (cancellation) => {
+				preparePresentation: async (cancellation) => {
 					try {
 						channel = await raceStartup(
 							Promise.race([admission, startupFault]),
@@ -364,11 +372,28 @@ export class PiChildProcessRuntime {
 								`child_runtime_ready_mismatch: expected session ${bootstrap.expectedSessionId}, received ${readyPayload.sessionId}`,
 							);
 						}
-						const snapshot = await raceStartup(
-							Promise.race([channel.request("runtime.snapshot", {}), startupFault]),
+						// Presentation must be usable while inherited startup handlers await
+						// dialogs. Only the later startup-completion snapshot admits Agent work.
+						await exactProjection.enterNativeTerminalMode();
+						await raceStartup(
+							Promise.race([channel.request("presentation.setVisible", { visible: false }), startupFault]),
 							exactProjection,
 							timeoutMilliseconds,
-							"configuration snapshot",
+							"hidden presentation",
+							cancellation,
+						);
+						return new ChildProcessPresentation(exactProjection, channel);
+					} catch (error) {
+						throw await withTerminalDiagnostic(error, exactProjection);
+					}
+				},
+				initialize: async (presentation, cancellation) => {
+					try {
+						const snapshot = await raceStartup(
+							Promise.race([startupComplete, startupFault]),
+							exactProjection,
+							timeoutMilliseconds,
+							"startup completion snapshot",
 							cancellation,
 						);
 						await assertRuntimeSnapshot(
@@ -380,20 +405,12 @@ export class PiChildProcessRuntime {
 							options.sessionPath,
 							exactSystemPromptArtifactPath,
 						);
-						// Startup diagnostics negotiate once; admitted hidden sessions keep only native UI data.
-						await exactProjection.enterNativeTerminalMode();
-						await raceStartup(
-							Promise.race([channel.request("presentation.setVisible", { visible: false }), startupFault]),
-							exactProjection,
-							timeoutMilliseconds,
-							"hidden presentation",
-							cancellation,
-						);
 						return new PiChildProcessRuntime({
+							presentation,
 							projection: exactProjection,
 							admissionBroker,
-							channel,
-							ready: readyPayload,
+							channel: presentation.channel,
+							ready: await bridgeReady,
 							snapshot,
 							bootstrapPath,
 							artifactDirectory,
@@ -456,28 +473,11 @@ export class PiChildProcessRuntime {
 	async beginPhysicalTerminalAttachment(
 		handler: (data: string) => void,
 	): Promise<() => void> {
-		const revision = ++this.#presentationRevision;
-		return beginPhysicalTerminalAttachment(
-			this.#projection,
-			// Native-mode preparation yields. A hide issued in that interval must
-			// invalidate this show, not be overtaken by it after cancellation.
-			() => revision === this.#presentationRevision
-				? this.setPresentationVisible(true)
-				: Promise.resolve(),
-			handler,
-		);
+		return this.#presentation.beginPhysicalTerminalAttachment(handler);
 	}
 
 	hidePresentation(): Promise<void> {
-		++this.#presentationRevision;
-		if (this.#exitObserved) return Promise.resolve();
-		this.#projection.resumeOutput();
-		// A disconnected Control channel already schedules exact process cleanup.
-		// Hiding that failed view must not add another request against the closed channel.
-		if (this.#channelClosed) return Promise.resolve();
-		return this.setPresentationVisible(false).catch((error) => {
-			if (!this.#channelClosed) throw error;
-		});
+		return this.#presentation.hidePresentation();
 	}
 
 	pauseOutput(): void {
@@ -489,9 +489,7 @@ export class PiChildProcessRuntime {
 	}
 
 	setPresentationVisible(visible: boolean): Promise<void> {
-		++this.#presentationRevision;
-		return this.channel.request("presentation.setVisible", { visible })
-			.then(() => undefined);
+		return this.#presentation.setPresentationVisible(visible);
 	}
 
 	writeInput(data: string | Buffer): void {
@@ -573,6 +571,7 @@ export class PiChildProcessLaunch {
 	readonly #eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
 	readonly #cleanupInitialization: () => Promise<void>;
 	readonly #readiness: Promise<PiChildProcessRuntime>;
+	readonly #presentationReadiness: Promise<ChildProcessPresentation>;
 	#rejectCancellation!: (error: unknown) => void;
 	#state: PiChildProcessLaunchState = { kind: "pending" };
 	#cleanupPromise: Promise<void> | undefined;
@@ -586,7 +585,8 @@ export class PiChildProcessLaunch {
 		bootstrapPath: string;
 		eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
 		cleanup(): Promise<void>;
-		initialize(cancellation: Promise<never>): Promise<PiChildProcessRuntime>;
+		preparePresentation(cancellation: Promise<never>): Promise<ChildProcessPresentation>;
+		initialize(presentation: ChildProcessPresentation, cancellation: Promise<never>): Promise<PiChildProcessRuntime>;
 	}) {
 		this.#projection = options.projection;
 		this.bootstrapPath = options.bootstrapPath;
@@ -596,7 +596,10 @@ export class PiChildProcessLaunch {
 		const cancellation = new Promise<never>((_resolve, reject) => {
 			this.#rejectCancellation = reject;
 		});
-		this.#readiness = options.initialize(cancellation).then(
+		this.#presentationReadiness = options.preparePresentation(cancellation);
+		this.#readiness = this.#presentationReadiness.then(
+			presentation => options.initialize(presentation, cancellation),
+		).then(
 			(runtime) => {
 				if (this.#state.kind !== "pending") {
 					throw this.#state.kind === "cancelled"
@@ -649,12 +652,11 @@ export class PiChildProcessLaunch {
 	async beginPhysicalTerminalAttachment(
 		handler: (data: string) => void,
 	): Promise<() => void> {
-		// Preserve startup terminal negotiation until admission has paused native rendering.
-		return this.#readiness.then(runtime => runtime.beginPhysicalTerminalAttachment(handler));
+		return this.#presentationReadiness.then(presentation => presentation.beginPhysicalTerminalAttachment(handler));
 	}
 
 	hidePresentation(): Promise<void> {
-		return this.#readiness.then(runtime => runtime.hidePresentation());
+		return this.#presentationReadiness.then(presentation => presentation.hidePresentation());
 	}
 
 	pauseOutput(): void {
@@ -666,8 +668,8 @@ export class PiChildProcessLaunch {
 	}
 
 	setPresentationVisible(visible: boolean): Promise<void> {
-		return this.#readiness.then(
-			(runtime) => runtime.setPresentationVisible(visible),
+		return this.#presentationReadiness.then(
+			(presentation) => presentation.setPresentationVisible(visible),
 		);
 	}
 
@@ -882,6 +884,51 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
 		]);
 	} finally {
 		if (timer) clearTimeout(timer);
+	}
+}
+
+/** One presentation across startup and admission, preserving in-flight hide/show fencing. */
+class ChildProcessPresentation {
+	#revision = 0;
+	#closed = false;
+	readonly projection: PtyTerminalProjection;
+	readonly channel: PiChildRuntimeChannel;
+
+	constructor(
+		projection: PtyTerminalProjection,
+		channel: PiChildRuntimeChannel,
+	) {
+		this.projection = projection;
+		this.channel = channel;
+		channel.onClose(() => { this.#closed = true; });
+		void projection.exited.then(() => { this.#closed = true; });
+	}
+
+	beginPhysicalTerminalAttachment(handler: (data: string) => void): Promise<() => void> {
+		const revision = ++this.#revision;
+		return beginPhysicalTerminalAttachment(
+			this.projection,
+			// Native-mode preparation yields; cancellation must invalidate a pending show.
+			() => revision === this.#revision
+				? this.setPresentationVisible(true)
+				: Promise.resolve(),
+			handler,
+		);
+	}
+
+	hidePresentation(): Promise<void> {
+		++this.#revision;
+		if (this.#closed) return Promise.resolve();
+		this.projection.resumeOutput();
+		return this.setPresentationVisible(false).catch(error => {
+			// Exact process cleanup owns a disconnected channel, not the UI hide.
+			if (!this.#closed) throw error;
+		});
+	}
+
+	setPresentationVisible(visible: boolean): Promise<void> {
+		++this.#revision;
+		return this.channel.request("presentation.setVisible", { visible }).then(() => undefined);
 	}
 }
 

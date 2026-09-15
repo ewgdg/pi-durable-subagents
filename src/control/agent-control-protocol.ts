@@ -825,9 +825,11 @@ export const agentControlMethods = {
 
 /** Bridge-proven version-seven event payload map. */
 export const agentControlEvents = {
+	// Early Control/presentation availability; inherited startup hooks may still await UI.
 	"runtime.ready": {
 		payload: closed({ sessionId: NonEmptyStringSchema, mode: Type.Literal("tui"), hasUI: Type.Literal(true) }),
 	},
+	"runtime.startupComplete": { payload: RuntimeSnapshotSchema },
 	"runtime.snapshot.changed": { payload: RuntimeSnapshotSchema },
 	"runtime.input.submissionAcknowledged": {
 		payload: closed({ sequence: Type.Integer({ minimum: 1 }) }),

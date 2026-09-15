@@ -1195,6 +1195,8 @@ for (const selection of ["reordered", "missing"] as const) {
 						...tools.filter((name) => name !== "read"),
 						...(selection === "missing" ? [] : ["read"]),
 					]),
+					// Yield in the inherited session_start handler before changing tools.
+					PROCESS_RUNTIME_STARTUP_DELAY_MS: "250",
 				},
 				runtimeDirectory: root,
 				ownerRequestHandlers: ordinaryOwnerHandlers({
@@ -1220,6 +1222,10 @@ for (const selection of ["reordered", "missing"] as const) {
 				"ask_user",
 				"read",
 			]);
+			await attachNativeChildDisplay(runtime);
+			runtime.writeInput("/runtime-state\r");
+			await waitForFrame(runtime, "PROCESS_RUNTIME_STATE_CHANGED");
+			assert.deepEqual((await runtime.channel.request("runtime.snapshot", {})).tools, []);
 		} finally {
 			await runtime?.dispose();
 		}
