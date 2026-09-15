@@ -136,7 +136,7 @@ export type EventFrame = Static<typeof EventFrameSchema>;
 export type CancelFrame = Static<typeof CancelFrameSchema>;
 export type ControlFrame = Static<typeof ControlFrameSchema>;
 
-export const CHILD_LAUNCH_ALIGNMENT_GUIDANCE = "Stop child and Moderator launches. Owner: report this failure and its safe diagnostic to the user immediately. Guide the user to stop active work, align the installed Owner and child package versions, and restart the Pi host running this Workflow. Resume or cancellation is not a repair.";
+export const CHILD_LAUNCH_ALIGNMENT_GUIDANCE = "Stop child and Moderator launches. Owner: report this diagnostic to the user immediately; ask them to stop active work, align installed packages, and restart the Pi host.";
 
 export function validateChildProcessBootstrap(value: unknown): ChildProcessBootstrap {
 	if (!Check(ChildProcessBootstrapSchema, value)) {

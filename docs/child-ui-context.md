@@ -45,9 +45,9 @@ Low-level launch rechecks before allocating process resources. An incompatible o
 unverifiable contract blocks that factory's launch path for its remaining lifetime,
 preventing repeated failed launches and Moderator diagnosis through the same path.
 Diagnostics distinguish version mismatch from schema drift and identify affected
-fields without exposing descriptor values or connection tokens. The Owner is
-instructed to report the safe diagnostic immediately and guide the user to stop
-active work, align installed packages, and restart Pi.
+fields without exposing descriptor values or connection tokens. All rejection
+paths use the shared `CHILD_LAUNCH_ALIGNMENT_GUIDANCE` in
+[the bootstrap contract](../src/control/control-protocol-schemas.ts).
 The probe is not an atomic installation lock and does not terminate existing Runs.
 
 Only Agent Identity or Moderator Input bootstrap evidence commits before process launch. Child Identity and Moderator Input commit their captured `creationPreset` atomically with the rest of their bootstrap. The Owner dynamically resolves the current parent configuration, captured creation rules, canonical explicit spawn input, resources, trust, native project context-file loading, and explicit system prompt into a volatile launch specification; it never re-selects the original Template name. It materializes the bootstrap evidence to the exact session JSONL, drops its staging writer, and launches the exact installed Pi CLI with the prepared cwd, model, thinking, startup tool selection, skill paths, file-backed extensions, explicit system prompt artifact when configured, trust decision, and session path. Admission requires the resolved tool selection to match the initial active set, regardless of order. After admission, extensions may change active tools through normal Pi behavior. The launch specification uses native loading of trusted project instruction files such as `AGENTS.md` and `CLAUDE.md` when `loadContextFiles` is true, and passes the explicit child system prompt with its independent `systemPromptMode`. A replacement child can disable native context files with `loadContextFiles: false`. The launch specification is not transcript evidence and is resolved again for every successor Runtime.

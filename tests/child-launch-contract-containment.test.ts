@@ -81,7 +81,7 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 			assert.match(error.message, expected);
 			assert.match(error.message, /stop.*align.*restart/i);
 			assert.match(error.message, /Owner: report.*user immediately/);
-			assert.match(error.message, /restart the Pi host running this Workflow/);
+			assert.match(error.message, /restart the Pi host/);
 			assert.doesNotMatch(error.message, /SECRET-TOKEN|unused.sock/);
 			return true;
 		});

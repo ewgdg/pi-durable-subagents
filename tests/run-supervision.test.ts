@@ -1541,7 +1541,7 @@ test("workflow resume and cancellation retain canonical identities through a lat
 		assert.ok(retained);
 		assert.match(retained.reason ?? "", /protocol_mismatch.*Stop.*align.*restart/);
 		assert.match(retained.reason ?? "", /Owner: report.*user immediately/);
-		assert.match(retained.reason ?? "", /restart the Pi host running this Workflow/);
+		assert.match(retained.reason ?? "", /restart the Pi host/);
 		assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
 		assert.deepEqual(harness.ownerView.inspectRequest(request.requestMessageId), canonicalRequest);
 	}

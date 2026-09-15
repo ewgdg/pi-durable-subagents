@@ -658,7 +658,7 @@ test("bootstrap incompatibility diagnostics distinguish versions and safe field 
 			assert.match(error.message, pattern);
 			assert.match(error.message, /Stop.*align.*restart/i);
 			assert.match(error.message, /Owner: report.*user immediately/);
-			assert.match(error.message, /restart the Pi host running this Workflow/);
+			assert.match(error.message, /restart the Pi host/);
 			assert.doesNotMatch(error.message, /SECRET-TOKEN|control.sock/);
 			return true;
 		});
