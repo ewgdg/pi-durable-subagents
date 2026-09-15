@@ -97,6 +97,22 @@ test("/quota-resume rejects arguments before invoking the coordinator", async ()
 	assert.equal(calls, 0);
 });
 
+test("/quota-resume fails closed when the admitted view cannot resume quota", async () => {
+	const commands = captureCommands((pi) => registerAgentsCommand(
+		pi,
+		() => ({}) as HumanPresentationCoordinatorView,
+		"admitted",
+	));
+	const command = commands.get("quota-resume");
+	assert.ok(command);
+
+	await assert.rejects(
+		command.handler("", commandContext([])),
+		(error: unknown) => error instanceof Error && error.message ===
+			"invariant_violation: admitted Owner view cannot resume quota",
+	);
+});
+
 test("only an admitted Owner registers /quota-resume", () => {
 	const view = () => viewWithQuotaResumer(async () => true);
 	assert.equal(captureCommands((pi) => registerAgentsCommand(pi, view)).has("quota-resume"), false);
