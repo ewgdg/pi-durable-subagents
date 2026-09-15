@@ -46,7 +46,7 @@ Each status contains the durable Agent identity and structural relationship, the
 
 - `primaryEvidence.transcriptPath` is the authorized Pi transcript location, or `null` for a non-file-backed session.
 - `primaryEvidence.inspectedThrough` identifies the last physical transcript entry included in the observation.
-- `run.phase` is `starting`, `live`, `ending`, or `dormant`. A live Run also reports `work`, `attention`, and counted `retentionReasons`.
+- `run.phase` is `starting`, `live`, `ending`, or `dormant`. A live Run also reports `work`, `attention`, and counted `retentionReasons`. `run.suspension` identifies a quota-suspended Run and contains its retained provider evidence.
 
 Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, `interruption_hold`, and `moderator_handling`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
 
@@ -56,9 +56,32 @@ The native status call and collapsed result identify the Agent as `label · comp
 
 Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. A child-local Turn Compaction Gateway cancels threshold compaction requested after a Run only when no raw Pi continuation is queued. The child releases normally and recomputes the same configured threshold before its next idle native prompt or Owner Delivery. Manual compaction and overflow recovery remain Pi-native. The gateway owns only preparation and input commitment, never the model cycle, and creates no durable pending state or Runtime retention.
 
-If Pi's configured native behavior ultimately ends the exact Run unexpectedly, the runtime retains a Run Failure Report, even when no Answer Obligation remains. It captures the observed error and stage, exact Agent and Run, affected work, and recovery findings or explicit uncertainty. Startup errors observed by the host do not require a child-side error transcript entry. Successfully recovered transient errors, ongoing provider recovery, and deliberate termination are not Run Failures. Pi currently exposes no structured terminal quota-suspension discriminator; the runtime does not guess one from error text.
+If Pi's configured native behavior ultimately ends the exact Run unexpectedly, the runtime retains a Run Failure Report, even when no Answer Obligation remains. It captures the observed error and stage, exact Agent and Run, affected work, and recovery findings or explicit uncertainty. Startup errors observed by the host do not require a child-side error transcript entry. Successfully recovered transient errors, ongoing provider recovery, deliberate termination, and recognized quota suspension are not Run Failures.
 
 An unresolved Answer Obligation still determines eligibility for ordinary Run Failure moderation; reporting does not broaden that policy. Reports use the Owner's existing read/unread, copy, and retained history surfaces. Marking read acknowledges the notification only: it does not clear live failure handling, settle Requests, or initiate recovery. See [Operational Incident moderation](operational-incident-moderation.md) for report grouping and recovery findings.
+
+## Quota suspension
+
+A terminal, evidence-backed quota error displays **Suspended · Usage limit reached** after Pi's configured native retry/fallback has finished. It retains the exact Run instead of failing it or starting a Moderator. The status and its acknowledgeable Runtime Report retain provider/model and the exact diagnostic; a reset time appears only when the provider supplied it. Each continuous suspension has one notice. Reading it does not resume execution.
+
+Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Messages, heartbeat scheduling, Workflow continuation, and native editor input cannot release it. Suspended children relinquish execution capacity so unrelated children can progress. Quota-blocked work and its genuinely blocked dependency path do not generate obligation reminders, stall/deadlock moderation, or Moderator replacements; unrelated incidents remain eligible.
+
+Restore quota or deliberately select an available model/account, then explicitly resume:
+
+- A supervisor uses `agent_control` with `operation: "resume"`, the child Agent ID, and resumption instructions.
+- The human uses `/quota-resume` to resume the Owner. Agent controls do not gain authority over the Owner.
+
+Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. Explicit termination ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
+
+The Owner transcript retains suspension independently of report read state. Cold recovery restores the stop before scheduling work, rather than silently starting a successor. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
+
+### Provider evidence and upstream limitation
+
+The classifier accepts retained `usage_limit_reached` / `insufficient_quota` JSON error codes or types (including Pi's HTTP-status-prefixed JSON), and the exact observed Codex diagnostic `Codex error: The usage limit has been reached`. An explicit unrelated code takes precedence over prose. Generic HTTP 429, `rate_limit_exceeded`, arbitrary text containing “limit”, and ambiguous friendly usage-limit wording are not quota evidence. Temporary throttling stays on Pi's native recovery path; unknown terminal errors remain ordinary failures.
+
+The installed Pi provider exposes `AssistantMessage.errorMessage`, not the original structured provider error. Codex streaming errors construct a `CodexApiError` with code/payload, but error formatting discards those fields. The HTTP formatter also conflates quota, temporary throttling, and other 429 responses into friendly text. This package cannot recover facts already discarded upstream.
+
+Required upstream improvement: preserve provider code/type and provider-supplied absolute reset time through both HTTP and streaming error mapping into `AssistantMessage` and lifecycle events, independently of human-readable formatting. Until then, classification is intentionally limited to retained exact/JSON evidence. Installed provider packages are not patched.
 
 ## Child execution and Delivery
 

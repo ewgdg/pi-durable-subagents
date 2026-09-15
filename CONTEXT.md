@@ -177,13 +177,16 @@ The transient human choice to attach the physical terminal to one durable non-Ow
 An Owner-hosted read-only presentation of one coherent active-branch snapshot from a durable Agent transcript, used only when Dormant Runtime Preparation cannot produce a usable projection. It shows the Runtime preparation error separately, admits no Run, creates no Runtime or retention, appends no evidence, and does not mark the durable Agent failed. Closing it restores the exact previously mounted Owner or Agent presentation.
 
 **Selected Agent Status**:
-The human-facing lifecycle and work disposition of an Agent under Interactive Selection. It is Dormant when no exact Run exists. A healthy current Run is Active while work is executing, Waiting with a concise reason when progress requires a named external condition or human action, and Idle when settled without such a wait. Starting, Ending, and Failed communicate lifecycle transitions or failure separately.
+The human-facing lifecycle and work disposition of an Agent under Interactive Selection. It is Dormant when no exact Run exists. A healthy current Run is Active while work is executing, Waiting with a concise reason when progress requires a named external condition or human action, and Idle when settled without such a wait. Starting, Ending, Failed, and Suspended communicate lifecycle transitions, failure, and quota suspension separately.
 
 **Interruption Hold**:
 The transient exact-Run pause established by confirmed authorized-supervisor interruption or Human Escape. It retains the Run, Requests, obligations, and pending scheduling while blocking ordinary Message Delivery commits and stuck-condition moderation. Only a native human editor Message commit or a standalone Supervisory Resume Message Delivery commit bound to that exact Hold atomically replaces it with an isolated resumption turn; explicit Run Termination instead ends the held Run and discards its undelivered backlog.
 
+**Quota Suspension**:
+An evidence-backed exact-Run stop after the provider's exhausted quota survives configured native recovery, distinct from Run Failure and a human-issued Interruption Hold. It preserves Request ownership and blocks implicit continuation across host recovery until explicit resumption or termination; acknowledging its notice does not change the stop.
+
 **Supervisory Resume Message**:
-An authorized supervisor's free-form Message requesting that one exact held Agent Run continue. It uses reserved fixed resumption scheduling, clears only the exact Interruption Hold against which it was admitted when its standalone Delivery commits, and otherwise remains ordinary Steer direction without gaining power over a later Hold.
+An authorized supervisor's free-form Message requesting that one exact held or quota-suspended Agent Run continue. It uses reserved fixed resumption scheduling, clears only the exact stop against which it was admitted when its standalone Delivery commits, and otherwise remains ordinary Steer direction without gaining power over a later stop.
 
 **Run Release Gate**:
 The live decision that permits an exact child Agent Run to end only when no Run Retention Reason remains. A separately retained Agent Runtime may remain prepared after Run release.

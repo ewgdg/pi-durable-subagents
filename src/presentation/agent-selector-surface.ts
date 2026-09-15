@@ -1046,6 +1046,16 @@ function formatRun(status: AgentRosterStatus, theme: Theme): string {
 
 function formatDetailedRun(status: AgentRosterStatus): string {
 	const { run } = status;
+	if (run.suspension) {
+		const { evidence } = run.suspension;
+		return [
+			"Suspended · Usage limit reached",
+			evidence.provider,
+			evidence.model,
+			evidence.diagnostic,
+			evidence.resetAt === undefined ? undefined : `Reset: ${evidence.resetAt}`,
+		].filter(Boolean).join(" · ");
+	}
 	const state = run.phase === "dormant"
 		? ["Dormant"]
 		: [

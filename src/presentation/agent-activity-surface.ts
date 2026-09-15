@@ -215,7 +215,7 @@ export class AgentActivityDock implements Component {
 			]!;
 			return this.#theme.fg("accent", frame);
 		}
-		if (status.kind === "waiting") return this.#theme.fg("warning", "■");
+		if (status.kind === "waiting" || status.kind === "suspended") return this.#theme.fg("warning", "■");
 		if (status.kind === "failed") return this.#theme.fg("error", "×");
 		return this.#theme.fg("dim", "○");
 	}

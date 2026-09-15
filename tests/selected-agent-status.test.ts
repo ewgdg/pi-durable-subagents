@@ -18,6 +18,16 @@ const identity = {
 	agentId: "019fa1ff-6e95-761e-b4ce-7415983c81e3",
 };
 
+test("quota suspension stays visible despite pending work or compaction", () => {
+	const evidence = { diagnostic: "Codex error: The usage limit has been reached", provider: "openai-codex", model: "gpt-5" };
+	const status = selectedAgentWorkStatus({
+		phase: "live", work: "active", attention: "none", retentionReasons: [],
+		suspension: { reason: "provider_quota", evidence },
+	}, false, true);
+	assert.deepEqual(status, { kind: "suspended", evidence });
+	assert.match(formatSelectedAgentIdentity({ ...identity, status }, theme), /<warning>Suspended · Usage limit reached<\/warning>/);
+});
+
 test("selected Agent identity gives every work status its specified theme role", () => {
 	const cases = [
 		{ status: { kind: "active" as const }, role: "success", label: "active" },
