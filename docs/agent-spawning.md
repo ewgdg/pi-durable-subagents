@@ -38,8 +38,6 @@ When neither `config` nor the captured Template specifies `tools`, a fresh Runti
 
 `tools` and `skills` are startup selections, not capability ceilings. Coordination tools are normalized to the child's role: Owner-only tools such as `workflow_resume` are removed, and role-required tools are always added. Thus `tools: []` selects no optional tools. At startup admission, the active tools must match the resolved selection as a set: missing and unexpected tools fail admission, while a different order is accepted. An extension that removes a selected tool or activates an unselected tool during startup causes a clear admission failure. After admission, Pi and extensions may change active tools normally, including dynamic loading; the initial selection is not a permanent runtime restriction. Runtime snapshots report the current active `tools`, while the launch configuration records the initial selection. Missing selected skills continue to fail preparation.
 
-The former ceiling field is not a compatibility alias. See [upgrading tool selections](tool-selection-upgrade.md) before reusing old Templates or persisted Workflows.
-
 The label resolves from the explicit label, selected template name, then `agent`. A description comes only from the explicit spawn input. Display metadata is trimmed, preserves Unicode, rejects line breaks and control characters, and is limited to 64 Unicode code points for labels and 240 for descriptions.
 
 The authenticated calling Agent becomes the immutable Direct Spawner. Agent identity, Workflow membership, authority, role-required tool capabilities, and Creation Request delivery mode are not caller-supplied fields.

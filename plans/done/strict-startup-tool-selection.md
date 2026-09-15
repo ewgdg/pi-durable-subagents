@@ -48,7 +48,7 @@ Selection names describe the initial contract. Runtime `tools` describes current
 
 ## Outcomes
 
-Implemented and reviewed. All task-owned changes are committed at the selection, startup readiness, native activation, and documentation/caller boundaries. The old field is rejected rather than aliased, and no user configuration or immutable history was rewritten. Upgrade implications are documented separately in `docs/tool-selection-upgrade.md`.
+Implemented and reviewed. All task-owned changes are committed at the selection, startup readiness, native activation, and documentation/caller boundaries. The old field is rejected rather than aliased, and no user configuration or immutable history was rewritten.
 
 The important corrections were semantic, not cosmetic: an exact startup contract requires waiting for asynchronous inherited handlers, while later dynamic activation requires avoiding Pi's persistent CLI registry filter. Early Control/presentation must remain usable during startup so validation does not deadlock dialogs.
 
