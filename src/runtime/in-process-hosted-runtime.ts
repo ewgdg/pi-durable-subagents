@@ -1,5 +1,5 @@
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
-import { bindSessionStartup, disposeSessionStartup, isStartupPreparationBusy } from "../pi-integration/session-startup.ts";
+import { bindSessionStartup, disposeSessionStartup, isStartupPreparationBusy, waitForStartupRelease } from "../pi-integration/session-startup.ts";
 import type { CommitModeratorReminderIfCurrent, ModeratorReminderOutcome } from "./agent-runtime-host.ts";
 import type {
 	AgentSession,
@@ -113,10 +113,11 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 	}
 
 	async deliverModeratorReminder(commitIfCurrent: CommitModeratorReminderIfCurrent): Promise<ModeratorReminderOutcome> {
-		if (!this.#session.isIdle) return "busy";
+		const admission = bindSessionStartup(this.#session);
+		if (!this.#session.isIdle || admission.isPreparing) return "busy";
 		return commitIfCurrent(async () => {
 			// Recheck after the reconciliation-lane admission; never enter a native queue.
-			if (!this.#session.isIdle) return "busy";
+			if (!this.#session.isIdle || admission.isPreparing) return "busy";
 			const message = createModelVisibleModeratorObligationReminder();
 			const existing = new Set(this.#session.sessionManager.getEntries().map(entry => entry.id));
 			const dispatched = this.deliver({ kind: "custom", message, triggerTurn: true }, {
@@ -196,7 +197,7 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 			} catch (error) {
 				if (!isStartupPreparationBusy(error)) throw error;
 				// Only retry uncommitted busy admission; never override handled input.
-				await error.whenReleased;
+				await waitForStartupRelease(error.whenReleased, cancellation);
 			}
 		}
 	}

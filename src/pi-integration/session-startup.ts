@@ -9,6 +9,7 @@ type CustomStartup = {
 	checkpoint: () => void;
 	invocation?: Invocation;
 	injected: boolean;
+	nativeAccepted: boolean;
 	resolvePreflight: () => void;
 };
 type Invocation = {
@@ -50,8 +51,8 @@ export function registerSessionStartup(pi: ExtensionAPI): void {
 
 export function bindSessionStartup(session: AgentSession): SessionStartupAdmission {
 	let admission = admissions.get(session.sessionManager);
-	if (!admission) {
-		admission = new SessionStartupAdmission(session);
+	if (!admission || admission.isDisposed) {
+		admission = new SessionStartupAdmission(session, admission?.whenAvailable);
 		admissions.set(session.sessionManager, admission);
 	}
 	return admission;
@@ -70,12 +71,20 @@ export class SessionStartupAdmission {
 	#owner: Invocation | undefined;
 	#disposed = false;
 	#cancellation = new AbortController();
+	#previousPreparation: Promise<void> | undefined;
 
-	constructor(session: AgentSession) {
+	constructor(session: AgentSession, previousPreparation?: Promise<void>) {
 		this.#session = session;
+		this.#previousPreparation = previousPreparation;
+		void previousPreparation?.then(() => {
+			if (this.#previousPreparation === previousPreparation) this.#previousPreparation = undefined;
+		});
 		const originalPrompt = session.prompt;
 		const prompt: AgentSession["prompt"] = (text, options) => {
-			if (this.#disposed) return originalPrompt.call(session, text, options);
+			if (this.#disposed) {
+				if (this.whenAvailable) return Promise.reject(new StartupPreparationBusyError(this.whenAvailable));
+				return originalPrompt.call(session, text, options);
+			}
 			return this.#prompt(() => originalPrompt.call(session, text, {
 				...options,
 				preflightResult: success => {
@@ -90,9 +99,18 @@ export class SessionStartupAdmission {
 		};
 		const originalCustom = session.sendCustomMessage;
 		const custom: AgentSession["sendCustomMessage"] = (message, options) => {
+			const pending = this.#kickoffs.getStore();
+			const ownDispatch = pending && !pending.invocation && !pending.nativeAccepted && pending.message === message;
 			if (this.#disposed || !options?.triggerTurn || options.deliverAs === "nextTurn" || session.isStreaming) {
-				return originalCustom.call(session, message, options);
+				if (this.#disposed && options?.triggerTurn && !session.isStreaming && this.whenAvailable) {
+					return Promise.reject(new StartupPreparationBusyError(this.whenAvailable));
+				}
+				if (ownDispatch) pending.checkpoint();
+				const completion = originalCustom.call(session, message, options);
+				if (ownDispatch) { pending.nativeAccepted = true; pending.resolvePreflight(); }
+				return completion;
 			}
+			if (ownDispatch) return this.#promptCustom();
 			return this.#startCustom(message, () => {}).completion;
 		};
 		const agent = session.agent;
@@ -126,7 +144,9 @@ export class SessionStartupAdmission {
 		};
 	}
 
-	get isPreparing(): boolean { return this.#owner !== undefined; }
+	get isPreparing(): boolean { return this.whenAvailable !== undefined; }
+	get isDisposed(): boolean { return this.#disposed; }
+	get whenAvailable(): Promise<void> | undefined { return this.#owner?.released ?? this.#previousPreparation; }
 	/** Capture once across a dispatch's busy retries; abort also cancels waiting admissions. */
 	get signal(): AbortSignal { return this.#cancellation.signal; }
 
@@ -140,14 +160,7 @@ export class SessionStartupAdmission {
 	}
 
 	dispatchCustom(message: CustomMessage, options: CustomOptions, checkpoint: () => void = () => {}): Dispatch {
-		if (options?.triggerTurn && options.deliverAs !== "nextTurn" && !this.#session.isStreaming) {
-			return this.#startCustom(message, checkpoint);
-		}
-		const completion = (async () => {
-			checkpoint();
-			return this.#session.sendCustomMessage(message, options);
-		})();
-		return { completion, preflight: completion };
+		return this.#startCustom(message, checkpoint, () => this.#session.sendCustomMessage(message, options));
 	}
 
 	cancelPreparation(): void {
@@ -160,21 +173,25 @@ export class SessionStartupAdmission {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		this.cancelPreparation();
-		if (this.#owner) this.#release(this.#owner);
-		if (admissions.get(this.#session.sessionManager) === this) admissions.delete(this.#session.sessionManager);
+		// A paused Pi hook can still assign its prompt override before final preflight.
+		// Retain that exclusion across reload until the old invocation actually exits.
 		this.#restore();
 	}
 
-	#startCustom(message: CustomMessage, checkpoint: () => void): Dispatch {
+	#promptCustom(): Promise<void> {
+		// No streamingBehavior: a busy transition must never queue an empty kickoff.
+		return this.#session.prompt("", { source: "extension", expandPromptTemplates: false });
+	}
+
+	#startCustom(message: CustomMessage, checkpoint: () => void, operation = () => this.#promptCustom()): Dispatch {
 		let resolvePreflight!: () => void;
 		const entered = new Promise<void>(resolve => { resolvePreflight = resolve; });
-		const custom: CustomStartup = { message, checkpoint, injected: false, resolvePreflight };
+		const custom: CustomStartup = { message, checkpoint, injected: false, nativeAccepted: false, resolvePreflight };
 		const completion = this.#kickoffs.run(custom, async () => {
 			if (this.#disposed) throw new Error("startup_admission_disposed");
 			checkpoint();
-			// No streamingBehavior: a busy transition must never queue an empty kickoff.
-			await this.#session.prompt("", { source: "extension", expandPromptTemplates: false });
-			if (!custom.invocation?.started) throw new Error("custom_startup_not_started: no native Run accepted the delivery");
+			await operation();
+			if (!custom.nativeAccepted && !custom.invocation?.started) throw new Error("custom_startup_not_started: no native Run accepted the delivery");
 		});
 		// A handled input or rejected preflight has no native start edge.
 		const preflight = Promise.race([entered, completion]);
@@ -183,7 +200,7 @@ export class SessionStartupAdmission {
 	}
 
 	async #prompt(operation: () => Promise<void>): Promise<void> {
-		if (this.#owner) throw new StartupPreparationBusyError(this.#owner.released);
+		if (this.whenAvailable) throw new StartupPreparationBusyError(this.whenAvailable);
 		let release!: () => void;
 		const released = new Promise<void>(resolve => { release = resolve; });
 		const pending = this.#kickoffs.getStore();
@@ -216,4 +233,17 @@ export class SessionStartupAdmission {
 		this.#owner = undefined;
 		invocation.release();
 	}
+}
+
+export async function waitForStartupRelease(released: Promise<void>, signal: AbortSignal): Promise<void> {
+	signal.throwIfAborted();
+	let abort!: () => void;
+	const cancelled = new Promise<never>((_resolve, reject) => {
+		abort = () => reject(signal.reason);
+		signal.addEventListener("abort", abort, { once: true });
+	});
+	try {
+		await Promise.race([released, cancelled]);
+		signal.throwIfAborted();
+	} finally { signal.removeEventListener("abort", abort); }
 }
