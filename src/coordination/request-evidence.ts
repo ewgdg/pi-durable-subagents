@@ -813,9 +813,8 @@ export class RequestEvidence {
 			)
 				continue;
 			if (!child.creationInput) {
-				throw new EvidenceUnavailableError(
-					`Creation Request ${requestId} has no reconstructed spawn input`,
-				);
+				// Skipped spawn history has no authored Request; recipient Delivery can still stand alone.
+				continue;
 			}
 			return (child.creationRequest ??= resolveCreationRequest({
 				childIdentity: child.identity,

@@ -44,6 +44,15 @@ rather than blindly repeating the work.
 Existing identity, membership, and role requirements remain. This policy does
 not fabricate an Agent or repair arbitrary native transcript-container damage.
 
+A rejected `agent_spawn` input does not invalidate an independently verified
+child Identity, captured preset, or Owner-rooted ancestry. Cold discovery still
+requires the root bootstrap, unique physical Spawn source and Agent claims, and
+valid Workflow membership. Accepted Spawn input retains metadata consistency
+checks. Rejected input supplies no authored Creation Request or Runtime overrides;
+the recovered Agent uses current ancestry and its captured preset for later
+Runtime preparation. Independently valid recipient Delivery can still establish
+the Creation Request's local Answer obligation under the missing-source rules.
+
 Skipping invalid coordination records is not a Workflow admission failure and
 must not mark the Workflow unavailable or emit an admission-failure warning.
 Missing Request references handled by the selected rejection policy are not
@@ -112,6 +121,9 @@ not redesign either or introduce a general repair engine.
 - An invalid historical coordination record does not abort admission; valid
   records on every physical branch continue to participate under one rejection
   rule, and original rejected evidence remains available.
+- A rejected Spawn input does not quarantine independently valid children or
+  descendants, reconstruct its authored Creation Request, or apply its config.
+  Recovered children remain usable; invalid identity/bootstrap still quarantines.
 - A valid delivered obligation survives rejection of its original Request source;
   a valid Answer closes it without delivery, including after another replay.
 - A rejected Answer has no effect; no effects are reconstructed from its text.

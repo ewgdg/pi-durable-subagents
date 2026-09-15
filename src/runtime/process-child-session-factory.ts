@@ -121,7 +121,7 @@ export class ProcessChildSessionFactory {
 	async prepareOrdinaryRun(options: {
 		agentId: string;
 		parent: AgentRecord;
-		spawnInput: AgentSpawnInput;
+		spawnInput: AgentSpawnInput | undefined;
 		creationPreset?: AgentCreationPreset;
 	}): Promise<PreparedOrdinaryChildRuntime> {
 		await this.#launchContract.assertCompatible();
@@ -160,7 +160,7 @@ export class ProcessChildSessionFactory {
 
 	createAgentRecord(options: {
 		identity: ChildAgentIdentity;
-		spawnInput: AgentSpawnInput;
+		spawnInput: AgentSpawnInput | undefined;
 		parent: AgentRecord;
 		initialPreparation?: PreparedOrdinaryChildRuntime;
 		sessionPath: string;
@@ -317,15 +317,18 @@ export class ProcessChildSessionFactory {
 		options: {
 			agentId: string;
 			parent: AgentRecord;
-			spawnInput: AgentSpawnInput;
+			spawnInput: AgentSpawnInput | undefined;
 			creationPreset?: AgentCreationPreset;
 		},
 		resolving: Set<string>,
 		captureTemplates = true,
 	): Promise<PreparedOrdinaryChildRuntime> {
 		const parentRuntime = await this.#resolveCurrentRuntime(options.parent, resolving);
+		if (!options.spawnInput && options.creationPreset === undefined) {
+			throw new Error("invariant_violation: Recovered Agent creation preset is unavailable");
+		}
 		const creationPreset = options.creationPreset === undefined
-			? captureAgentCreationPreset(await this.#resolveSelectedTemplate(options.parent.identity.agentId, parentRuntime, options.spawnInput.template))
+			? captureAgentCreationPreset(await this.#resolveSelectedTemplate(options.parent.identity.agentId, parentRuntime, options.spawnInput?.template))
 			: options.creationPreset;
 		const template = creationPreset ?? undefined;
 		const preparedRuntime = await prepareChildRuntime({
@@ -335,7 +338,8 @@ export class ProcessChildSessionFactory {
 			parentRuntime,
 			isModelAvailable: (model) => this.#isModelAvailable(model),
 			...(template === undefined ? {} : { template }),
-			...(options.spawnInput.config === undefined
+			// Rejected spawn arguments provide no runtime overrides; the Identity retains its preset.
+			...(options.spawnInput?.config === undefined
 				? {}
 				: { overrides: options.spawnInput.config }),
 		});
@@ -391,8 +395,8 @@ export class ProcessChildSessionFactory {
 		if (resolving.has(record.identity.agentId)) {
 			throw new Error("invariant_violation: Agent Runtime preparation ancestry contains a cycle");
 		}
-		if (!record.creationInput || record.identity.directSpawnerAgentId === null) {
-			throw new Error("invariant_violation: Child Agent creation input is unavailable");
+		if (record.identity.directSpawnerAgentId === null) {
+			throw new Error("invariant_violation: Child Agent Direct Spawner is unavailable");
 		}
 		const parent = this.#resolveAgent(record.identity.directSpawnerAgentId);
 		if (!parent) {
