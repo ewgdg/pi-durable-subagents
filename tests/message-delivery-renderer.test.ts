@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 
 import {
 	initTheme,
+	type ExtensionAPI,
+	type MessageRenderer,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 
@@ -13,7 +16,7 @@ import {
 	MESSAGE_DELIVERY_CUSTOM_TYPE,
 	type ModelVisibleMessage,
 } from "../src/protocol/message-delivery.ts";
-import { renderMessageDelivery } from "../src/tools/message-delivery-renderer.ts";
+import { registerMessageDeliveryRenderer, renderMessageDelivery, renderMessageProjection } from "../src/tools/message-delivery-renderer.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
 const plainTheme = {
@@ -21,6 +24,103 @@ const plainTheme = {
 	bg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 } as unknown as Theme;
+
+test("left-click toggles a delivered block without affecting its batched sibling", () => {
+	initTheme("dark");
+	const component = renderMessageDelivery(customDelivery([longMessage("first"), longMessage("second")]),
+		{ expanded: false, outputPad: 1 }, plainTheme);
+	assert.doesNotMatch(component.render(60).join("\n"), /first ending|second ending/);
+	assert.equal(pointer(component, "[Message]")?.handled, true);
+	assert.match(component.render(60).join("\n"), /first ending/);
+	assert.doesNotMatch(component.render(60).join("\n"), /second ending/);
+	assert.equal(pointer(component, "[Message]")?.handled, true);
+	assert.doesNotMatch(component.render(60).join("\n"), /first ending|second ending/);
+});
+
+test("registered delivery clicks survive rebuild, invalidation and resize; global expansion supersedes clicks", () => {
+	initTheme("dark");
+	let renderer!: MessageRenderer;
+	registerMessageDeliveryRenderer({
+		registerMessageRenderer: (_type: string, registered: MessageRenderer) => { renderer = registered; },
+	} as ExtensionAPI);
+	const message = customDelivery([longMessage("first"), longMessage("second")]);
+	const render = (expanded = false, theme = plainTheme) => {
+		const component = renderer(message, { expanded, outputPad: 1 }, theme);
+		assert.ok(component);
+		return component;
+	};
+	let component = render();
+	pointer(component, "from first");
+	component.invalidate();
+	assert.match(component.render(45).join("\n"), /first ending/);
+	const changedTheme = { ...plainTheme, bold: (text: string) => `THEMED ${text}` } as Theme;
+	component = render(false, changedTheme);
+	assert.match(component.render(45).join("\n"), /THEMED/);
+	assert.match(component.render(45).join("\n"), /first ending/);
+	assert.doesNotMatch(component.render(45).join("\n"), /second ending/);
+	pointer(component, "from second", {}, 45);
+	assert.match(component.render(45).join("\n"), /second ending/);
+	pointer(component, "from first", {}, 45);
+	assert.doesNotMatch(component.render(45).join("\n"), /first ending/);
+	assert.match(component.render(45).join("\n"), /second ending/);
+	component = render(true);
+	assert.match(component.render(60).join("\n"), /first ending/);
+	assert.match(component.render(60).join("\n"), /second ending/);
+	pointer(component, "from second");
+	component = render(true);
+	assert.doesNotMatch(component.render(60).join("\n"), /second ending/);
+	component = render(false);
+	assert.doesNotMatch(component.render(60).join("\n"), /first ending|second ending/);
+	const separate = renderer(customDelivery([longMessage("first")]), { expanded: false, outputPad: 1 }, plainTheme)!;
+	pointer(component, "from first");
+	assert.doesNotMatch(separate.render(60).join("\n"), /first ending/);
+});
+
+test("delivery pointer handling leaves non-primary clicks, scrolling and selection untouched", () => {
+	initTheme("dark");
+	const component = renderMessageDelivery(customDelivery([longMessage("first")]),
+		{ expanded: false, outputPad: 1 }, plainTheme);
+	for (const type of ["press", "release", "move", "drag", "wheel"] as const) {
+		assert.equal(pointer(component, "[Message]", { type }), undefined);
+	}
+	for (const button of ["right", "middle"] as const) {
+		assert.equal(pointer(component, "[Message]", { button }), undefined);
+	}
+	assert.doesNotMatch(component.render(60).join("\n"), /first ending/);
+	// Tool-result projections share presentation, but Pi owns their click handling.
+	const toolProjection = renderMessageProjection(longMessage("first"), { expanded: false }, plainTheme);
+	assert.equal(pointer(toolProjection, "[Message]"), undefined);
+});
+
+test("Request and Answer delivery bodies toggle independently", () => {
+	initTheme("dark");
+	const body = Array.from({ length: 13 }, (_, i) => `Line ${i}`).join("\n");
+	const component = renderMessageDelivery(customDelivery([
+		{ kind: "request", title: "Review", requestMessageId: "request", fromAgentId: "requester", question: `${body}\nRequest ending` },
+		{ kind: "answer", requestTitle: "Review", requestMessageId: "request", answerId: "answer", fromAgentId: "responder", answer: `${body}\nAnswer ending` },
+	]), { expanded: false, outputPad: 1 }, plainTheme);
+	pointer(component, "[Answer]");
+	assert.match(component.render(60).join("\n"), /Answer ending/);
+	assert.doesNotMatch(component.render(60).join("\n"), /Request ending/);
+	pointer(component, "[Request]");
+	assert.match(component.render(60).join("\n"), /Request ending/);
+	pointer(component, "[Answer]");
+	assert.doesNotMatch(component.render(60).join("\n"), /Answer ending/);
+});
+
+function longMessage(id: string): ModelVisibleMessage {
+	return { kind: "message", messageId: id, fromAgentId: id,
+		content: [...Array.from({ length: 12 }, (_, i) => `Line ${i}`), `${id} ending`].join("\n") };
+}
+
+function pointer(component: Component, header: string, overrides: Partial<TuiMouseEvent> = {}, width = 60) {
+	const lines = component.render(width);
+	const y = lines.findIndex((line) => line.includes(header));
+	assert.notEqual(y, -1);
+	return component.handleMouse?.({ type: "click", button: "left", x: 2, y,
+		screenX: 2, screenY: y, width, height: lines.length,
+		shift: false, alt: false, ctrl: false, ...overrides });
+}
 
 test("collapsed Message Delivery shows type, sender label, compact identity, and a ten-line body snippet", () => {
 	initTheme("dark");

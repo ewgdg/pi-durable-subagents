@@ -8,6 +8,7 @@ import {
 	Box,
 	Container,
 	Markdown,
+	MouseRegion,
 	Spacer,
 	Text,
 	type Component,
@@ -26,14 +27,29 @@ import {
 	type ModelVisibleMessage,
 } from "../protocol/message-delivery.ts";
 
+interface DeliveryExpansionState {
+	expanded: boolean;
+	projections: Map<number, boolean>;
+}
+
 export function registerMessageDeliveryRenderer(
 	pi: ExtensionAPI,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): void {
+	// Pi rebuilds custom components on invalidation; retain clicks for the same
+	// message without keeping discarded transcript messages alive.
+	const states = new WeakMap<object, DeliveryExpansionState>();
 	pi.registerMessageRenderer(
 		MESSAGE_DELIVERY_CUSTOM_TYPE,
-		(message, options, theme) =>
-			renderMessageDelivery(message, options, theme, resolveAgentLabel),
+		(message, options, theme) => {
+			let state = states.get(message);
+			if (!state || state.expanded !== options.expanded) {
+				// A global keyboard toggle supersedes individual click overrides.
+				state = { expanded: options.expanded, projections: new Map() };
+				states.set(message, state);
+			}
+			return renderMessageDelivery(message, options, theme, resolveAgentLabel, state);
+		},
 	);
 }
 
@@ -42,6 +58,7 @@ export function renderMessageDelivery(
 	options: MessageRenderOptions,
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
+	state: DeliveryExpansionState = { expanded: options.expanded, projections: new Map() },
 ): Component {
 	const projections = parseMessageDeliveryContent(message.content);
 	const box = new Box(
@@ -52,12 +69,21 @@ export function renderMessageDelivery(
 
 	for (const [index, projection] of projections.entries()) {
 		if (index > 0) box.addChild(new Spacer(1));
-		box.addChild(renderMessageProjection(
-			projection,
-			options,
-			theme,
-			resolveAgentLabel,
-		));
+		const content = new Container();
+		const isExpanded = () => state.projections.get(index) ?? state.expanded;
+		const rebuild = () => {
+			content.clear();
+			content.addChild(renderMessageProjection(
+				projection, { expanded: isExpanded() }, theme, resolveAgentLabel,
+			));
+		};
+		rebuild();
+		box.addChild(new MouseRegion(content, (event) => {
+			if (event.type !== "click" || event.button !== "left") return undefined;
+			state.projections.set(index, !isExpanded());
+			rebuild();
+			return { handled: true };
+		}));
 	}
 
 	return box;

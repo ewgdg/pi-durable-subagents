@@ -120,6 +120,8 @@ The scheduler tracks dispatched Steer batches alongside Resume, Deferred, and Wa
 
 The recipient transcript renders each delivered item as a readable message block. Its collapsed view shows the Message type, sender label with the final eight characters of the Agent identity, and the first ten terminal-width-aware rows of the body. A standalone dim ellipsis on the following line marks a truncated preview. Outgoing Message and Request tool calls use the same body preview, label, and compact identity format for the receiver. Expanding the block shows the sender label with the full Agent identity and the complete Message, Request question, Answer, or Cancellation reason with Markdown formatting. Batched Deliveries keep each item's sender and type visible instead of presenting the protocol JSON.
 
+In fullscreen mode, left-click a delivered block to expand or collapse it independently, including within a batch. Click choices survive redraws, resizing, and theme changes. Pi's keyboard/global expansion toggle still applies to all blocks and resets individual click choices when its expanded setting changes. Links retain their native click behavior; scrolling, selection drags, and non-left clicks are not intercepted. Regular scrollback mode does not capture mouse input; use Pi's keyboard expansion control there. Tool-result clicks remain owned by Pi.
+
 ## Request one Answer
 
 Use a Request when the recipient owes one mechanically correlated Answer:
