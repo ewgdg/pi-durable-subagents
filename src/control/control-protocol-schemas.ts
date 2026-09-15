@@ -2,8 +2,20 @@ import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
 import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
-// Version 8 makes the required initial tools selection an explicit incompatible contract.
-export const AGENT_CONTROL_PROTOCOL_VERSION = 8 as const;
+import {
+	AGENT_CONTROL_PROTOCOL_VERSION,
+	ChildProcessBootstrapSchema,
+	ControlEndpointSchema,
+	NamedPipeControlEndpointSchema,
+	UnixControlEndpointSchema,
+} from "./child-bootstrap-contract.ts";
+export {
+	AGENT_CONTROL_PROTOCOL_VERSION,
+	ChildProcessBootstrapSchema,
+	ControlEndpointSchema,
+	NamedPipeControlEndpointSchema,
+	UnixControlEndpointSchema,
+} from "./child-bootstrap-contract.ts";
 
 const NonEmptyStringSchema = Type.String({ minLength: 1 });
 const ControlIdentityProperties = {
@@ -11,21 +23,6 @@ const ControlIdentityProperties = {
 	workflowId: NonEmptyStringSchema,
 	agentId: NonEmptyStringSchema,
 } as const;
-
-export const UnixControlEndpointSchema = Type.Object({
-	transport: Type.Literal("unix"),
-	address: NonEmptyStringSchema,
-}, { additionalProperties: false });
-
-export const NamedPipeControlEndpointSchema = Type.Object({
-	transport: Type.Literal("named-pipe"),
-	address: NonEmptyStringSchema,
-}, { additionalProperties: false });
-
-export const ControlEndpointSchema = Type.Union([
-	UnixControlEndpointSchema,
-	NamedPipeControlEndpointSchema,
-]);
 
 export const AgentTemplateCatalogueEntrySchema = Type.Object({
 	name: NonEmptyStringSchema,
@@ -51,18 +48,6 @@ export const AgentTemplateCatalogueSnapshotSchema = Type.Object({
 export type ControlEndpoint = Static<typeof ControlEndpointSchema>;
 export type UnixControlEndpoint = Static<typeof UnixControlEndpointSchema>;
 export type NamedPipeControlEndpoint = Static<typeof NamedPipeControlEndpointSchema>;
-
-export const ChildProcessBootstrapSchema = Type.Object({
-	protocolVersion: Type.Literal(AGENT_CONTROL_PROTOCOL_VERSION),
-	endpoint: ControlEndpointSchema,
-	connectionToken: NonEmptyStringSchema,
-	workflowId: NonEmptyStringSchema,
-	agentId: NonEmptyStringSchema,
-	role: Type.Union([Type.Literal("ordinary"), Type.Literal("moderator")]),
-	ownerPresentation: Type.Boolean(),
-	tools: Type.Array(NonEmptyStringSchema, { uniqueItems: true }),
-	expectedSessionId: NonEmptyStringSchema,
-}, { additionalProperties: false });
 
 export type ChildProcessBootstrap = Static<typeof ChildProcessBootstrapSchema>;
 
@@ -136,7 +121,7 @@ export type EventFrame = Static<typeof EventFrameSchema>;
 export type CancelFrame = Static<typeof CancelFrameSchema>;
 export type ControlFrame = Static<typeof ControlFrameSchema>;
 
-export const CHILD_LAUNCH_ALIGNMENT_GUIDANCE = "Stop child and Moderator launches. Owner: report this diagnostic to the user immediately; ask them to stop active work, align installed packages, and restart the Pi host.";
+export const CHILD_LAUNCH_ALIGNMENT_GUIDANCE = "Stop child and Moderator launches. Owner: report this diagnostic to the user immediately; ask them to stop active work and correct the reported problem (align installed packages if incompatible), then restart the Pi host.";
 
 export function validateChildProcessBootstrap(value: unknown): ChildProcessBootstrap {
 	if (!Check(ChildProcessBootstrapSchema, value)) {
