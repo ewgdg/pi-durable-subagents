@@ -140,6 +140,8 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 		isShuttingDown: () => shuttingDown,
 		reportError: (error) => errors.push(error),
 		publishRuntimeReport() {},
+		appendRuntimeReportFinding() {},
+		runtimeReportSourceForIncident() { return undefined; },
 		retainDiagnostic: (error) => {
 			errors.push(error);
 			return { agentId: identity.agentId, entryId: host.session.sessionManager.appendCustomEntry("test-diagnostic", String(error)) };

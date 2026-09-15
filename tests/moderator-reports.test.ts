@@ -11,6 +11,56 @@ import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 const input = { symptom: "Hung", suspectedDefect: "Wake lost", uncertainty: "Unconfirmed", recoveryActions: "Resume", recoveryOutcome: "Recovered", evidence: ["entry:call"] };
 const reporter = { agentId: "moderator", label: "Moderator" };
 const source = { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/tmp/moderator.jsonl" };
+
+test("incident linkage cold lookup retains first report source without changing publication or read state", () => {
+	const manager = fixture();
+	const reports = store(manager);
+	const source = { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "first", transcriptPath: manager.getSessionFile()!, incidentKey: "incident:one" };
+	const report = reports.publishRuntime(input, source);
+	reports.setRead(report.reportId, true);
+	reports.publishRuntime(input, { ...source, entryId: "second" });
+	const before = reports.history();
+	const reopened = store(SessionManager.open(manager.getSessionFile()!));
+	assert.deepEqual(reopened.runtimeSourceForIncident("incident:one"), { agentId: "owner", entryId: "first" });
+	assert.equal(reopened.runtimeSourceForIncident("incident:missing"), undefined);
+	assert.deepEqual(reopened.history(), before);
+	assert.deepEqual(reopened.publishRuntime(input, { ...source, incidentKey: "changed" }), report);
+	assert.throws(() => reopened.publishRuntime(input, { ...source, incidentKey: " " }), /incident key/);
+});
+
+test("runtime findings append once, survive cold reopen, and leave report and attention unchanged", () => {
+	const manager = fixture();
+	const reports = store(manager);
+	const diagnostic = { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "diagnostic", transcriptPath: manager.getSessionFile()! };
+	const report = reports.publishRuntime(input, diagnostic);
+	reports.setRead(report.reportId, true);
+	const readAt = reports.history()[0]!.readAt;
+	const before = manager.getEntries().length;
+	reports.appendRuntimeFinding(diagnostic, { key: "recovered", summary: "Inspection recovered", evidence: ["entry:recovery"] });
+	const reopened = store(SessionManager.open(manager.getSessionFile()!));
+	const item = reopened.history()[0]!;
+	assert.deepEqual(item.report, report);
+	assert.equal(item.readAt, readAt);
+	assert.equal(item.findings?.length, 1);
+	assert.equal(item.findings?.[0]?.summary, "Inspection recovered");
+	assert.ok(Number.isFinite(Date.parse(item.findings![0]!.createdAt)));
+	assert.ok(Object.isFrozen(item.findings) && Object.isFrozen(item.findings![0]!.evidence));
+	reopened.appendRuntimeFinding(diagnostic, { key: "recovered", summary: "changed", evidence: ["other"] });
+	assert.deepEqual(reopened.history(), [item]);
+	assert.equal(SessionManager.open(manager.getSessionFile()!).getEntries().length, before + 1);
+	assert.equal(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "agent-coordination.moderator-report").length, 1);
+	assert.throws(() => reopened.appendRuntimeFinding({ ...diagnostic, agentId: "missing" }, { key: "x", summary: "Missing", evidence: ["ref"] }), /Unknown runtime report/);
+});
+
+test("malformed retained findings are rejected without losing the report", async () => {
+	const { inspectCoordinationRejections } = await import("../src/protocol/replay-rejection.ts");
+	const manager = fixture();
+	const reports = store(manager);
+	const report = reports.publishRuntime(input, { kind: "runtime_diagnostic", agentId: "owner", entryId: "diagnostic", transcriptPath: manager.getSessionFile()! });
+	manager.appendCustomEntry("agent-coordination.moderator-report-finding", { reportId: report.reportId, key: "bad", summary: " ", evidence: [], createdAt: "bad" });
+	assert.deepEqual(reports.history(), [{ report }]);
+	assert.equal(inspectCoordinationRejections(transcriptFromSessionManager(manager).inspect(), manager.getSessionId()).length, 1);
+});
 function store(manager: SessionManager) {
 	return new ModeratorReportStore({ transcript: transcriptFromSessionManager(manager), appendCustomEntry: (type, data) => manager.appendCustomEntry(type, data) });
 }

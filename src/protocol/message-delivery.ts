@@ -1,6 +1,6 @@
 import { CoordinationRecordValidationError } from "./record-validation.ts";
 import { readCoordinationRecord } from "./replay-rejection.ts";
-import { MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE } from "./moderator-report.ts";
+import { MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE, MODERATOR_REPORT_FINDING_CUSTOM_TYPE } from "./moderator-report.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 
@@ -209,6 +209,7 @@ function readMessageDeliveries(options: {
 				if (
 					entry.customType === MODERATOR_REPORT_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE ||
+					entry.customType === MODERATOR_REPORT_FINDING_CUSTOM_TYPE ||
 					entry.customType === CONVERSATION_FORK_CUSTOM_TYPE ||
 					entry.customType === OWNER_FORK_PROVENANCE_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||

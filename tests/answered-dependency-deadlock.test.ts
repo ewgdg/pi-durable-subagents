@@ -61,6 +61,8 @@ for (const ownerAnswered of [false, true]) {
 			isShuttingDown: () => false,
 			reportError(error) { throw error; },
 			publishRuntimeReport(report) { reports.push(report); },
+		appendRuntimeReportFinding() {},
+		runtimeReportSourceForIncident() { return undefined; },
 			retainDiagnostic: () => ({ agentId: "requester", entryId: owner.manager.appendCustomEntry("diagnostic", {}) }),
 		});
 		t.after(() => { incidents.shutdown(); messages.shutdownDeliveryProgress(); });

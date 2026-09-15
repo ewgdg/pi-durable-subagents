@@ -107,7 +107,12 @@ export class AgentActivityDock implements Component {
 		const attentionLines = ownerScope
 			? this.#renderAttention(
 				snapshot.humanAttention,
-				snapshot.operationalAttention.filter(({ trigger }) => trigger.kind !== "moderation_unavailable"),
+				snapshot.operationalAttention.filter(({ trigger, reportSource }) => {
+					if (trigger.kind === "moderation_unavailable") return false;
+					// Linked reports own inbox acknowledgement; unresolved state remains a live status.
+					return !reportSource || !(snapshot.reports ?? []).some(({ report }) =>
+						report.source.kind === "runtime_diagnostic" && report.source.agentId === reportSource.agentId && report.source.entryId === reportSource.entryId);
+				}),
 				snapshot.reports ?? [],
 			)
 			: [];
@@ -131,9 +136,12 @@ export class AgentActivityDock implements Component {
 				`${this.#theme.fg("accent", this.#theme.bold("ANSWER"))}${this.#theme.fg("dim", " · Enter submits")}`,
 			]
 			: [];
-		const moderationStatus = ownerScope && snapshot.operationalAttention.some(({ trigger }) => trigger.kind === "moderation_unavailable")
-			? [this.#theme.fg("warning", "Moderation Unavailable · live status")] : [];
-		return [...identityLines, ...moderationStatus, ...attentionLines, ...agentLines, ...answerModeLines].map(
+		const operationalStatus = !ownerScope ? []
+			: snapshot.operationalAttention.some(({ trigger }) => trigger.kind === "moderation_unavailable")
+				? [this.#theme.fg("warning", "Moderation Unavailable · live status")]
+				: snapshot.operationalAttention.some(({ reportSource }) => reportSource !== undefined)
+					? [this.#theme.fg("warning", "Operational incident unresolved · live status")] : [];
+		return [...identityLines, ...operationalStatus, ...attentionLines, ...agentLines, ...answerModeLines].map(
 			(line) => truncateToWidth(line, safeWidth, ""),
 		);
 	}

@@ -360,6 +360,9 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 						? "aborted"
 						: "error",
 				willRetry: event.payload.willRetry,
+				...(event.payload.outcome === "failed" && event.payload.error !== undefined
+					? { failure: { stage: "model", error: event.payload.error, provenance: "pi-child-hosted-runtime" } }
+					: {}),
 			});
 			return;
 		}
@@ -441,7 +444,9 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	#endTransport(error: unknown, cause: "failure" | "shutdown" = "failure"): void {
 		if (this.#unavailable) return;
-		const terminalRun = this.#runObserved && cause === "failure";
+		// Owner-side Run admission can precede the first model cycle. A ready child
+		// dying in that gap is still a terminal failure, not an idle clean runtime.
+		const terminalRun = (this.#runObserved || this.#snapshot !== undefined) && cause === "failure";
 		this.#unavailable = error;
 		this.#reminderAdmissionAbort?.abort(error);
 		this.#cancellation.abort();
@@ -450,7 +455,13 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#currentRunId = undefined;
 		this.#rejectPendingCompletions(error);
 		if (terminalRun) {
-			this.#emit({ type: "agent_end", outcome: "error", willRetry: false });
+			this.#emit({
+				type: "agent_end", outcome: "error", willRetry: false,
+				failure: {
+					stage: "runtime", error: error instanceof Error ? error.message : String(error),
+					provenance: "pi-child-hosted-runtime",
+				},
+			});
 		}
 		this.#emit({ type: "state_changed" });
 		if (terminalRun) this.#emit({ type: "agent_settled" });

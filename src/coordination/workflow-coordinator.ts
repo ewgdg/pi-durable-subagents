@@ -324,10 +324,10 @@ export class WorkflowCoordinator {
 			this.#ownerDiagnostics.push({ type: "error", message });
 			return { agentId: identity.agentId, entryId };
 		};
-		const publishRuntimeReport = (input: ReportToUserInput, diagnostic: EntryPointer) => {
+		const publishRuntimeReport = (input: ReportToUserInput, diagnostic: EntryPointer, incidentKey?: string) => {
 			const transcriptPath = runtime.session.sessionManager.getSessionFile();
 			if (!transcriptPath) throw new Error("Runtime report requires a durable diagnostic transcript");
-			this.#reports.publishRuntime(input, { kind: "runtime_diagnostic", ...diagnostic, transcriptPath });
+			this.#reports.publishRuntime(input, { kind: "runtime_diagnostic", ...diagnostic, transcriptPath, ...(incidentKey === undefined ? {} : { incidentKey }) });
 		};
 		const sessionFactory = new ProcessChildSessionFactory({
 			ownerRuntime: runtime,
@@ -498,6 +498,8 @@ export class WorkflowCoordinator {
 				});
 			},
 			publishRuntimeReport,
+			runtimeReportSourceForIncident: (incidentKey) => this.#reports.runtimeSourceForIncident(incidentKey),
+			appendRuntimeReportFinding: (diagnostic, finding) => this.#reports.appendRuntimeFinding(diagnostic, finding),
 			retainDiagnostic,
 			boundaryHooks: options.incidentBoundaryHooks,
 			presentation: options.operationalIncidentPresentation,

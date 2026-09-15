@@ -76,6 +76,8 @@ for (const delivered of [false, true]) {
 			integrateAgent() { throw new Error("Unexpected runtime creation"); }, isShuttingDown: () => false,
 			reportError(error) { throw error; },
 			publishRuntimeReport(report) { reports.push(report); },
+		appendRuntimeReportFinding() {},
+		runtimeReportSourceForIncident() { return undefined; },
 			retainDiagnostic: () => ({ agentId: "requester", entryId: owner.manager.appendCustomEntry("diagnostic", {}) }),
 		});
 		t.after(async () => {

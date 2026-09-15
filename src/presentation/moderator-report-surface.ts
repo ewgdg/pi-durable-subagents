@@ -47,7 +47,7 @@ class ModeratorReportSurface implements Component {
 		this.#done = done;
 		this.#read = item.readAt !== undefined;
 		this.#hasReporter = item.report.reporter !== undefined;
-		this.#reportText = formatModeratorReport(item.report);
+		this.#reportText = formatModeratorReport(item.report, item.findings);
 		// Plain wrapped Markdown keeps every source reference visible, including link destinations.
 		this.#body = new Text(sanitizeReportTerminalText(this.#reportText), 0, 0);
 	}

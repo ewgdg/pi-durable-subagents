@@ -43,6 +43,23 @@ test("an authenticated native child lifecycle adopts its transport identity with
 	await runtime.dispose();
 });
 
+test("child model errors preserve the original provider text", async () => {
+	const { runtime, emit } = createFakeRuntime();
+	const events: HostedRuntimeEvent[] = [];
+	runtime.subscribe((event) => events.push(event));
+	await runtime.ready;
+	emit(controlEvent("agent.start", { runId: "model-failure", queuedInputCount: 0 }));
+	emit(controlEvent("agent.end", {
+		runId: "model-failure", outcome: "failed", willRetry: false, queuedInputCount: 0,
+		error: "provider rejected model identifier",
+	}));
+	assert.deepEqual(events.find((event) => event.type === "agent_end"), {
+		type: "agent_end", outcome: "error", willRetry: false,
+		failure: { stage: "model", error: "provider rejected model identifier", provenance: "pi-child-hosted-runtime" },
+	});
+	await runtime.dispose();
+});
+
 test("a post-admission child Runtime fault terminally fences its hosted Run once", async () => {
 	const { runtime, emit } = createFakeRuntime();
 	const hostedEvents: HostedRuntimeEvent[] = [];
@@ -62,7 +79,10 @@ test("a post-admission child Runtime fault terminally fences its hosted Run once
 	assert.equal(runtime.cancellationSignal().aborted, true);
 	await assert.rejects(completion, /participant_lifecycle_failed.*Owner rejected/);
 	assert.deepEqual(hostedEvents.slice(-3), [
-		{ type: "agent_end", outcome: "error", willRetry: false },
+		{ type: "agent_end", outcome: "error", willRetry: false, failure: {
+			stage: "runtime", provenance: "pi-child-hosted-runtime",
+			error: "child_runtime_fault: participant_lifecycle_failed: Owner rejected the awaited boundary",
+		} },
 		{ type: "state_changed" },
 		{ type: "agent_settled" },
 	]);
@@ -76,6 +96,18 @@ test("a post-admission child Runtime fault terminally fences its hosted Run once
 		1,
 	);
 	await runtime.dispose();
+});
+
+test("child exit after Run admission but before model activity preserves failure", async () => {
+	const { runtime, settleExit } = createFakeRuntime();
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "idle-admitted-child", startSession: async () => ({ runtime, ready: runtime.ready }),
+	});
+	await host.lane.run(() => host.startInLane());
+	settleExit({ exitCode: 1, signal: 0 });
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(host.currentRunFailed(), true);
+	await host.lane.run(() => host.discardAndEndInLane("failure"));
 });
 
 test("child exit fences the hosted Run before its projection reports failure", async () => {

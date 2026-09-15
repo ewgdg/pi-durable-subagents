@@ -347,7 +347,9 @@ class AgentSelectorSurface implements Component {
 		const contentLines: SelectorLine[] = [
 			this.#renderTabs(),
 			{ text: (this.#options.operationalAttention ?? []).some(({ trigger }) => trigger.kind === "moderation_unavailable")
-				? this.#theme.fg("warning", "Moderation Unavailable · live status") : "" },
+				? this.#theme.fg("warning", "Moderation Unavailable · live status")
+				: (this.#options.operationalAttention ?? []).some(({ reportSource }) => reportSource !== undefined)
+					? this.#theme.fg("warning", "Operational incident unresolved · live status") : "" },
 			...this.#renderPinnedList(contentWidth),
 			{ text: "" },
 			this.#renderOwnerFooter(),
@@ -622,7 +624,12 @@ class AgentSelectorSurface implements Component {
 				`Human Request ${attention.requestId}`,
 			],
 		}));
-		const operational = (this.#options.operationalAttention ?? []).filter(({ trigger }) => trigger.kind !== "moderation_unavailable").map(
+		const operational = (this.#options.operationalAttention ?? []).filter(({ trigger, reportSource }) => {
+			if (trigger.kind === "moderation_unavailable") return false;
+			// Acknowledging the report must not resurrect the same incident as a second inbox row.
+			return !reportSource || !(this.#options.reports ?? []).some(({ report }) =>
+				report.source.kind === "runtime_diagnostic" && report.source.agentId === reportSource.agentId && report.source.entryId === reportSource.entryId);
+		}).map(
 			(attention, index) => {
 				const requests = operationalIncidentRequestEvidence(attention);
 				const affectedAgentId = attention.affectedAgents.length === 1

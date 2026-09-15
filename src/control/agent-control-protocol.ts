@@ -598,6 +598,7 @@ const OperationalIncidentAgentSchema = closed({
 const OperationalIncidentAttentionFields = {
 	summary: Type.Optional(Type.String()),
 	diagnostics: Type.Array(EntryPointerSchema, { uniqueItems: true }),
+	reportSource: Type.Optional(EntryPointerSchema),
 };
 const OperationalIncidentAttentionSchema = Type.Union([closed({
 	...OperationalIncidentAttentionFields,
@@ -620,11 +621,18 @@ const ModeratorReportSchema = Type.Union([closed({
 	source: closed({ ...ToolCallPointerSchema.properties, transcriptPath: NonEmptyStringSchema }),
 }), closed({
 	...ReportFields,
-	source: closed({ ...EntryPointerSchema.properties, kind: Type.Literal("runtime_diagnostic"), transcriptPath: NonEmptyStringSchema }),
+	source: closed({ ...EntryPointerSchema.properties, kind: Type.Literal("runtime_diagnostic"), transcriptPath: NonEmptyStringSchema, incidentKey: Type.Optional(NonEmptyStringSchema) }),
 })]);
 const ReportHistoryItemSchema = closed({
 	report: ModeratorReportSchema,
 	readAt: Type.Optional(NonEmptyStringSchema),
+	findings: Type.Optional(Type.Array(closed({
+		reportId: NonEmptyStringSchema,
+		key: NonEmptyStringSchema,
+		summary: NonEmptyStringSchema,
+		evidence: Type.Array(NonEmptyStringSchema, { minItems: 1 }),
+		createdAt: NonEmptyStringSchema,
+	}))),
 });
 export const AgentSelectorActionSchema = Type.Union([
 	closed({ kind: Type.Literal("open_report"), reportId: NonEmptyStringSchema }),

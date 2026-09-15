@@ -1,4 +1,4 @@
-import type { ReportToUserInput } from "../protocol/moderator-report.ts";
+import type { ReportToUserInput, ReportFindingInput } from "../protocol/moderator-report.ts";
 import {
 	createModelVisibleModeratorObligationReminder,
 	inspectModeratorObligationReminder,
@@ -18,6 +18,7 @@ import {
 	isModeratorIdentity,
 	MAX_MODERATOR_REQUEST_SOURCES,
 	validateCommittedModeratorInput,
+	validateColdModeratorInput,
 	type EntryPointer,
 	type ModeratorIdentity,
 	type ModeratorInput,
@@ -46,12 +47,13 @@ import {
 } from "../protocol/moderator-control.ts";
 import {
 	ProtocolInvariantError,
+	deriveMessageIdentity,
 	resolveCommittedToolCall,
 	toolCallPointerKey,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
 import type { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
-import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
+import type { AgentRunHandle, AgentRunFailure } from "../runtime/agent-runtime-host.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import { statusOf, type AgentRecord } from "./agent-record.ts";
@@ -106,6 +108,13 @@ type OperationalConditionSnapshot =
 	| DependencyDeadlockSnapshot
 	| OperationReviewConditionSnapshot;
 
+type IncidentReportContext = ConditionSnapshotBase & Readonly<{
+	kind: OperationalConditionSnapshot["kind"];
+	incidentKey: string;
+	coldRecovery?: boolean;
+	snapshot?: OperationalConditionSnapshot;
+}>;
+
 const MODERATION_TRIGGER_EXPLANATIONS: Readonly<Record<OperationalConditionSnapshot["kind"], string>> = {
 	delivery_stall: "Delivery stopped making progress on a Request path supporting an unresolved Answer Obligation.",
 	obligation_stall: "An Agent settled after its reminder but still owes an Answer, with no observed source of progress.",
@@ -128,6 +137,7 @@ type OperationalIncidentHandling = {
 
 export type OperationalIncidentAttention = Readonly<{
 	summary?: string;
+	reportSource?: EntryPointer;
 	affectedAgents: readonly Readonly<{
 		agentId: string;
 		label: string;
@@ -172,7 +182,13 @@ export class OperationalIncidentCoordinator {
 	readonly #onAttentionChanged: () => void;
 	readonly #faultAttention = new Map<string, OperationalIncidentAttention>();
 	readonly #retainDiagnostic: (error: unknown) => EntryPointer;
-	readonly #publishRuntimeReport: (input: ReportToUserInput, diagnostic: EntryPointer) => void;
+	readonly #publishRuntimeReport: (input: ReportToUserInput, diagnostic: EntryPointer, incidentKey?: string) => void;
+	readonly #runtimeReportSourceForIncident: (incidentKey: string) => EntryPointer | undefined;
+	readonly #appendRuntimeReportFinding: (diagnostic: EntryPointer, finding: ReportFindingInput) => void;
+	readonly #reportSources = new Map<string, EntryPointer>();
+	readonly #reportSourcesBySnapshot = new WeakMap<OperationalConditionSnapshot, EntryPointer>();
+	readonly #reportedFailures = new Set<string>();
+	readonly #reportedRunFailures = new Map<string, RunFailureSnapshot>();
 	readonly #handlingByKey = new Map<string, OperationalIncidentHandling>();
 	readonly #attemptByModeratorAgentId = new Map<string, OperationalConditionSnapshot>();
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
@@ -191,7 +207,9 @@ export class OperationalIncidentCoordinator {
 		isShuttingDown(): boolean;
 		reportError(error: unknown): void;
 		retainDiagnostic(error: unknown): EntryPointer;
-		publishRuntimeReport(input: ReportToUserInput, diagnostic: EntryPointer): void;
+		publishRuntimeReport(input: ReportToUserInput, diagnostic: EntryPointer, incidentKey?: string): void;
+		runtimeReportSourceForIncident(incidentKey: string): EntryPointer | undefined;
+		appendRuntimeReportFinding(diagnostic: EntryPointer, finding: ReportFindingInput): void;
 		boundaryHooks?: OperationalIncidentBoundaryHooks;
 		presentation?: OperationalIncidentPresentation;
 		operationReviewClock?: OperationReviewClock;
@@ -209,6 +227,8 @@ export class OperationalIncidentCoordinator {
 		this.#reportError = options.reportError;
 		this.#retainDiagnostic = options.retainDiagnostic;
 		this.#publishRuntimeReport = options.publishRuntimeReport;
+		this.#runtimeReportSourceForIncident = options.runtimeReportSourceForIncident;
+		this.#appendRuntimeReportFinding = options.appendRuntimeReportFinding;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
@@ -239,10 +259,12 @@ export class OperationalIncidentCoordinator {
 			if (settlement !== "settled") return;
 			this.#scheduleReconciliationAfterHostLane(record);
 		});
-		record.host.addEndedHandler((handle, cause) => this.#containEvidenceInspection(() => {
+		record.host.addEndedHandler((handle, cause, failure) => this.#containEvidenceInspection(() => {
 			this.#operationReviews.endRun(record.identity.agentId);
 			if (this.#isModerator(record)) {
 				if (cause === "failure" && !this.#isShuttingDown()) {
+					const original = this.#attemptByModeratorAgentId.get(record.identity.agentId);
+					this.#recordModeratorFailure(original ? this.#reportContext(original) : this.#coldModeratorReportContext(record), record, handle, failure);
 					void this.#reconciliationLane
 						.run(async () => {
 							const handling = [...this.#handlingByKey.values()].find(
@@ -260,22 +282,18 @@ export class OperationalIncidentCoordinator {
 				!this.#isShuttingDown()
 			) {
 				const requestIds = [...this.#messages.answerObligationRequestIds(record)].sort();
-				if (requestIds.length > 0) {
-					const snapshot: RunFailureSnapshot = {
-						kind: "run_failure",
-						key: JSON.stringify([
-							"run_failure",
-							record.identity.agentId,
-							handle.sequence,
-						]),
-						agentId: record.identity.agentId,
-						affectedAgentIds: [record.identity.agentId],
-						run: handle,
-						requestIds,
-						inspectedThrough: [statusOf(record).primaryEvidence.inspectedThrough],
-					};
-					this.#runFailureByKey.set(snapshot.key, snapshot);
-				}
+				const snapshot: RunFailureSnapshot = {
+					kind: "run_failure",
+					key: JSON.stringify(["run_failure", record.identity.agentId, handle.sequence]),
+					agentId: record.identity.agentId,
+					affectedAgentIds: [record.identity.agentId],
+					run: handle,
+					requestIds,
+					inspectedThrough: [statusOf(record).primaryEvidence.inspectedThrough],
+				};
+				this.#recordRunFailure(snapshot, record, failure);
+				// Reporting every terminal failure does not widen moderation eligibility.
+				if (requestIds.length > 0) this.#runFailureByKey.set(snapshot.key, snapshot);
 			}
 			this.#scheduleReconciliation();
 		}));
@@ -283,6 +301,86 @@ export class OperationalIncidentCoordinator {
 			this.#containEvidenceInspection(() => this.#operationReviews.reconcileAgent(record.identity.agentId));
 			this.#scheduleReconciliation();
 		});
+	}
+
+	#failureText(failure?: AgentRunFailure): string {
+		return failure ? `Failed stage: ${failure.stage}\nObserved error: ${failure.error}\nProvenance: ${failure.provenance}`
+			: "Failed stage/error unavailable: the Runtime Host observed terminal failure without error details. Cause is unconfirmed.";
+	}
+
+	#reportContext(snapshot: OperationalConditionSnapshot): IncidentReportContext {
+		return { ...snapshot, snapshot, incidentKey: incidentReportKey({ trigger: this.#triggerFor(snapshot), inspectedThrough: snapshot.inspectedThrough }) };
+	}
+
+	#coldModeratorReportContext(record: AgentRecord): IncidentReportContext {
+		const transcript = record.transcript.inspect();
+		const { input } = validateColdModeratorInput({ sessionId: record.identity.agentId, entries: transcript.entries });
+		const trigger = input.trigger;
+		const incidentKey = incidentReportKey(input);
+		const affectedAgentIds = trigger.kind === "operation_review" ? [trigger.toolCall.agentId]
+			: trigger.kind === "dependency_deadlock" || trigger.kind === "delivery_stall" ? trigger.agentIds : [trigger.agentId];
+		const sources = trigger.kind === "operation_review" ? []
+			: trigger.kind === "run_failure" || trigger.kind === "obligation_stall" ? trigger.obligations.sources : trigger.requests.sources;
+		// Recover only immutable incident identity. No live handling, attempt budget,
+		// timer or automatic replacement is resurrected from a cold Moderator Input.
+		const retained = this.#runtimeReportSourceForIncident(incidentKey);
+		if (retained) this.#reportSources.set(incidentKey, retained);
+		return { kind: trigger.kind, key: incidentKey, incidentKey, affectedAgentIds, requestIds: sources.map(deriveMessageIdentity), inspectedThrough: input.inspectedThrough, coldRecovery: true };
+	}
+
+	#recordRunFailure(snapshot: RunFailureSnapshot, record: AgentRecord, failure?: AgentRunFailure): void {
+		if (this.#reportedFailures.has(snapshot.key)) return;
+		const facts = `Agent: ${record.identity.metadata.label} (${snapshot.agentId})\nRun ${snapshot.run.sequence}\n${this.#failureText(failure)}`;
+		const outgoingRequests = this.#messages.outstandingRequestIdsFor(record);
+		const affectedRequests = [...new Set([...snapshot.requestIds, ...outgoingRequests])].sort();
+		const diagnostic = this.#retainDiagnostic(new Error(facts));
+		this.#publishRuntimeReport({
+			symptom: `Unexpected terminal Run failure.\n${facts}`,
+			suspectedDefect: this.#failureText(failure),
+			uncertainty: "The terminal failure is observed; its underlying cause and eventual recovery are not established.",
+			recoveryActions: snapshot.requestIds.length ? "Runtime will inspect existing Answer obligations for bounded moderation. No recovery has yet been confirmed." : "No Answer obligations were observed. Automatic moderation is not eligible; a later Message or human input may start a successor Run.",
+			recoveryOutcome: "Run ended unexpectedly. Recovery outcome unknown at publication. Reading this report changes notification state only.",
+			evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`, `Affected Requests: ${JSON.stringify(affectedRequests)}`, `Answer obligations: ${JSON.stringify(snapshot.requestIds)}`, `Awaiting Answers: ${JSON.stringify(outgoingRequests)}`, ...snapshot.inspectedThrough.map(pointer => `Inspected through: ${JSON.stringify(pointer)}`)],
+		}, diagnostic, this.#reportContext(snapshot).incidentKey);
+		this.#reportSources.set(snapshot.key, diagnostic);
+		this.#reportSourcesBySnapshot.set(snapshot, diagnostic);
+		this.#reportedFailures.add(snapshot.key);
+		this.#reportedRunFailures.set(snapshot.key, snapshot);
+		this.#onAttentionChanged();
+	}
+
+	#recordModeratorFailure(snapshot: IncidentReportContext, moderator: AgentRecord, handle?: AgentRunHandle, failure?: AgentRunFailure): void {
+		const key = `moderator-failure:${moderator.identity.agentId}:${handle?.sequence ?? "startup-not-admitted"}`;
+		if (this.#reportedFailures.has(key)) return;
+		const evidence = statusOf(moderator).primaryEvidence;
+		const facts = `Moderator ${moderator.identity.metadata.label} (${moderator.identity.agentId}), ${handle ? `Run ${handle.sequence}` : "startup attempt; no Run admitted"}.\n${this.#failureText(failure)}`;
+		const diagnostic = this.#retainDiagnostic(new Error(facts));
+		let source = snapshot.snapshot ? this.#reportSourcesBySnapshot.get(snapshot.snapshot) : this.#reportSources.get(snapshot.key);
+		if (!source) {
+			this.#publishRuntimeReport({
+				symptom: `Moderator handling failed for original incident: ${snapshot.kind}.\nAffected Agents: ${snapshot.affectedAgentIds.join(", ")}`,
+				suspectedDefect: facts,
+				uncertainty: `The original incident remains distinct from failed Moderator attempts. Root cause and recovery are not established.${snapshot.coldRecovery ? " Incident identity comes from cold committed Moderator Input; its qualifying Requests may be a bounded subset and live handling was not reconstructed." : ""}`,
+				recoveryActions: "Runtime retains each failed Moderator attempt under this incident and applies the existing bounded attempt policy.",
+				recoveryOutcome: "Recovery unknown at publication; later observations are linked findings, not changes to this report.",
+				evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`, `Affected Requests: ${JSON.stringify(snapshot.requestIds)}`, ...snapshot.inspectedThrough.map(pointer => `Original incident evidence: ${JSON.stringify(pointer)}`)],
+			}, diagnostic, snapshot.incidentKey);
+			source = diagnostic;
+			if (snapshot.snapshot) this.#reportSourcesBySnapshot.set(snapshot.snapshot, diagnostic);
+			if (!snapshot.snapshot || this.#handlingByKey.get(snapshot.key)?.snapshot === snapshot.snapshot) this.#reportSources.set(snapshot.key, diagnostic);
+		}
+		// Run sequences restart with a cold Host; the retained diagnostic distinguishes
+		// those observations while the in-memory key deduplicates repeated callbacks.
+		this.#appendRuntimeReportFinding(source, { key: `${key}:${diagnostic.entryId}`, summary: `${facts}${snapshot.coldRecovery ? "\nCold-recovered Moderator: original incident linked from committed Input only. Live recovery state and outcome are unknown; no automatic replacement was scheduled." : ""}`, evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`, `Moderator transcript: ${evidence.transcriptPath ?? "unavailable"}`, `Inspected through: ${JSON.stringify(evidence.inspectedThrough)}`, `Affected Requests: ${JSON.stringify(snapshot.requestIds)}`] });
+		this.#onAttentionChanged();
+		this.#reportedFailures.add(key);
+	}
+
+	#appendFinding(conditionKey: string, finding: ReportFindingInput): void {
+		const source = this.#reportSources.get(conditionKey);
+		if (!source) return;
+		this.#appendRuntimeReportFinding(source, finding);
+		this.#onAttentionChanged();
 	}
 
 	deliveryProgressChanged(): void {
@@ -533,7 +631,7 @@ export class OperationalIncidentCoordinator {
 				`Previous attempt evidence: ${item.previousAttempt ? JSON.stringify(item.previousAttempt) : "none recorded"}`,
 			];
 		});
-		this.#publishRuntimeReport({
+		const reportInput = {
 			symptom: `${attention.summary}\n${incident}`,
 			suspectedDefect: `Failed stage: ${handling?.creationStage ?? "evidence inspection"}\nError: ${error instanceof Error ? error.message : String(error)}`,
 			uncertainty: "The underlying cause is unconfirmed. Captured incident facts were not revalidated by this failed observation. It does not establish whether pending work will complete or whether any Agent needs recovery.",
@@ -551,7 +649,16 @@ export class OperationalIncidentCoordinator {
 					...item.diagnostics.map(pointer => `Moderator diagnostic: ${JSON.stringify(pointer)}`),
 				]),
 			],
-		}, diagnostic);
+		};
+		if (handling && this.#reportSources.has(handling.snapshot.key)) {
+			this.#appendFinding(handling.snapshot.key, { key: `moderation-unavailable:${diagnostic.entryId}`, summary: `${reportInput.symptom}\n${reportInput.suspectedDefect}\n${reportInput.recoveryOutcome}`, evidence: reportInput.evidence });
+		} else {
+			this.#publishRuntimeReport(reportInput, diagnostic, handling?.trigger ? incidentReportKey({ trigger: handling.trigger, inspectedThrough: handling.snapshot.inspectedThrough }) : undefined);
+			if (handling) {
+				this.#reportSources.set(handling.snapshot.key, diagnostic);
+				this.#reportSourcesBySnapshot.set(handling.snapshot, diagnostic);
+			}
+		}
 		this.#faultAttention.set(key, attention);
 		this.#presentation.present(key, attention);
 		this.#onAttentionChanged();
@@ -569,6 +676,19 @@ export class OperationalIncidentCoordinator {
 		await this.#messages.refreshTranscriptFacts();
 		if (this.#isShuttingDown()) return;
 		const snapshots: OperationalConditionSnapshot[] = [];
+		for (const [key, snapshot] of this.#reportedRunFailures) {
+			const affected = this.#agents.get(snapshot.agentId);
+			if (!affected) continue;
+			const successor = affected.host.latestStartedRunSequence();
+			if (successor <= snapshot.run.sequence) continue;
+			// Obligation clearance may release live handling before this successor.
+			// Its recovery evidence still belongs to the exact failed Run's report.
+			const source = this.#reportSourcesBySnapshot.get(snapshot);
+			if (!source) throw new Error("Reported Run failure has no retained report source");
+			this.#appendRuntimeReportFinding(source, { key: `successor:${successor}`, summary: `Successor Run ${successor} started for Agent ${snapshot.agentId}. This establishes resumption, not successful completion. Original Answer obligations remain: ${this.#messages.hasUnsettledAnswerObligation(affected, snapshot.requestIds)}.`, evidence: [`Inspected through: ${JSON.stringify(statusOf(affected).primaryEvidence.inspectedThrough)}`] });
+			this.#onAttentionChanged();
+			this.#reportedRunFailures.delete(key);
+		}
 		for (const [key, snapshot] of this.#runFailureByKey) {
 			if (!this.#conditionRemains(snapshot)) {
 				await this.#notifyRunFailureRecovery(snapshot);
@@ -775,7 +895,7 @@ export class OperationalIncidentCoordinator {
 			this.#boundaryHooks.beforeModeratorRunStart?.() ===
 			"confirmed_failure"
 		) {
-			await this.#handleModeratorFailure(handling, moderator);
+			await this.#handleModeratorFailure(handling, moderator, { stage: handling.creationStage, error: "Confirmed Moderator Run startup failure", provenance: "Moderator startup boundary" });
 			return;
 		}
 		try {
@@ -783,6 +903,7 @@ export class OperationalIncidentCoordinator {
 			await moderator.host.lane.run(async () => {
 				if (this.#isShuttingDown()) return;
 				await moderator.host.startInLane(["moderator_handling"]);
+				this.#appendFinding(handling.snapshot.key, { key: `moderator-started:${agentId}`, summary: `Moderator ${agentId} Run ${moderator.host.currentHandle()?.sequence} started as bounded recovery attempt ${handling.committedAttemptCount} of ${MAX_AUTOMATIC_MODERATOR_ATTEMPTS}. Outcome unknown.`, evidence: [`Moderator transcript: ${sessionPath}`] });
 				if (this.#isShuttingDown()) return;
 				const routineStart = createModelVisibleModeratorRoutineStart();
 				// Startup is already progress before the child reports agent.start.
@@ -802,16 +923,19 @@ export class OperationalIncidentCoordinator {
 			});
 		} catch (error) {
 			this.#reportError(error);
-			await this.#handleModeratorFailure(handling, moderator);
+			await this.#handleModeratorFailure(handling, moderator, { stage: handling.creationStage, error: error instanceof Error ? error.message : String(error), provenance: "Moderator startup rejection" });
 		}
 	}
 
 	async #handleModeratorFailure(
 		handling: OperationalIncidentHandling,
 		moderator: AgentRecord,
+		failure?: AgentRunFailure,
 	): Promise<void> {
 		if (this.#isShuttingDown()) return;
 		if (handling.moderatorAgentId !== moderator.identity.agentId) return;
+		const sequence = moderator.host.latestStartedRunSequence();
+		this.#recordModeratorFailure(this.#reportContext(handling.snapshot), moderator, sequence > 0 ? { sequence } : undefined, failure);
 		if (!this.#conditionRemains(handling.snapshot)) {
 			this.#releaseHandling(handling.snapshot.key);
 			return;
@@ -823,6 +947,7 @@ export class OperationalIncidentCoordinator {
 			await this.#attemptModeratorCreation(handling);
 		} else {
 			handling.exhausted = true;
+			this.#appendFinding(handling.snapshot.key, { key: "moderator-attempts-exhausted", summary: `All ${MAX_AUTOMATIC_MODERATOR_ATTEMPTS} automatic Moderator attempts failed. No further automatic attempt is scheduled for this incident; recovery remains unresolved.`, evidence: handling.diagnostics.map(pointer => JSON.stringify(pointer)) });
 			this.#presentation.present(
 				handling.snapshot.key,
 				this.#attentionFor(handling),
@@ -833,6 +958,7 @@ export class OperationalIncidentCoordinator {
 
 	#attentionFor(handling: OperationalIncidentHandling): OperationalIncidentAttention {
 		return {
+			...(this.#reportSources.has(handling.snapshot.key) ? { reportSource: this.#reportSources.get(handling.snapshot.key)! } : {}),
 			trigger: handling.trigger ?? this.#triggerFor(handling.snapshot),
 			affectedAgents: handling.snapshot.affectedAgentIds.map((agentId) => ({
 				agentId,
@@ -1245,7 +1371,11 @@ export class OperationalIncidentCoordinator {
 	#releaseHandling(key: string): void {
 		const handling = this.#handlingByKey.get(key);
 		if (!handling) return;
+		this.#appendFinding(key, { key: "condition-cleared", summary: "Original operational condition is no longer eligible for this handling, or Moderator handling was explicitly resolved. This does not establish that all Requests were answered or that underlying failure was repaired.", evidence: [`Original incident: ${handling.snapshot.kind}`, `Affected Requests: ${JSON.stringify(handling.snapshot.requestIds)}`] });
 		this.#handlingByKey.delete(key);
+		// Request-set keys can recur after activity clears a Stall. Keep the old
+		// snapshot's report for its Moderators, not as the next episode's inbox row.
+		this.#reportSources.delete(key);
 		if (handling.exhausted) {
 			this.#presentation.dismiss(key);
 			this.#onAttentionChanged();
@@ -1259,6 +1389,14 @@ export class OperationalIncidentCoordinator {
 		void this.#messages.requestRelease(moderator)
 			.catch((error: unknown) => this.#reportError(error));
 	}
+}
+
+function incidentReportKey(input: Pick<ModeratorInput, "trigger" | "inspectedThrough">): string {
+	// Validation rebuilds trigger objects; key identity must not depend on their property order.
+	const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+		: value !== null && typeof value === "object"
+			? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value;
+	return JSON.stringify(canonical({ trigger: input.trigger, inspectedThrough: input.inspectedThrough }));
 }
 
 function hasExactDurableModeratorEvidence(options: {

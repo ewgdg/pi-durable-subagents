@@ -15,8 +15,8 @@ import { validateAgentMessageResultShape } from "./message-result-shape.ts";
 import { validateModeratorControlInput } from "./moderator-control.ts";
 import { validateModeratorObligationReminderRecord } from "./moderator-obligation-reminder.ts";
 import {
-	validateReportToUserInput, validateModeratorReport, validateModeratorReportReadState,
-	MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE,
+	validateReportToUserInput, validateModeratorReport, validateModeratorReportReadState, validateReportFinding,
+	MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE, MODERATOR_REPORT_FINDING_CUSTOM_TYPE,
 } from "./moderator-report.ts";
 import { obligationStack } from "./obligation-focus.ts";
 import { validateObligationReminderRecord } from "./obligation-reminder.ts";
@@ -45,6 +45,7 @@ const CALL_VALIDATORS: Readonly<Record<string, (value: Record<string, unknown>) 
 const CUSTOM_VALIDATORS: Readonly<Record<string, (entry: SessionEntry) => unknown>> = {
 	[MODERATOR_REPORT_CUSTOM_TYPE]: entry => validateModeratorReport(customData(entry)),
 	[MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE]: entry => validateModeratorReportReadState(customData(entry)),
+	[MODERATOR_REPORT_FINDING_CUSTOM_TYPE]: entry => validateReportFinding(customData(entry)),
 	[OBLIGATION_REMINDER_CUSTOM_TYPE]: validateObligationReminderRecord,
 	[RUN_FAILURE_RECOVERY_CUSTOM_TYPE]: validateRunFailureRecoveryRecord,
 	[MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE]: validateModeratorObligationReminderRecord,

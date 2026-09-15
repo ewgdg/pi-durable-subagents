@@ -5,6 +5,7 @@ import type { TerminalProjection } from "../presentation/terminal-projection.ts"
 import type {
 	AgentRetentionReason,
 	AgentRunEndCause,
+	AgentRunFailure,
 	AgentRunHandle,
 	AgentRunSettlement,
 	AgentRunState,
@@ -23,6 +24,7 @@ import type {
 export type {
 	AgentRetentionReason,
 	AgentRunEndCause,
+	AgentRunFailure,
 	AgentRunHandle,
 	AgentRunSettlement,
 	AgentRunState,
@@ -57,6 +59,7 @@ type BoundAgentRuntime = {
 	admitted: boolean;
 	hasInput: boolean;
 	failed: boolean;
+	failure?: AgentRunFailure;
 	expectedInterruption: boolean;
 	releaseDeferredUntilInputSettles: boolean;
 	releaseDeferredUntilActivitySettles: boolean;
@@ -71,7 +74,7 @@ type HeldNativeQueue = {
 
 type StartSession = () => Promise<StartedAgentRuntime>;
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
-type EndedHandler = (handle: AgentRunHandle, cause: AgentRunEndCause) => void;
+type EndedHandler = (handle: AgentRunHandle, cause: AgentRunEndCause, failure?: AgentRunFailure) => void;
 type StateChangeHandler = () => void;
 type ProjectionInputSettledHandler = () => void;
 type RunFenceHandler = (handle: AgentRunHandle) => void;
@@ -101,6 +104,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	>();
 	#runtime: BoundAgentRuntime | undefined;
 	#starting = false;
+	#startingHandle: AgentRunHandle | undefined;
 	#passivePreparation = false;
 	#startingCancellationRequested = false;
 	#pendingInitializationTermination: RuntimeInitializationTermination | undefined;
@@ -241,7 +245,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	currentHandle(): AgentRunHandle | undefined {
-		return this.#runtime?.admitted ? this.#runtime.handle : undefined;
+		return this.#runtime?.admitted ? this.#runtime.handle : this.#startingHandle;
 	}
 
 	currentProjection(): TerminalProjection | undefined {
@@ -610,7 +614,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 				await this.#admitPreparedRun(existing);
 				return existing.runtime;
 			} catch (error) {
-				const cleanupErrors = [error, ...await this.#discardFailedStart(this.#startingCancellationRequested ? "termination" : "failure")];
+				const cleanupErrors = [error, ...await this.#discardFailedStart(this.#startingCancellationRequested ? "termination" : "failure", startupFailure(error))];
 				this.#clearRunScopedState();
 				if (cleanupErrors.length > 1) {
 					throw new AggregateError(cleanupErrors, "Agent Run admission cleanup failed");
@@ -630,6 +634,8 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		}
 		this.#starting = true;
 		this.#passivePreparation = !admitRun;
+		// Admission must survive failures before a child Runtime or transcript exists.
+		if (admitRun) this.#startingHandle = Object.freeze({ sequence: ++this.#runSequence });
 		for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
 		this.#notifyStateChanged();
 		let startedRun: StartedAgentRuntime | undefined;
@@ -691,7 +697,21 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			const endCause = this.#startingCancellationRequested
 				? "termination" as const
 				: "failure" as const;
-			cleanupErrors.push(...await this.#discardFailedStart(endCause));
+			const failure = startupFailure(error);
+			if (this.#runtime && this.#startingHandle && !this.#runtime.admitted) {
+				this.#runtime.handle = this.#startingHandle;
+				this.#runtime.admitted = true;
+				this.#startingHandle = undefined;
+			}
+			if (!this.#runtime && this.#startingHandle) {
+				const handle = this.#startingHandle;
+				this.#startingHandle = undefined;
+				this.#starting = false;
+				this.#clearRunScopedState();
+				this.#notifyStateChanged();
+				this.#notifyEnded(handle, endCause, endCause === "failure" ? failure : undefined);
+			}
+			cleanupErrors.push(...await this.#discardFailedStart(endCause, failure));
 			this.#clearRunScopedState();
 			if (cleanupErrors.length > 1) {
 				throw new AggregateError(
@@ -703,6 +723,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			}
 			throw error;
 		} finally {
+			this.#startingHandle = undefined;
 			if (this.#starting) {
 				this.#starting = false;
 				this.#passivePreparation = false;
@@ -724,8 +745,8 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	async #markPreparedRunAdmitted(run: BoundAgentRuntime): Promise<void> {
 		this.#cancelReleaseAfterActivitySettlement(run);
 		run.releaseDeferredUntilActivitySettles = false;
-		this.#runSequence += 1;
-		run.handle = Object.freeze({ sequence: this.#runSequence });
+		run.handle = this.#startingHandle ?? Object.freeze({ sequence: ++this.#runSequence });
+		this.#startingHandle = undefined;
 		run.admitted = true;
 		run.hasInput = false;
 		// Startup owns an exact Run before readiness. Keep that identity for terminal
@@ -966,6 +987,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			)
 		);
 		const endedHandle = run.handle;
+		const failure = cause === "failure" ? run.failure : undefined;
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
 			try {
@@ -1013,6 +1035,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			if (retainRuntime) {
 				run.admitted = false;
 				run.failed = false;
+				run.failure = undefined;
 				run.expectedInterruption = false;
 			} else {
 				this.#runtime = undefined;
@@ -1020,7 +1043,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			this.#clearRunScopedState(retainRuntime);
 			this.#ending = false;
 			this.#notifyStateChanged();
-			if (endedHandle.sequence > 0) this.#notifyEnded(endedHandle, cause);
+			if (endedHandle.sequence > 0) this.#notifyEnded(endedHandle, cause, failure);
 		}
 		if (cleanupErrors.length > 0) {
 			throw new AggregateError(cleanupErrors, "Agent Run cleanup failed");
@@ -1053,9 +1076,11 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 
 	async #discardFailedStart(
 		cause: Extract<AgentRunEndCause, "failure" | "termination">,
+		failure?: AgentRunFailure,
 	): Promise<unknown[]> {
 		const failedStart = this.#runtime;
 		if (!failedStart) return [];
+		const admitted = failedStart.admitted;
 		this.#cancelReleaseAfterActivitySettlement(failedStart);
 		const retainRuntime = this.#runtimeOwnership === "native-host";
 		const cleanupErrors: unknown[] = [];
@@ -1088,6 +1113,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			if (retainRuntime) {
 				failedStart.admitted = false;
 				failedStart.failed = false;
+				failedStart.failure = undefined;
 				failedStart.expectedInterruption = false;
 			} else {
 				this.#runtime = undefined;
@@ -1095,7 +1121,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			this.#clearRunScopedState();
 			this.#starting = false;
 			this.#notifyStateChanged();
-			if (failedStart.admitted) this.#notifyEnded(failedStart.handle, cause);
+			if (admitted) this.#notifyEnded(failedStart.handle, cause, cause === "failure" ? failure : undefined);
 		}
 		return cleanupErrors;
 	}
@@ -1162,7 +1188,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 					// into Run Failure before the exact Hold is established.
 					!this.#interrupting &&
 					!expectedInterruption;
-				if (terminalFailure) this.#markRunFailed(run, run.handle);
+				if (terminalFailure) {
+					if (!run.failed) run.failure = event.failure;
+					this.#markRunFailed(run, run.handle);
+				}
 			}
 			if (event.type === "agent_settled") {
 				run.expectedInterruption = false;
@@ -1182,8 +1211,8 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		for (const handler of this.#stateChangeHandlers) handler();
 	}
 
-	#notifyEnded(handle: AgentRunHandle, cause: AgentRunEndCause): void {
-		for (const handler of this.#endedHandlers) handler(handle, cause);
+	#notifyEnded(handle: AgentRunHandle, cause: AgentRunEndCause, failure?: AgentRunFailure): void {
+		for (const handler of this.#endedHandlers) handler(handle, cause, failure);
 	}
 
 	#restoreHeldNativeQueueAfterIsolatedTurn(
@@ -1259,6 +1288,14 @@ function hasInFlightProjectionInput(run: BoundAgentRuntime): boolean {
 	// Pi remains session-idle during async input and prompt preflight. The process
 	// projection keeps this true until its child admits the resulting Agent Run.
 	return run.runtime.projection?.isProcessingInput() ?? false;
+}
+
+function startupFailure(error: unknown): AgentRunFailure {
+	return {
+		stage: "startup",
+		error: error instanceof Error ? error.message : String(error),
+		provenance: "agent-runtime-supervisor",
+	};
 }
 
 function isRequestRelationshipReason(

@@ -13,6 +13,8 @@ import {
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
+import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import {
@@ -924,7 +926,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 		moderatorAgents.surface.handleInput?.("j");
 		dormantModerator = moderatorAgents.surface.render(80).join("\n");
 	}
-	assert.match(dormantModerator, /moderator.*moderating obligation stall/i);
+	assert.match(dormantModerator, /moderator.*Incident: obligation stall/i);
 	assert.match(dormantModerator, new RegExp(moderator.agentId));
 	moderatorAgents.surface.handleInput?.("\x1b");
 	await moderatorAgents.command;
@@ -968,6 +970,13 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 	]);
 	assert.match(recoveredPrompt, /Captured Moderator rules\./);
 	assert.doesNotMatch(recoveredPrompt, /Changed Moderator rules\./);
+	reopened.model.setResponses([fauxAssistantMessage("Cold Moderator failed", { stopReason: "error", errorMessage: "400 cold Moderator original failure" })]);
+	await executeTool(reopened, "agent_message", "fail-recovered-moderator", { operation: "send", targetAgent: moderator.agentId, content: "Fail this recovered Run." });
+	const reports = reportStore(reopened);
+	await waitForCondition(async () => reports.history().length === 1);
+	assert.match(reports.history()[0]!.report.uncertainty, /cold committed Moderator Input/);
+	assert.match(reports.history()[0]!.findings![0]!.summary, /400 cold Moderator original failure/);
+	assert.equal(await countModeratorSessions(directory), 1, "cold failure does not reconstruct automatic handling");
 	await reopened.runtime.dispose();
 });
 
@@ -1049,20 +1058,12 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		}
 		return true;
 	});
-	const attentionAgents = await openAgentsSurface(host);
-	await waitForCondition(async () =>
-		attentionAgents.surface.render(80).join("\n").includes(
-			"→ ATTENTION 1 · Obligation Stall",
-		)
-	);
-	const operationalAttention = attentionAgents.surface.render(80).join("\n");
-	assert.match(operationalAttention, /→ ATTENTION 1 · Obligation Stall/);
-	assert.match(operationalAttention, /Affected Agent/);
-	assert.doesNotMatch(operationalAttention, new RegExp(affected.agentId));
-	assert.match(operationalAttention, /Request .*\/.*\/.*/);
-	assert.equal((operationalAttention.match(/Diagnostic /g) ?? []).length, 2);
-	attentionAgents.surface.handleInput?.("\x1b");
-	await attentionAgents.command;
+	const reports = reportStore(host);
+	const retained = reports.history()[0]!;
+	assert.equal(reports.history().length, 1);
+	assert.equal(retained.findings?.filter(finding => finding.key.startsWith("moderator-failure:")).length, 2);
+	assert.ok(retained.report.symptom.includes(affected.agentId));
+	reports.setRead(retained.report.reportId, true);
 
 	const ownerSessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(ownerSessionFile);
@@ -1072,10 +1073,24 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 	});
 	const reopenedAgents = await openAgentsSurface(reopened);
 	assert.doesNotMatch(reopenedAgents.surface.render(80).join("\n"), /ATTENTION 1/);
+	assert.doesNotMatch(reopenedAgents.surface.render(80).join("\n"), /Operational incident unresolved/);
 	reopenedAgents.surface.handleInput?.("\x1b");
 	await reopenedAgents.command;
+	const reopenedReports = reportStore(reopened);
+	assert.deepEqual(reopenedReports.history(), reports.history());
+	reopened.model.setResponses([fauxAssistantMessage("Recovered attempt fails", { stopReason: "error", errorMessage: "400 recovered Moderator attempt failed" })]);
+	await executeTool(reopened, "agent_message", "fail-cold-exhausted-moderator", { operation: "send", targetAgent: failedModeratorIds[0]!, content: "Try the recovered Moderator Run." });
+	await waitForCondition(async () => reopenedReports.history()[0]?.findings?.some(finding => finding.summary.includes("400 recovered Moderator attempt failed")) ?? false);
+	assert.equal(reopenedReports.history().length, 1, "cold attempt is grouped into original retained incident");
+	assert.deepEqual(reopenedReports.history()[0]?.report, retained.report);
+	assert.ok(reopenedReports.history()[0]?.readAt, "later finding does not undo acknowledgment");
+	assert.equal(await countModeratorSessions(directory), 2, "no reconstructed replacement budget");
 	await reopened.runtime.dispose();
 });
+
+function reportStore(host: TestOwnerHost): ModeratorReportStore {
+	return new ModeratorReportStore({ transcript: transcriptFromSessionManager(host.session.sessionManager), appendCustomEntry: (type, data) => host.session.sessionManager.appendCustomEntry(type, data) });
+}
 
 test("cold discovery quarantines malformed Moderator bootstrap evidence", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });

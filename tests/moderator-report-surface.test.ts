@@ -251,7 +251,7 @@ test("runtime reports are copyable and acknowledgeable without fictional reporte
 	const runtimeItem: ReportHistoryItem = { report: {
 		...item.report, reporter: undefined,
 		source: { kind: "runtime_diagnostic", agentId: "owner", entryId: "diagnostic-exact", transcriptPath: "/tmp/owner.jsonl" },
-	} };
+	}, findings: [{ reportId: item.report.reportId, key: "recovery", summary: "Inspection recovered", evidence: ["entry:recovered"], createdAt: "2026-01-02T00:00:00Z" }] };
 	const h = harness();
 	const reads: boolean[] = [];
 	let copied = "";
@@ -265,6 +265,11 @@ test("runtime reports are copyable and acknowledgeable without fictional reporte
 	assert.equal(navigations, 0);
 	h.component.handleInput?.("c"); await flush();
 	assert.match(copied, /Source entry: diagnostic-exact/);
+	assert.match(copied, /Finding: recovery/);
+	assert.match(copied, /Inspection recovered/);
+	assert.match(copied, /entry:recovered/);
+	h.component.handleInput?.("\u001b[F");
+	assert.match(h.component.render(180).join("\n"), /Inspection recovered/);
 	assert.doesNotMatch(copied, /Source tool call|Reporter:/);
 	assert.deepEqual(reads, []);
 	h.component.handleInput?.("m"); await flush();

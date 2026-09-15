@@ -55,6 +55,7 @@ export type InterruptionHoldHandle = Readonly<{
 }>;
 export type AgentRunSettlement = "settled" | "failed";
 export type AgentRunEndCause = "clean" | "failure" | "termination" | "shutdown";
+export type AgentRunFailure = Readonly<{ stage: string; error: string; provenance: string }>;
 export type ResidualRequestRelationships = Readonly<{
 	awaitingAnswerRequestIds: readonly string[];
 	answerOwedRequestIds: readonly string[];
@@ -154,7 +155,7 @@ export interface AgentRuntimeHost {
 		handler: (handle: AgentRunHandle, settlement: AgentRunSettlement) => void,
 	): () => void;
 	addEndedHandler(
-		handler: (handle: AgentRunHandle, cause: AgentRunEndCause) => void,
+		handler: (handle: AgentRunHandle, cause: AgentRunEndCause, failure?: AgentRunFailure) => void,
 	): () => void;
 	addStateChangeHandler(handler: () => void): () => void;
 	setProjectionInputSettledHandler(handler: () => void): void;

@@ -2,6 +2,7 @@ import type {
 	CommitModeratorReminderIfCurrent,
 	ModeratorReminderOutcome,
 	AgentRuntimeDelivery,
+	AgentRunFailure,
 	AgentRuntimeDeliveryDispatch,
 	AgentRuntimeWorkState,
 	EffectiveRuntimeSnapshot,
@@ -16,6 +17,7 @@ export type HostedRuntimeEvent =
 		type: "agent_end";
 		outcome: "completed" | "aborted" | "error";
 		willRetry: boolean;
+		failure?: AgentRunFailure;
 	}>
 	| Readonly<{ type: "agent_settled" }>;
 

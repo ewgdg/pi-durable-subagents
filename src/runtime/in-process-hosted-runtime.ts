@@ -150,7 +150,12 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 					(assistant.stopReason === "error" || assistant.stopReason === "aborted")
 					? assistant.stopReason
 					: "completed";
-				handler({ type: "agent_end", outcome, willRetry: event.willRetry });
+				handler({
+					type: "agent_end", outcome, willRetry: event.willRetry,
+					...(outcome === "error" && assistant?.role === "assistant" && assistant.errorMessage !== undefined
+						? { failure: { stage: "model", error: assistant.errorMessage, provenance: "in-process-hosted-runtime" } }
+						: {}),
+				});
 			}
 			if (event.type === "agent_settled") handler({ type: "agent_settled" });
 		});

@@ -526,6 +526,41 @@ test("unread reports remain in the Owner Attention Inbox until explicitly marked
 	readDock.dispose();
 });
 
+test("linked Run Failure reports own inbox visibility while unresolved status remains live", () => {
+	const report = {
+		reportId: "failure", createdAt: "2026-06-11T00:00:00Z",
+		source: { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "diagnostic", transcriptPath: "/tmp/owner.jsonl" },
+		symptom: "Run failed", suspectedDefect: "Unknown", uncertainty: "Unknown",
+		recoveryActions: "None", recoveryOutcome: "Unknown", evidence: ["diagnostic"],
+	};
+	for (const readAt of [undefined, report.createdAt]) {
+		for (const reportSource of [
+			{ agentId: "owner", entryId: "diagnostic" },
+			{ agentId: "other", entryId: "diagnostic" },
+			{ agentId: "owner", entryId: "other" },
+		]) {
+			const { dock } = createDock({
+				scope: agent({ agentId: "owner", label: "Owner", parent: null }), children: [], answerMode: false,
+				humanAttention: [], operationalAttention: [{
+					trigger: { kind: "run_failure", agentId: "child", runSequence: 1, obligations: { total: 1, sources: [] } },
+					affectedAgents: [{ agentId: "child", label: "Child" }], diagnostics: [], reportSource,
+				}],
+				reports: [{ report, ...(readAt ? { readAt } : {}) }],
+			});
+			try {
+				const rendered = dock.render(160).join("\n");
+				assert.match(rendered, /Operational incident unresolved · live status/);
+				if (reportSource.agentId === "owner" && reportSource.entryId === "diagnostic") {
+					assert.doesNotMatch(rendered, /ATTENTION/);
+					if (readAt) assert.doesNotMatch(rendered, /Attention Inbox/);
+				} else assert.match(rendered, /ATTENTION.*Run Failure/);
+				if (readAt) assert.doesNotMatch(rendered, /REPORT/);
+				else assert.match(rendered, /REPORT.*Runtime.*Run failed/);
+			} finally { dock.dispose(); }
+		}
+	}
+});
+
 test("acknowledged moderation failure keeps live unavailable status outside the inbox", () => {
 	const report = {
 		reportId: "failure", createdAt: "2026-06-11T00:00:00Z",
@@ -536,11 +571,15 @@ test("acknowledged moderation failure keeps live unavailable status outside the 
 	for (const readAt of [undefined, report.createdAt]) {
 		const { dock } = createDock({
 			scope: agent({ agentId: "owner", label: "Owner", parent: null }), children: [], answerMode: false,
-			humanAttention: [], operationalAttention: [{ trigger: { kind: "moderation_unavailable" }, affectedAgents: [], diagnostics: [] }],
+			humanAttention: [], operationalAttention: [{
+				trigger: { kind: "moderation_unavailable" }, affectedAgents: [], diagnostics: [],
+				reportSource: { agentId: "owner", entryId: "diagnostic" },
+			}],
 			reports: [{ report, ...(readAt ? { readAt } : {}) }],
 		});
 		const rendered = dock.render(160).join("\n");
 		assert.match(rendered, /Moderation Unavailable · live status/);
+		assert.doesNotMatch(rendered, /Operational incident unresolved/);
 		assert.doesNotMatch(rendered, /ATTENTION.*Moderation/);
 		if (readAt) assert.doesNotMatch(rendered, /Attention Inbox|REPORT/);
 		else assert.match(rendered, /REPORT.*Runtime.*Inspection blocked/);

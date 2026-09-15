@@ -1439,6 +1439,30 @@ for (const terminalRows of [10, 24, 40]) {
 	}
 }
 
+for (const readAt of [undefined, "2026-06-11T00:00:00Z"]) test(`linked incident uses report notification only (read=${!!readAt})`, async () => {
+	const harness = surfaceHarness(30);
+	const source = { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "incident-diagnostic", transcriptPath: "/tmp/owner.jsonl" };
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
+		operationalAttention: [{
+			trigger: { kind: "run_failure", agentId: "worker", runSequence: 1, obligations: { total: 0, sources: [] } },
+			affectedAgents: [{ agentId: "worker", label: "Worker" }], diagnostics: [source], reportSource: source,
+		}],
+		reports: [{ readAt, report: {
+			reportId: "incident-report", createdAt: "2026-06-11T00:00:00Z", source,
+			symptom: "Recovery exhausted", suspectedDefect: "Unknown", uncertainty: "Unknown",
+			recoveryActions: "Retried", recoveryOutcome: "Failed", evidence: ["diagnostic"],
+		} }],
+	});
+	const rendered = harness.component!.render(100).join("\n");
+	assert.doesNotMatch(rendered, /ATTENTION/);
+	assert.match(rendered, /Operational incident unresolved · live status/);
+	if (readAt) assert.doesNotMatch(rendered, /REPORT/);
+	else assert.match(rendered, /REPORT · Runtime/);
+	harness.component!.handleInput?.("\x1b");
+	await selection;
+});
+
 test("runtime report read toggle removes only inbox notification and preserves history and live status", async () => {
 	const harness = surfaceHarness(30);
 	const report = {

@@ -631,6 +631,11 @@ test("one failed provider request creates Run Failure without regenerating an an
 		retentionReasons: [],
 	});
 	assert.equal(failedChildProviderRequests, 1);
+	const reports = new ModeratorReportStore({ transcript: transcriptFromSessionManager(host.session.sessionManager), appendCustomEntry: (type, data) => host.session.sessionManager.appendCustomEntry(type, data) });
+	const report = reports.history().find(item => item.report.symptom.includes(input.trigger.agentId));
+	assert.ok(report, "answer-obligated terminal failure is retained immediately");
+	assert.match(report.report.suspectedDefect, /deterministic answer-obligated generation failure/);
+	assert.match(report.report.evidence.join("\n"), /Affected Requests: \["/);
 
 	await host.runtime.dispose();
 });
@@ -2394,6 +2399,13 @@ test("a terminal Moderator Run failure creates one linked replacement", async (t
 	assert.ok(failedTail?.type === "message" && failedTail.message.role === "assistant");
 	assert.equal(failedTail.message.stopReason, "error");
 	assert.equal(previousAttempt.entryId, failedTail.id);
+	const report = harness.owner.reportHistory()[0];
+	assert.ok(report);
+	assert.equal(harness.owner.reportHistory().length, 1, "replacement does not create a competing incident report");
+	const failureFinding = report.findings?.find(finding => finding.key.startsWith(`moderator-failure:${failed.id}:1:`));
+	assert.ok(failureFinding);
+	assert.ok(failureFinding.summary.includes(failedTail.message.errorMessage!));
+	assert.match(failureFinding.evidence.join("\n"), new RegExp(failed.id));
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
@@ -2489,6 +2501,12 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 	const moderators = await findModerators(harness.host);
 	assert.equal(moderators.length, 2);
 	const attention = harness.owner.operationalAttention()[0]!;
+	const incidentReport = harness.owner.reportHistory()[0];
+	assert.ok(incidentReport, "failed Moderator attempts produce one retained incident report");
+	assert.equal(harness.owner.reportHistory().length, 1);
+	assert.equal(incidentReport.findings?.filter(finding => finding.key.startsWith("moderator-failure:")).length, 2);
+	harness.owner.setReportRead(incidentReport.report.reportId, true);
+	assert.deepEqual(harness.owner.operationalAttention(), [attention], "reading does not clear unresolved handling");
 	assert.equal(attention.trigger.kind, "obligation_stall");
 	assert.deepEqual(attention.affectedAgents, [{
 		agentId: affected.agentId,
@@ -2530,7 +2548,136 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 		affected.requestMessageId,
 	);
 	await waitForCondition(() => harness.owner.operationalAttention().length === 0);
+	assert.deepEqual(harness.owner.reportHistory()[0]?.report, incidentReport.report);
+	assert.ok(harness.owner.reportHistory()[0]?.readAt);
+	assert.ok(harness.owner.reportHistory()[0]?.findings?.some(finding => finding.key === "condition-cleared"));
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("a same-obligation Stall recurrence publishes fresh attention after its prior report was read", async (t) => {
+	const { host, owner } = await createIncidentBoundaryHarness(t, { beforeModeratorRunStart: () => "confirmed_failure" });
+	host.model.setResponses([fauxAssistantMessage("Remain obligated."), fauxAssistantMessage("Still obligated after reminder.")]);
+	const child = await spawnFromView(host.session, owner, "recurring-stall", "Remain obligated.");
+	await waitForCondition(() => owner.operationalAttention().length === 1);
+	const original = owner.reportHistory()[0]!;
+	assert.match(original.report.symptom, /Moderator handling failed for original incident: obligation_stall/);
+	owner.setReportRead(original.report.reportId, true);
+	let release!: () => void;
+	let started = false;
+	const gate = new Promise<void>(resolve => { release = resolve; });
+	t.after(() => release());
+	host.model.setResponses([async () => { started = true; await gate; return fauxAssistantMessage("Still obligated after renewed activity."); }]);
+	await sendMessageFromView(host.session, owner, "restart-recurring-stall", child.agentId, "Continue working, without answering yet.");
+	await waitForCondition(() => started);
+	await waitForCondition(() => owner.operationalAttention().length === 0);
+	release();
+	await waitForCondition(() => owner.operationalAttention().length === 1);
+	assert.equal(owner.reportHistory().length, 2, "the same Request set can begin a distinct operational episode");
+	assert.match(owner.reportHistory()[1]!.report.symptom, /Moderator handling failed for original incident: obligation_stall/);
+	assert.equal(owner.reportHistory()[1]?.findings?.filter(finding => finding.key.startsWith("moderator-failure:")).length, 2);
+	assert.ok(owner.reportHistory()[0]?.readAt);
+	assert.equal(owner.reportHistory()[1]?.readAt, undefined);
+	assert.deepEqual(owner.reportHistory()[0]?.report, original.report);
+	const originalModeratorId = original.findings!.find(finding => finding.key.startsWith("moderator-failure:"))!.key.split(":")[1]!;
+	const recurrenceFindings = owner.reportHistory()[1]!.findings;
+	host.model.setResponses([fauxAssistantMessage("Late original failure", { stopReason: "error", errorMessage: "400 late original Moderator failed" })]);
+	await sendMessageFromView(host.session, owner, "late-original-moderator-failure", originalModeratorId, "Inspect the original incident again.");
+	await waitForCondition(() => owner.reportHistory()[0]?.findings?.some(finding => finding.summary.includes("400 late original Moderator failed")) ?? false);
+	assert.equal(owner.reportHistory().length, 2);
+	assert.deepEqual(owner.reportHistory()[1]?.findings, recurrenceFindings, "old Moderator evidence cannot contaminate the recurrent episode");
+	assert.ok(owner.reportHistory()[0]?.readAt);
+});
+
+test("intentional child termination does not publish a Run failure report", async (t) => {
+	const { host, owner, coordinator } = await createIncidentBoundaryHarness(t);
+	host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Wait for intentional termination." }, { id: "intentional-termination-wait" }), { stopReason: "toolUse" })]);
+	const child = await spawnFromView(host.session, owner, "intentional-termination-report", "Wait for a human.");
+	await waitForCondition(() => coordinator.forAgent(child.agentId).obligationFrames().length > 0);
+	await controlFromView(host.session, owner, "terminate-without-failure-report", { operation: "terminate", agentId: child.agentId });
+	await owner.reachSafeBoundary();
+	assert.deepEqual(owner.reportHistory(), []);
+	assert.deepEqual(await findModerators(host), []);
+});
+
+test("a native retry followed by success does not publish a Run failure report", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, { persistent: true, settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } } });
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-agent-coordination>" });
+	const owner = coordinator.forAgent(identity.agentId);
+	const retries: boolean[] = [];
+	host.session.subscribe(event => { if (event.type === "agent_end") retries.push(event.willRetry); });
+	host.model.setResponses([
+		fauxAssistantMessage("Transient", { stopReason: "error", errorMessage: "503 service unavailable" }),
+		fauxAssistantMessage("Retry succeeded."),
+	]);
+	await host.session.prompt("Recover through native retry.");
+	await owner.reachSafeBoundary();
+	assert.deepEqual(retries, [true, false], "exercise actual native retry, not just a successful turn");
+	assert.deepEqual(owner.reportHistory(), []);
+});
+
+test("startup rejection before any child error transcript retains the original failure and exact Run", async (t) => {
+	const { ProcessChildSessionFactory } = await import("../src/runtime/process-child-session-factory.ts");
+	const { AgentRuntimeSupervisor } = await import("../src/runtime/agent-runtime-supervisor.ts");
+	const createRecord = ProcessChildSessionFactory.prototype.createAgentRecord;
+	t.mock.method(ProcessChildSessionFactory.prototype, "createAgentRecord", function (this: InstanceType<typeof ProcessChildSessionFactory>, options: Parameters<typeof createRecord>[0]) {
+		const record = createRecord.call(this, options);
+		record.host = AgentRuntimeSupervisor.createChild({ agentId: record.identity.agentId, startSession: async () => { throw new Error("original model startup failure before child transcript"); } });
+		return record;
+	});
+	const { host, owner } = await createIncidentBoundaryHarness(t);
+	await spawnFromView(host.session, owner, "pre-transcript-failure", "Start without reaching a model.");
+	const item = owner.reportHistory()[0];
+	assert.ok(item);
+	assert.match(item.report.symptom, /Run 1/);
+	assert.match(item.report.suspectedDefect, /original model startup failure before child transcript/);
+	assert.match(item.report.suspectedDefect, /stage: startup/);
+	assert.equal((await findModerators(host)).length, 0);
+	const child = owner.selectionRoster().dormant.find(record => record.agentId !== owner.status().agentId);
+	assert.ok(child);
+	const entries = SessionManager.open((await sessionPathFor(host, child.agentId))).getEntries();
+	assert.equal(entries.some(entry => entry.type === "message" && entry.message.role === "assistant"), false);
+	owner.setReportRead(item.report.reportId, true);
+	const manager = SessionManager.open(host.session.sessionManager.getSessionFile()!);
+	const reopened = new ModeratorReportStore({ transcript: transcriptFromSessionManager(manager), appendCustomEntry: (type, data) => manager.appendCustomEntry(type, data) });
+	assert.deepEqual(reopened.history(), owner.reportHistory());
+});
+
+test("an un-obligated terminal Run failure is retained without widening Moderator eligibility", async (t) => {
+	const { host, owner } = await createIncidentBoundaryHarness(t);
+	host.model.setResponses([fauxAssistantMessage("Failed without obligations", {
+		stopReason: "error", errorMessage: "400 deterministic un-obligated terminal failure",
+	})]);
+	await host.session.prompt("Fail this Owner Run without delegating anything.");
+	await waitForCondition(() => owner.reportHistory().length === 1);
+	const original = owner.reportHistory()[0]!;
+	assert.match(original.report.symptom, /Run 1/);
+	assert.match(original.report.suspectedDefect, /deterministic un-obligated terminal failure/);
+	assert.match(original.report.evidence.join("\n"), /Affected Requests: \[\]/);
+	owner.setReportRead(original.report.reportId, true);
+	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
+	assert.equal(owner.reportHistory().length, 1, "repeated observation does not duplicate report");
+	assert.equal((await findModerators(host)).length, 0);
+	host.model.setResponses([fauxAssistantMessage("Recovered successor")]);
+	await owner.beginExecution();
+	await host.session.prompt("Start a successor Run.");
+	await waitForCondition(() => owner.reportHistory()[0]?.findings?.some(finding => finding.key.startsWith("successor:")) ?? false);
+	await owner.reachSafeBoundary();
+	assert.deepEqual(owner.reportHistory()[0]?.report, original.report);
+	assert.ok(owner.reportHistory()[0]?.findings?.some(finding => finding.key.startsWith("successor:")));
+	assert.ok(owner.reportHistory()[0]?.readAt);
+	const manager = SessionManager.open(host.session.sessionManager.getSessionFile()!);
+	const reopened = new ModeratorReportStore({ transcript: transcriptFromSessionManager(manager), appendCustomEntry: (type, data) => manager.appendCustomEntry(type, data) });
+	assert.deepEqual(reopened.history(), owner.reportHistory());
+	host.model.setResponses([fauxAssistantMessage("Another terminal failure", {
+		stopReason: "error", errorMessage: "400 distinct Run recurrence",
+	})]);
+	await host.session.prompt("Fail a distinct Run.");
+	await waitForCondition(() => owner.reportHistory().length === 2);
+	assert.notEqual(owner.reportHistory()[1]?.report.reportId, original.report.reportId);
+	assert.match(owner.reportHistory()[1]!.report.symptom, /Run 2/);
+	assert.ok(owner.reportHistory()[0]?.readAt);
 });
 
 test("selected-child native quit fences Workflow shutdown before exit and creates no Moderator", async (t) => {

@@ -630,6 +630,19 @@ test("Control snapshots carry runtime diagnostic reports but reject invented too
 	const snapshot = { live: [], dormant: [], humanAttention: [], operationalAttention: [], reports: [{ report, readAt: report.createdAt }], selectedAgentId: "owner" };
 	const schema = agentControlMethods["presentation.agents.snapshot"].response;
 	assert.ok(Check(schema, JSON.parse(JSON.stringify(snapshot))));
+	const linkedReport = { ...report, source: { ...report.source, incidentKey: "original-incident" } };
+	const finding = { reportId: report.reportId, key: "successor-started", createdAt: report.createdAt,
+		summary: "Successor started; completion unknown", evidence: ["worker/entry"] };
+	const linkedSnapshot = { ...snapshot,
+		reports: [{ report: linkedReport, readAt: report.createdAt, findings: [finding] }],
+		operationalAttention: [{
+			trigger: { kind: "run_failure", agentId: "worker", runSequence: 1, obligations: { total: 1, sources: [] } },
+			affectedAgents: [{ agentId: "worker", label: "Worker" }], diagnostics: [],
+			reportSource: { agentId: "owner", entryId: "diagnostic" },
+		}],
+	};
+	assert.ok(Check(schema, JSON.parse(JSON.stringify(linkedSnapshot))), "linked findings and live status survive process transport independently of read state");
+	assert.equal(Check(schema, { ...linkedSnapshot, reports: [{ report: linkedReport, findings: [{ ...finding, evidence: [] }] }] }), false);
 	const attention = { trigger: { kind: "moderation_unavailable" }, affectedAgents: [], diagnostics: [] };
 	assert.ok(Check(schema, { ...snapshot, operationalAttention: [attention] }));
 	assert.equal(Check(schema, { ...snapshot, operationalAttention: [{

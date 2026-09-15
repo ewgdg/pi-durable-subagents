@@ -56,7 +56,9 @@ The native status call and collapsed result identify the Agent as `label · comp
 
 Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. A child-local Turn Compaction Gateway cancels threshold compaction requested after a Run only when no raw Pi continuation is queued. The child releases normally and recomputes the same configured threshold before its next idle native prompt or Owner Delivery. Manual compaction and overflow recovery remain Pi-native. The gateway owns only preparation and input commitment, never the model cycle, and creates no durable pending state or Runtime retention.
 
-If Pi's configured native behavior ultimately ends the exact Run with an unresolved Answer Obligation, ordinary Run Failure moderation applies rather than a separate generation-failure or Operation Review mechanism.
+If Pi's configured native behavior ultimately ends the exact Run unexpectedly, the runtime retains a Run Failure Report, even when no Answer Obligation remains. It captures the observed error and stage, exact Agent and Run, affected work, and recovery findings or explicit uncertainty. Startup errors observed by the host do not require a child-side error transcript entry. Successfully recovered transient errors, ongoing provider recovery, and deliberate termination are not Run Failures. Pi currently exposes no structured terminal quota-suspension discriminator; the runtime does not guess one from error text.
+
+An unresolved Answer Obligation still determines eligibility for ordinary Run Failure moderation; reporting does not broaden that policy. Reports use the Owner's existing read/unread, copy, and retained history surfaces. Marking read acknowledges the notification only: it does not clear live failure handling, settle Requests, or initiate recovery. See [Operational Incident moderation](operational-incident-moderation.md) for report grouping and recovery findings.
 
 ## Child execution and Delivery
 

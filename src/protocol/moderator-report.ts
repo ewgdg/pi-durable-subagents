@@ -4,6 +4,10 @@ import type { EntryPointer } from "./moderator-input.ts";
 
 export const MODERATOR_REPORT_CUSTOM_TYPE = "agent-coordination.moderator-report";
 export const MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE = "agent-coordination.moderator-report-read";
+export const MODERATOR_REPORT_FINDING_CUSTOM_TYPE = "agent-coordination.moderator-report-finding";
+
+export type ReportFindingInput = Readonly<{ key: string; summary: string; evidence: readonly string[] }>;
+export type ReportFinding = ReportFindingInput & Readonly<{ reportId: string; createdAt: string }>;
 
 export type ReportToUserInput = Readonly<{
 	symptom: string;
@@ -15,7 +19,7 @@ export type ReportToUserInput = Readonly<{
 }>;
 export type Reporter = Readonly<{ agentId: string; label: string }>;
 export type ModeratorReportSource = ToolCallPointer & Readonly<{ transcriptPath: string; kind?: never }>;
-export type RuntimeReportSource = EntryPointer & Readonly<{ kind: "runtime_diagnostic"; transcriptPath: string; toolCallId?: never }>;
+export type RuntimeReportSource = EntryPointer & Readonly<{ kind: "runtime_diagnostic"; transcriptPath: string; incidentKey?: string; toolCallId?: never }>;
 export type ModeratorReport = ReportToUserInput & Readonly<{
 	reportId: string;
 	createdAt: string;
@@ -29,7 +33,18 @@ export type RuntimeReport = ReportToUserInput & Readonly<{
 	source: RuntimeReportSource;
 }>;
 export type Report = ModeratorReport | RuntimeReport;
-export type ReportHistoryItem = Readonly<{ report: Report; readAt?: string }>;
+export type ReportHistoryItem = Readonly<{ report: Report; readAt?: string; findings?: readonly ReportFinding[] }>;
+
+export function validateReportFinding(value: unknown): ReportFinding {
+	if (typeof value !== "object" || value === null) throw new CoordinationRecordValidationError("Report finding must be an object");
+	const finding = value as ReportFinding;
+	for (const field of ["reportId", "key", "summary"] as const) {
+		if (typeof finding[field] !== "string" || !finding[field].trim()) throw new CoordinationRecordValidationError(`Report finding ${field} must be nonblank text`);
+	}
+	if (typeof finding.createdAt !== "string" || !Number.isFinite(Date.parse(finding.createdAt))) throw new CoordinationRecordValidationError("Invalid report finding timestamp");
+	if (!Array.isArray(finding.evidence) || finding.evidence.length === 0 || finding.evidence.some(reference => typeof reference !== "string" || !reference.trim())) throw new CoordinationRecordValidationError("Report finding evidence must contain at least one nonblank reference");
+	return Object.freeze({ reportId: finding.reportId, key: finding.key, summary: finding.summary, createdAt: finding.createdAt, evidence: Object.freeze([...finding.evidence]) });
+}
 
 export function validateReportToUserInput(value: unknown): ReportToUserInput {
 	if (typeof value !== "object" || value === null) throw new CoordinationRecordValidationError("Report input must be an object");
@@ -49,7 +64,7 @@ export function validateReportToUserInput(value: unknown): ReportToUserInput {
 	});
 }
 
-export function formatModeratorReport(report: Report): string {
+export function formatModeratorReport(report: Report, findings: readonly ReportFinding[] = []): string {
 	return [
 		`# ${report.reporter ? "Moderator" : "Runtime"} report ${report.reportId}`,
 		`Created: ${report.createdAt}`,
@@ -64,6 +79,7 @@ export function formatModeratorReport(report: Report): string {
 		"", "## Recovery actions", report.recoveryActions,
 		"", "## Recovery outcome", report.recoveryOutcome,
 		"", "## Evidence", ...report.evidence.map((reference) => `- ${reference}`),
+		...findings.flatMap(finding => ["", `## Finding: ${finding.key}`, `Created: ${finding.createdAt}`, finding.summary, ...finding.evidence.map(reference => `- ${reference}`)]),
 	].join("\n");
 }
 
@@ -87,6 +103,8 @@ export function validateModeratorReport(value: unknown): Report {
 export function validateRuntimeReportSource(source: RuntimeReportSource): void {
 	if (source?.kind !== "runtime_diagnostic" || source.toolCallId !== undefined)
 		throw new CoordinationRecordValidationError("Runtime report requires diagnostic-entry provenance, not a tool call");
+	if (source.incidentKey !== undefined && (typeof source.incidentKey !== "string" || !source.incidentKey.trim()))
+		throw new CoordinationRecordValidationError("Runtime report incident key must be nonblank text");
 	for (const value of [source.agentId, source.entryId, source.transcriptPath]) {
 		if (typeof value !== "string" || !value.trim()) throw new CoordinationRecordValidationError("Runtime report source must be nonblank");
 	}
