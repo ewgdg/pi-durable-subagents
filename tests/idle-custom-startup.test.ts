@@ -73,15 +73,17 @@ for (const phase of ["input", "before_agent_start"] as const) {
 		test(`nested ${JSON.stringify(text)} during ${phase} is rejected before it can prepare or consume Delivery`, { timeout: 5000 }, async t => {
 			let nested!: () => Promise<void>;
 			let nestedEntries = 0;
+			let nestedError: unknown;
 			const host = await fixture(t, pi => {
 				onPreparation(pi, phase, async () => {
 					nestedEntries++;
-					if (nestedEntries === 1) await assert.rejects(nested(), /startup_preparation_busy/);
+					if (nestedEntries === 1) nestedError = await nested().then(() => undefined, error => error);
 				});
 			});
 			nested = () => host.session.prompt(text, { source: "extension" });
 			host.model.setResponses([fauxAssistantMessage("Only outer input ran.")]);
 			await host.deliver();
+			assert.match(String(nestedError), /startup_preparation_busy/);
 			assert.equal(nestedEntries, 1);
 			assert.equal(host.deliveries().length, 1);
 			assert.equal(host.session.messages.filter(message => message.role === "user").length, 1);
