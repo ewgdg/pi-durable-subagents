@@ -1199,8 +1199,9 @@ async function readBootstrapDescriptor(): Promise<ChildProcessBootstrap> {
 	let value: unknown;
 	try {
 		value = JSON.parse(await readFile(path, "utf8"));
-	} catch (error) {
-		throw new Error(`control_bootstrap_invalid: ${errorMessage(error)}`);
+	} catch {
+		// JSON parser errors can quote descriptor text, including the connection token.
+		throw new Error("control_bootstrap_invalid: descriptor could not be read as JSON; stop child launches, align package versions, and restart the Owner host");
 	}
 	return validateChildProcessBootstrap(value);
 }

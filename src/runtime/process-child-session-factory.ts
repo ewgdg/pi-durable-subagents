@@ -4,6 +4,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { dirname, resolve } from "node:path";
 
+import { ChildLaunchContractGuard } from "../process-runtime/child-launch-contract.ts";
+
 import type { AgentRecord } from "../coordination/agent-record.ts";
 import { admitControlTransportPlatform } from "../control/control-platform.ts";
 import { transcriptFromSessionFile } from "../pi-integration/session-manager-transcript.ts";
@@ -62,6 +64,7 @@ type ParticipantHandlers =
 /** Launches every non-Owner Runtime in a fresh Pi process. */
 export class ProcessChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
+	readonly #launchContract = new ChildLaunchContractGuard();
 	readonly #onRuntimeQuit: ((agentId: string, projection: HostedAgentProjection) => boolean) | undefined;
 	readonly #templateLoads = new Map<string, Promise<Readonly<{
 		discovery: AgentTemplateDiscovery;
@@ -119,6 +122,7 @@ export class ProcessChildSessionFactory {
 		spawnInput: AgentSpawnInput;
 		creationPreset?: AgentCreationPreset;
 	}): Promise<PreparedOrdinaryChildRuntime> {
+		await this.#launchContract.assertCompatible();
 		return this.#prepareOrdinaryRun(options, new Set());
 	}
 
@@ -126,6 +130,7 @@ export class ProcessChildSessionFactory {
 		agentId: string;
 		creationPreset?: AgentCreationPreset;
 	}): Promise<PreparedModeratorRuntime> {
+		await this.#launchContract.assertCompatible();
 		const owner = this.#resolveAgent(this.#ownerIdentity.agentId);
 		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
 		const parentRuntime = await this.#resolveCurrentRuntime(owner, new Set());
@@ -446,7 +451,9 @@ export class ProcessChildSessionFactory {
 		if (identityRole !== prepared.role) {
 			throw new Error("invariant_violation: Agent Identity and Runtime preparation roles differ");
 		}
+		// The low-level launch rechecks even when initial preparation was cached.
 		const launch = await PiChildProcessRuntime.launch({
+			launchContract: this.#launchContract,
 			workflowId: identity.workflowId,
 			agentId: identity.agentId,
 			role: prepared.role,

@@ -17,7 +17,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 7, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 8, workflowId: "workflow", agentId: "agent" } as const;
 
 test("control transports local Answer commitment without fabricating Delivery proof", () => {
 	const schema = agentControlMethods["coordination.message"].response;
@@ -51,7 +51,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 7,
+		protocolVersion: 8,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -69,7 +69,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		{ ...bootstrap, endpoint: namedPipeEndpoint },
 	);
 	for (const protocolVersion of [identity.protocolVersion - 1, identity.protocolVersion + 1]) {
-		assert.throws(() => validateChildProcessBootstrap({ ...bootstrap, protocolVersion }), /control_bootstrap_invalid/);
+		assert.throws(() => validateChildProcessBootstrap({ ...bootstrap, protocolVersion }), /control_bootstrap_protocol_mismatch/);
 		assert.equal(Check(ControlFrameSchema, {
 			...identity, protocolVersion, type: "hello", connectionToken: "token", expectedSessionId: "session",
 		}), false);
@@ -113,7 +113,7 @@ test("Control frame schema is a closed hello/request/response/event/cancel union
 	}), false);
 });
 
-test("every version-seven method and event has TypeBox payload/result schemas", () => {
+test("every version-eight method and event has TypeBox payload/result schemas", () => {
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"runtime.executionBegin",
@@ -637,5 +637,28 @@ test("Control snapshots carry runtime diagnostic reports but reject invented too
 	}] }), false, "an established incident still requires an affected Agent");
 	for (const invalid of [ { ...report, reporter: { agentId: "owner", label: "Owner" } }, { ...report, source: { ...report.source, toolCallId: "fake" } } ]) {
 		assert.equal(Check(schema, { ...snapshot, reports: [{ report: invalid }] }), false);
+	}
+});
+
+test("bootstrap incompatibility diagnostics distinguish versions and safe field failures", () => {
+	const descriptor = {
+		protocolVersion: 8,
+		endpoint: { transport: "unix", address: "/tmp/control.sock" },
+		connectionToken: "SECRET-TOKEN", workflowId: "workflow", agentId: "agent",
+		role: "ordinary", ownerPresentation: true, tools: [], expectedSessionId: "session",
+	};
+	assert.doesNotThrow(() => validateChildProcessBootstrap(descriptor));
+	for (const [value, pattern] of [
+		[{ ...descriptor, protocolVersion: 7, tools: undefined }, /protocol_mismatch: expected 8, received 7/],
+		[{ ...descriptor, tools: undefined }, /schema_drift.*missing fields: tools/],
+		[{ ...descriptor, tools: 42 }, /schema_drift.*invalid fields: tools/],
+		[{ ...descriptor, protocolVersion: "SECRET-TOKEN" }, /invalid fields: protocolVersion/],
+	] as const) {
+		assert.throws(() => validateChildProcessBootstrap(value), (error: Error) => {
+			assert.match(error.message, pattern);
+			assert.match(error.message, /Stop.*align.*restart/i);
+			assert.doesNotMatch(error.message, /SECRET-TOKEN|control.sock/);
+			return true;
+		});
 	}
 });

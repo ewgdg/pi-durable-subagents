@@ -2,7 +2,8 @@ import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
 import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
-export const AGENT_CONTROL_PROTOCOL_VERSION = 7 as const;
+// Version 8 makes the required initial tools selection an explicit incompatible contract.
+export const AGENT_CONTROL_PROTOCOL_VERSION = 8 as const;
 
 const NonEmptyStringSchema = Type.String({ minLength: 1 });
 const ControlIdentityProperties = {
@@ -135,10 +136,12 @@ export type EventFrame = Static<typeof EventFrameSchema>;
 export type CancelFrame = Static<typeof CancelFrameSchema>;
 export type ControlFrame = Static<typeof ControlFrameSchema>;
 
+export const CHILD_LAUNCH_ALIGNMENT_GUIDANCE = "Stop child launches, align the Owner and child package versions, and restart the Owner host. Resume or cancellation is not a repair.";
+
 export function validateChildProcessBootstrap(value: unknown): ChildProcessBootstrap {
 	if (!Check(ChildProcessBootstrapSchema, value)) {
 		throw new Error(
-			`control_bootstrap_invalid: descriptor does not match protocol version ${AGENT_CONTROL_PROTOCOL_VERSION}`,
+			`${bootstrapFailureDetail(value)}. ${CHILD_LAUNCH_ALIGNMENT_GUIDANCE}`,
 		);
 	}
 	return value;
@@ -149,4 +152,23 @@ export function validateControlEndpoint(value: unknown): ControlEndpoint {
 		throw new Error("control_endpoint_invalid: endpoint descriptor is invalid");
 	}
 	return value;
+}
+
+function bootstrapFailureDetail(value: unknown): string {
+	const descriptor = typeof value === "object" && value !== null && !Array.isArray(value)
+		? value as Record<string, unknown> : {};
+	const version = descriptor.protocolVersion;
+	if (typeof version === "number" && Number.isSafeInteger(version) && version !== AGENT_CONTROL_PROTOCOL_VERSION) {
+		return `control_bootstrap_protocol_mismatch: expected ${AGENT_CONTROL_PROTOCOL_VERSION}, received ${version}`;
+	}
+	const missing: string[] = [];
+	const invalid: string[] = [];
+	for (const [field, schema] of Object.entries(ChildProcessBootstrapSchema.properties)) {
+		if (descriptor[field] === undefined) missing.push(field);
+		else if (!Check(schema, descriptor[field])) invalid.push(field);
+	}
+	const extra = Object.keys(descriptor).some(field => !(field in ChildProcessBootstrapSchema.properties));
+	const category = version === AGENT_CONTROL_PROTOCOL_VERSION ? "schema_drift" : "invalid";
+	// Only schema-owned field names are reported; never descriptor values or unknown keys.
+	return `control_bootstrap_${category}: expected protocol ${AGENT_CONTROL_PROTOCOL_VERSION}; missing fields: ${missing.join(", ") || "none"}; invalid fields: ${invalid.join(", ") || "none"}${extra ? "; unexpected fields present" : ""}`;
 }

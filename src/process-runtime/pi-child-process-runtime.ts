@@ -30,11 +30,13 @@ import { createPlatformControlListener } from "../control/control-platform.ts";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
 	type ChildProcessBootstrap,
+	validateChildProcessBootstrap,
 } from "../control/control-protocol-schemas.ts";
 import type { AgentRunLaunchConfiguration } from "../templates/agent-configuration.ts";
 import {
 	buildChildProcessEnvironment,
 } from "./child-process-environment.ts";
+import { ChildLaunchContractGuard } from "./child-launch-contract.ts";
 import { materializeNewChildSystemPromptArtifact } from "./child-system-prompt-artifact.ts";
 import { buildPiChildCliLaunch } from "./pi-child-cli-launch.ts";
 import {
@@ -71,6 +73,7 @@ export type PiChildRuntimeChannel = FramedAgentControlChannel<typeof agentContro
 export type StartPiChildProcessRuntimeOptions = Readonly<{
 	workflowId: string;
 	agentId: string;
+	launchContract?: ChildLaunchContractGuard;
 	role: ChildProcessBootstrap["role"];
 	expectedSessionId: string;
 	sessionPath: string;
@@ -162,6 +165,7 @@ export class PiChildProcessRuntime {
 	}
 
 	static async launch(options: StartPiChildProcessRuntimeOptions): Promise<PiChildProcessLaunch> {
+		await (options.launchContract ?? new ChildLaunchContractGuard()).assertCompatible();
 		const listener = await createPlatformControlListener({
 			workflowId: options.workflowId,
 			...(options.runtimeDirectory === undefined
@@ -200,6 +204,7 @@ export class PiChildProcessRuntime {
 				tools: [...options.configuration.tools],
 				expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),
 			};
+			validateChildProcessBootstrap(bootstrap);
 			if (options.configuration.systemPrompt !== undefined) {
 				systemPromptArtifactPath = await materializeNewChildSystemPromptArtifact({
 					path: systemPromptArtifactCandidatePath,

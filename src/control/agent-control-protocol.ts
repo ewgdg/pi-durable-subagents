@@ -690,7 +690,7 @@ export const RuntimeSnapshotSchema = closed({
 	loadContextFiles: Type.Boolean(),
 });
 
-/** Bridge-proven version-seven method payload/result map. */
+/** Bridge-proven version-eight method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
 	"runtime.executionBegin": {
@@ -834,7 +834,7 @@ export const agentControlMethods = {
 	},
 } as const satisfies AgentControlProtocol["methods"];
 
-/** Bridge-proven version-seven event payload map. */
+/** Bridge-proven version-eight event payload map. */
 export const agentControlEvents = {
 	// Early Control/presentation availability; inherited startup hooks may still await UI.
 	"runtime.ready": {

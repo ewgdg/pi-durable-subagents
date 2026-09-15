@@ -1,0 +1,55 @@
+import { execFile } from "node:child_process";
+import { isDeepStrictEqual, promisify } from "node:util";
+
+import {
+	AGENT_CONTROL_PROTOCOL_VERSION,
+	ChildProcessBootstrapSchema,
+	CHILD_LAUNCH_ALIGNMENT_GUIDANCE,
+} from "../control/control-protocol-schemas.ts";
+
+const execFileAsync = promisify(execFile);
+const SCHEMA_MODULE_URL = new URL("../control/control-protocol-schemas.ts", import.meta.url);
+const PROBE_TIMEOUT_MS = 5_000;
+// Strip TypeBox-only symbol metadata before comparing the transportable contract.
+const OWNER_BOOTSTRAP_SCHEMA = JSON.parse(JSON.stringify(ChildProcessBootstrapSchema));
+
+/** Host-local rejection is permanent: retrying work cannot align an installed package. */
+export class ChildLaunchContractGuard {
+	readonly #schemaModuleUrl: URL;
+	#failure: Error | undefined;
+
+	constructor(schemaModuleUrl = SCHEMA_MODULE_URL) {
+		this.#schemaModuleUrl = schemaModuleUrl;
+	}
+
+	async assertCompatible(): Promise<void> {
+		if (this.#failure) throw this.#failure;
+		try {
+			// A cache-busted import in this process still shares cached transitive modules.
+			// A fresh Node process sees the same on-disk schema the next Pi child will load.
+			const { stdout } = await execFileAsync(process.execPath, [
+				"--input-type=module", "--eval",
+				`const schema = await import(${JSON.stringify(this.#schemaModuleUrl.href)}); process.stdout.write(JSON.stringify({version: schema.AGENT_CONTROL_PROTOCOL_VERSION, bootstrap: schema.ChildProcessBootstrapSchema}));`,
+			], { timeout: PROBE_TIMEOUT_MS, maxBuffer: 256 * 1024 });
+			const contract = JSON.parse(stdout) as { version: unknown; bootstrap: unknown };
+			if (!Number.isSafeInteger(contract.version)) {
+				throw new Error("control_bootstrap_invalid: invalid fields: protocolVersion");
+			}
+			if (contract.version !== AGENT_CONTROL_PROTOCOL_VERSION) {
+				throw new Error(`control_bootstrap_protocol_mismatch: expected ${contract.version}, received ${AGENT_CONTROL_PROTOCOL_VERSION}`);
+			}
+			if (!isDeepStrictEqual(contract.bootstrap, OWNER_BOOTSTRAP_SCHEMA)) {
+				throw new Error(`control_bootstrap_schema_drift: protocol ${AGENT_CONTROL_PROTOCOL_VERSION}; installed bootstrap schema differs (required fields or field constraints)`);
+			}
+		} catch (error) {
+			// Never forward subprocess stderr or descriptors, which can contain secrets.
+			const detail = error instanceof Error && /^control_bootstrap_(invalid|protocol_mismatch|schema_drift):/.test(error.message)
+				? error.message
+				: "control_bootstrap_probe_failed: could not verify the installed child launch contract";
+			this.#failure ??= new Error(`${detail}. ${CHILD_LAUNCH_ALIGNMENT_GUIDANCE}`);
+			throw this.#failure;
+		}
+		// A concurrent probe may already have rejected this host's launch path.
+		if (this.#failure) throw this.#failure;
+	}
+}

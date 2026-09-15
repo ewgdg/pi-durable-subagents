@@ -36,7 +36,7 @@ const protocol = {
 	},
 } as const satisfies AgentControlProtocol;
 const identity = {
-	protocolVersion: 7 as const,
+	protocolVersion: 8 as const,
 	workflowId: "named-pipe-workflow",
 	agentId: "named-pipe-agent",
 };

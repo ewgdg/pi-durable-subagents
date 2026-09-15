@@ -39,7 +39,7 @@ const protocol = {
 		},
 	},
 } as const satisfies AgentControlProtocol;
-const identity = { protocolVersion: 7 as const, workflowId: "unix-workflow", agentId: "unix-agent" };
+const identity = { protocolVersion: 8 as const, workflowId: "unix-workflow", agentId: "unix-agent" };
 
 unixOnly("Unix listener allocates a short private endpoint and removes it on close", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-control-test-"));
