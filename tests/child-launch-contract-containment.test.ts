@@ -4,11 +4,108 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
+import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
+import type { WorkflowCoordinator, AgentSpawnReceipt } from "../src/coordination/workflow-coordinator.ts";
+import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
+import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
+import { executeAndCommitRegisteredTool } from "./support/agent-session.ts";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-contract.ts";
 import { PiChildProcessRuntime, type StartPiChildProcessRuntimeOptions } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
+
+test("permanent launch rejection publishes one durable unread report without Owner cooperation", { timeout: 10_000 }, async (t) => {
+	let owner!: ReturnType<WorkflowCoordinator["forAgent"]>;
+	const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true });
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-agent-coordination>" });
+	owner = coordinator.forAgent(identity.agentId);
+	await bindTestOwnerHost(host, "tui");
+	let notifiedWithUnreadReport = false;
+	const unsubscribe = owner.addAgentActivityChangeHandler(() => {
+		if (owner.agentActivity().reports?.some(item => !item.readAt)) notifiedWithUnreadReport = true;
+	});
+	t.after(unsubscribe);
+	const spawn = async (id: string) => (await executeAndCommitRegisteredTool(host.session, "agent_spawn", id, {
+		title: "Probe failure", request: "Must fail before creating a child.",
+	})).details as AgentSpawnReceipt;
+	// Exercise a real probe failure without mutating the installed contract or
+	// depending on stderr content. Restoring Node must not unlock the factory.
+	const executable = process.execPath;
+	let receipt: AgentSpawnReceipt;
+	try {
+		process.execPath = join(host.cwd, "missing-node");
+		receipt = await spawn("blocked-launch");
+	} finally {
+		process.execPath = executable;
+	}
+	assert.equal(receipt.spawnStatus, "not_created");
+	assert.ok(receipt.spawnStatus === "not_created");
+	assert.equal(receipt.failedStage, "configuration");
+	assert.match(receipt.reason, /control_bootstrap_probe_failed/);
+	assert.deepEqual(owner.children(), []);
+	const history = owner.reportHistory();
+	assert.equal(history.length, 1, "the runtime reports even when the Owner never reads the tool result");
+	const item = history[0]!;
+	assert.equal(item.readAt, undefined);
+	assert.equal(item.report.reporter, undefined);
+	assert.equal(item.report.source.kind, "runtime_diagnostic");
+	assert.match(item.report.symptom, /child and Moderator launches.*blocked/i);
+	assert.match(item.report.suspectedDefect, /control_bootstrap_probe_failed/);
+	assert.match(item.report.recoveryActions, /restart/i);
+	assert.match(item.report.recoveryOutcome, /reading.*does not.*unblock/i);
+	assert.ok(notifiedWithUnreadReport, "report publication refreshes the human attention surface");
+	const diagnostic = host.session.sessionManager.getEntry(item.report.source.entryId);
+	assert.ok(diagnostic?.type === "custom");
+	assert.match(JSON.stringify(diagnostic.data), /control_bootstrap_probe_failed/);
+	owner.setReportRead(item.report.reportId, true);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const retry = await spawn(`blocked-retry-${attempt}`);
+		assert.equal(retry.spawnStatus, "not_created");
+	}
+	assert.equal(owner.reportHistory().length, 1, "latched rejection does not republish after acknowledgement");
+	assert.ok(owner.reportHistory()[0]?.readAt);
+	const reopened = SessionManager.open(host.session.sessionManager.getSessionFile()!);
+	const reports = new ModeratorReportStore({
+		transcript: transcriptFromSessionManager(reopened),
+		appendCustomEntry: (type, data) => reopened.appendCustomEntry(type, data),
+	});
+	assert.deepEqual(reports.history(), owner.reportHistory());
+});
+
+test("an unsaved Owner gets direct launch-block attention without losing the original diagnostic", { timeout: 10_000 }, async (t) => {
+	let owner!: ReturnType<WorkflowCoordinator["forAgent"]>;
+	const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner));
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-agent-coordination>" });
+	owner = coordinator.forAgent(identity.agentId);
+	await bindTestOwnerHost(host, "tui");
+	assert.equal(host.session.sessionManager.getSessionFile(), undefined);
+	const executable = process.execPath;
+	try {
+		process.execPath = join(host.cwd, "missing-node");
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const result = await executeAndCommitRegisteredTool(host.session, "agent_spawn", `unsaved-block-${attempt}`, {
+				title: "Probe failure", request: "Must fail before creating a child.",
+			});
+			const receipt = result.details as AgentSpawnReceipt;
+			assert.ok(receipt.spawnStatus === "not_created");
+			assert.match(receipt.reason, /control_bootstrap_probe_failed.*probe runtime is unavailable/);
+		}
+	} finally {
+		process.execPath = executable;
+	}
+	const notifications = host.ui.notifications.filter(item => item.message.includes("control_bootstrap_probe_failed"));
+	assert.equal(notifications.length, 1);
+	assert.equal(notifications[0]?.type, "error");
+	assert.match(notifications[0]!.message, /no session file.*report cannot be saved/i);
+	assert.deepEqual(owner.reportHistory(), []);
+	assert.deepEqual(owner.children(), []);
+});
 
 test("incompatible shared pending-delivery admission creates no Runs or Moderator launch path", { timeout: 10_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-contract-containment-"));
@@ -77,7 +174,7 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/],
 	] as const) {
 		await writeFile(path, content, { mode: 0o600 });
-		await assert.rejects(async () => bridge({ registerMessageRenderer() {} } as unknown as Parameters<typeof bridge>[0]), (error: Error) => {
+		await assert.rejects(async () => bridge({ on() {}, registerMessageRenderer() {} } as unknown as Parameters<typeof bridge>[0]), (error: Error) => {
 			assert.match(error.message, expected);
 			assert.match(error.message, /stop.*align.*restart/i);
 			assert.match(error.message, /Owner: report.*user immediately/);

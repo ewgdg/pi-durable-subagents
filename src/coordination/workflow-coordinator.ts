@@ -96,7 +96,7 @@ import type {
 	ModeratorControlInput,
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
-import { isModeratorIdentity } from "../protocol/moderator-input.ts";
+import { isModeratorIdentity, type EntryPointer } from "../protocol/moderator-input.ts";
 import type { OperationReviewClock } from "./operation-review.ts";
 import { participantLifecycleHandlers } from "../bootstrap/agent-extension.ts";
 import type {
@@ -315,8 +315,44 @@ export class WorkflowCoordinator {
 			transcript: this.#requireAgent(identity.agentId).transcript,
 			appendCustomEntry: (customType, data) => runtime.session.sessionManager.appendCustomEntry(customType, data),
 		});
+		const retainDiagnostic = (error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			const entryId = runtime.session.sessionManager.appendCustomEntry(
+				OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE,
+				{ message, stack: error instanceof Error ? error.stack : undefined },
+			);
+			this.#ownerDiagnostics.push({ type: "error", message });
+			return { agentId: identity.agentId, entryId };
+		};
+		const publishRuntimeReport = (input: ReportToUserInput, diagnostic: EntryPointer) => {
+			const transcriptPath = runtime.session.sessionManager.getSessionFile();
+			if (!transcriptPath) throw new Error("Runtime report requires a durable diagnostic transcript");
+			this.#reports.publishRuntime(input, { kind: "runtime_diagnostic", ...diagnostic, transcriptPath });
+		};
 		const sessionFactory = new ProcessChildSessionFactory({
 			ownerRuntime: runtime,
+			onLaunchBlocked: (error) => {
+				const diagnostic = retainDiagnostic(error);
+				if (!runtime.session.sessionManager.getSessionFile()) {
+					// --no-session has no durable report provenance. Keep its original
+					// failure visible without inventing a transcript path or enabling persistence.
+					runtime.session.extensionRunner.getUIContext().notify(
+						`${error.message}\nThis host has no session file, so a durable report cannot be saved.`, "error",
+					);
+					return;
+				}
+				// The Owner may continue after a failed tool call. Publish directly to
+				// human attention instead of depending on it to relay launch guidance.
+				publishRuntimeReport({
+					symptom: "Child and Moderator launches are permanently blocked in this Pi host. The installed child bootstrap contract could not be verified as compatible.",
+					suspectedDefect: error.message,
+					uncertainty: "This diagnostic establishes a blocked launch path, not the state or outcome of existing Agent work. A failed probe does not by itself prove a package version mismatch.",
+					recoveryActions: "Stop active work and inspect the diagnostic. Correct the reported bootstrap or probe problem; align installed packages when a mismatch is reported. Then restart the Pi host. Retrying launches in this host cannot clear the block.",
+					recoveryOutcome: "No recovery was attempted. Existing Runs were not terminated. Reading this report does not unblock launches or restart the host.",
+					evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`],
+				}, diagnostic);
+				this.#notifyAgentActivityChanged();
+			},
 			onRuntimeQuit: (agentId, projection) => {
 				const selected = this.#activeAgentView;
 				if (
@@ -461,23 +497,8 @@ export class WorkflowCoordinator {
 					message: error instanceof Error ? error.message : String(error),
 				});
 			},
-			publishRuntimeReport: (input, diagnostic) => {
-				const transcriptPath = runtime.session.sessionManager.getSessionFile();
-				if (!transcriptPath) throw new Error("Runtime report requires a durable diagnostic transcript");
-				this.#reports.publishRuntime(input, { kind: "runtime_diagnostic", ...diagnostic, transcriptPath });
-			},
-			retainDiagnostic: (error) => {
-				const entryId = runtime.session.sessionManager.appendCustomEntry(
-					OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE,
-					{ message: error instanceof Error ? error.message : String(error),
-						stack: error instanceof Error ? error.stack : undefined },
-				);
-				this.#ownerDiagnostics.push({
-					type: "error",
-					message: error instanceof Error ? error.message : String(error),
-				});
-				return { agentId: identity.agentId, entryId };
-			},
+			publishRuntimeReport,
+			retainDiagnostic,
 			boundaryHooks: options.incidentBoundaryHooks,
 			presentation: options.operationalIncidentPresentation,
 			operationReviewClock: options.operationReviewClock,

@@ -132,6 +132,8 @@ Every Moderator-authored Report captures the stable reporting Moderator identity
 
 Runtime-authored Reports use the same retained report store and explicit read-state records, with `source.kind: "runtime_diagnostic"` and an entry pointer instead of a tool-call pointer. They omit the Agent reporter. Process Control snapshots carry both report kinds. The source diagnostic identifies one publication; replay returns the original immutable Report, never revised findings or a fresh unread notification.
 
+A permanent child-launch contract rejection also publishes a Runtime Report immediately, even when no Operational Incident or Moderator exists. It records the sanitized diagnostic and directs the human to correct the problem and restart the Pi host. Repeated launches cannot clear the block or create duplicate notifications; reading the report only acknowledges it. See [Runtime preparation and Run admission](child-ui-context.md#runtime-preparation-and-run-admission).
+
 ### Human review
 
 Both Moderator and runtime Reports appear in `/agents`. Unread reports appear as `REPORT` items in the **Attention Inbox**. Enter opens a dedicated read-only report view—not a live transcript, new Agent, or new session. The **Reports** tab retains all report history, including read reports.

@@ -64,7 +64,7 @@ type ParticipantHandlers =
 /** Launches every non-Owner Runtime in a fresh Pi process. */
 export class ProcessChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
-	readonly #launchContract = new ChildLaunchContractGuard();
+	readonly #launchContract: ChildLaunchContractGuard;
 	readonly #onRuntimeQuit: ((agentId: string, projection: HostedAgentProjection) => boolean) | undefined;
 	readonly #templateLoads = new Map<string, Promise<Readonly<{
 		discovery: AgentTemplateDiscovery;
@@ -84,6 +84,7 @@ export class ProcessChildSessionFactory {
 
 	constructor(options: {
 		ownerRuntime: AgentSessionRuntime;
+		onLaunchBlocked?(error: Error): void;
 		onRuntimeQuit?(agentId: string, projection: HostedAgentProjection): boolean;
 		ownerIdentity: OwnerIdentity;
 		entryModulePath: string;
@@ -99,6 +100,7 @@ export class ProcessChildSessionFactory {
 		): ParticipantHandlers;
 	}) {
 		this.#ownerRuntime = options.ownerRuntime;
+		this.#launchContract = new ChildLaunchContractGuard(undefined, options.onLaunchBlocked);
 		this.#onRuntimeQuit = options.onRuntimeQuit;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#entryModulePath = options.entryModulePath;

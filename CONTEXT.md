@@ -220,7 +220,7 @@ An immutable, evidence-supported account for human review, retained in Workflow 
 A Report authored by a Moderator after investigation, with its stable reporter identity and exact native authoring source. It can describe suspected defects, uncertainty, attempted recovery, and observed outcomes without claiming that a suspicion is confirmed.
 
 **Runtime Report**:
-A Report authored by the Workflow runtime when moderation is unavailable, with diagnostic provenance rather than an Agent reporter. It records known incident and attempt evidence, distinguishes missing knowledge from observed failure, and never invents an affected Agent when no incident was established.
+A Report authored directly by the Workflow runtime when moderation is unavailable or child launches are permanently blocked, with diagnostic provenance rather than an Agent reporter. It records known failure evidence, distinguishes missing knowledge from observed failure, and never invents an affected Agent or incident.
 
 **Report Read State**:
 The human's explicit, reversible acknowledgement of a Report notification. Unread brings the Report to the Attention Inbox; Read removes only that notification, preserving history and all independent live conditions. Opening, copying, or closing a Report does not change its Read State.
