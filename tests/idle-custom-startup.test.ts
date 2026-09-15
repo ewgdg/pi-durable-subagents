@@ -197,7 +197,7 @@ test("Owner reminder returns busy while another prompt prepares and never joins 
 	assert.equal(host.session.messages.some(message => message.role === "custom" && message.customType.includes("moderator-obligation-reminder")), false);
 });
 
-test("idle delivery composes with an existing public custom-message wrapper", { timeout: 5000 }, async t => {
+test("idle delivery composes with an existing public custom-message wrapper across reload", { timeout: 5000 }, async t => {
 	const host = await fixture(t);
 	const original = host.session.sendCustomMessage;
 	const observed: unknown[] = [];
@@ -205,10 +205,14 @@ test("idle delivery composes with an existing public custom-message wrapper", { 
 		observed.push(message);
 		return original.call(host.session, message, options);
 	};
-	host.model.setResponses([fauxAssistantMessage("Wrapper preserved.")]);
+	host.model.setResponses([fauxAssistantMessage("Wrapper preserved."), fauxAssistantMessage("Reload wrapper preserved.")]);
 	await host.deliver();
 	assert.deepEqual(observed, [host.message]);
 	assert.equal(host.deliveries().length, 1);
+	await host.session.reload();
+	const next = customMessage("message", "wrapper-after-reload");
+	await host.hosted.deliver({ kind: "custom", message: next, triggerTurn: true }).completion;
+	assert.deepEqual(observed, [host.message, next]);
 });
 
 test("reload keeps late preparation excluded until the cancelled generation unwinds", { timeout: 5000 }, async t => {
@@ -231,6 +235,35 @@ test("reload keeps late preparation excluded until the cancelled generation unwi
 	await host.deliver();
 	assert.deepEqual(prompts, ["Current preparation."]);
 	assert.equal(host.deliveries().length, 1);
+});
+
+test("Owner native input forwarding hands off only its handled submission and prepares one replacement Run", { timeout: 5000 }, async t => {
+	let forward!: (text: string) => Promise<unknown>;
+	let preparations = 0;
+	const errors: unknown[] = [];
+	const host = await fixture(t, pi => {
+		pi.on("input", async event => {
+			if (event.source !== "interactive") return;
+			try { await forward(event.text); } catch (error) { errors.push(error); }
+			return { action: "handled" };
+		});
+		pi.on("before_agent_start", () => { preparations++; return { systemPrompt: "Prepared forwarded input." }; });
+	});
+	forward = async text => {
+		const dispatched = host.hosted.deliver({ kind: "user", content: text, forwardedInput: {} }, {
+			inspectCommit: () => host.session.messages.some(message => message.role === "user" && JSON.stringify(message.content).includes(text)),
+		});
+		void dispatched.completion.catch(() => {});
+		assert.equal(await dispatched.transcriptCommit, true);
+	};
+	const prompts: string[] = [];
+	host.model.setResponses([context => { prompts.push(context.systemPrompt ?? ""); return fauxAssistantMessage("Forwarded input completed."); }]);
+	await host.session.prompt("Resume my work.");
+	await host.session.waitForIdle();
+	assert.deepEqual(errors, []);
+	assert.equal(preparations, 1);
+	assert.deepEqual(prompts, ["Prepared forwarded input."]);
+	assert.equal(host.session.messages.filter(message => message.role === "user").length, 1);
 });
 
 test("Owner reload restores composed wrappers and the next idle delivery prepares exactly once", { timeout: 5000 }, async t => {

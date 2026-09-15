@@ -173,15 +173,17 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		await this.#session.dispose();
 	}
 
-	#dispatch(delivery: AgentRuntimeDelivery): Promise<void> {
-		return delivery.kind === "custom"
-			? this.#dispatchCustom(delivery)
-			: this.#session.sendUserMessage(
+	async #dispatch(delivery: AgentRuntimeDelivery): Promise<void> {
+		if (delivery.kind === "custom") return this.#dispatchCustom(delivery);
+		if (delivery.forwardedInput) {
+			bindSessionStartup(this.#session).captureInputHandoff()?.();
+		}
+		return this.#session.sendUserMessage(
 				typeof delivery.content === "string" ? delivery.content : [...delivery.content],
 				{
 					...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
 				},
-			);
+		);
 	}
 
 	async #dispatchCustom(delivery: Extract<AgentRuntimeDelivery, { kind: "custom" }>): Promise<void> {
