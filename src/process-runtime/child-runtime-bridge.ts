@@ -84,6 +84,7 @@ type DeliveryExecution = {
 	finished: boolean;
 	started: boolean;
 	signal?: AbortSignal;
+	checkpoint?: () => void;
 };
 
 type ChildRuntimeBinding = {
@@ -508,25 +509,19 @@ export function createChildRuntimeBinding(
 	const activity = new RemoteAgentActivitySource(agentId);
 	const deliveryExecution = new AsyncLocalStorage<DeliveryExecution>();
 	const startupAdmission = bindSessionStartup(runtime.session);
-	const agent = runtime.session.agent;
-	const originalPrompt = agent.prompt;
-	// AgentSession awaits extension agent_start hooks before its subscribers.
-	// Capture the real native signal at the public Agent prompt boundary instead,
-	// using dispatch-local provenance rather than predicting the next cycle.
-	const trackedPrompt: typeof agent.prompt = function (this: typeof agent, ...args) {
-		const execution = deliveryExecution.getStore();
-		const previousSignal = this.signal;
-		const completion = Reflect.apply(originalPrompt, this, args) as Promise<void>;
-		if (
-			execution?.admitted && !execution.finished && !execution.started &&
-			this.signal !== undefined && this.signal !== previousSignal
-		) {
+	const removeNativeStartupObserver = startupAdmission.observeNativeStartup({
+		beforeStart() {
+			const execution = deliveryExecution.getStore();
+			if (!execution?.admitted || execution.finished || execution.started) return;
+			execution.checkpoint!();
+		},
+		started(signal) {
+			const execution = deliveryExecution.getStore();
+			if (!execution?.admitted || execution.finished || execution.started) return;
 			execution.started = true;
-			execution.signal = this.signal;
-		}
-		return completion;
-	};
-	agent.prompt = trackedPrompt;
+			execution.signal = signal;
+		},
+	});
 	const turnCompaction = new ChildTurnCompactionGateway(
 		runtime.session,
 		(message) => context.ui.notify(message, "warning"),
@@ -604,7 +599,7 @@ export function createChildRuntimeBinding(
 			disposed = true;
 			reminderAdmission.cancel();
 			turnCompaction.dispose();
-			if (agent.prompt === trackedPrompt) agent.prompt = originalPrompt;
+			removeNativeStartupObserver();
 			startupAdmission.dispose();
 			deliveryExecution.disable();
 			removeInputLifecycleObserver();
@@ -698,16 +693,19 @@ async function handleOwnerRequest(
 					const dispatchSignal = AbortSignal.any([admissionSignal, startupCancellation]);
 					const dispatchCommit = observeDeliveryCommit(binding.runtime, binding.context.sessionManager, delivery, binding.turnCompaction.signal);
 					commit = dispatchCommit;
-					const dispatch = () => {
+					const dispatchCheckpoint = () => {
 						checkpoint();
 						dispatchSignal.throwIfAborted();
+					};
+					const dispatch = () => {
+						dispatchCheckpoint();
+						execution.checkpoint = dispatchCheckpoint;
 						// Active queue admission belongs to this actual native execution.
 						execution.signal = binding.runtime.session.agent.signal;
 						execution.admitted = delivery.kind === "custom" && !binding.runtime.session.isIdle;
 						return binding.deliveryExecution.run(execution, () =>
 							dispatchDelivery(binding, delivery, () => {
-								checkpoint();
-								dispatchSignal.throwIfAborted();
+								dispatchCheckpoint();
 								execution.admitted = true;
 							})
 						);
