@@ -539,6 +539,9 @@ const AgentRuntimeDeliverySchema = Type.Union([
 			Type.Array(Type.Union([TextContentSchema, ImageContentSchema])),
 		]),
 		deliverAs: Type.Optional(DeliveryModeSchema),
+		forwardedInput: Type.Optional(closed({
+			submissionSequence: Type.Optional(Type.Integer({ minimum: 1 })),
+		})),
 	}),
 ]);
 

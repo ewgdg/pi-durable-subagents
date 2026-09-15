@@ -199,10 +199,11 @@ export class RunSupervisor {
 		agentId: string,
 		text: string,
 		images: readonly ImageContent[] | undefined,
+		submissionSequence?: number,
 	): Promise<boolean> {
 		const record = this.#requireAgent(agentId);
 		return record.host.lane.run(() =>
-			this.resumeFromHumanInLane(record, text, images)
+			this.resumeFromHumanInLane(record, text, images, submissionSequence)
 		);
 	}
 
@@ -210,6 +211,7 @@ export class RunSupervisor {
 		record: AgentRecord,
 		text: string,
 		images: readonly ImageContent[] | undefined,
+		submissionSequence?: number,
 	): Promise<boolean> {
 		const hold = record.host.currentInterruptionHold();
 		if (!hold) return false;
@@ -217,7 +219,7 @@ export class RunSupervisor {
 			throw new Error("Run resumption is already in progress");
 		}
 		try {
-			await this.submitFromHumanInLane(record, text, images);
+			await this.submitFromHumanInLane(record, text, images, submissionSequence);
 			if (!record.host.commitIsolatedResumptionInLane(hold)) {
 				throw new Error(
 					"invariant_violation: committed human resume Message lost its exact Hold",
@@ -234,13 +236,14 @@ export class RunSupervisor {
 		record: AgentRecord,
 		text: string,
 		images: readonly ImageContent[] | undefined,
+		submissionSequence?: number,
 	): Promise<void> {
 		const content: Array<TextContent | ImageContent> = [
 			{ type: "text", text },
 			...(images ?? []),
 		];
 		const delivery = record.host.deliverInLane(
-			{ kind: "user", content },
+			{ kind: "user", content, forwardedInput: submissionSequence === undefined ? {} : { submissionSequence } },
 			{
 				inspectCommit: () => {
 					const tail = record.transcript.inspect().entries.at(-1);

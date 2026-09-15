@@ -1492,7 +1492,7 @@ export class WorkflowCoordinator {
 		return this.#agentViewLane.run(async () => {
 			const active = this.#activeAgentView;
 			if (!active || active.record.identity.agentId !== agentId) {
-				return await this.#runSupervisor.resumeFromHuman(agentId, text, images)
+				return await this.#runSupervisor.resumeFromHuman(agentId, text, images, submissionSequence)
 					? "submitted"
 					: "continue";
 			}
@@ -1512,6 +1512,7 @@ export class WorkflowCoordinator {
 							active.record,
 							text,
 							images,
+							submissionSequence,
 						)
 							? "submitted"
 							: "continue";
@@ -1521,7 +1522,7 @@ export class WorkflowCoordinator {
 				if (!currentHandle) {
 					await active.record.host.startInLane(["interactive_selection"]);
 				}
-				await this.#runSupervisor.submitFromHumanInLane(active.record, text, images);
+				await this.#runSupervisor.submitFromHumanInLane(active.record, text, images, submissionSequence);
 				return "submitted";
 			});
 		});

@@ -99,6 +99,8 @@ export type AgentRuntimeDelivery =
 		kind: "user";
 		content: string | readonly (TextContent | ImageContent)[];
 		deliverAs?: "steer" | "followUp";
+		/** Marks forwarding from a native input hook; child input uses its exact sequence. */
+		forwardedInput?: Readonly<{ submissionSequence?: number }>;
 	}>;
 /** The episode owner orders this callback against clearance through native transcript proof. */
 export type ModeratorReminderCommit = () => Promise<"committed" | "busy">;

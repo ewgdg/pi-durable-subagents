@@ -469,6 +469,7 @@ function serializeDelivery(delivery: AgentRuntimeDelivery) {
 				? delivery.content
 				: delivery.content.map((part) => ({ ...part })),
 			...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+			...(delivery.forwardedInput === undefined ? {} : { forwardedInput: { ...delivery.forwardedInput } }),
 		};
 	}
 	return {
