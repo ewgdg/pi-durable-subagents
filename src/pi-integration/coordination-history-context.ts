@@ -252,7 +252,12 @@ function mapVisibleMessages(
 	const contextPrefixLength = Math.min(messages.length, contextMessages.length);
 	const followsContextPrefix = messages.slice(0, contextPrefixLength).every((message, index) =>
 		messageKey(message) === messageKey(contextMessages[index]!));
-	const used = new Set<PhysicalMessage>();
+	// A previous pass may have replaced inherited native groups with one
+	// informational custom message. Its records identify the physical entries
+	// represented by that replacement; reserve those occurrences before mapping
+	// the remaining (possibly cloned) native messages. Without this, an exact
+	// current duplicate is mapped back to the already projected inherited one.
+	const used = reservedProjectedMessages(messages, physical);
 	let cursor = -1;
 	return messages.map((message, index) => {
 		const candidates = byIdentity.get(message) ??
@@ -267,6 +272,35 @@ function mapVisibleMessages(
 		}
 		return physicalMessage ? { message, physical: physicalMessage } : { message };
 	});
+}
+
+function reservedProjectedMessages(messages: readonly AgentMessage[], physical: readonly PhysicalMessage[]): Set<PhysicalMessage> {
+	const used = new Set<PhysicalMessage>();
+	for (const message of messages) {
+		if (message.role !== "custom" || message.customType !== CONTEXT_ONLY_CUSTOM_TYPE) continue;
+		const details = message.details;
+		if (!details || typeof details !== "object" || !Array.isArray((details as { records?: unknown }).records)) continue;
+		for (const record of (details as { records: unknown[] }).records) {
+			if (!record || typeof record !== "object") continue;
+			const source = record as { entryId?: unknown; kind?: unknown; toolCallId?: unknown };
+			if (typeof source.entryId !== "string") continue;
+			const entryMessages = physical.filter(candidate => candidate.entryId === source.entryId);
+			if (source.kind !== "tool-call" || typeof source.toolCallId !== "string") {
+				for (const candidate of entryMessages) used.add(candidate);
+				continue;
+			}
+			const call = entryMessages.find(candidate => candidate.message.role === "assistant" && candidate.message.content.some(part => part.type === "toolCall" && part.id === source.toolCallId));
+			if (!call) continue;
+			used.add(call);
+			const callIndex = physical.indexOf(call);
+			for (let index = callIndex + 1; index < physical.length; index++) {
+				const candidate = physical[index]!;
+				if (candidate.message.role === "assistant" && candidate.message.content.some(part => part.type === "toolCall" && part.id === source.toolCallId)) break;
+				if (candidate.message.role === "toolResult" && candidate.message.toolCallId === source.toolCallId) used.add(candidate);
+			}
+		}
+	}
+	return used;
 }
 
 function contextPhysicalMessagesFor(transcript: TranscriptInspection): PhysicalMessage[] {

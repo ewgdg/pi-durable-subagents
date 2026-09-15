@@ -153,6 +153,34 @@ test("a compacted context keeps an exact duplicate current call and result nativ
 	assert.equal(projected.some(message => message.role === "toolResult" && message.toolCallId === "exact-compacted"), true);
 });
 
+test("projecting an already marked context keeps an exact duplicate current call native", () => {
+	const session = SessionManager.inMemory(process.cwd());
+	const inherited = { ...fauxAssistantMessage(fauxToolCall("agent_message", { operation: "send", targetAgent: "peer", content: "Same payload" }, { id: "projected-duplicate" })), timestamp: 1 };
+	const inheritedEntryId = session.appendMessage(inherited);
+	session.appendMessage({ ...result("projected-duplicate", "agent_message", "Same result"), timestamp: 2 });
+	const current = structuredClone(inherited);
+	const currentEntryId = session.appendMessage(current);
+	const currentResult = { ...result("projected-duplicate", "agent_message", "Same result"), timestamp: 2 };
+	session.appendMessage(currentResult);
+	const transcript = transcriptFromSessionManager(session).inspect();
+	const inheritedMark = { reason: "inherited" as const,
+		record: { agentId: "source-owner", entryId: inheritedEntryId, kind: "tool-call" as const, toolCallId: "projected-duplicate" }, diagnostic: "Historical source scope" };
+	const first = projectCoordinationHistory({ messages: transcript.context.messages, transcript, marks: [inheritedMark] });
+	const repeated = projectCoordinationHistory({ messages: first, transcript, marks: [inheritedMark] });
+	const projected = projectCoordinationHistory({ messages: structuredClone(repeated), transcript, marks: [inheritedMark] });
+	assert.equal(projected.filter(message => message.role === "custom" && JSON.stringify(message).includes("Historical source scope")).length, 1);
+	assert.equal(projected.filter(message => message.role === "assistant" && message.content.some(part => part.type === "toolCall" && part.id === "projected-duplicate")).length, 1);
+	assert.equal(projected.filter(message => message.role === "toolResult" && message.toolCallId === "projected-duplicate").length, 1);
+
+	const invalidMark = { reason: "invalid" as const,
+		record: { agentId: session.getSessionId(), entryId: currentEntryId, kind: "tool-call" as const, toolCallId: "projected-duplicate" }, diagnostic: "Missing title" };
+	const combined = projectCoordinationHistory({ messages: structuredClone(first), transcript, marks: [inheritedMark, invalidMark] });
+	const combinedText = JSON.stringify(combined);
+	assert.equal(combinedText.split("^ ").length - 1, 1);
+	assert.equal(combinedText.split("! ").length - 1, 1);
+	assert.equal(combined.filter(message => message.role === "assistant" && message.content.some(part => part.type === "toolCall" && part.id === "projected-duplicate")).length, 0);
+});
+
 test("informational tool and custom groups preserve images as image blocks, not base64 text", () => {
 	const picture = { type: "image" as const, mimeType: "image/png", data: "image-payload" };
 	for (const kind of ["tool", "custom"] as const) {
