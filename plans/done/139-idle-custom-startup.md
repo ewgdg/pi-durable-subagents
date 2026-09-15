@@ -33,7 +33,7 @@ Concrete design challenge: while delivery awaits a late before-start hook, anoth
 - [x] Record failing regression tests.
 - [x] Implement shared admission and both production adapters.
 - [x] Complete focused validation, documentation and independent review.
-- [ ] Commit, push and create PR.
+- [x] Commit, push and create PR.
 
 ## Decisions and discoveries
 
@@ -65,4 +65,4 @@ Separate existing process checks passed 5/5 across `steer-request-preemption`, `
 
 ## Outcomes
 
-Implementation and focused validation complete. Publishing the committed branch and PR is the remaining handoff step.
+Implementation, focused validation and publication complete. [PR #141](https://github.com/ewgdg/pi-durable-subagents/pull/141) contains the committed `codex/139-idle-custom-startup` branch and closes #139. Platform CI results are tracked on the PR.
