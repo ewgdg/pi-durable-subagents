@@ -585,7 +585,11 @@ export class MessageCoordinator {
 				operation: "send",
 			}) === "confirmed_failure"
 		) {
-			this.#deliveryScheduler.recordAdmissionFailure(recipient, delivery, new Error("Confirmed Delivery admission failure"));
+			// Unlike ordinary Messages, a rejected initial Request has no identity
+			// whose failed Delivery should remain under observation.
+			if (message.kind !== "request") {
+				this.#deliveryScheduler.recordAdmissionFailure(recipient, delivery, new Error("Confirmed Delivery admission failure"));
+			}
 			if (message.kind === "request") sender.host.removeRetentionReason("awaiting_answer", message.messageId);
 			return {
 				...identity,
@@ -603,6 +607,9 @@ export class MessageCoordinator {
 				? { ...identity, messageStatus: "unknown", reason: "confirmation_lost" }
 				: { ...identity, messageStatus: "sent" };
 		}
+		// Only initial send owns non-creation rollback; scheduler failures alone
+		// cannot distinguish this from a failed retry of an existing Request.
+		if (message.kind === "request") this.#deliveryScheduler.discardUncreatedDeliveryProgress(message.messageId);
 		if (message.kind === "request") sender.host.removeRetentionReason("awaiting_answer", message.messageId);
 		return {
 			...identity,

@@ -124,6 +124,46 @@ test("initial non-admission is returned synchronously, not notified", { timeout:
 });
 
 
+for (const failure of ["startup", "boundary", "capacity"] as const) test(
+	`initial Request ${failure} rejection leaves no delivery progress to inspect`, { timeout: 5_000 }, async t => {
+	const h = harness(t, failure === "boundary" ? { beforeDeliveryAdmission: () => "confirmed_failure" } : undefined);
+	if (failure === "startup") {
+		h.recipient.end("clean");
+		h.recipient.record.host.startInLane = async () => { throw new Error("recipient unavailable"); };
+	}
+	if (failure === "capacity") {
+		h.recipient.active = true;
+		for (let i = 0; i < new WorkflowPolicyStore().current().maxPendingDeliveriesPerAgent; i++) {
+			const receipt = await h.message(`fill-${i}`, { operation: "send", targetAgent: "recipient", content: "Fill queue" });
+			if ("messageStatus" in receipt && receipt.messageStatus === "not_sent") break;
+		}
+	}
+	const receipt = await h.send("request");
+	assert.ok("requestMessageId" in receipt);
+	assert.ok("messageStatus" in receipt && receipt.messageStatus === "not_sent");
+	assert.equal(receipt.reason, failure === "capacity" ? "capacity_exhausted" : "target_unavailable");
+	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.author.record), []);
+	assert.ok(!h.messages.blockedDeliveries().some(item => item.messageId === receipt.requestMessageId));
+	assert.doesNotThrow(() => h.messages.hasAutonomousDeliveryProgress());
+	await assert.rejects(h.message("poll-rejected", { operation: "poll", messageId: receipt.requestMessageId }), /unknown_identity/);
+});
+
+for (const status of ["sent", "unknown"] as const) test(
+	`${status} Request retains progress after a failed retry`, { timeout: 5_000 }, async t => {
+	const h = harness(t, status === "unknown" ? { afterDeliveryAdmission: () => "confirmation_lost" } : undefined);
+	const receipt = await h.send("request");
+	assert.ok("requestMessageId" in receipt);
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, status);
+	h.recipient.fail(new Error("transport lost"));
+	await flush();
+	h.recipient.record.host.startInLane = async () => { throw new Error("recipient unavailable"); };
+	const retry = await h.message("retry-unavailable", { operation: "retry", messageId: receipt.requestMessageId });
+	assert.equal("messageStatus" in retry && retry.messageStatus, "not_sent");
+	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.author.record), [receipt.requestMessageId]);
+	assert.ok(h.messages.blockedDeliveries().some(item => item.messageId === receipt.requestMessageId));
+});
+
+
 test("admitted dispatch rejection notifies once and allows explicit retry without a settlement event", { timeout: 5_000 }, async t => {
 	let dispatch!: () => void;
 	const h = harness(t, { scheduleDeliveryDispatch: (context, release) => {

@@ -266,6 +266,12 @@ export class MessageDeliveryScheduler {
 		this.#failDeliveryProgress(delivery, error);
 	}
 
+	discardUncreatedDeliveryProgress(messageId: string): void {
+		this.#progress.get(messageId)?.watcher.dispose();
+		this.#progress.delete(messageId);
+		this.#progressChanged();
+	}
+
 	shutdownProgress(): void {
 		for (const { watcher } of this.#progress.values()) watcher.dispose();
 		this.#progress.clear();
