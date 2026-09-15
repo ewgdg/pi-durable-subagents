@@ -634,6 +634,7 @@ async function handleOwnerRequest(
 			const admissionSignal = AbortSignal.any([
 				request.signal, binding.turnCompaction.signal, admissionCancellation.signal,
 			]);
+			let startupCancellation: AbortSignal | undefined;
 			let completionTracked = false;
 			const finish = () => {
 				execution.finished = true;
@@ -661,6 +662,7 @@ async function handleOwnerRequest(
 			try {
 				const admitDelivery = () => binding.turnCompaction.admitDelivery(deliveryId, async checkpoint => {
 					admissionSignal.throwIfAborted();
+					startupCancellation?.throwIfAborted();
 					await binding.turnCompaction.waitForCompaction();
 					checkpoint();
 					if (binding.runtime.session.isIdle && delivery.kind === "custom" && delivery.triggerTurn) {
@@ -668,18 +670,22 @@ async function handleOwnerRequest(
 					}
 					checkpoint();
 					admissionSignal.throwIfAborted();
+					// Pi's manual compaction calls abort() itself. Capture native input
+					// cancellation only after that separate preparation phase finishes.
+					startupCancellation = binding.startupAdmission.signal;
+					const dispatchSignal = AbortSignal.any([admissionSignal, startupCancellation]);
 					const dispatchCommit = observeDeliveryCommit(binding.runtime, binding.context.sessionManager, delivery, binding.turnCompaction.signal);
 					commit = dispatchCommit;
 					const dispatch = () => {
 						checkpoint();
-						admissionSignal.throwIfAborted();
+						dispatchSignal.throwIfAborted();
 						// Active queue admission belongs to this actual native execution.
 						execution.signal = binding.runtime.session.agent.signal;
 						execution.admitted = delivery.kind === "custom" && !binding.runtime.session.isIdle;
 						return binding.deliveryExecution.run(execution, () =>
 							dispatchDelivery(binding, delivery, () => {
 								checkpoint();
-								admissionSignal.throwIfAborted();
+								dispatchSignal.throwIfAborted();
 								execution.admitted = true;
 							})
 						);
@@ -707,7 +713,8 @@ async function handleOwnerRequest(
 						// Native input may own startup while waiting for this compaction
 						// gate. Release the gate before waiting, then preserve the original
 						// custom queue mode when retrying this uncommitted admission.
-						await waitForStartupRelease(error.whenReleased, admissionSignal);
+						await waitForStartupRelease(error.whenReleased,
+							AbortSignal.any([admissionSignal, startupCancellation!]));
 					}
 				}
 				const { completion } = admission;
