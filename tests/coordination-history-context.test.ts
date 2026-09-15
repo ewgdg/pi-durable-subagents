@@ -116,6 +116,43 @@ test("a compacted rejected call's result cannot attach to an inherited call with
 	assert.match(JSON.stringify(projected[2]), /Current result/);
 });
 
+test("a selected branch keeps an exact duplicate current call native", () => {
+	const session = SessionManager.inMemory(process.cwd());
+	const inherited = { ...fauxAssistantMessage(fauxToolCall("agent_message", { operation: "send", targetAgent: "peer", content: "Same payload" }, { id: "exact-duplicate" })), timestamp: 1 };
+	const inheritedEntryId = session.appendMessage(inherited);
+	session.appendMessage({ ...result("exact-duplicate", "agent_message", "Same result"), timestamp: 2 });
+	const branchPoint = session.getLeafId()!;
+	session.branch(branchPoint);
+	const current = structuredClone(inherited);
+	session.appendMessage(current);
+	const currentResult = { ...result("exact-duplicate", "agent_message", "Same result"), timestamp: 2 };
+	session.appendMessage(currentResult);
+	const transcript = transcriptFromSessionManager(session).inspect();
+	const projected = projectCoordinationHistory({ messages: structuredClone(transcript.context.messages), transcript, marks: [{ reason: "inherited",
+		record: { agentId: "source-owner", entryId: inheritedEntryId, kind: "tool-call", toolCallId: "exact-duplicate" }, diagnostic: "Historical source scope",
+	}] });
+	assert.equal(projected.some(message => message.role === "assistant" && message.content.some(part => part.type === "toolCall" && part.id === "exact-duplicate")), true);
+	assert.equal(projected.some(message => message.role === "toolResult" && message.toolCallId === "exact-duplicate"), true);
+});
+
+test("a compacted context keeps an exact duplicate current call and result native", () => {
+	const session = SessionManager.inMemory(process.cwd());
+	const inherited = { ...fauxAssistantMessage(fauxToolCall("agent_message", { operation: "send", targetAgent: "peer", content: "Same payload" }, { id: "exact-compacted" })), timestamp: 1 };
+	const inheritedEntryId = session.appendMessage(inherited);
+	session.appendMessage({ ...result("exact-compacted", "agent_message", "Same result"), timestamp: 2 });
+	const current = structuredClone(inherited);
+	const currentEntryId = session.appendMessage(current);
+	const currentResult = { ...result("exact-compacted", "agent_message", "Same result"), timestamp: 2 };
+	session.appendMessage(currentResult);
+	session.appendCompaction("Current summary", currentEntryId, 100);
+	const transcript = transcriptFromSessionManager(session).inspect();
+	const projected = projectCoordinationHistory({ messages: structuredClone(transcript.context.messages), transcript, marks: [{ reason: "inherited",
+		record: { agentId: "source-owner", entryId: inheritedEntryId, kind: "tool-call", toolCallId: "exact-compacted" }, diagnostic: "Historical source scope",
+	}] });
+	assert.equal(projected.some(message => message.role === "assistant" && message.content.some(part => part.type === "toolCall" && part.id === "exact-compacted")), true);
+	assert.equal(projected.some(message => message.role === "toolResult" && message.toolCallId === "exact-compacted"), true);
+});
+
 test("informational tool and custom groups preserve images as image blocks, not base64 text", () => {
 	const picture = { type: "image" as const, mimeType: "image/png", data: "image-payload" };
 	for (const kind of ["tool", "custom"] as const) {
