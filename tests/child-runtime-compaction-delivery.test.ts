@@ -283,8 +283,9 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 	});
 }
 
-for (const cancelWhilePreparing of [false, true]) {
-	test(`compaction admission releases for competing native preparation${cancelWhilePreparing ? " and cancellation preserves that input" : " before retrying the original custom queue mode"}`, {
+for (const cancellation of [undefined, "delivery", "native"] as const) {
+	const cancelWhilePreparing = cancellation !== undefined;
+	test(`compaction admission releases for competing native preparation${cancellation === "native" ? " and native abort cancels waiting delivery" : cancellation === "delivery" ? " and cancellation preserves that input" : " before retrying the original custom queue mode"}`, {
 		timeout: 5_000,
 	}, async t => {
 		const inputEntered = deferred();
@@ -356,27 +357,42 @@ for (const cancelWhilePreparing of [false, true]) {
 		void dispatch.catch(() => undefined);
 		await inputEntered.promise;
 		if (cancelWhilePreparing) {
-			assert.deepEqual(await binding.handleOwnerRequest({
-				method: "message.cancel", payload: { deliveryId: "competing-delivery" }, signal: new AbortController().signal,
-			}), { accepted: true });
-			await assert.rejects(dispatch, /child_turn_admission_cancelled/);
+			if (cancellation === "native") {
+				await session.abort();
+				let timeout!: ReturnType<typeof setTimeout>;
+				try {
+					await Promise.race([
+						assert.rejects(dispatch, /startup_admission_cancelled/),
+						new Promise<never>((_resolve, reject) => {
+							timeout = setTimeout(() => reject(new Error("Native abort left child Delivery waiting for preparation")), 1_000);
+						}),
+					]);
+				} finally { clearTimeout(timeout); }
+			} else {
+				assert.deepEqual(await binding.handleOwnerRequest({
+					method: "message.cancel", payload: { deliveryId: "competing-delivery" }, signal: new AbortController().signal,
+				}), { accepted: true });
+				await assert.rejects(dispatch, /child_turn_admission_cancelled/);
+			}
 			releaseInput.resolve();
 		} else {
 			await modelEntered.promise;
 			await new Promise<void>(resolve => setImmediate(resolve));
 			assert.equal(session.agent.hasQueuedMessages(), true, "the original custom follow-up is queued after native entry");
 		}
-		await modelEntered.promise;
+		if (cancellation !== "native") await modelEntered.promise;
 		releaseModel.resolve();
 		if (!cancelWhilePreparing) {
 			assert.equal((await dispatch as { transcriptCommitted: boolean }).transcriptCommitted, true);
 		}
-		await nativePrompt;
+		if (cancellation === "native") await assert.rejects(nativePrompt!, /startup_admission_cancelled/);
+		else await nativePrompt;
 		await session.waitForIdle();
 		await new Promise<void>(resolve => setImmediate(resolve));
 		assert.equal(manualAttempts, 1);
-		assert.equal(preparations, 1, "only the competing native Run starts; active custom input stays native");
-		assert.deepEqual(seen, cancelWhilePreparing ? [false] : [false, true]);
+		assert.equal(preparations, 1,
+			"only the competing native input prepares; active custom input stays native");
+		assert.deepEqual(seen, cancellation === "native" ? [] : cancelWhilePreparing ? [false] : [false, true]);
 		assert.equal(session.pendingMessageCount, 0);
 		assert.equal(session.sessionManager.getEntries().filter(entry =>
 			entry.type === "custom_message" && entry.customType === deliveryMessage.customType).length,
