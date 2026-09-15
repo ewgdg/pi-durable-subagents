@@ -9,6 +9,21 @@ type CustomMessageEntry = {
 	wrapper: AgentSession["sendCustomMessage"];
 	dispatch: AgentSession["sendCustomMessage"];
 };
+type NativePromptEntry = {
+	original: AgentSession["agent"]["prompt"];
+	wrapper: AgentSession["agent"]["prompt"];
+	dispatch: AgentSession["agent"]["prompt"];
+};
+type SessionStartupBinding = {
+	invocations: AsyncLocalStorage<Invocation>;
+	kickoffs: AsyncLocalStorage<CustomStartup>;
+	custom: CustomMessageEntry;
+	native: NativePromptEntry;
+};
+type NativeStartupObserver = {
+	beforeStart(): void;
+	started(signal: AbortSignal): void;
+};
 type CustomStartup = {
 	message: CustomMessage;
 	checkpoint: () => void;
@@ -18,7 +33,9 @@ type CustomStartup = {
 	resolvePreflight: () => void;
 };
 type Invocation = {
+	checkpoint: () => void;
 	custom?: CustomStartup;
+	cancellation: AbortSignal;
 	cancelled: boolean;
 	finished: boolean;
 	started: boolean;
@@ -59,7 +76,7 @@ export function registerSessionStartup(pi: ExtensionAPI): void {
 export function bindSessionStartup(session: AgentSession): SessionStartupAdmission {
 	let admission = admissions.get(session.sessionManager);
 	if (!admission || admission.isDisposed) {
-		admission = new SessionStartupAdmission(session, admission?.whenAvailable, admission?.customMessageEntry);
+		admission = new SessionStartupAdmission(session, admission?.whenAvailable, admission?.binding);
 		admissions.set(session.sessionManager, admission);
 	}
 	return admission;
@@ -71,18 +88,29 @@ export function disposeSessionStartup(session: AgentSession): void {
 
 /** Owns only preparation, leaving native streaming/settlement to Pi and its host. */
 export class SessionStartupAdmission {
-	readonly customMessageEntry: CustomMessageEntry;
+	readonly binding: SessionStartupBinding;
 	readonly #session: AgentSession;
-	readonly #invocations = new AsyncLocalStorage<Invocation>();
-	readonly #kickoffs = new AsyncLocalStorage<CustomStartup>();
+	readonly #invocations: AsyncLocalStorage<Invocation>;
+	readonly #kickoffs: AsyncLocalStorage<CustomStartup>;
 	readonly #restore: () => void;
+	readonly #nativeObservers = new Set<NativeStartupObserver>();
 	#owner: Invocation | undefined;
 	#disposed = false;
 	#cancellation = new AbortController();
 	#previousPreparation: Promise<void> | undefined;
 
-	constructor(session: AgentSession, previousPreparation?: Promise<void>, retainedCustomEntry?: CustomMessageEntry) {
+	constructor(session: AgentSession, previousPreparation?: Promise<void>, retainedBinding?: SessionStartupBinding) {
 		this.#session = session;
+		// Retain async provenance as well as forwarding entries: a delayed outer
+		// wrapper can resume through the rebound guard after its generation ends.
+		this.binding = retainedBinding ?? {
+			invocations: new AsyncLocalStorage<Invocation>(),
+			kickoffs: new AsyncLocalStorage<CustomStartup>(),
+			custom: createCustomMessageEntry(session),
+			native: createNativePromptEntry(session.agent),
+		};
+		this.#invocations = this.binding.invocations;
+		this.#kickoffs = this.binding.kickoffs;
 		this.#previousPreparation = previousPreparation;
 		void previousPreparation?.then(() => {
 			if (this.#previousPreparation === previousPreparation) this.#previousPreparation = undefined;
@@ -108,16 +136,21 @@ export class SessionStartupAdmission {
 		// Keep this forwarding function in place under wrappers installed after
 		// binding. Re-wrapping the outer method on reload would skip those wrappers
 		// whenever idle custom startup switches to the prepared prompt path.
-		const customEntry = this.customMessageEntry = retainedCustomEntry ?? createCustomMessageEntry(session);
+		const customEntry = this.binding.custom;
 		const originalCustom = customEntry.original;
 		const custom: AgentSession["sendCustomMessage"] = (message, options) => {
 			const pending = this.#kickoffs.getStore();
-			const ownDispatch = pending && !pending.invocation && !pending.nativeAccepted && pending.message === message;
+			const ownDispatch = pending && !pending.invocation && !pending.nativeAccepted;
+			if (ownDispatch) {
+				pending.checkpoint();
+				// A forwarding wrapper may clone or enrich the argument. Attribute
+				// its guarded call to this dispatch, not to object reference identity.
+				pending.message = message;
+			}
 			if (this.#disposed || !options?.triggerTurn || options.deliverAs === "nextTurn" || session.isStreaming) {
 				if (this.#disposed && options?.triggerTurn && options.deliverAs !== "nextTurn" && !session.isStreaming && this.whenAvailable) {
 					return Promise.reject(new StartupPreparationBusyError(this.whenAvailable));
 				}
-				if (ownDispatch) pending.checkpoint();
 				const completion = originalCustom.call(session, message, options);
 				if (ownDispatch) { pending.nativeAccepted = true; pending.resolvePreflight(); }
 				return completion;
@@ -126,15 +159,24 @@ export class SessionStartupAdmission {
 			return this.#startCustom(message, () => {}).completion;
 		};
 		const agent = session.agent;
-		const originalNativePrompt = agent.prompt;
-		const nativePrompt: typeof agent.prompt = function (this: typeof agent, ...args) {
+		const nativeEntry = this.binding.native;
+		const originalNativePrompt = nativeEntry.original;
+		const nativePrompt: typeof agent.prompt = async function (this: typeof agent, ...args) {
 			const invocation = admission.#invocations.getStore();
+			invocation?.checkpoint();
+			const observers = [...admission.#nativeObservers];
+			for (const observer of observers) observer.beforeStart();
 			const previousSignal = this.signal;
+			// Guard-first binding leaves no await between cancellation and Pi's
+			// synchronous signal allocation, even when an outer wrapper delayed us.
 			const completion = Reflect.apply(originalNativePrompt, this, args) as Promise<void>;
-			if (!admission.#disposed && invocation && !invocation.cancelled && !invocation.finished &&
-				this.signal !== undefined && this.signal !== previousSignal) {
-				invocation.started = true;
-				invocation.custom?.resolvePreflight();
+			const signal = this.signal;
+			if (signal !== undefined && signal !== previousSignal) {
+				if (invocation) {
+					invocation.started = true;
+					invocation.custom?.resolvePreflight();
+				}
+				for (const observer of observers) observer.started(signal);
 			}
 			return completion;
 		};
@@ -147,11 +189,12 @@ export class SessionStartupAdmission {
 		session.prompt = prompt;
 		customEntry.dispatch = custom;
 		if (session.sendCustomMessage === originalCustom) session.sendCustomMessage = customEntry.wrapper;
-		agent.prompt = nativePrompt;
+		nativeEntry.dispatch = nativePrompt;
+		if (agent.prompt === originalNativePrompt) agent.prompt = nativeEntry.wrapper;
 		session.abort = abort;
 		this.#restore = () => {
 			if (session.abort === abort) session.abort = originalAbort;
-			if (agent.prompt === nativePrompt) agent.prompt = originalNativePrompt;
+			if (nativeEntry.dispatch === nativePrompt && agent.prompt === nativeEntry.wrapper) agent.prompt = originalNativePrompt;
 			if (customEntry.dispatch === custom && session.sendCustomMessage === customEntry.wrapper) session.sendCustomMessage = originalCustom;
 			if (session.prompt === prompt) session.prompt = originalPrompt;
 		};
@@ -162,6 +205,12 @@ export class SessionStartupAdmission {
 	get whenAvailable(): Promise<void> | undefined { return this.#owner?.released ?? this.#previousPreparation; }
 	/** Capture once across a dispatch's busy retries; abort also cancels waiting admissions. */
 	get signal(): AbortSignal { return this.#cancellation.signal; }
+
+	/** Check entry and capture its signal without awaiting extension start hooks. */
+	observeNativeStartup(observer: NativeStartupObserver): () => void {
+		this.#nativeObservers.add(observer);
+		return () => { this.#nativeObservers.delete(observer); };
+	}
 
 	beforeStart(): BeforeAgentStartEventResult | undefined {
 		const invocation = this.#invocations.getStore();
@@ -206,6 +255,7 @@ export class SessionStartupAdmission {
 		const preparation = this.whenAvailable;
 		if (preparation) void preparation.then(this.#restore);
 		else this.#restore();
+		this.#nativeObservers.clear();
 	}
 
 	#promptCustom(): Promise<void> {
@@ -216,10 +266,18 @@ export class SessionStartupAdmission {
 	#startCustom(message: CustomMessage, checkpoint: () => void, operation = () => this.#promptCustom()): Dispatch {
 		let resolvePreflight!: () => void;
 		const entered = new Promise<void>(resolve => { resolvePreflight = resolve; });
-		const custom: CustomStartup = { message, checkpoint, injected: false, nativeAccepted: false, resolvePreflight };
+		const cancellation = this.signal;
+		const custom: CustomStartup = {
+			message, injected: false, nativeAccepted: false, resolvePreflight,
+			checkpoint: () => {
+				if (this.#disposed) throw new Error("startup_admission_cancelled");
+				cancellation.throwIfAborted();
+				checkpoint();
+			},
+		};
 		const completion = this.#kickoffs.run(custom, async () => {
 			if (this.#disposed) throw new Error("startup_admission_disposed");
-			checkpoint();
+			custom.checkpoint();
 			await operation();
 			if (!custom.nativeAccepted && !custom.invocation?.started) throw new Error("custom_startup_not_started: no native Run accepted the delivery");
 		});
@@ -235,6 +293,10 @@ export class SessionStartupAdmission {
 		const released = new Promise<void>(resolve => { release = resolve; });
 		const pending = this.#kickoffs.getStore();
 		const invocation: Invocation = {
+			// Retain the owning generation's check without accessing another
+			// module evaluation's class-private method after Pi reloads extensions.
+			checkpoint: () => this.#checkpoint(invocation),
+			cancellation: this.signal,
 			cancelled: false, finished: false, started: false, beforeStartReached: false,
 			inputHandedOff: false, released, release,
 		};
@@ -255,6 +317,7 @@ export class SessionStartupAdmission {
 
 	#checkpoint(invocation: Invocation): void {
 		if (this.#disposed || invocation.cancelled) throw new Error("startup_admission_cancelled");
+		invocation.cancellation.throwIfAborted();
 		if (invocation.inputHandedOff && invocation.beforeStartReached) {
 			throw new Error("startup_input_handoff_not_handled");
 		}
@@ -276,6 +339,15 @@ function createCustomMessageEntry(session: AgentSession): CustomMessageEntry {
 		original: session.sendCustomMessage,
 		dispatch: session.sendCustomMessage.bind(session),
 		wrapper: (message, options) => entry.dispatch(message, options),
+	};
+	return entry;
+}
+
+function createNativePromptEntry(agent: AgentSession["agent"]): NativePromptEntry {
+	const entry: NativePromptEntry = {
+		original: agent.prompt,
+		dispatch: agent.prompt,
+		wrapper: function (...args) { return Reflect.apply(entry.dispatch, this, args) as Promise<void>; },
 	};
 	return entry;
 }
