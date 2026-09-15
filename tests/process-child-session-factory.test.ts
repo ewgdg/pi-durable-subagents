@@ -32,6 +32,61 @@ import { createProcessModelBroker } from "./support/process-model-broker.ts";
 const TEST_TIMEOUT_MS = 45_000;
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 
+test("Owner tool inheritance uses active tools, including without an admitted snapshot", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const owner: AgentRecord = {
+		identity,
+		host: AgentRuntimeSupervisor.bindOwner(host.runtime),
+		transcript: transcriptFromSessionManager(host.session.sessionManager),
+		children: [],
+	};
+	const factory = new ProcessChildSessionFactory({
+		ownerRuntime: host.runtime,
+		ownerIdentity: identity,
+		entryModulePath: "<inline:pi-agent-coordination>",
+		templateRoots: () => [],
+		resolveAgent: (agentId) => agentId === identity.agentId ? owner : undefined,
+		ownerRequestHandlers() { throw new Error("Preparation must not launch a child process"); },
+	});
+	try {
+		assert.ok(host.session.getAllTools().some(({ name }) => name === "bash"));
+		for (const admitted of [true, false]) {
+			owner.host = admitted ? AgentRuntimeSupervisor.bindOwner(host.runtime)
+				: { effectiveRuntimeSnapshot: () => undefined } as AgentRecord["host"];
+			for (const active of [["read"], ["bash"], []]) {
+				host.session.setActiveToolsByName(active);
+				const prepared = await factory.prepareOrdinaryRun({
+					agentId: "descendant", parent: owner,
+					spawnInput: { title: "Inherit active tools", request: "Use the current active tools." },
+				});
+				assert.deepEqual(prepared.configuration.allowedTools, [
+					...active, "agent_message", "agent_wait", "agent_control", "agent_observe", "agent_spawn", "ask_user",
+				]);
+			}
+			for (const tools of [["bash"], []]) {
+				const explicit = await factory.prepareOrdinaryRun({
+					agentId: "explicit", parent: owner,
+					spawnInput: { title: "Explicit tools", request: "Use explicitly selected tools.", config: { allowedTools: tools } },
+				});
+				assert.equal(explicit.configuration.allowedTools.includes("bash"), tools.includes("bash"));
+				const preset = await factory.prepareOrdinaryRun({
+					agentId: "preset", parent: owner,
+					spawnInput: { title: "Template tools", request: "Use captured Template tools." },
+					creationPreset: { allowedTools: tools, systemPromptMode: "append", loadContextFiles: false, systemPrompt: "" },
+				});
+				assert.equal(preset.configuration.allowedTools.includes("bash"), tools.includes("bash"));
+			}
+		}
+	} finally {
+		await host.runtime.dispose();
+	}
+});
+
 test("a dormant parent retains creation preset rules while descendant catalogues load current resources", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-dynamic-parent-runtime-"));
 	const templateRoot = join(root, "templates");
@@ -160,7 +215,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		cwd: host.cwd,
 		model: { provider: model.provider, modelId: model.id },
 		thinking: host.session.thinkingLevel,
-		allowedTools: ["bash"],
+		allowedTools: ["bash", "read", "powershell"],
 		tools: ["bash"],
 		skills: [],
 		skillSources: [],
@@ -217,6 +272,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		assert.equal(synchronizations, 1);
 		assert.equal(prepared.configuration.allowedTools.includes("bash"), true);
 		assert.equal(prepared.configuration.allowedTools.includes("read"), false);
+		assert.equal(prepared.configuration.allowedTools.includes("powershell"), false);
 
 		const omitted = await factory.prepareOrdinaryRun({
 			agentId: "omitted", parent: parentRecord, spawnInput: { title: "Fixture request", request: "Inherit" },
@@ -237,7 +293,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		synchronizedSnapshot = {
 			...synchronizedSnapshot,
 			model: { provider: "current-parent", modelId: "current-model" },
-			thinking: "high", allowedTools: ["grep"], cwd: currentCwd,
+			thinking: "high", allowedTools: ["bash", "read", "grep"], tools: ["grep"], cwd: currentCwd,
 			skills: ["inherited-skill"], skillSources: [{ name: "inherited-skill", filePath: inheritedSkill }],
 			fileExtensionPaths: [inheritedExtension],
 		};

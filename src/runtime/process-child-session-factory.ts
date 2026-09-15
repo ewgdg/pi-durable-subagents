@@ -361,7 +361,8 @@ export class ProcessChildSessionFactory {
 					cwd: snapshot.cwd,
 					model: snapshot.model,
 					thinking: snapshot.thinking,
-					allowedTools: [...snapshot.allowedTools],
+					// Inherit what the parent can currently call, not its broader capability ceiling.
+					allowedTools: [...snapshot.tools],
 					skills: [...snapshot.skills],
 					extensions: snapshot.fileExtensionPaths.filter(
 						(path) => !this.#isCoordinationExtension(path),
@@ -421,7 +422,7 @@ export class ProcessChildSessionFactory {
 				cwd: this.#ownerRuntime.services.cwd,
 				model: { provider: model.provider, modelId: model.id },
 				thinking: session.thinkingLevel,
-				allowedTools: session.getAllTools().map(({ name }) => name),
+				allowedTools: [...session.getActiveToolNames()],
 				skills: skills.map(({ name }) => name),
 				extensions: this.#ownerRuntime.services.resourceLoader
 					.getExtensions()
