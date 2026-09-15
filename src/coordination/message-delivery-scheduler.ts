@@ -1167,7 +1167,8 @@ export class MessageDeliveryScheduler {
 		// A proven Delivery may still own its native prompt while agent_wait parks it.
 		// Keep that reservation for serialization, not as an external progress source.
 		if (this.#activeModeratorReminderByAgent.has(record.identity.agentId) ||
-			(activeDeferred !== undefined && !activeDeferred.deliveryCommitted) ||
+			(activeDeferred !== undefined && activeDeferred.deliveries.some(delivery =>
+				!activeDeferred.committedMessageIds.has(delivery.messageId))) ||
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId) ||
 			this.#reservedResumeByAgent.has(record.identity.agentId) ||
 			this.#activeResumeByAgent.has(record.identity.agentId) ||

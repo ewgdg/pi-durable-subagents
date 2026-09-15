@@ -66,6 +66,8 @@ test("park entry does not await the idle Deferred prompt Promise after Delivery 
 	), false);
 	proof = { agentId: "owner", entryId: "delivery-proof" };
 	assert.equal(scheduler.hasAutonomousProgress(), false, "native prompt duration after proof is not delivery progress");
+	await scheduler.reachSafeBoundary(record);
+	assert.equal(scheduler.hasProgress(record), false, "a committed custom Delivery retained through a native prompt is not pending delivery work");
 	assert.equal(await withTimeout(
 		lane.run(() => scheduler.beginParkingInLane(record, handle)),
 		100,
