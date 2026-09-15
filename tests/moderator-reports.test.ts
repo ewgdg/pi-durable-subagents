@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 
@@ -110,4 +111,18 @@ test("runtime diagnostic reports retain truthful provenance and read state acros
 	assert.ok(reopened.history()[0]?.readAt, "publication does not re-notify after read");
 	reopened.setRead(report.reportId, false);
 	assert.equal(reopened.history()[0]?.readAt, undefined);
+});
+
+test("early runtime reports share native delayed persistence without synthesizing an assistant", () => {
+	const manager = SessionManager.create(tmpdir(), mkdtempSync(join(tmpdir(), "early-runtime-report-")));
+	manager.appendCustomEntry("agent-coordination.identity", { agentId: manager.getSessionId() });
+	const reports = store(manager);
+	const source = { kind: "runtime_diagnostic" as const, agentId: manager.getSessionId(), entryId: manager.appendCustomEntry("agent-coordination.operational-diagnostic", { message: "Initial inspection failed" }), transcriptPath: manager.getSessionFile()! };
+	const report = reports.publishRuntime(input, source);
+	reports.setRead(report.reportId, true);
+	assert.ok(reports.history()[0]?.readAt);
+	assert.equal(existsSync(source.transcriptPath), false, "report publication does not force native persistence");
+	assert.equal(manager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant"), false);
+	manager.appendMessage(fauxAssistantMessage("First real assistant response."));
+	assert.deepEqual(store(SessionManager.open(source.transcriptPath)).history(), reports.history());
 });

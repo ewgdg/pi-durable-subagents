@@ -1,3 +1,4 @@
+import type { ReportToUserInput } from "../src/protocol/moderator-report.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -50,6 +51,7 @@ for (const ownerAnswered of [false, true]) {
 		const workflowPolicy = new WorkflowPolicyStore();
 		const messages = new MessageCoordinator({ agents: history.agents, workflowPolicy, isShuttingDown: () => false });
 		let creationAttempts = 0;
+		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
 			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, workflowPolicy,
 			sessionFactory: {
@@ -58,6 +60,7 @@ for (const ownerAnswered of [false, true]) {
 			integrateAgent() { throw new Error("Unexpected runtime creation"); },
 			isShuttingDown: () => false,
 			reportError(error) { throw error; },
+			publishRuntimeReport(report) { reports.push(report); },
 			retainDiagnostic: () => ({ agentId: "requester", entryId: owner.manager.appendCustomEntry("diagnostic", {}) }),
 		});
 		t.after(() => { incidents.shutdown(); messages.shutdownDeliveryProgress(); });
@@ -70,11 +73,12 @@ for (const ownerAnswered of [false, true]) {
 			return;
 		}
 		assert.equal(attention.length, 1);
-		assert.deepEqual(attention[0]!.trigger, {
+		assert.equal(attention[0]!.trigger.kind, "moderation_unavailable");
+		assert.ok(reports[0]?.evidence.includes(`Original trigger: ${JSON.stringify({
 			kind: "dependency_deadlock",
 			agentIds: ["publication", "responder"],
 			requests: { total: 2, sources: messages.requestSources([coreToPublication, publicationToCore].sort()) },
-		});
+		})}`));
 		assert.ok(messages.outstandingRequestIdsFor(core.record).includes(coreToOwner),
 			"the undelivered Owner Answer remains outstanding for all-answer Wait");
 	});

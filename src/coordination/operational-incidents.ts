@@ -1,3 +1,4 @@
+import type { ReportToUserInput } from "../protocol/moderator-report.ts";
 import {
 	createModelVisibleModeratorObligationReminder,
 	inspectModeratorObligationReminder,
@@ -105,6 +106,14 @@ type OperationalConditionSnapshot =
 	| DependencyDeadlockSnapshot
 	| OperationReviewConditionSnapshot;
 
+const MODERATION_TRIGGER_EXPLANATIONS: Readonly<Record<OperationalConditionSnapshot["kind"], string>> = {
+	delivery_stall: "Delivery stopped making progress on a Request path supporting an unresolved Answer Obligation.",
+	obligation_stall: "An Agent settled after its reminder but still owes an Answer, with no observed source of progress.",
+	run_failure: "An Agent Run failed while its Agent still owed an Answer.",
+	dependency_deadlock: "Settled Agents depend on unanswered Requests within a closed group, with no observed external source of progress.",
+	operation_review: "An unresolved tool call exceeded its operation-review interval while its Agent owed an Answer; this does not establish that the tool failed.",
+};
+
 type OperationalIncidentHandling = {
 	snapshot: OperationalConditionSnapshot;
 	moderatorAgentId?: string;
@@ -112,19 +121,22 @@ type OperationalIncidentHandling = {
 	diagnostics: EntryPointer[];
 	exhausted: boolean;
 	creationFailed: boolean;
+	creationStage?: string;
 	trigger?: ModeratorTrigger;
 	previousAttempt?: EntryPointer;
 };
 
 export type OperationalIncidentAttention = Readonly<{
-	trigger: ModeratorTrigger | Readonly<{ kind: "moderation_unavailable" }>;
 	summary?: string;
 	affectedAgents: readonly Readonly<{
 		agentId: string;
 		label: string;
 	}>[];
 	diagnostics: readonly EntryPointer[];
-}>;
+}> & (
+	| Readonly<{ trigger: ModeratorTrigger }>
+	| Readonly<{ trigger: Readonly<{ kind: "moderation_unavailable" }> }>
+);
 
 export type OperationalIncidentPresentation = Readonly<{
 	present(conditionKey: string, attention: OperationalIncidentAttention): void;
@@ -160,6 +172,7 @@ export class OperationalIncidentCoordinator {
 	readonly #onAttentionChanged: () => void;
 	readonly #faultAttention = new Map<string, OperationalIncidentAttention>();
 	readonly #retainDiagnostic: (error: unknown) => EntryPointer;
+	readonly #publishRuntimeReport: (input: ReportToUserInput, diagnostic: EntryPointer) => void;
 	readonly #handlingByKey = new Map<string, OperationalIncidentHandling>();
 	readonly #attemptByModeratorAgentId = new Map<string, OperationalConditionSnapshot>();
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
@@ -178,6 +191,7 @@ export class OperationalIncidentCoordinator {
 		isShuttingDown(): boolean;
 		reportError(error: unknown): void;
 		retainDiagnostic(error: unknown): EntryPointer;
+		publishRuntimeReport(input: ReportToUserInput, diagnostic: EntryPointer): void;
 		boundaryHooks?: OperationalIncidentBoundaryHooks;
 		presentation?: OperationalIncidentPresentation;
 		operationReviewClock?: OperationReviewClock;
@@ -194,6 +208,7 @@ export class OperationalIncidentCoordinator {
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#reportError = options.reportError;
 		this.#retainDiagnostic = options.retainDiagnostic;
+		this.#publishRuntimeReport = options.publishRuntimeReport;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
@@ -470,7 +485,7 @@ export class OperationalIncidentCoordinator {
 			this.#inspectionStalled = true;
 			const handling = this.#activeCreation;
 			this.#presentFault(handling ? `moderation:creation:${handling.snapshot.key}` : "moderation:evidence",
-				new Error(`Moderation ${handling ? "creation" : "evidence inspection"} made no completion within ${intervalMs}ms`), handling);
+				new Error(`Moderation ${handling ? "creation" : "evidence inspection"} made no completion within ${intervalMs}ms`), handling, true);
 			// An existing fault may deduplicate its UI entry, but this inspection
 			// has just ceased to be autonomous progress for a parked Owner.
 			this.#onAttentionChanged();
@@ -487,15 +502,56 @@ export class OperationalIncidentCoordinator {
 		}
 	}
 
-	#presentFault(key: string, error: unknown, handling?: OperationalIncidentHandling): void {
+	#presentFault(key: string, error: unknown, handling?: OperationalIncidentHandling, pending = false): void {
 		if (this.#isShuttingDown() || this.#faultAttention.has(key)) return;
-		const agentIds = handling?.snapshot.affectedAgentIds ?? [this.#ownerIdentity.agentId];
+		const knownHandlings = handling ? [handling] : [...this.#handlingByKey.values()];
+		const agentIds = [...new Set(knownHandlings.flatMap(item => item.snapshot.affectedAgentIds))];
+		const diagnostic = this.#retainDiagnostic(error);
 		const attention: OperationalIncidentAttention = {
-			trigger: handling?.trigger ?? { kind: "moderation_unavailable" },
+			trigger: { kind: "moderation_unavailable" },
 			summary: handling ? "Moderator creation blocked; inspect diagnostic evidence." : "Moderation evidence inspection blocked; inspect diagnostic evidence.",
 			affectedAgents: agentIds.map((agentId) => ({ agentId, label: this.#requireAgent(agentId).identity.metadata.label })),
-			diagnostics: [this.#retainDiagnostic(error)],
+			diagnostics: [diagnostic],
 		};
+		// Use captured incident facts only: re-inspecting the failed evidence path
+		// here could hide the failure or invent a newer trigger for this report.
+		const incident = knownHandlings.length
+			? knownHandlings.map(item => [
+				`Original incident: ${item.snapshot.kind}`,
+				`Why moderation was triggered: ${MODERATION_TRIGGER_EXPLANATIONS[item.snapshot.kind]}`,
+				`Affected Agents: ${item.snapshot.affectedAgentIds.map(agentId => `${this.#requireAgent(agentId).identity.metadata.label} (${agentId})`).join(", ")}`,
+				`Trigger: ${item.trigger ? JSON.stringify(item.trigger, null, 2) : "Trigger source capture failed; qualifying Request source graph was not established."}`,
+			].join("\n")).join("\n\n")
+			: "No trigger or affected Request graph was established. Owner hosts this report and diagnostic; no affected Agent is inferred.";
+		const attempts = knownHandlings.flatMap(item => {
+			const moderatorId = item.moderatorAgentId ?? item.previousAttempt?.agentId;
+			const moderator = moderatorId ? this.#agents.get(moderatorId)?.identity : undefined;
+			return [
+				`Incident: ${item.snapshot.kind}`,
+				`Committed Moderator attempts: ${item.committedAttemptCount} of ${MAX_AUTOMATIC_MODERATOR_ATTEMPTS}`,
+				`Known Moderator: ${moderatorId ? `${moderator?.metadata.label ?? "Moderator (label unavailable)"} (${moderatorId})` : "none committed"}`,
+				`Previous attempt evidence: ${item.previousAttempt ? JSON.stringify(item.previousAttempt) : "none recorded"}`,
+			];
+		});
+		this.#publishRuntimeReport({
+			symptom: `${attention.summary}\n${incident}`,
+			suspectedDefect: `Failed stage: ${handling?.creationStage ?? "evidence inspection"}\nError: ${error instanceof Error ? error.message : String(error)}`,
+			uncertainty: "The underlying cause is unconfirmed. Captured incident facts were not revalidated by this failed observation. It does not establish whether pending work will complete or whether any Agent needs recovery.",
+			recoveryActions: [
+				"Runtime retained diagnostic evidence and published this report. Reading it only acknowledges the notification; it does not retry moderation or change handling bounds.",
+				...(attempts.length ? attempts : ["No Moderator handling was established by this inspection; attempt count and Moderator identity are unknown."]),
+			].join("\n"),
+			recoveryOutcome: `Moderation unavailable at publication. ${pending ? "The completion deadline elapsed, but the operation is still pending; terminal failure is not established." : handling?.creationFailed ? "Creation failed; automatic staging is not retried for this continuous condition." : "Evidence inspection failed; later inspection may clear the live fault."} No recovery is claimed. Live status is separate and may change after this immutable report.`,
+			evidence: [
+				`Runtime diagnostic: ${JSON.stringify(diagnostic)}`,
+				...knownHandlings.flatMap(item => [
+					`Original trigger: ${item.trigger ? JSON.stringify(item.trigger) : "not captured"}`,
+					`Qualifying Request identities: ${JSON.stringify(item.snapshot.requestIds)}`,
+					...item.snapshot.inspectedThrough.map(pointer => `Inspected through: ${JSON.stringify(pointer)}`),
+					...item.diagnostics.map(pointer => `Moderator diagnostic: ${JSON.stringify(pointer)}`),
+				]),
+			],
+		}, diagnostic);
 		this.#faultAttention.set(key, attention);
 		this.#presentation.present(key, attention);
 		this.#onAttentionChanged();
@@ -573,6 +629,7 @@ export class OperationalIncidentCoordinator {
 			const previousCreation = this.#activeCreation;
 			this.#activeCreation = handling;
 			try {
+				handling.creationStage = "incident trigger capture";
 				handling.trigger = this.#triggerFor(handling.snapshot);
 				await this.#createModerator(handling);
 				// Initial creation can synchronously lead to replacement creation.
@@ -636,9 +693,11 @@ export class OperationalIncidentCoordinator {
 		if (!this.#agents.has(this.#ownerIdentity.agentId)) {
 			throw new Error("invariant_violation: Workflow Owner is unavailable");
 		}
+		handling.creationStage = "Moderator runtime preparation";
 		this.#sessionFactory.admitProcessRuntimePlatform();
 		const agentId = uuidv7();
 		const prepared = await this.#sessionFactory.prepareModeratorRun({ agentId });
+		handling.creationStage = "Moderator staging session creation";
 		const sessionManager = this.#sessionFactory.createStagingSession(prepared);
 		if (this.#isShuttingDown()) return;
 		if (!this.#conditionRemains(handling.snapshot)) {
@@ -661,6 +720,7 @@ export class OperationalIncidentCoordinator {
 				? {}
 				: { previousAttempt: handling.previousAttempt }),
 		};
+		handling.creationStage = "Moderator bootstrap commit";
 		const bootstrapBoundary =
 			this.#boundaryHooks.beforeModeratorBootstrapCommit?.();
 		if (this.#isShuttingDown()) return;
@@ -687,6 +747,7 @@ export class OperationalIncidentCoordinator {
 			})) throw error;
 			sessionPath = candidatePath;
 		}
+		handling.creationStage = "Moderator bootstrap verification";
 		validateCommittedModeratorInput({
 			transcript: transcriptFromSessionFile(sessionPath).inspect(),
 			identity,
@@ -701,6 +762,7 @@ export class OperationalIncidentCoordinator {
 		handling.committedAttemptCount += 1;
 		this.#attemptByModeratorAgentId.set(agentId, handling.snapshot);
 
+		handling.creationStage = "Moderator record integration";
 		const moderator = this.#sessionFactory.createModeratorRecord({
 			identity,
 			initialPreparation: prepared,
@@ -708,6 +770,7 @@ export class OperationalIncidentCoordinator {
 		});
 		this.#agents.set(agentId, moderator);
 		this.#integrateAgent(moderator);
+		handling.creationStage = "Moderator Run startup";
 		if (
 			this.#boundaryHooks.beforeModeratorRunStart?.() ===
 			"confirmed_failure"

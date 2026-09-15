@@ -525,3 +525,25 @@ test("unread reports remain in the Owner Attention Inbox until explicitly marked
 	assert.doesNotMatch(readDock.render(120).join("\n"), /REPORT/);
 	readDock.dispose();
 });
+
+test("acknowledged moderation failure keeps live unavailable status outside the inbox", () => {
+	const report = {
+		reportId: "failure", createdAt: "2026-06-11T00:00:00Z",
+		source: { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "diagnostic", transcriptPath: "/tmp/owner.jsonl" },
+		symptom: "Inspection blocked", suspectedDefect: "Unknown", uncertainty: "No incident established",
+		recoveryActions: "None", recoveryOutcome: "Unknown", evidence: ["diagnostic"],
+	};
+	for (const readAt of [undefined, report.createdAt]) {
+		const { dock } = createDock({
+			scope: agent({ agentId: "owner", label: "Owner", parent: null }), children: [], answerMode: false,
+			humanAttention: [], operationalAttention: [{ trigger: { kind: "moderation_unavailable" }, affectedAgents: [], diagnostics: [] }],
+			reports: [{ report, ...(readAt ? { readAt } : {}) }],
+		});
+		const rendered = dock.render(160).join("\n");
+		assert.match(rendered, /Moderation Unavailable · live status/);
+		assert.doesNotMatch(rendered, /ATTENTION.*Moderation/);
+		if (readAt) assert.doesNotMatch(rendered, /Attention Inbox|REPORT/);
+		else assert.match(rendered, /REPORT.*Runtime.*Inspection blocked/);
+		dock.dispose();
+	}
+});

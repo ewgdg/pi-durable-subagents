@@ -592,15 +592,20 @@ const OperationalIncidentAgentSchema = closed({
 	agentId: NonEmptyStringSchema,
 	label: NonEmptyStringSchema,
 });
-const OperationalIncidentAttentionSchema = closed({
-	trigger: Type.Union([ModeratorTriggerSchema, closed({ kind: Type.Literal("moderation_unavailable") })]),
+const OperationalIncidentAttentionFields = {
 	summary: Type.Optional(Type.String()),
-	affectedAgents: Type.Array(OperationalIncidentAgentSchema, {
-		minItems: 1,
-		uniqueItems: true,
-	}),
 	diagnostics: Type.Array(EntryPointerSchema, { uniqueItems: true }),
-});
+};
+const OperationalIncidentAttentionSchema = Type.Union([closed({
+	...OperationalIncidentAttentionFields,
+	trigger: ModeratorTriggerSchema,
+	affectedAgents: Type.Array(OperationalIncidentAgentSchema, { minItems: 1, uniqueItems: true }),
+}), closed({
+	...OperationalIncidentAttentionFields,
+	trigger: closed({ kind: Type.Literal("moderation_unavailable") }),
+	// Failed inspection may establish no incident; do not invent an affected Owner.
+	affectedAgents: Type.Array(OperationalIncidentAgentSchema, { uniqueItems: true }),
+})]);
 const ReportFields = {
 	...participantCoordinationToolSchemas.report_to_user.properties,
 	reportId: NonEmptyStringSchema,

@@ -139,6 +139,7 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 		integrateAgent() { throw new Error("Unexpected Moderator"); },
 		isShuttingDown: () => shuttingDown,
 		reportError: (error) => errors.push(error),
+		publishRuntimeReport() {},
 		retainDiagnostic: (error) => {
 			errors.push(error);
 			return { agentId: identity.agentId, entryId: host.session.sessionManager.appendCustomEntry("test-diagnostic", String(error)) };

@@ -93,6 +93,7 @@ export function validateRuntimeReportSource(source: RuntimeReportSource): void {
 }
 
 export function validateReportProvenance(reporter: Reporter, source: ModeratorReportSource): void {
+	if (source?.kind !== undefined) throw new CoordinationRecordValidationError("Moderator report requires native tool-call provenance");
 	for (const [field, value] of Object.entries({
 		reporterAgentId: reporter?.agentId, reporterLabel: reporter?.label,
 		sourceAgentId: source?.agentId, entryId: source?.entryId,

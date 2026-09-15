@@ -630,6 +630,11 @@ test("Control snapshots carry runtime diagnostic reports but reject invented too
 	const snapshot = { live: [], dormant: [], humanAttention: [], operationalAttention: [], reports: [{ report, readAt: report.createdAt }], selectedAgentId: "owner" };
 	const schema = agentControlMethods["presentation.agents.snapshot"].response;
 	assert.ok(Check(schema, JSON.parse(JSON.stringify(snapshot))));
+	const attention = { trigger: { kind: "moderation_unavailable" }, affectedAgents: [], diagnostics: [] };
+	assert.ok(Check(schema, { ...snapshot, operationalAttention: [attention] }));
+	assert.equal(Check(schema, { ...snapshot, operationalAttention: [{
+		...attention, trigger: { kind: "obligation_stall", agentId: "worker", obligations: { total: 1, sources: [] } },
+	}] }), false, "an established incident still requires an affected Agent");
 	for (const invalid of [ { ...report, reporter: { agentId: "owner", label: "Owner" } }, { ...report, source: { ...report.source, toolCallId: "fake" } } ]) {
 		assert.equal(Check(schema, { ...snapshot, reports: [{ report: invalid }] }), false);
 	}

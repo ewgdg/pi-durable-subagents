@@ -1,3 +1,7 @@
+import { Check } from "typebox/value";
+import { agentControlMethods } from "../src/control/agent-control-protocol.ts";
+import { createAgentSelectorSnapshot } from "../src/process-runtime/remote-agent-selector.ts";
+import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import { obligationStack } from "../src/protocol/obligation-focus.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
@@ -3295,10 +3299,12 @@ test("blocked Delivery deadline catches a silent leaf while its obligated parent
 	assert.ok(parentRun.retentionReasons.some(({ reason }) => reason === "awaiting_answer"));
 });
 
-test("blocked Delivery Moderator creation failure produces deduplicated Owner attention with diagnostics", async (t) => {
+test("blocked Delivery Moderator creation failure reports original incident before any Moderator commits", async (t) => {
 	let requests = 0;
 	let bootstrapAttempts = 0;
+	let inspectionUnavailable = false;
 	const { host, owner } = await createIncidentBoundaryHarness(t, {
+		beforeEvidenceInspection() { if (inspectionUnavailable) throw new Error("Inspection failed with known handling"); },
 		beforeModeratorBootstrapCommit: () => { bootstrapAttempts++; return "confirmed_failure"; },
 	}, {
 		messageBoundaryHooks: {
@@ -3316,25 +3322,73 @@ test("blocked Delivery Moderator creation failure produces deduplicated Owner at
 	await waitForCondition(() => owner.operationalAttention().length > 0);
 	const attention = owner.operationalAttention();
 	assert.equal(attention.length, 1);
-	assert.equal(attention[0]?.trigger.kind, "delivery_stall");
+	assert.equal(attention[0]?.trigger.kind, "moderation_unavailable");
 	assert.ok(attention[0]?.diagnostics.length);
+	const item = owner.reportHistory()[0];
+	assert.ok(item);
+	assert.match(item.report.symptom, /delivery_stall/);
+	assert.match(item.report.symptom, /Why moderation was triggered: .*Delivery.*unresolved Answer Obligation/);
+	assert.match(item.report.symptom, /unavailable-leaf/);
+	for (const agent of attention[0]!.affectedAgents) {
+		assert.ok(item.report.symptom.includes(agent.agentId));
+		assert.ok(item.report.symptom.includes(agent.label));
+	}
+	assert.match(item.report.suspectedDefect, /Moderator bootstrap commit/);
+	assert.match(item.report.recoveryActions, /Committed Moderator attempts: 0 of 2/);
+	assert.match(item.report.recoveryActions, /Known Moderator: none committed/);
+	assert.match(item.report.evidence.join("\n"), /unavailable-leaf/);
+	owner.setReportRead(item.report.reportId, true);
 	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
 	assert.deepEqual(owner.operationalAttention(), attention);
+	assert.equal(owner.reportHistory().length, 1);
+	assert.ok(owner.reportHistory()[0]?.readAt);
 	assert.equal(bootstrapAttempts, 1, "deduplication also prevents repeated staging effects");
 	assert.equal((await findModerators(host)).length, 0);
+	inspectionUnavailable = true;
+	await owner.reachSafeBoundary();
+	const inspectionReport = owner.reportHistory()[1]?.report;
+	assert.ok(inspectionReport);
+	assert.match(inspectionReport.symptom, /delivery_stall/);
+	assert.doesNotMatch(inspectionReport.symptom, /No trigger or affected Request graph was established/);
+	assert.match(inspectionReport.uncertainty, /not revalidated/);
 });
 
-test("moderation evidence failure surfaces once to Owner and clears after successful inspection", async (t) => {
+test("moderation evidence failure publishes one acknowledgeable runtime report per continuous fault", async (t) => {
 	let unavailable = false;
 	const { host, owner } = await createIncidentBoundaryHarness(t, {
 		beforeEvidenceInspection() { if (unavailable) throw new Error("controlled evidence read failure"); },
 	});
+	// Native Pi persistence begins with an assistant entry, independently of incident discovery.
+	host.session.sessionManager.appendMessage(fauxAssistantMessage("Owner session started; no incident established."));
 	unavailable = true;
 	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
 	const attention = owner.operationalAttention();
 	assert.equal(attention.length, 1);
 	assert.equal(attention[0]?.trigger.kind, "moderation_unavailable");
+	assert.deepEqual(attention[0]?.affectedAgents, [], "Owner hosts the diagnostic, not an invented incident");
+	const item = owner.reportHistory()[0];
+	assert.ok(item);
+	assert.equal(item.report.reporter, undefined);
+	assert.equal(item.report.source.kind, "runtime_diagnostic");
+	assert.match(item.report.symptom, /No trigger or affected Request graph was established/);
+	assert.match(item.report.suspectedDefect, /controlled evidence read failure/);
+	owner.setReportRead(item.report.reportId, true);
+	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
+	assert.equal(owner.reportHistory().length, 1);
+	assert.ok(owner.reportHistory()[0]?.readAt);
+	assert.deepEqual(owner.operationalAttention(), attention, "read does not clear live fault");
 	const diagnosticId = attention[0]?.diagnostics[0]?.entryId;
+	assert.equal(item.report.source.entryId, diagnosticId);
+	assert.equal(item.report.source.transcriptPath, host.session.sessionManager.getSessionFile());
+	const snapshot = JSON.parse(JSON.stringify(createAgentSelectorSnapshot(owner)));
+	assert.ok(Check(agentControlMethods["presentation.agents.snapshot"].response, snapshot));
+	assert.deepEqual(snapshot.reports, owner.reportHistory());
+	const reopenedManager = SessionManager.open(host.session.sessionManager.getSessionFile()!);
+	const reopened = new ModeratorReportStore({
+		transcript: transcriptFromSessionManager(reopenedManager),
+		appendCustomEntry: (type, data) => reopenedManager.appendCustomEntry(type, data),
+	});
+	assert.deepEqual(reopened.history(), owner.reportHistory(), "runtime report and acknowledgement survive cold transcript recovery");
 	const diagnostic = host.session.sessionManager.getEntry(diagnosticId!);
 	assert.ok(diagnostic?.type === "custom");
 	assert.match(JSON.stringify(diagnostic.data), /controlled evidence read failure/);
@@ -3343,6 +3397,13 @@ test("moderation evidence failure surfaces once to Owner and clears after succes
 	unavailable = false;
 	await owner.reachSafeBoundary();
 	assert.deepEqual(owner.operationalAttention(), []);
+	assert.ok(owner.reportHistory()[0]?.readAt);
+	unavailable = true;
+	await owner.reachSafeBoundary();
+	const recurrence = owner.reportHistory();
+	assert.equal(recurrence.length, 2);
+	assert.notEqual(recurrence[1]?.report.reportId, item.report.reportId);
+	assert.equal(recurrence[1]?.readAt, undefined);
 });
 
 test("blocked Delivery meaningful reservation resets its deadline and transcript proof clears handling without duplicate Delivery", async (t) => {
@@ -3627,6 +3688,10 @@ test("moderation inspection deadline reports Owner attention while the inspectio
 	assert.equal(owner.operationalAttention().length, 0);
 	clock.advanceBy(1);
 	assert.equal(owner.operationalAttention()[0]?.trigger.kind, "moderation_unavailable");
+	const report = owner.reportHistory()[0]?.report;
+	assert.ok(report);
+	assert.match(report.symptom, /No trigger or affected Request graph was established/);
+	assert.match(report.recoveryOutcome, /still pending; terminal failure is not established/);
 	assert.equal(coordinator.hasAutonomousWorkflowProgress(), false, "a stuck recovery inspection must not keep Owner parking active");
 	clock.advanceBy(10_000);
 	assert.equal(owner.operationalAttention().length, 1);
@@ -3634,6 +3699,7 @@ test("moderation inspection deadline reports Owner attention while the inspectio
 	releaseInspection();
 	await boundary;
 	assert.equal(owner.operationalAttention().length, 0);
+	assert.deepEqual(owner.reportHistory(), [{ report }], "successful inspection does not erase its earlier report");
 });
 
 test("blocked Delivery detects a Creation Request stranded before scheduler admission without changing its canonical identity", async (t) => {
@@ -3729,19 +3795,34 @@ test("a blocked replacement Moderator preparation receives deadline attention be
 	clock.advanceBy(1);
 	const attention = owner.operationalAttention();
 	assert.equal(attention.length, 1);
-	assert.equal(attention[0]?.trigger.kind, "obligation_stall");
+	assert.equal(attention[0]?.trigger.kind, "moderation_unavailable");
 	assert.match(attention[0]?.summary ?? "", /creation blocked/);
 	assert.equal(coordinator.hasAutonomousWorkflowProgress(), false, "hung replacement preparation must not keep the workflow active");
+	const item = owner.reportHistory()[0];
+	assert.ok(item);
+	assert.match(item.report.symptom, /obligation_stall/);
+	assert.match(item.report.suspectedDefect, /Moderator runtime preparation/);
+	assert.match(item.report.recoveryActions, /Committed Moderator attempts: 1 of 2/);
+	const firstModerator = (await findModerators(host))[0]!;
+	assert.ok(item.report.recoveryActions.includes(firstModerator.id));
+	assert.match(item.report.recoveryActions, /Previous attempt evidence: .*entryId/);
+	assert.match(item.report.evidence.join("\n"), /Moderator diagnostic: .*entryId/);
+	assert.match(item.report.recoveryOutcome, /still pending; terminal failure is not established/);
+	owner.setReportRead(item.report.reportId, true);
 	const pointer = attention[0]?.diagnostics[0];
 	assert.ok(pointer);
 	assert.ok(host.session.sessionManager.getEntry(pointer.entryId));
 	clock.advanceBy(10_000);
 	assert.deepEqual(owner.operationalAttention(), attention);
 	assert.equal(preparations, 2);
+	assert.equal(owner.reportHistory().length, 1);
+	assert.ok(owner.reportHistory()[0]?.readAt);
 	releasePreparation();
 	await owner.reachSafeBoundary();
 	await waitForCondition(async () => (await findModerators(host)).length === 2);
 	assert.equal(owner.operationalAttention().length, 0);
+	assert.deepEqual(owner.reportHistory()[0]?.report, item.report, "later completion does not rewrite the earlier observation");
+	assert.ok(owner.reportHistory()[0]?.readAt);
 	assert.equal(preparations, 2);
 });
 
@@ -3764,9 +3845,17 @@ test("a failed replacement bootstrap retains Owner attention and does not restag
 	await spawnFromView(host.session, owner, "replacement-bootstrap-fault-parent", "Settle without Answer.");
 	await waitForCondition(() => owner.operationalAttention().length > 0);
 	const attention = owner.operationalAttention();
-	assert.equal(attention[0]?.trigger.kind, "obligation_stall");
+	assert.equal(attention[0]?.trigger.kind, "moderation_unavailable");
+	const report = owner.reportHistory()[0]?.report;
+	assert.ok(report);
+	assert.match(report.symptom, /Why moderation was triggered: .*still owes an Answer/);
+	assert.match(report.recoveryActions, /Committed Moderator attempts: 1 of 2/);
+	assert.match(report.recoveryOutcome, /Creation failed; automatic staging is not retried/);
+	owner.setReportRead(report.reportId, true);
 	for (let n = 0; n < 4; n++) await owner.reachSafeBoundary();
 	assert.deepEqual(owner.operationalAttention(), attention);
+	assert.equal(owner.reportHistory().length, 1);
+	assert.ok(owner.reportHistory()[0]?.readAt);
 	assert.equal(bootstrapAttempts, 2);
 	assert.equal(runStarts, 1, "uncommitted replacement preparation is not a committed handling attempt");
 	assert.equal((await findModerators(host)).length, 1);

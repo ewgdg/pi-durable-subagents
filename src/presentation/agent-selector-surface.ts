@@ -346,7 +346,8 @@ class AgentSelectorSurface implements Component {
 		}
 		const contentLines: SelectorLine[] = [
 			this.#renderTabs(),
-			{ text: "" },
+			{ text: (this.#options.operationalAttention ?? []).some(({ trigger }) => trigger.kind === "moderation_unavailable")
+				? this.#theme.fg("warning", "Moderation Unavailable · live status") : "" },
 			...this.#renderPinnedList(contentWidth),
 			{ text: "" },
 			this.#renderOwnerFooter(),
@@ -621,7 +622,7 @@ class AgentSelectorSurface implements Component {
 				`Human Request ${attention.requestId}`,
 			],
 		}));
-		const operational = (this.#options.operationalAttention ?? []).map(
+		const operational = (this.#options.operationalAttention ?? []).filter(({ trigger }) => trigger.kind !== "moderation_unavailable").map(
 			(attention, index) => {
 				const requests = operationalIncidentRequestEvidence(attention);
 				const affectedAgentId = attention.affectedAgents.length === 1

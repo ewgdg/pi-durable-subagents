@@ -461,6 +461,11 @@ export class WorkflowCoordinator {
 					message: error instanceof Error ? error.message : String(error),
 				});
 			},
+			publishRuntimeReport: (input, diagnostic) => {
+				const transcriptPath = runtime.session.sessionManager.getSessionFile();
+				if (!transcriptPath) throw new Error("Runtime report requires a durable diagnostic transcript");
+				this.#reports.publishRuntime(input, { kind: "runtime_diagnostic", ...diagnostic, transcriptPath });
+			},
 			retainDiagnostic: (error) => {
 				const entryId = runtime.session.sessionManager.appendCustomEntry(
 					OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE,

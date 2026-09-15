@@ -1438,3 +1438,34 @@ for (const terminalRows of [10, 24, 40]) {
 		});
 	}
 }
+
+test("runtime report read toggle removes only inbox notification and preserves history and live status", async () => {
+	const harness = surfaceHarness(30);
+	const report = {
+		reportId: "failure", createdAt: "2026-06-11T00:00:00Z",
+		source: { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "diagnostic", transcriptPath: "/tmp/owner.jsonl" },
+		symptom: "Inspection blocked", suspectedDefect: "Unknown", uncertainty: "No incident established",
+		recoveryActions: "None", recoveryOutcome: "Unknown", evidence: ["diagnostic"],
+	};
+	const marked: boolean[] = [];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
+		operationalAttention: [{ trigger: { kind: "moderation_unavailable" }, affectedAgents: [], diagnostics: [] }], reports: [{ report }],
+		setReportRead(_id, read) { marked.push(read); return [{ report, ...(read ? { readAt: report.createdAt } : {}) }]; },
+	});
+	const component = harness.component!;
+	assert.match(component.render(100).join("\n"), /REPORT · Runtime/);
+	assert.doesNotMatch(component.render(100).join("\n"), /ATTENTION/);
+	component.handleInput?.("m"); await new Promise(resolve => setImmediate(resolve));
+	assert.doesNotMatch(component.render(100).join("\n"), /REPORT/);
+	assert.match(component.render(100).join("\n"), /Moderation Unavailable · live status/);
+	component.handleInput?.("\x1b[Z");
+	assert.match(component.render(100).join("\n"), /REPORT · Runtime.*Read/);
+	component.handleInput?.("m"); await new Promise(resolve => setImmediate(resolve));
+	assert.deepEqual(marked, [true, false]);
+	component.handleInput?.("\t");
+	assert.match(component.render(100).join("\n"), /REPORT · Runtime.*Unread/);
+	component.handleInput?.("k");
+	component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "open_report", reportId: "failure" });
+});

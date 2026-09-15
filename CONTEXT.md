@@ -211,7 +211,19 @@ The captured Workflow Policy interval during which eligible delivery machinery m
 A live delivery blockage qualifying through an unresolved upstream Answer Obligation and its outstanding Request path. Known scheduling loss requests investigation immediately; silent eligible scheduling or commitment stalls qualify at the Delivery Progress Deadline. The undelivered leaf need not have an obligation and the path need not be cyclic. Human attention, selection and Holds exclude paths. Run termination leaves undelivered work observable while its upstream obligation remains; it is not cancellation or an exclusion. Handling is bounded per continuous blocked Message and grants no retry, cancellation, outcome, or authority.
 
 **Moderation Unavailable**:
-Passive Owner attention when moderation cannot inspect evidence or create its Moderator, including when its observation pass does not complete within the delivery-progress policy interval. It points to retained Owner diagnostic evidence and deduplicates the continuous fault. A creation exception pauses staging for that continuous condition; it does not consume an uncommitted attempt or permit heartbeat retries. Inspection success, completion of a still-running preparation, or original-condition clearance dismisses the applicable attention. It is not an Operational Incident trigger, durable failure state, or authorization to recover effects.
+A live status indicating that moderation cannot inspect evidence or create its Moderator, including when its observation pass misses its completion deadline. One Runtime Report brings each continuous fault to human attention, independently of whether that report has been read. Reading does not clear the status, retry creation, or imply recovery. Successful inspection, completion of pending preparation, or original-condition clearance ends the applicable fault. It is not an Operational Incident trigger or durable failure state.
+
+**Report**:
+An immutable, evidence-supported account for human review, retained in Workflow history independently of its Read State and any related live condition. It creates no Request or Answer Obligation and neither grants recovery authority nor resolves Moderator handling.
+
+**Moderator Report**:
+A Report authored by a Moderator after investigation, with its stable reporter identity and exact native authoring source. It can describe suspected defects, uncertainty, attempted recovery, and observed outcomes without claiming that a suspicion is confirmed.
+
+**Runtime Report**:
+A Report authored by the Workflow runtime when moderation is unavailable, with diagnostic provenance rather than an Agent reporter. It records known incident and attempt evidence, distinguishes missing knowledge from observed failure, and never invents an affected Agent when no incident was established.
+
+**Report Read State**:
+The human's explicit, reversible acknowledgement of a Report notification. Unread brings the Report to the Attention Inbox; Read removes only that notification, preserving history and all independent live conditions. Opening, copying, or closing a Report does not change its Read State.
 
 **Operational Incident**:
 A predefined suspicious live coordination condition blocking at least one unresolved Answer Obligation and starting Moderator handling. It is a transient occurrence rather than a durable aggregate or lifecycle; unnecessary review is preferable to silently stranded obligated work.

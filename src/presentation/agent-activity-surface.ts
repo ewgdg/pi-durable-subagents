@@ -107,7 +107,7 @@ export class AgentActivityDock implements Component {
 		const attentionLines = ownerScope
 			? this.#renderAttention(
 				snapshot.humanAttention,
-				snapshot.operationalAttention,
+				snapshot.operationalAttention.filter(({ trigger }) => trigger.kind !== "moderation_unavailable"),
 				snapshot.reports ?? [],
 			)
 			: [];
@@ -131,7 +131,9 @@ export class AgentActivityDock implements Component {
 				`${this.#theme.fg("accent", this.#theme.bold("ANSWER"))}${this.#theme.fg("dim", " · Enter submits")}`,
 			]
 			: [];
-		return [...identityLines, ...attentionLines, ...agentLines, ...answerModeLines].map(
+		const moderationStatus = ownerScope && snapshot.operationalAttention.some(({ trigger }) => trigger.kind === "moderation_unavailable")
+			? [this.#theme.fg("warning", "Moderation Unavailable · live status")] : [];
+		return [...identityLines, ...moderationStatus, ...attentionLines, ...agentLines, ...answerModeLines].map(
 			(line) => truncateToWidth(line, safeWidth, ""),
 		);
 	}

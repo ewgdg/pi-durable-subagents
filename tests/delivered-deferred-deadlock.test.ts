@@ -1,3 +1,4 @@
+import type { ReportToUserInput } from "../src/protocol/moderator-report.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
@@ -68,11 +69,13 @@ for (const delivered of [false, true]) {
 		const abort = new AbortController();
 		const pendingWaits: Promise<unknown>[] = [];
 		let creationAttempts = 0;
+		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
 			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, workflowPolicy,
 			sessionFactory: { admitProcessRuntimePlatform() { creationAttempts++; throw new Error("Test platform unavailable"); } } as unknown as ProcessChildSessionFactory,
 			integrateAgent() { throw new Error("Unexpected runtime creation"); }, isShuttingDown: () => false,
 			reportError(error) { throw error; },
+			publishRuntimeReport(report) { reports.push(report); },
 			retainDiagnostic: () => ({ agentId: "requester", entryId: owner.manager.appendCustomEntry("diagnostic", {}) }),
 		});
 		t.after(async () => {
@@ -107,10 +110,10 @@ for (const delivered of [false, true]) {
 		await incidents.reachSafeBoundary();
 		assert.equal(creationAttempts, delivered ? 1 : 0);
 		if (!delivered) assert.deepEqual(incidents.attentionItems("requester"), []);
-		if (delivered) assert.deepEqual(incidents.attentionItems("requester")[0]?.trigger, {
+		if (delivered) assert.ok(reports[0]?.evidence.includes(`Original trigger: ${JSON.stringify({
 			kind: "dependency_deadlock", agentIds: ["peer", "responder"],
 			requests: { total: 2, sources: messages.requestSources([workerToPeer, peerToWorker].sort()) },
-		});
+		})}`));
 		assert.equal(messages.hasDeliveryProgress(worker.record), !delivered);
 		assert.equal(dispatchCount, 1, "Delivery is not repeated while its prompt remains unresolved");
 		assert.equal(worker.record.host.hasRetentionReason("pending_delivery"), true, "prompt ownership retains its Run");
