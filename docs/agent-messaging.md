@@ -106,6 +106,18 @@ Delivery inspection trusts a structurally readable, committed model-visible reco
 
 Writers still deliver the requested content; receipt inspection does not re-prove that writer contract. Queued admission and incomplete transcript entries are not delivery. Delivery means available in the recipient's transcript/context, not necessarily processed by the model. Exact schemas, duplicate rejection, cursor advancement, and retry/Wait/Cancellation ordering are unchanged. Receipts use existing transcript facts, not a separate durable store.
 
+### Idle custom startup
+
+First and later idle custom deliveries run Pi's normal `input` and `before_agent_start` preparation in both Owner and process-child runtimes. This covers Messages, Requests and runtime reminders, including the Moderator's separate reminder path. The runtime submits an empty extension-origin prompt and one registered hook returns the custom delivery for that exact prompt invocation. Pi applies the prepared system prompt and preserves it across tool continuations.
+
+The empty user entry precedes the custom delivery in the transcript; it creates no Human Request and no visible Pi chat component. Other hooks may append their own messages afterward. The canonical custom type, content, display flag, structured details, Message identity and renderer remain intact.
+
+Preparation counts as busy. Public `session.prompt` and idle triggering `session.sendCustomMessage` calls reject conflicting or nested startup before it reaches input/auth/before-start handlers. Native steering and follow-up remain available after preparation admits native execution. The guard spans late preparation across reload: a cancelled old generation must unwind before its replacement can prepare another Run. Extensions must enter through the currently bound public session methods; previously captured entrypoints are outside this cooperative admission contract. Wrappers installed after binding retain their position across reload.
+
+Coordination delivery that encounters busy preparation waits for that exact preparation outside the child's compaction admission lane, then rechecks cancellation and keeps the original custom queue mode. Working-zone preparation and extension-owned compaction replacement Runs still precede this startup guard. A Moderator reminder returns busy instead of joining another Run's queue. Native input forwarded to resume a held or selected Agent transfers only its exact handled input submission to the replacement prompt.
+
+Handled input, failed authentication and cancelled preparation commit no custom Delivery. They leave no pending injection or empty queued kickoff. Cancellation also ends admission waiting on another input. `preflightResult(true)` alone is not native-start proof; the adapter observes the exact native Agent signal. A failed uncommitted dispatch releases scheduler ownership for explicit same-Message retry. A committed Delivery remains authoritative: retry does not replay it or force another Run; use the existing [Workflow continuation](cold-host-recovery.md) for delivered unanswered work.
+
 ### Runtime completion tracking
 
 Transcript commitment and native prompt completion are separate. The child Control response confirms admission/commitment early; a Delivery-correlated completion event reports the actual dispatch Promise. An idle-started Delivery remains pending through that prompt's native settlement. Queued-active Delivery still waits for native settlement rather than treating queue acceptance as completion.
