@@ -152,7 +152,7 @@ async function createLaunchOptions(
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			allowedTools: [],
+			tools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			systemPrompt: { mode: "append", body: `Launch context for ${name}` },

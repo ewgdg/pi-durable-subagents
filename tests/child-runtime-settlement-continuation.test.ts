@@ -37,14 +37,14 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 		expectedSessionId: agentId, sessionPath, agentDir: PI_TEST_AGENT_DIR,
 		configuration: {
 			cwd, model: { provider: CONTINUATION_PROVIDER, modelId: CONTINUATION_MODEL },
-			thinking: "off", allowedTools: [CONTEXT_ROLLOVER_TOOL], skills: [],
+			thinking: "off", tools: [CONTEXT_ROLLOVER_TOOL], skills: [],
 			extensions: [fileURLToPath(new URL("./fixtures/settlement-continuation-extension.ts", import.meta.url))],
 			loadContextFiles: true,
 		},
 		skillPaths: [], projectTrusted: true, runtimeDirectory: root,
 		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1", CONTINUATION_RELEASE_PATH: releasePath },
 	});
-	const runtime = new PiChildHostedRuntime(launch, [CONTEXT_ROLLOVER_TOOL]);
+	const runtime = new PiChildHostedRuntime(launch);
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId, startSession: async () => ({ runtime, ready: runtime.ready }),
 	});

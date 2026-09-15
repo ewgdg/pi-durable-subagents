@@ -361,8 +361,8 @@ export class ProcessChildSessionFactory {
 					cwd: snapshot.cwd,
 					model: snapshot.model,
 					thinking: snapshot.thinking,
-					// Inherit what the parent can currently call, not its broader capability ceiling.
-					allowedTools: [...snapshot.tools],
+					// Native activation changes also apply to descendant inheritance.
+					tools: [...snapshot.tools],
 					skills: [...snapshot.skills],
 					extensions: snapshot.fileExtensionPaths.filter(
 						(path) => !this.#isCoordinationExtension(path),
@@ -422,7 +422,7 @@ export class ProcessChildSessionFactory {
 				cwd: this.#ownerRuntime.services.cwd,
 				model: { provider: model.provider, modelId: model.id },
 				thinking: session.thinkingLevel,
-				allowedTools: [...session.getActiveToolNames()],
+				tools: [...session.getActiveToolNames()],
 				skills: skills.map(({ name }) => name),
 				extensions: this.#ownerRuntime.services.resourceLoader
 					.getExtensions()
@@ -463,7 +463,6 @@ export class ProcessChildSessionFactory {
 		});
 		const runtime = new PiChildHostedRuntime(
 			launch,
-			prepared.configuration.allowedTools,
 			(projection) => this.#onRuntimeQuit?.(identity.agentId, projection) === true,
 		);
 		return { runtime, ready: runtime.ready };

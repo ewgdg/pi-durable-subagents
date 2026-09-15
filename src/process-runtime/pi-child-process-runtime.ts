@@ -762,7 +762,8 @@ async function assertRuntimeSnapshot(
 	sessionPath: string,
 	systemPromptArtifactPath: string | undefined,
 ): Promise<void> {
-	assertAllowedTools(actual, expected.allowedTools);
+	// This is a startup contract, not a restriction on later native activation.
+	assertSelectedTools(actual, expected.tools);
 	if ((systemPromptArtifactPath === undefined) !== (expected.systemPrompt === undefined)) {
 		throw new Error("child_runtime_system_prompt_mismatch: artifact and configuration disagree");
 	}
@@ -798,21 +799,23 @@ async function assertRuntimeSnapshot(
 	}
 }
 
-function assertAllowedTools(
-	actual: PiChildRuntimeSnapshot,
-	allowedTools: readonly string[],
+export function assertSelectedTools(
+	actual: Pick<PiChildRuntimeSnapshot, "tools" | "toolExecutionModes">,
+	selectedTools: readonly string[],
 ): void {
-	const allowedToolNames = new Set(allowedTools);
 	const modeNames = actual.toolExecutionModes.map(({ name }) => name);
 	if (JSON.stringify(modeNames) !== JSON.stringify(actual.tools)) {
 		throw new Error(
 			`child_runtime_tool_modes_mismatch: tools ${JSON.stringify(actual.tools)}, modes ${JSON.stringify(modeNames)}`,
 		);
 	}
-	const disallowedTools = actual.tools.filter((name) => !allowedToolNames.has(name));
-	if (disallowedTools.length > 0) {
+	const selectedToolNames = new Set(selectedTools);
+	const activeToolNames = new Set(actual.tools);
+	const missing = [...selectedToolNames].filter((name) => !activeToolNames.has(name));
+	const unexpected = [...activeToolNames].filter((name) => !selectedToolNames.has(name));
+	if (missing.length > 0 || unexpected.length > 0) {
 		throw new Error(
-			`child_runtime_disallowed_tools: ${JSON.stringify(disallowedTools)} exceed ${JSON.stringify(allowedTools)}`,
+			`child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`,
 		);
 	}
 }

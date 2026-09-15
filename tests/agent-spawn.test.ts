@@ -181,6 +181,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	assert.ok(spawnResult && spawnResult.type === "message");
 	assert.equal(spawnResult.message.role, "toolResult");
 	assert.equal(spawnResult.message.isError, false);
+	assert.equal((spawnResult.message.details as { messageStatus: string }).messageStatus, "sent", JSON.stringify(spawnResult.message.details));
 	assert.deepEqual(
 		Object.keys(spawnResult.message.details as Record<string, unknown>).sort(),
 		[
@@ -210,7 +211,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			cwd: host.cwd,
 			model: { provider: "coordination-test", modelId: "deterministic-owner" },
 			thinking: "off",
-			allowedTools: ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls", "workflow_resume", "agent_message", "agent_wait", "agent_control", "agent_observe", "agent_spawn", "ask_user"],
+			tools: ["agent_message", "agent_wait", "agent_control", "agent_observe", "agent_spawn", "ask_user"],
 			skills: [],
 			extensions: processExtensions,
 			loadContextFiles: true,
@@ -364,7 +365,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nTemplate context",
+		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\ntools: read\n---\nTemplate context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
 	await writeFile(
@@ -405,7 +406,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 		description: "  Research specialist  ",
 		config: {
 			cwd: "subproject",
-			allowedTools: ["grep"],
+			tools: ["grep"],
 			systemPrompt: "Spawn context",
 			systemPromptMode: "append" as const,
 		},
@@ -430,7 +431,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 		cwd: effectiveCwd,
 		model: { provider: "coordination-test", modelId: "deterministic-owner" },
 		thinking: "off",
-		allowedTools: [
+		tools: [
 			"grep",
 			"agent_message",
 			"agent_wait",
@@ -457,7 +458,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	assert.match(observedSystemPrompt, /Spawn context/);
 	assert.doesNotMatch(observedSystemPrompt, /Wrong discovery root/);
 	assert.equal(observedTools.includes("read"), false);
-	for (const toolName of receipt.effectiveConfiguration.allowedTools) {
+	for (const toolName of receipt.effectiveConfiguration.tools) {
 		assert.ok(observedTools.includes(toolName), `missing model-visible tool ${toolName}`);
 	}
 
@@ -513,7 +514,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	assert.equal(termination.disposition, "terminated");
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nChanged Template context",
+		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\ntools: read\n---\nChanged Template context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
 	let successorSystemPrompt = "";
@@ -733,7 +734,7 @@ test("effective cwd honors Pi's default project-trust policy", async (t) => {
 	await harness.shutdown();
 });
 
-test("allowed tools need not be registered or active in the child Runtime", async (t) => {
+test("selected tools unavailable in the child reject startup without losing its Identity", async (t) => {
 	const ownerOnlyTool: ExtensionFactory = (pi) => {
 		pi.registerTool({
 			name: "owner_only_probe",
@@ -748,16 +749,12 @@ test("allowed tools need not be registered or active in the child Runtime", asyn
 	const harness = await createCoordinatorHarness(t, {}, ownerOnlyTool);
 	const receipt = await harness.spawn("spawn-missing-inherited-resource");
 
-	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
-		throw new Error(`Allowed-tools child was not created: ${JSON.stringify(receipt)}`);
-	}
-	assert.equal(harness.view.children()[0]?.run.phase, "live");
-	assert.ok(receipt.effectiveConfiguration.allowedTools.includes("owner_only_probe"));
-	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
-	assert.match(
-		receipt.effectiveConfiguration.extensions[0]!,
-		/process-model-broker-extension\.mjs$/,
-	);
+	assert.equal(receipt.spawnStatus, "created");
+	assert.ok("failedStage" in receipt);
+	assert.equal(receipt.failedStage, "run_start");
+	assert.equal(receipt.messageStatus, "not_sent");
+	assert.match(receipt.reason, /child_runtime_tools_mismatch: missing .*owner_only_probe/);
+	assert.equal(harness.view.children()[0]?.run.phase, "dormant");
 
 	await harness.shutdown();
 });

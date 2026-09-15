@@ -315,10 +315,10 @@ const agentSpawnConfigurationParameters = Type.Object(
 			),
 		),
 		cwd: Type.Optional(Type.String({ minLength: 1 })),
-		allowedTools: Type.Optional(
+		tools: Type.Optional(
 			Type.Array(Type.String({ minLength: 1 }), {
 				uniqueItems: true,
-				description: "Omit to inherit tools by default.",
+				description: "Initial tool selection. Omit to use Template tools or inherit current active tools; required role tools are added.",
 			}),
 		),
 		skills: Type.Optional(

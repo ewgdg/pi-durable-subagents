@@ -17,7 +17,7 @@ export type AgentSpawnConfigurationInput = Readonly<{
 		thinking?: RuntimeThinkingLevel | "inherit";
 	}>;
 	cwd?: string;
-	allowedTools?: readonly string[];
+	tools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
 	systemPrompt?: string;
@@ -29,7 +29,7 @@ export type EffectiveAgentRunConfiguration = Readonly<{
 	cwd: string;
 	model: ModelReference;
 	thinking: RuntimeThinkingLevel;
-	allowedTools: readonly string[];
+	tools: readonly string[];
 	skills: readonly string[];
 	extensions: readonly string[];
 	systemPrompt?: Readonly<{
@@ -50,13 +50,13 @@ export function resolveAgentRunConfiguration(options: {
 	inherited: InheritableRuntimeConfiguration;
 	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
-	fixedAllowedTools: readonly string[];
+	requiredTools: readonly string[];
 	isModelAvailable(model: ModelReference): boolean;
 }): EffectiveAgentRunConfiguration {
 	const { inherited, template, overrides } = options;
-	const configuredAllowedTools = overrides?.allowedTools
-		?? template?.allowedTools
-		?? inherited.allowedTools;
+	const selectedTools = overrides?.tools
+		?? template?.tools
+		?? inherited.tools;
 	const configuredSkills = overrides?.skills ?? template?.skills ?? inherited.skills;
 	const templateExtensions = resolveExtensions(template?.extensions, inherited.extensions);
 	const configuredExtensions = resolveExtensions(
@@ -93,7 +93,7 @@ export function resolveAgentRunConfiguration(options: {
 		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),
 		model: { ...modelConfiguration.model },
 		thinking: modelConfiguration.thinking,
-		allowedTools: unique([...configuredAllowedTools, ...options.fixedAllowedTools]),
+		tools: unique([...selectedTools, ...options.requiredTools]),
 		skills: [...configuredSkills],
 		extensions: [...configuredExtensions],
 		...(systemPrompt === undefined ? {} : { systemPrompt }),

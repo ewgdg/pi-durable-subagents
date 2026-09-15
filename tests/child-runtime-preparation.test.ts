@@ -68,7 +68,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 				cwd: parentCwd,
 				model: { provider: "parent", modelId: "parent-model" },
 				thinking: "low",
-				allowedTools: ["bash"],
+				tools: ["bash"],
 				skills: ["review"],
 				extensions: ["<inline:parent-factory>", extensionAliasPath, extensionPath],
 			},
@@ -80,7 +80,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 				model: { provider: "template", modelId: "template-model" },
 				thinking: "medium",
 			}],
-			allowedTools: ["grep"],
+			tools: ["grep"],
 			skills: ["review", "project-audit"],
 			extensions: "inherit",
 			systemPromptMode: "append",
@@ -90,7 +90,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 		overrides: {
 			cwd: "subproject",
 			model: { id: "template/template-model", thinking: "high" },
-			allowedTools: ["read", "extension_tool"],
+			tools: ["read", "extension_tool"],
 			extensions: "inherit",
 			systemPrompt: "Spawn instructions",
 			systemPromptMode: "append",
@@ -100,7 +100,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 	assert.deepEqual(preparation, {
 		creationPreset: {
 			models: [{ model: { provider: "template", modelId: "template-model" }, thinking: "medium" }],
-			allowedTools: ["grep"], skills: ["review", "project-audit"], extensions: "inherit",
+			tools: ["grep"], skills: ["review", "project-audit"], extensions: "inherit",
 			systemPromptMode: "append", loadContextFiles: true, systemPrompt: "Template instructions",
 		},
 		agentId: "ordinary-child",
@@ -109,7 +109,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			cwd: effectiveCwd,
 			model: { provider: "template", modelId: "template-model" },
 			thinking: "high",
-			allowedTools: [
+			tools: [
 				"read",
 				"extension_tool",
 				"agent_message",
@@ -155,7 +155,7 @@ test("extensions none does not inspect or carry inherited extension paths", asyn
 				cwd,
 				model: { provider: "test", modelId: "model" },
 				thinking: "off",
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [join(fixture, "missing-parent-extension.ts")],
 			},
@@ -198,7 +198,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 			cwd: parentCwd,
 			model: { provider: "parent", modelId: "model" },
 			thinking: "minimal" as const,
-			allowedTools: ["read"],
+			tools: ["read"],
 			skills: [],
 			extensions: [],
 		},
@@ -222,7 +222,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 	assert.deepEqual(sameCwd.configuration, {
 		cwd: parentCwd,
 		model: { provider: "parent", modelId: "model" },
-		allowedTools: [
+		tools: [
 			"read",
 			"agent_message",
 			"agent_wait",
@@ -285,6 +285,34 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 	assert.equal(newCwdPreparation.projectTrusted, true);
 });
 
+test("each role normalizes Owner coordination tools and preserves empty optional selections", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "child-run-empty-tools-"));
+	for (const role of ["ordinary", "moderator"] as const) {
+		for (const overrides of [undefined, { tools: [] }]) {
+			const options = {
+				agentId: `${role}-empty-tools`, agentDir: cwd,
+				parentRuntime: {
+					configuration: {
+						cwd, model: { provider: "test", modelId: "model" }, thinking: "off" as const,
+						tools: ["read", "workflow_resume"], skills: [], extensions: [],
+					},
+					projectTrusted: true, skillSources: [],
+				},
+				overrides,
+			};
+			const preparation = await (role === "ordinary"
+				? prepareChildRuntime({ ...options, role })
+				: prepareChildRuntime({ ...options, role }));
+			assert.deepEqual(preparation.configuration.tools, [
+				...(overrides === undefined ? ["read"] : []),
+				...(role === "ordinary"
+					? ["agent_message", "agent_wait", "agent_control", "agent_observe", "agent_spawn", "ask_user"]
+					: ["agent_message", "agent_wait", "agent_control", "agent_observe", "ask_user", "moderator_control", "report_to_user"]),
+			]);
+		}
+	}
+});
+
 test("replaces inherited or configured coordination tools with the exact child role set", async () => {
 	const fixture = await mkdtemp(join(tmpdir(), "child-run-role-tools-"));
 	const agentDir = join(fixture, "agent");
@@ -302,7 +330,7 @@ test("replaces inherited or configured coordination tools with the exact child r
 				cwd,
 				model: { provider: "test", modelId: "model" },
 				thinking: "off",
-				allowedTools: ["bash", "agent_spawn", "moderator_control", "report_to_user"],
+				tools: ["bash", "agent_spawn", "moderator_control", "report_to_user"],
 				skills: [],
 				extensions: [],
 			},
@@ -310,11 +338,11 @@ test("replaces inherited or configured coordination tools with the exact child r
 			skillSources: [],
 		},
 		overrides: {
-			allowedTools: ["read", "moderator_control", "agent_message"],
+			tools: ["read", "moderator_control", "agent_message"],
 		},
 	});
 
-	assert.deepEqual(preparation.configuration.allowedTools, [
+	assert.deepEqual(preparation.configuration.tools, [
 		"read",
 		"agent_message",
 		"agent_wait",

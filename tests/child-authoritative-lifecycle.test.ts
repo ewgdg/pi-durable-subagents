@@ -98,7 +98,7 @@ async function attachRuntime(host: Awaited<ReturnType<typeof createTestOwnerHost
 			return () => { eventHandlers.delete(handler); };
 		},
 		dispose: async () => {},
-	} as unknown as PiChildProcessLaunch, []);
+	} as unknown as PiChildProcessLaunch);
 	await parent.ready;
 
 

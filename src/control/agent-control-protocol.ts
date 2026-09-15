@@ -233,7 +233,7 @@ const EffectiveConfigurationSchema = closed({
 	cwd: NonEmptyStringSchema,
 	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
 	thinking: RuntimeThinkingSchema,
-	allowedTools: StringListSchema,
+	tools: StringListSchema,
 	skills: StringListSchema,
 	extensions: StringListSchema,
 	systemPrompt: Type.Optional(closed({

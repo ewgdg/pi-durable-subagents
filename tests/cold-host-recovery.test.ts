@@ -578,7 +578,7 @@ test("cold successor retains captured template rules after rename and recovers r
 	await mkdir(templateDirectory, { recursive: true });
 	await writeFile(
 		templatePath,
-		"---\nname: residual-agent\nuseWhen: Use for residual work.\nallowedTools: read\n---\nInitial context",
+		"---\nname: residual-agent\nuseWhen: Use for residual work.\ntools: read\n---\nInitial context",
 	);
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
@@ -605,7 +605,7 @@ test("cold successor retains captured template rules after rename and recovers r
 	await rename(templatePath, renamedTemplatePath);
 	await writeFile(
 		renamedTemplatePath,
-		"---\nname: replacement-agent\nuseWhen: Use for residual work.\nallowedTools:\n  - read\n  - bash\n---\nCurrent context",
+		"---\nname: replacement-agent\nuseWhen: Use for residual work.\ntools:\n  - read\n  - bash\n---\nCurrent context",
 	);
 
 	const reopened = await reopenOwner(t, host, ownerSessionFile);
@@ -844,7 +844,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 	const templateDirectory = join(host.services.agentDir, "agents");
 	const templatePath = join(templateDirectory, "moderator.md");
 	await mkdir(templateDirectory, { recursive: true });
-	await writeFile(templatePath, "---\nname: moderator\nallowedTools: read\n---\nCaptured Moderator rules.");
+	await writeFile(templatePath, "---\nname: moderator\ntools: read\n---\nCaptured Moderator rules.");
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -868,7 +868,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
 	await ownerPrompt;
-	await writeFile(templatePath, "---\nname: renamed-moderator\nallowedTools: bash\n---\nChanged Moderator rules.");
+	await writeFile(templatePath, "---\nname: renamed-moderator\ntools: bash\n---\nChanged Moderator rules.");
 
 	const reopened = await reopenOwner(t, host, ownerSessionFile, {
 		implicitModeratorResponses: false,

@@ -279,7 +279,7 @@ for (const outcome of ["dispatch_rejected", "channel_loss", "process_exit", "com
 		onEvent: (handler: (event: PiChildRuntimeEvent) => void) => { eventHandlers.add(handler); return () => eventHandlers.delete(handler); },
 		dispose: async () => {},
 	} as unknown as PiChildProcessLaunch;
-	const runtime = new PiChildHostedRuntime(launch, []);
+	const runtime = new PiChildHostedRuntime(launch);
 	await runtime.ready;
 	t.after(() => { void runtime.dispose(); });
 	h.recipient.dispatchOverride = input => runtime.deliver(input);

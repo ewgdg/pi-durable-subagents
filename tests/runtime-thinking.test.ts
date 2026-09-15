@@ -43,7 +43,7 @@ test("thinking validators and schemas accept every Pi level, with inherit only a
 				cwd: "/project",
 				model: { provider: "provider", modelId: "model" },
 				thinking,
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [],
 				loadContextFiles: true,

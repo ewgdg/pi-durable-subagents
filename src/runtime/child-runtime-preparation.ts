@@ -43,7 +43,8 @@ const COORDINATION_TOOLS_BY_ROLE = {
 	],
 } as const;
 const COORDINATION_TOOL_NAMES = new Set<string>(
-	Object.values(COORDINATION_TOOLS_BY_ROLE).flat(),
+	// Owner-only recovery is never part of a child role's startup selection.
+	["workflow_resume", ...Object.values(COORDINATION_TOOLS_BY_ROLE).flat()],
 );
 
 export type AgentRuntimeRole = "ordinary" | "moderator";
@@ -107,7 +108,7 @@ export async function prepareChildRuntime(
 		},
 		template: options.template,
 		overrides: options.overrides,
-		fixedAllowedTools: [],
+		requiredTools: [],
 		isModelAvailable: options.isModelAvailable ?? (() => true),
 	});
 	// Pi owns its shared default and model-capability clamp. Keep an absent
@@ -117,8 +118,8 @@ export async function prepareChildRuntime(
 		: resolvedConfiguration;
 	const configuration = {
 		...launchConfiguration,
-		allowedTools: [
-			...launchConfiguration.allowedTools.filter(
+		tools: [
+			...launchConfiguration.tools.filter(
 				(name) => !COORDINATION_TOOL_NAMES.has(name),
 			),
 			...COORDINATION_TOOLS_BY_ROLE[options.role],

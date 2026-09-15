@@ -49,7 +49,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		cwd,
 	})}\n`, { mode: 0o600 });
 
-	const launchAllowedTools = ["read"] as const;
+	const launchTools = ["read"] as const;
 	const launch = await PiChildProcessRuntime.launch({
 		workflowId: "hosted-runtime-test-workflow",
 		agentId: "hosted-runtime-test-agent",
@@ -64,7 +64,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			allowedTools: launchAllowedTools,
+			tools: launchTools,
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			loadContextFiles: true,
@@ -83,7 +83,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 	});
 	const pid = launch.pid;
 	const bootstrapPath = launch.bootstrapPath;
-	const runtime = new PiChildHostedRuntime(launch, launchAllowedTools);
+	const runtime = new PiChildHostedRuntime(launch);
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId: expectedSessionId,
 		startSession: async () => ({ runtime, ready: runtime.ready }),
@@ -100,7 +100,6 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			allowedTools: ["read"],
 			tools: ["read"],
 			skills: [],
 			skillSources: [],
@@ -249,7 +248,7 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), ["sequential-tool"]);
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 	await runtime.ready;
 	assert.equal(runtime.snapshot().model.modelId, "initial-model");
 	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
@@ -269,7 +268,6 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 		cwd: "/runtime",
 		model: { provider: "test", modelId: "current-model" },
 		thinking: "high",
-		allowedTools: ["sequential-tool"],
 		tools: ["sequential-tool"],
 		skills: [],
 		skillSources: [],
@@ -330,7 +328,7 @@ test("a prepared hosted child has no Run queue or abort intention", async () => 
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, new Set()), []);
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, new Set()));
 	await runtime.ready;
 	assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
 	await runtime.abort();
@@ -393,7 +391,6 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 	} as unknown as PiChildProcessLaunch;
 	const runtime = new PiChildHostedRuntime(
 		launch,
-		["parallel-tool", "sequential-tool"],
 	);
 	await runtime.ready;
 	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
@@ -518,7 +515,7 @@ for (const scenario of [
 		} as unknown as PiChildProcessRuntime;
 		const launch = Object.assign(fakeLaunch(admitted, handlers), { exited });
 		const observed: string[] = [];
-		const runtime = new PiChildHostedRuntime(launch, [], () => {
+		const runtime = new PiChildHostedRuntime(launch, () => {
 			observed.push("quit_requested");
 			return scenario === "selected_quit";
 		});
@@ -598,7 +595,7 @@ test("hosted child reminder busy releases explicit reservation", { timeout: 5000
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 	try {
 		await runtime.ready;
 		assert.equal(await runtime.deliverModeratorReminder(async () => {
@@ -648,7 +645,7 @@ test("hosted child reminder stale callback suppresses and releases reservation",
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 	try {
 		await runtime.ready;
 		const outcome = await runtime.deliverModeratorReminder(async (commit) => {
@@ -691,7 +688,7 @@ test("hosted child reminder throwing callback releases reservation", { timeout: 
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 	try {
 		await runtime.ready;
 		await assert.rejects(
@@ -746,7 +743,7 @@ test("hosted child reminder abort while callback waits releases promptly and lat
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 	try {
 		await runtime.ready;
 		const reminder = runtime.deliverModeratorReminder(async (commit) => {
@@ -801,7 +798,7 @@ test("hosted child reminder transport rejection does not strand future admission
 				},
 			},
 		} as unknown as PiChildProcessRuntime;
-		const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+		const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 		try {
 			await runtime.ready;
 			await assert.rejects(runtime.deliverModeratorReminder(async () => "suppressed"), (error) => error === prepareError);
@@ -837,7 +834,7 @@ test("hosted child reminder transport rejection does not strand future admission
 				},
 			},
 		} as unknown as PiChildProcessRuntime;
-		const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+		const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 		try {
 			await runtime.ready;
 			await assert.rejects(
@@ -874,7 +871,7 @@ test("hosted child reminder busy does not create speculative Run id", { timeout:
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 	try {
 		await runtime.ready;
 		assert.equal(await runtime.deliverModeratorReminder(async () => "committed"), "busy");
@@ -1001,7 +998,7 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			allowedTools: [],
+			tools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			systemPrompt: { mode: "append", body: `Hosted failure context for ${name}` },
@@ -1019,7 +1016,7 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 		rows: 24,
 		ownerRequestHandlers: ordinaryOwnerHandlers(`hosted-${name}-agent`),
 	});
-	const runtime = new PiChildHostedRuntime(launch, []);
+	const runtime = new PiChildHostedRuntime(launch);
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId: expectedSessionId,
 		startSession: async () => ({ runtime, ready: runtime.ready }),

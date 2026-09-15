@@ -311,8 +311,8 @@ test("Agent Spawn schema accepts isolated children and rejects extension path ar
 	for (const configuration of [
 		{},
 		{ template: "reviewer" },
-		{ config: { allowedTools: ["read"] } },
-		{ template: "reviewer", config: { allowedTools: ["read"] } },
+		{ config: { tools: ["read"] } },
+		{ template: "reviewer", config: { tools: ["read"] } },
 	]) {
 		assert.equal(Value.Check(schema, {
 			title: "Fixture request",
@@ -353,7 +353,7 @@ test("Template catalogue shows available Template configuration without Runtime 
 					thinking: "medium",
 				},
 			],
-			allowedTools: ["read", "bash"],
+			tools: ["read", "bash"],
 			skills: ["research"],
 			extensions: "none",
 			systemPromptMode: "replace",

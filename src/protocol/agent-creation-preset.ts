@@ -14,7 +14,7 @@ const CreationPresetSchema = Type.Union([
 			model: Type.Object({ provider: Identifier, modelId: Identifier }, { additionalProperties: false }),
 			thinking: Type.Union(RUNTIME_THINKING_LEVELS.map((level) => Type.Literal(level))),
 		}, { additionalProperties: false }), { minItems: 1, uniqueItems: true })),
-		allowedTools: Type.Optional(Selection),
+		tools: Type.Optional(Selection),
 		skills: Type.Optional(Selection),
 		extensions: Type.Optional(Type.Union([Type.Literal("inherit"), Type.Literal("none")])),
 		systemPromptMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),

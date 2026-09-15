@@ -167,7 +167,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 				return () => { eventHandlers.delete(handler); };
 			},
 			dispose: async () => {},
-		} as unknown as PiChildProcessLaunch, []);
+		} as unknown as PiChildProcessLaunch);
 		await parent.ready;
 		const failures: string[] = [];
 		let dispatched!: ReturnType<typeof parent.deliver>;

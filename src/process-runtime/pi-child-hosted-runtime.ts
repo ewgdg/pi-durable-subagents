@@ -62,7 +62,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	constructor(
 		launch: PiChildProcessLaunch,
-		allowedTools: readonly string[],
 		onQuit?: (projection: HostedAgentProjection) => boolean,
 	) {
 		this.#launch = launch;
@@ -89,7 +88,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#removeEventHandler = launch.onEvent((event) => this.#handleEvent(event));
 		this.#admitted = launch.ready();
 		this.ready = this.#admitted.then((runtime) => {
-			this.#adoptSnapshot(runtime.snapshot, allowedTools);
+			this.#adoptSnapshot(runtime.snapshot);
 			this.#removeChannelCloseHandler = runtime.channel.onClose((cause) => {
 				if (this.#shutdownExpected) return;
 				this.#endTransport(cause ?? new Error("child_runtime_channel_closed"));
@@ -277,7 +276,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	#adoptSnapshot(
 		snapshot: PiChildProcessRuntime["snapshot"],
-		allowedTools: readonly string[] = this.#snapshot?.allowedTools ?? [],
 	): void {
 		// Tool classification and descendant inheritance must observe one coherent
 		// child state, never fields copied from different Runtime generations.
@@ -288,7 +286,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			cwd: snapshot.cwd,
 			model: snapshot.model,
 			thinking: snapshot.thinking,
-			allowedTools: [...allowedTools],
 			tools: [...snapshot.tools],
 			skills: [...snapshot.skills],
 			skillSources: snapshot.skillSources.map(({ name, filePath }) => ({ name, filePath })),

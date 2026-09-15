@@ -18,9 +18,9 @@ export function renderAgentTemplatePromptGuide(
 					`  model: ${template.models[0].model.provider}/${template.models[0].model.modelId}`,
 					`  thinking: ${template.models[0].thinking}`,
 				]),
-			...(template.allowedTools === undefined
+			...(template.tools === undefined
 				? []
-				: [`  allowedTools: ${JSON.stringify(template.allowedTools)}`]),
+				: [`  tools: ${JSON.stringify(template.tools)}`]),
 			...(template.skills === undefined ? [] : [`  skills: ${JSON.stringify(template.skills)}`]),
 			...(template.extensions === undefined
 				? []

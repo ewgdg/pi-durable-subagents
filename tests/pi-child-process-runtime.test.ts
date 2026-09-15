@@ -15,7 +15,7 @@ import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
-import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
+import { assertSelectedTools, PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import type { AgentObserveInput } from "../src/tools/participant-coordination-tools.ts";
 import {
@@ -71,7 +71,7 @@ test("real Pi CLI resolves unset Moderator thinking from the shared Pi default",
 					provider: PROCESS_RUNTIME_TEST_PROVIDER,
 					modelId: PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL,
 				},
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -128,7 +128,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				systemPrompt: { mode: "append", body: "Runtime-owned child context" },
@@ -462,7 +462,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 					modelId: PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL,
 				},
 				thinking: "high",
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -771,7 +771,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1120,77 +1120,111 @@ test("an idle child defers threshold compaction until later work is admitted", {
 	}
 });
 
-test("startup admits extension-controlled active tool order within the configured allowlist", {
-	timeout: TEST_TIMEOUT_MS,
-	skip: process.platform === "win32",
-}, async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-child-allowed-tools-test-"));
-	const cwd = join(root, "work");
-	const sessionDirectory = join(root, "sessions");
-	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000010";
-	await mkdir(cwd, { recursive: true });
-	await mkdir(sessionDirectory, { recursive: true });
-	const sessionPath = join(sessionDirectory, "child.jsonl");
-	await writeFile(sessionPath, `${JSON.stringify({
-		type: "session",
-		version: 3,
-		id: expectedSessionId,
-		timestamp: new Date().toISOString(),
-		cwd,
-	})}\n`, { mode: 0o600 });
-	const allowedTools = [
-		"runtime_sequential_probe",
-		"read",
-		"agent_message",
-		"agent_control",
-		"agent_observe",
-		"agent_spawn",
-		"ask_user",
-	] as const;
-	let runtime: PiChildProcessRuntime | undefined;
-	try {
-		runtime = await PiChildProcessRuntime.start({
-			workflowId: "process-allowed-tools-workflow",
-			agentId: "process-allowed-tools-agent",
-			role: "ordinary",
-			expectedSessionId,
-			sessionPath,
-			configuration: {
-				cwd,
-				model: {
-					provider: PROCESS_RUNTIME_TEST_PROVIDER,
-					modelId: PROCESS_RUNTIME_TEST_MODEL,
-				},
-				thinking: "off",
-				allowedTools,
-				skills: [],
-				extensions: [CHILD_EXTENSION],
-				loadContextFiles: true,
-			},
-			skillPaths: [],
-			projectTrusted: true,
-			ownerEnvironment: {
-				...process.env,
-				PI_SKIP_VERSION_CHECK: "1",
-				PROCESS_RUNTIME_REORDER_TOOLS: "1",
-			},
-			runtimeDirectory: root,
-			ownerRequestHandlers: ordinaryOwnerHandlers({
-				selectorSnapshot: processSelectorSnapshot(expectedSessionId),
-			}),
+test("startup tool admission compares sets and preserves execution-mode validation", () => {
+	const snapshot = (tools: string[]) => ({
+		tools,
+		toolExecutionModes: tools.map((name) => ({ name, executionMode: "parallel" as const })),
+	});
+	assert.doesNotThrow(() => assertSelectedTools(snapshot([]), []));
+	assert.doesNotThrow(() => assertSelectedTools(snapshot(["read", "agent_message"]), ["agent_message", "read"]));
+	for (const [selected, active, missing, unexpected] of [
+		[["read"], [], ["read"], []],
+		[[], ["read"], [], ["read"]],
+		[["read"], ["extra"], ["read"], ["extra"]],
+	] as const) {
+		assert.throws(() => assertSelectedTools(snapshot([...active]), selected), {
+			message: `child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`,
 		});
-		assert.deepEqual(runtime.snapshot.tools, [
-			"agent_message",
+	}
+	assert.throws(() => assertSelectedTools({ tools: ["read"], toolExecutionModes: [] }, ["read"]), /child_runtime_tool_modes_mismatch/);
+});
+
+for (const selection of ["reordered", "missing"] as const) {
+	test(`startup checks exact initial tools: ${selection}`, {
+		timeout: TEST_TIMEOUT_MS,
+		skip: process.platform === "win32",
+	}, async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-child-selected-tools-test-"));
+		const cwd = join(root, "work");
+		const sessionDirectory = join(root, "sessions");
+		const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000010";
+		await mkdir(cwd, { recursive: true });
+		await mkdir(sessionDirectory, { recursive: true });
+		const sessionPath = join(sessionDirectory, "child.jsonl");
+		await writeFile(sessionPath, `${JSON.stringify({
+			type: "session",
+			version: 3,
+			id: expectedSessionId,
+			timestamp: new Date().toISOString(),
+			cwd,
+		})}\n`, { mode: 0o600 });
+		const tools = [
 			"read",
+			"agent_message",
 			"agent_control",
 			"agent_observe",
 			"agent_spawn",
 			"ask_user",
-		]);
-	} finally {
-		await runtime?.dispose();
-	}
-});
+		] as const;
+		let runtime: PiChildProcessRuntime | undefined;
+		try {
+			const startup = PiChildProcessRuntime.start({
+				workflowId: "process-selected-tools-workflow",
+				agentId: "process-selected-tools-agent",
+				role: "ordinary",
+				expectedSessionId,
+				sessionPath,
+				configuration: {
+					cwd,
+					model: {
+						provider: PROCESS_RUNTIME_TEST_PROVIDER,
+						modelId: PROCESS_RUNTIME_TEST_MODEL,
+					},
+					thinking: "off",
+					tools,
+					skills: [],
+					extensions: [CHILD_EXTENSION],
+					loadContextFiles: true,
+				},
+				skillPaths: [],
+				projectTrusted: true,
+				ownerEnvironment: {
+					...process.env,
+					PI_SKIP_VERSION_CHECK: "1",
+					PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify([
+						...tools.filter((name) => name !== "read"),
+						...(selection === "missing" ? [] : ["read"]),
+					]),
+				},
+				runtimeDirectory: root,
+				ownerRequestHandlers: ordinaryOwnerHandlers({
+					selectorSnapshot: processSelectorSnapshot(expectedSessionId),
+				}),
+			});
+			if (selection !== "reordered") {
+				const missing = ["read"];
+				const unexpected: string[] = [];
+				await assert.rejects(startup.then((admitted) => { runtime = admitted; return admitted; }), (error: unknown) => {
+					assert.ok(error instanceof Error);
+					assert.ok(error.message.includes(`child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`), error.message);
+					return true;
+				});
+				return;
+			}
+			runtime = await startup;
+			assert.deepEqual(runtime.snapshot.tools, [
+				"agent_message",
+				"agent_control",
+				"agent_observe",
+				"agent_spawn",
+				"ask_user",
+				"read",
+			]);
+		} finally {
+			await runtime?.dispose();
+		}
+	});
+}
 
 test("a pre-ready child fault rejects launch readiness without escaping startup cleanup", {
 	timeout: TEST_TIMEOUT_MS,
@@ -1223,7 +1257,7 @@ test("a pre-ready child fault rejects launch readiness without escaping startup 
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			allowedTools: [],
+			tools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			loadContextFiles: true,
@@ -1285,7 +1319,7 @@ test("inherited child input preflights run before coordination consumes transfor
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1358,7 +1392,7 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				allowedTools: [],
+				tools: [],
 				skills: ["review"],
 				extensions: [CHILD_EXTENSION],
 				systemPrompt: { mode: "append", body: systemPromptBody },
@@ -1448,7 +1482,7 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				allowedTools: ["agent_observe", "agent_message"],
+				tools: ["agent_observe", "agent_message"],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1541,7 +1575,7 @@ test("process Runtime Host force-kills a child whose session shutdown never comp
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1602,7 +1636,7 @@ test("process Runtime shutdown grace bounds an unresponsive Control request", {
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				allowedTools: [],
+				tools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1789,7 +1823,7 @@ test("hidden real child persists work without rendering and repeated attachment 
 		expectedSessionId: sessionId, sessionPath,
 		configuration: {
 			cwd, model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
-			thinking: "off", allowedTools: [], skills: [], extensions: [CHILD_EXTENSION],
+			thinking: "off", tools: [], skills: [], extensions: [CHILD_EXTENSION],
 			loadContextFiles: true,
 		},
 		skillPaths: [], projectTrusted: true, runtimeDirectory: root,

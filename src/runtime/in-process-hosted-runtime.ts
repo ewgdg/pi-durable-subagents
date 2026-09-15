@@ -247,7 +247,6 @@ function inspectInProcessRuntime(
 		cwd: services.cwd,
 		model: { provider: model.provider, modelId: model.id },
 		thinking: session.thinkingLevel,
-		allowedTools: session.getAllTools().map(({ name }) => name),
 		tools: [...session.getActiveToolNames()],
 		skills: services.resourceLoader.getSkills().skills.map(({ name }) => name),
 		skillSources: services.resourceLoader.getSkills().skills.map(({ name, filePath }) => ({

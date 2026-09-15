@@ -108,7 +108,7 @@ async function createRuntimeOptions(name: string): Promise<StartPiChildProcessRu
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			allowedTools: [],
+			tools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			systemPrompt: { mode: "append", body: `Windows runtime context for ${name}` },

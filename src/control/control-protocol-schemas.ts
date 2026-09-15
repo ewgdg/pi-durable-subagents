@@ -36,7 +36,7 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 		}, { additionalProperties: false }),
 		thinking: RuntimeThinkingSchema,
 	}, { additionalProperties: false }), { minItems: 1, uniqueItems: true })),
-	allowedTools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
+	tools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	skills: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	extensions: Type.Optional(Type.Union([Type.Literal("inherit"), Type.Literal("none")])),
 	systemPromptMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),

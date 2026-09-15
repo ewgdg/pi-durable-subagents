@@ -15,27 +15,32 @@ test("Agent Spawn rejects every removed conversation field", () => {
 });
 
 test("isolated spawning accepts default, Template and explicit configuration", () => {
-	for (const configuration of [{}, { template: "reviewer" }, { config: { allowedTools: ["read"] } }, { template: "reviewer", config: { allowedTools: ["read"] } }]) {
+	for (const configuration of [{}, { template: "reviewer" }, { config: { tools: ["read"] } }, { template: "reviewer", config: { tools: ["read"] } }]) {
 		const input = { title: "Fixture request", request: "Use supplied context.", ...configuration };
 		assert.deepEqual(validateAgentSpawnInput(input), input);
 		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
 	}
 });
 
-test("Agent Spawn accepts allowedTools as the tool capability ceiling", () => {
+test("Agent Spawn accepts tools as the initial selection and rejects obsolete fields", () => {
 	assert.deepEqual(validateAgentSpawnInput({
 		title: "Fixture request",
 		request: "Inspect the child Runtime.",
-		config: { allowedTools: ["read", "extension_tool"] },
+		config: { tools: ["read", "extension_tool"] },
 	}), {
 		title: "Fixture request",
 		request: "Inspect the child Runtime.",
-		config: { allowedTools: ["read", "extension_tool"] },
+		config: { tools: ["read", "extension_tool"] },
 	});
 	for (const config of [
-		{ tools: ["read"] },
+		{ allowedTools: ["read"] },
+		{ allowedTools: undefined },
+		{ tools: [], allowedTools: ["read"] },
 		{ allowed_tools: ["read"] },
 	]) {
+		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, {
+			title: "Fixture request", request: "Reject obsolete fields.", config,
+		}), false);
 		assert.throws(
 			() => validateAgentSpawnInput({
 				title: "Fixture request",

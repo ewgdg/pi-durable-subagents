@@ -64,7 +64,6 @@ export type EffectiveRuntimeSnapshot = Readonly<{
 	cwd: string;
 	model: ModelReference;
 	thinking: RuntimeThinkingLevel;
-	allowedTools: readonly string[];
 	tools: readonly string[];
 	skills: readonly string[];
 	skillSources: readonly Readonly<{ name: string; filePath: string }>[];

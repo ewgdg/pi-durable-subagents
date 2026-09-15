@@ -10,7 +10,6 @@ const snapshot = {
 	cwd: "/runtime/project",
 	model: { provider: "test", modelId: "model" },
 	thinking: "high" as const,
-	allowedTools: ["read"],
 	tools: ["read"],
 	skills: ["skill"],
 	skillSources: [{ name: "skill", filePath: "/runtime/skill/SKILL.md" }],

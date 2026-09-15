@@ -15,7 +15,7 @@ const TEMPLATE_FIELDS = new Set([
 	"name",
 	"useWhen",
 	"models",
-	"allowedTools",
+	"tools",
 	"skills",
 	"extensions",
 	"systemPromptMode",
@@ -92,9 +92,9 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 	const models = mapping.models === undefined
 		? undefined
 		: parseModelCandidates(mapping.models, sourcePath, name);
-	const allowedTools = mapping.allowedTools === undefined
+	const tools = mapping.tools === undefined
 		? undefined
-		: parseStringSelection(mapping.allowedTools, "allowedTools", sourcePath, name);
+		: parseStringSelection(mapping.tools, "tools", sourcePath, name);
 	const skills = mapping.skills === undefined
 		? undefined
 		: parseStringSelection(mapping.skills, "skills", sourcePath, name);
@@ -112,7 +112,7 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 		name,
 		...(useWhen === undefined ? {} : { useWhen }),
 		...(models === undefined ? {} : { models }),
-		...(allowedTools === undefined ? {} : { allowedTools }),
+		...(tools === undefined ? {} : { tools }),
 		...(skills === undefined ? {} : { skills }),
 		...(extensions === undefined ? {} : { extensions }),
 		systemPromptMode,
@@ -245,7 +245,7 @@ function parseThinking(
 
 function parseStringSelection(
 	value: unknown,
-	field: "allowedTools" | "skills" | "extensions",
+	field: "tools" | "skills" | "extensions",
 	sourcePath: string,
 	templateName: string,
 ): readonly string[] {

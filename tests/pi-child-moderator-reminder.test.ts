@@ -35,7 +35,7 @@ test("real child reminder admission defers active work and serializes clear vers
 		agentDir: PROCESS_RUNTIME_TEST_AGENT_DIR,
 		configuration: {
 			cwd, model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
-			thinking: "off", allowedTools: [], skills: [], loadContextFiles: false,
+			thinking: "off", tools: [], skills: [], loadContextFiles: false,
 			extensions: ["process-runtime-child-extension.ts", "moderator-reminder-child-extension.ts"]
 				.map((name) => fileURLToPath(new URL("./fixtures/" + name, import.meta.url))),
 		},
@@ -45,7 +45,7 @@ test("real child reminder admission defers active work and serializes clear vers
 		runtimeDirectory: root, columns: 100, rows: 30,
 		ownerRequestHandlers: ordinaryOwnerHandlers(expectedSessionId),
 	});
-	const runtime = new PiChildHostedRuntime(launch, []);
+	const runtime = new PiChildHostedRuntime(launch);
 	const reminders = () => SessionManager.open(sessionPath).getEntries().filter(
 		(entry) => entry.type === "custom_message" && entry.customType === MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE,
 	);
