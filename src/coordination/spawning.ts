@@ -185,13 +185,13 @@ export class DefaultChildSpawner {
 		try {
 			commitChildAgentIdentity(sessionManager, identity);
 		} catch (error) {
-				if (error instanceof ProtocolInvariantError) throw error;
-				return {
-					spawnStatus: "not_created",
-					failedStage: "identity_commit",
-					reason: errorMessage(error),
-				};
-			}
+			if (error instanceof ProtocolInvariantError) throw error;
+			return {
+				spawnStatus: "not_created",
+				failedStage: "identity_commit",
+				reason: errorMessage(error),
+			};
+		}
 
 		let sessionPath: string;
 		let materializationUncertain = false;

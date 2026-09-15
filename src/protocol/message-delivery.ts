@@ -5,6 +5,7 @@ import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLI
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
+import { OWNER_FORK_PROVENANCE_CUSTOM_TYPE } from "./fork-provenance.ts";
 import {
 	CONVERSATION_FORK_CUSTOM_TYPE,
 	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
@@ -209,6 +210,7 @@ function readMessageDeliveries(options: {
 					entry.customType === MODERATOR_REPORT_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE ||
 					entry.customType === CONVERSATION_FORK_CUSTOM_TYPE ||
+					entry.customType === OWNER_FORK_PROVENANCE_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_REMINDER_CUSTOM_TYPE ||

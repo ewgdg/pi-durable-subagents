@@ -306,8 +306,8 @@ function reservedProjectedMessages(messages: readonly AgentMessage[], physical: 
 function contextPhysicalMessagesFor(transcript: TranscriptInspection): PhysicalMessage[] {
 	const branch = transcript.activeBranch;
 	const compactionIndex = branch.findLastIndex(entry => entry.type === "compaction");
-	const entries = compactionIndex < 0 ? branch : (() => {
-		const compaction = branch[compactionIndex]!;
+	const compaction = branch[compactionIndex];
+	const entries = compaction?.type !== "compaction" ? branch : (() => {
 		const firstKeptIndex = branch.findIndex(entry => entry.id === compaction.firstKeptEntryId);
 		return [
 			compaction,

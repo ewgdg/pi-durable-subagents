@@ -93,11 +93,11 @@ the durable Identity cutoff after copied history rather than moving it to the
 front of unchanged native protocol records. Classification follows all-branch
 scope, not the selected leaf; inherited valid calls must not be called invalid.
 
-That fork change affects prompt-prefix reuse: the current Conversation Fork
-preserves the completed parent message prefix. Explicit identity and inherited
-marking favor clarity over that cache-affinity property. Keep the source
-transcripts and obligations unchanged; exact fork projection and cache behavior
-belong in #134, not invalid-record replay.
+Fork projection changes prompt-prefix reuse: identity-first context and inherited
+marking favor clarity over the former prefix-preservation advantage. Child
+Conversation Fork is removed; Owner fork/clone remain supported. Source
+transcripts and obligations stay unchanged. See [Owner fork and clone](owner-workflow.md#owner-fork-and-clone)
+for the projection and summary behavior; these remain separate from invalid-record replay.
 
 Warning UX remains with #125 and repair mechanics with #129. This decision does
 not redesign either or introduce a general repair engine.

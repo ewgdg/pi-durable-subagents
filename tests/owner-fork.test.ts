@@ -26,6 +26,136 @@ import {
 const OWNER_FORK_WAIT_TIMEOUT_MS = 5_000;
 const OWNER_FORK_POLL_INTERVAL_MS = 1;
 
+test("Owner fork projection survives native branch navigation, reload, and another fork", { timeout: 15_000 }, async t => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	try {
+		const source = host.runtime.session;
+		await executeTool(host, "agent_observe", "source-observation", { operation: "status" });
+		host.model.setResponses([fauxAssistantMessage("Source conversation retained.")]);
+		await source.prompt("Retain this source branch.");
+		await source.waitForIdle();
+		const oldLeaf = source.sessionManager.getLeafId()!;
+		const sourceEntries = structuredClone(source.sessionManager.getEntries());
+		await host.runtime.fork(oldLeaf, { position: "at" });
+		const fork = host.runtime.session;
+		await fork.navigateTree(oldLeaf, { summarize: false });
+		assert.equal(fork.sessionManager.getBranch().some(entry => entry.type === "custom" &&
+			entry.customType === "agent-coordination.identity" && (entry.data as { agentId: string }).agentId === fork.sessionId), false);
+		const projectionChecks: Array<() => void> = [];
+		const verifyProjection = (ownerId: string) => (context: Context) => {
+			projectionChecks.push(() => {
+				assert.match(JSON.stringify(context.messages[0]), /Current Agent identity/);
+				assert.match(JSON.stringify(context.messages[0]), new RegExp(ownerId));
+				assert.match(JSON.stringify(context.messages), /\^ .*source-observation/);
+				assert.equal(context.messages.some(message => message.role === "toolResult" && message.toolCallId === "source-observation"), false);
+			});
+			return fauxAssistantMessage("Current Owner understands historical provenance.");
+		};
+		host.model.setResponses([verifyProjection(fork.sessionId)]);
+		await fork.prompt("Continue on the old branch as the new Owner.");
+		await fork.waitForIdle();
+		await fork.reload();
+		host.model.setResponses([verifyProjection(fork.sessionId)]);
+		await fork.prompt("Verify identity after reload.");
+		await fork.waitForIdle();
+		await executeTool(host, "agent_observe", "reforked-current-observation", { operation: "status" });
+		await host.runtime.fork(fork.sessionManager.getLeafId()!, { position: "at" });
+		const secondFork = host.runtime.session;
+		host.model.setResponses([(context: Context) => {
+			projectionChecks.push(() => {
+				const group = context.messages.flatMap(message => typeof message.content === "string" ? [message.content]
+					: message.content.filter(part => part.type === "text").map(part => part.text))
+					.find(text => text.startsWith("^ ") && text.includes("reforked-current-observation"));
+				assert.ok(group);
+				assert.equal(JSON.parse(group.slice(2)).source.agentId, fork.sessionId);
+			});
+			return verifyProjection(secondFork.sessionId)(context);
+		}]);
+		await secondFork.prompt("Verify another fork's identity.");
+		await secondFork.waitForIdle();
+		assert.equal(projectionChecks.length, 4);
+		for (const check of projectionChecks) check();
+		assert.deepEqual(source.sessionManager.getEntries(), sourceEntries);
+	} finally {
+		await host.runtime.dispose();
+	}
+});
+
+test("native Owner compaction receives identity and inherited provenance without changing source evidence", { timeout: 10_000 }, async t => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		settings: { compaction: { enabled: false, reserveTokens: 256, keepRecentTokens: 1 } },
+	});
+	try {
+		const source = host.runtime.session;
+		host.model.setResponses([fauxAssistantMessage("Historical conversation.")]);
+		await source.prompt("Source work.");
+		await source.waitForIdle();
+		await executeTool(host, "agent_observe", "summarized-source-observation", { operation: "status" });
+		host.model.setResponses([fauxAssistantMessage("End of source branch.")]);
+		await source.prompt("Keep recent source text.");
+		await source.waitForIdle();
+		const before = structuredClone(source.sessionManager.getEntries());
+		await host.runtime.fork(source.sessionManager.getLeafId()!, { position: "at" });
+		const fork = host.runtime.session;
+		let summaries = 0;
+		let inheritedObservationSeen = false;
+		const verifySummary = (context: Context) => {
+			summaries++;
+			const text = JSON.stringify(context.messages);
+			assert.match(text, /Current Agent identity/);
+			assert.match(text, new RegExp(fork.sessionId));
+			if (text.includes("summarized-source-observation")) {
+				assert.match(text, /\^ .*summarized-source-observation/);
+				inheritedObservationSeen = true;
+			}
+			assert.match(text, /not current responsibilities/);
+			return fauxAssistantMessage("The source observation is inherited history. No current Request was established by it.");
+		};
+		host.model.setResponses([verifySummary, verifySummary]);
+		await fork.compact();
+		assert.ok(summaries > 0);
+		assert.ok(inheritedObservationSeen);
+		assert.deepEqual(source.sessionManager.getEntries(), before);
+	} finally {
+		await host.runtime.dispose();
+	}
+});
+
+test("native branch summary distinguishes inherited and current work on a pre-Identity branch", { timeout: 10_000 }, async t => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	try {
+		const source = host.runtime.session;
+		const sourceIdentity = source.sessionManager.getLeafId()!;
+		await executeTool(host, "agent_observe", "inherited-branch-observation", { operation: "status" });
+		host.model.setResponses([fauxAssistantMessage("Source branch completed.")]);
+		await source.prompt("Source branch text.");
+		await source.waitForIdle();
+		const oldLeaf = source.sessionManager.getLeafId()!;
+		await host.runtime.fork(oldLeaf, { position: "at" });
+		const fork = host.runtime.session;
+		await fork.navigateTree(oldLeaf, { summarize: false });
+		await executeTool(host, "agent_observe", "current-branch-observation", { operation: "status" });
+		const before = structuredClone(fork.sessionManager.getEntries());
+		let summarized = false;
+		host.model.setResponses([(context: Context) => {
+			summarized = true;
+			const text = JSON.stringify(context.messages);
+			assert.match(text, /Current Agent identity/);
+			assert.match(text, new RegExp(fork.sessionId));
+			assert.match(text, /\^ .*inherited-branch-observation/);
+			assert.doesNotMatch(text, /\^ [^\n]*toolCallId[^\n]*current-branch-observation/);
+			assert.match(text, /Keep the user's summary focus/);
+			return fauxAssistantMessage("The inherited observation belongs to the source; the latest observation is current work.");
+		}]);
+		await fork.navigateTree(sourceIdentity, { summarize: true, customInstructions: "Keep the user's summary focus" });
+		assert.ok(summarized);
+		assert.deepEqual(fork.sessionManager.getEntries().slice(0, before.length), before);
+	} finally {
+		await host.runtime.dispose();
+	}
+});
+
 test("native Owner clone closes an open Agent view and creates the replacement Workflow", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,

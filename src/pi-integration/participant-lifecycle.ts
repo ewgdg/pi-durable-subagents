@@ -3,7 +3,7 @@ import { obligationStack, type ObligationFrame } from "../protocol/obligation-fo
 import { summarizeRequestObligations } from "../protocol/request-inspection.ts";
 import { transcriptFromSessionManager } from "./session-manager-transcript.ts";
 import { inspectCoordinationRejections } from "../protocol/replay-rejection.ts";
-import { projectCoordinationHistory } from "./coordination-history-context.ts";
+import { projectOwnerForkBranch, projectOwnerForkCompaction, projectOwnerForkContext } from "./owner-fork-context.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type {
 	ExtensionAPI,
@@ -85,16 +85,23 @@ export function registerParticipantLifecycle(
 		const rejections = inspectCoordinationRejections(transcript, agentId);
 		const frames = currentFrames(transcript, agentId);
 		// Replace earlier continuation snapshots so resolved Requests are not re-presented.
-		const messages = projectCoordinationHistory({
-			messages: event.messages.filter(message =>
-				message.role !== "custom" || message.customType !== REQUEST_ATTENTION_CUSTOM_TYPE),
+		const messages = projectOwnerForkContext({
+			messages: event.messages,
 			transcript,
 			marks: rejections.map(rejection => ({ reason: rejection.reason,
 				record: { ...rejection.source, kind: rejection.recordKind }, diagnostic: rejection.diagnostic })),
-		});
+		}).filter(message => message.role !== "custom" || message.customType !== REQUEST_ATTENTION_CUSTOM_TYPE);
 		return { messages: frames.length
 			? [...messages, { role: "custom" as const, ...requestPresentation(frames), timestamp: Date.now() }]
 			: messages };
+	});
+	pi.on("session_before_compact", (event, ctx) => {
+		projectOwnerForkCompaction(event.preparation, transcriptFromSessionManager(ctx.sessionManager).inspect());
+	});
+	pi.on("session_before_tree", (event, ctx) => {
+		if (!event.preparation.userWantsSummary) return;
+		const customInstructions = projectOwnerForkBranch(event.preparation, transcriptFromSessionManager(ctx.sessionManager).inspect());
+		return customInstructions === undefined ? undefined : { customInstructions };
 	});
 	if (options.registerInput !== false) {
 		registerParticipantInputLifecycle(pi, handlers, {

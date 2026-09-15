@@ -51,6 +51,59 @@ test("context hook marks invalid coordination without starting a turn or rewriti
 	assert.equal(JSON.stringify(manager.getEntries()), original);
 });
 
+test("Owner context keeps inherited attention informational and newly delivered Requests owed on old branches", async () => {
+	const context = createExtensionContext();
+	const manager = SessionManager.inMemory();
+	Object.assign(context, { sessionManager: manager });
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: "source-owner" });
+	const oldLeaf = manager.appendCustomMessageEntry("agent-coordination.request-attention", "Source Request reminder", true);
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
+		agentId: manager.getSessionId(), workflowId: manager.getSessionId(), directSpawnerAgentId: null,
+		metadata: { label: "Owner", description: "Workflow Owner" },
+	});
+	manager.branch(oldLeaf);
+	const current = appendRequestDelivery(manager, { requesterAgentId: "current-requester", title: "Current Request", question: "Current work" });
+	const currentLeaf = manager.getLeafId()!;
+	const original = JSON.stringify(manager.getEntries());
+	for (const leaf of [currentLeaf, oldLeaf, currentLeaf]) {
+		manager.branch(leaf);
+		// A new registrar also exercises rebuilding projection after reload.
+		const pi = new CapturedExtensionApi();
+		registerParticipantLifecycle(pi.api, lifecycleHandlers({}));
+		const projected = await pi.emit("context", { type: "context", messages: manager.buildSessionContext().messages }, context);
+		assert.match(JSON.stringify(projected), /\^ .*Source Request reminder/);
+		assert.match(JSON.stringify(projected), /Outstanding Requests/);
+		assert.match(JSON.stringify(projected), new RegExp(current.requestId));
+		assert.deepEqual(obligationStack(transcriptFromSessionManager(manager).inspect(), manager.getSessionId()), [current]);
+		assert.equal(pi.messages.length, 0);
+		assert.equal(JSON.stringify(manager.getEntries()), original);
+	}
+});
+
+test("one Owner context pass separates inherited and invalid exact-duplicate native records", async () => {
+	const context = createExtensionContext();
+	const manager = SessionManager.inMemory();
+	Object.assign(context, { sessionManager: manager });
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: "source-owner" });
+	const call = { ...fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", question: "Missing title" }, { id: "same-native-id" })), timestamp: 1 };
+	const result = { role: "toolResult" as const, toolCallId: "same-native-id", toolName: "agent_message", content: [{ type: "text" as const, text: "Same native result" }], isError: false, timestamp: 2 };
+	manager.appendMessage(call);
+	manager.appendMessage(result);
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
+		agentId: manager.getSessionId(), workflowId: manager.getSessionId(), directSpawnerAgentId: null,
+		metadata: { label: "Owner", description: "Workflow Owner" },
+	});
+	manager.appendMessage(structuredClone(call));
+	manager.appendMessage(structuredClone(result));
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, lifecycleHandlers({}));
+	const projected = await pi.emit("context", { type: "context", messages: structuredClone(manager.buildSessionContext().messages) }, context);
+	const text = JSON.stringify(projected);
+	assert.equal(text.split("^ ").length - 1, 1);
+	assert.equal(text.split("! ").length - 1, 1);
+	assert.equal(pi.messages.length, 0);
+});
+
 test("verified startup reconciliation excludes already-proven Answers without durable snapshot authority", async () => {
 	const context = createExtensionContext();
 	const old = appendRequestDelivery(context.sessionManager, { requesterAgentId: "requester", title: "Previously answered", question: "Old work" });
@@ -143,6 +196,8 @@ const lifecycleEventNames = [
 	"context",
 	"input",
 	"message_end",
+	"session_before_compact",
+	"session_before_tree",
 	"tool_execution_start",
 	"turn_end",
 ] as const;
