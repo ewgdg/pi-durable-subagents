@@ -187,6 +187,61 @@ test("admitted dispatch rejection notifies once and allows explicit retry withou
 	assert.equal((await h.message("poll", { operation: "poll", messageId: receipt.messageId }) as { disposition: string }).disposition, "delivered");
 });
 
+for (const operation of ["send", "request"] as const) {
+	for (const deliveryMode of ["deferred", "steer"] as const) {
+		test(`${operation} ${deliveryMode}: asynchronous custom preflight rejection releases dispatch and explicit retry preserves its Message`, { timeout: 5_000 }, async t => {
+			const h = harness(t);
+			let rejectPreflight!: (error: Error) => void;
+			let nativeSettlements = 0;
+			h.recipient.record.host.addSettledHandler(() => { nativeSettlements++; });
+			// The actual-Pi startup tests establish that handled kickoff input rejects
+			// completion this way. Exercise the scheduler response without a native
+			// settlement or transcript proof that could independently release it.
+			h.recipient.dispatchOverride = () => ({
+				transcriptCommit: Promise.resolve(false),
+				completion: new Promise<void>((_resolve, reject) => { rejectPreflight = reject; }),
+			});
+			const receipt = await h.message("original", operation === "send"
+				? { operation, deliveryMode, targetAgent: "recipient", content: "Preserve this original Message." }
+				: { operation, deliveryMode, targetAgent: "recipient", title: "Original Request", question: "Preserve this original Request?" });
+			assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");
+			const messageId = "requestMessageId" in receipt ? receipt.requestMessageId : "messageId" in receipt ? receipt.messageId : assert.fail();
+			await flush();
+			assert.equal(h.recipient.dispatches.length, 1);
+			const original = h.recipient.dispatches[0];
+			assert.ok(original?.kind === "custom");
+			assert.equal(original.deliverAs, deliveryMode === "steer" ? "steer" : "followUp");
+
+			rejectPreflight(new Error("custom_startup_not_started: kickoff input was handled before delivery preparation"));
+			await flush();
+			assert.equal(nativeSettlements, 0);
+			assert.equal(h.recipient.record.host.observe().phase, "dormant", "rejected preparation must release its exact Run without native settlement");
+			assert.equal(h.messages.hasAutonomousDeliveryProgress(), false, "a failed kickoff must leave no active dispatch reservation");
+			assert.equal(h.recipient.dispatches.length, 1, "handled input must not be retried automatically");
+			assert.equal(h.notices().length, 1);
+			assert.match(h.notices()[0].failure.reason, /custom_startup_not_started/);
+			const beforeRetry = await h.message("poll-before-retry", { operation: "poll", messageId });
+			assert.equal("disposition" in beforeRetry && beforeRetry.disposition, "not_observed");
+
+			h.recipient.dispatchOverride = undefined;
+			h.recipient.commitOnDispatch = true;
+			const retry = await h.message("retry", { operation: "retry", messageId });
+			assert.equal("requestMessageId" in retry ? retry.requestMessageId : "messageId" in retry ? retry.messageId : undefined, messageId);
+			await flush();
+			assert.equal(h.recipient.dispatches.length, 2);
+			assert.deepEqual(h.recipient.dispatches[1], original, "retry preserves the original Message identity, metadata, and delivery mode");
+			const repeatedRetry = await h.message("retry-again", { operation: "retry", messageId });
+			assert.equal("disposition" in repeatedRetry && repeatedRetry.disposition, operation === "request" ? "request_delivered" : "delivered");
+			await flush();
+			assert.equal(h.recipient.dispatches.length, 2, "committed Delivery prevents another retry from dispatching");
+			const deliveries = h.recipient.manager.getEntries().filter(entry =>
+				entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery");
+			assert.equal(deliveries.length, 1);
+			assert.equal(nativeSettlements, 0);
+		});
+	}
+}
+
 test("recipient termination before dispatch confirms non-Delivery of this attempt", { timeout: 5_000 }, async t => {
 	const h = harness(t, { scheduleDeliveryDispatch: (context, release) => {
 		if (context.recipientAgentId !== "recipient") release();
