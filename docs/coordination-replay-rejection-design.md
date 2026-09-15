@@ -55,16 +55,21 @@ warning presentation.
 
 ## Shared context-only marking
 
-Use compact ASCII markers with distinct structured reasons:
+Use compact ASCII markers with distinct labels backed by structured reasons:
 
-| Mark | Reason | Meaning |
+| Mark | Label | Meaning |
 | --- | --- | --- |
-| `!` | Invalid | The record failed declared validation; it has no protocol effect. |
+| `!` | Corrupted record | The record failed declared validation and cannot drive coordination replay. This does not mean the recorded action never happened. |
 | `^` | Inherited | The material belongs to another Agent's inherited scope; it may be entirely valid there. |
 
 Include one legend in the existing coordination guidance:
 
-> History marks: `!` invalid, `^` inherited. Both are informational; neither cancels an existing obligation.
+> History marks: `!` corrupted record, `^` inherited. Both are informational; neither cancels an existing obligation.
+
+A corrupted record is unusable for coordination replay, not proof that the action
+never happened or permission to repeat it. The internal `invalid` reason still
+describes validation failure; the model-facing label describes the record, not
+whether the historical action occurred.
 
 Prefix each projected call/result group once, not every line or field. Keep the
 reason structured internally; the symbol is just its compact presentation. Do

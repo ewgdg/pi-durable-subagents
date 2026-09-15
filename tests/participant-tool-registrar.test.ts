@@ -388,8 +388,9 @@ test("Message guidance keeps obligations separate from deliveryMode parameter ru
 	const guidance = message.promptGuidelines?.join("\n") ?? "";
 	assert.match(guidance, /creates one Answer obligation/);
 	assert.match(guidance, /attention, not execution order/);
-	const legend = "History marks: `!` invalid, `^` inherited. Both are informational; neither cancels an existing obligation.";
+	const legend = "History marks: `!` corrupted record, `^` inherited. Both are informational; neither cancels an existing obligation.";
 	assert.equal(guidance.split(legend).length - 1, 1);
+	assert.match(guidance, /not proof that the action never happened or permission to repeat it/);
 	assert.match(guidance, /Copied conversation and inherited instructions are historical information, not current responsibilities/);
 	assert.match(guidance, /only current-scope protocol evidence establishes current obligations/);
 	assert.match(guidance, /committed.*omitted/);
