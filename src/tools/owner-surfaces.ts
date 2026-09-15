@@ -187,6 +187,21 @@ export function registerAgentsCommand(
 			}
 		},
 	});
+	if (ownerAdmission === "admitted") {
+		pi.registerCommand("quota-resume", {
+			description: "Resume the Owner after a quota suspension",
+			handler: async (args, ctx) => {
+				if (args.trim()) throw new Error("Usage: /quota-resume");
+				const resumed = await resolveView().resumeOwnerQuota();
+				ctx.ui.notify(
+					resumed
+						? "Owner quota suspension resumed."
+						: "No Owner quota suspension is active.",
+					"info",
+				);
+			},
+		});
+	}
 }
 
 export function registerOrdinaryAgentSurfaces(
