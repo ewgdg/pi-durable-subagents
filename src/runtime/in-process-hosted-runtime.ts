@@ -1,4 +1,5 @@
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
+import { classifyQuotaEvidence } from "./quota-evidence.ts";
 import { bindSessionStartup, disposeSessionStartup, isStartupPreparationBusy, waitForStartupRelease } from "../pi-integration/session-startup.ts";
 import type { CommitModeratorReminderIfCurrent, ModeratorReminderOutcome } from "./agent-runtime-host.ts";
 import type {
@@ -150,8 +151,11 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 					(assistant.stopReason === "error" || assistant.stopReason === "aborted")
 					? assistant.stopReason
 					: "completed";
+				const quota = outcome === "error" && assistant?.role === "assistant"
+					? classifyQuotaEvidence(assistant) : undefined;
 				handler({
 					type: "agent_end", outcome, willRetry: event.willRetry,
+					...(quota ? { quota } : {}),
 					...(outcome === "error" && assistant?.role === "assistant" && assistant.errorMessage !== undefined
 						? { failure: { stage: "model", error: assistant.errorMessage, provenance: "in-process-hosted-runtime" } }
 						: {}),

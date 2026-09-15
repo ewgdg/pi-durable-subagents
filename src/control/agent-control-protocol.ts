@@ -877,6 +877,12 @@ export const agentControlEvents = {
 			willRetry: Type.Boolean(),
 			queuedInputCount: QueuedInputCountSchema,
 			error: Type.Optional(Type.String()),
+			quota: Type.Optional(closed({
+				diagnostic: Type.String(),
+				provider: Type.Optional(Type.String()),
+				model: Type.Optional(Type.String()),
+				resetAt: Type.Optional(Type.String()),
+			})),
 		}),
 	},
 	"agent.settled": {

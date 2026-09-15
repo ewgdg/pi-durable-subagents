@@ -10,6 +10,24 @@ import type {
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 
+test("child Control preserves normalized quota evidence without changing retry semantics", async () => {
+	for (const willRetry of [true, false]) {
+		const { runtime, emit } = createFakeRuntime();
+		const events: HostedRuntimeEvent[] = [];
+		runtime.subscribe(event => events.push(event));
+		await runtime.ready;
+		const quota = { diagnostic: "Codex error: The usage limit has been reached", provider: "openai-codex", model: "gpt-5", resetAt: "2030-01-01T00:00:00.000Z" };
+		emit(controlEvent("agent.start", { runId: "quota", queuedInputCount: 0 }));
+		emit(controlEvent("agent.end", { runId: "quota", outcome: "failed", willRetry, queuedInputCount: 0, error: quota.diagnostic, quota }));
+		const event = events.find(event => event.type === "agent_end");
+		assert.equal(event?.type, "agent_end");
+		if (event?.type !== "agent_end") throw new Error("missing end");
+		assert.deepEqual(event.quota, quota);
+		assert.equal(event.willRetry, willRetry);
+		await runtime.dispose();
+	}
+});
+
 test("an authenticated native child lifecycle adopts its transport identity without a dispatched cycle", async () => {
 	const { runtime, emit } = createFakeRuntime();
 	const hostedEvents: HostedRuntimeEvent[] = [];

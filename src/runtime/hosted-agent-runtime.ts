@@ -10,6 +10,7 @@ import type {
 	TranscriptCommitConfirmation,
 } from "./agent-runtime-host.ts";
 import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
+import type { QuotaEvidence } from "./quota-evidence.ts";
 
 export type HostedRuntimeEvent =
 	| Readonly<{ type: "state_changed" }>
@@ -18,6 +19,7 @@ export type HostedRuntimeEvent =
 		outcome: "completed" | "aborted" | "error";
 		willRetry: boolean;
 		failure?: AgentRunFailure;
+		quota?: QuotaEvidence;
 	}>
 	| Readonly<{ type: "agent_settled" }>;
 

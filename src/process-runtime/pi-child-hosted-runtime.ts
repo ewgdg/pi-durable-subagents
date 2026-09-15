@@ -363,6 +363,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 				...(event.payload.outcome === "failed" && event.payload.error !== undefined
 					? { failure: { stage: "model", error: event.payload.error, provenance: "pi-child-hosted-runtime" } }
 					: {}),
+				...(event.payload.outcome === "failed" && event.payload.quota ? { quota: event.payload.quota } : {}),
 			});
 			return;
 		}

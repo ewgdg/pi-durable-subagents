@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { classifyQuotaEvidence } from "../runtime/quota-evidence.ts";
 import { ModeratorReminderAdmission } from "./moderator-reminder-admission.ts";
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-mode.ts";
@@ -949,10 +950,13 @@ async function reportRuntimeLifecycle(
 				? "failed"
 				: "completed";
 		activity.setScopeFailed(state.currentRunOutcome === "failed");
+		const quota = state.currentRunOutcome === "failed" && assistant?.role === "assistant"
+			? classifyQuotaEvidence(assistant) : undefined;
 		await state.channel.sendEvent("agent.end", {
 			runId: state.currentRunId,
 			outcome: state.currentRunOutcome,
 			willRetry: event.willRetry,
+			...(quota ? { quota } : {}),
 			queuedInputCount: runtime.session.pendingMessageCount,
 			...(assistant?.role === "assistant" && assistant.errorMessage
 				? { error: assistant.errorMessage }

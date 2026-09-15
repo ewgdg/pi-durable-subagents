@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { QUOTA_DIAGNOSTICS } from "./fixtures/quota-evidence-extension.ts";
+import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 
 import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
 
@@ -29,6 +31,48 @@ const TEST_TIMEOUT_MS = 30_000;
 const CHILD_EXTENSION = fileURLToPath(
 	new URL("./fixtures/process-runtime-child-extension.ts", import.meta.url),
 );
+
+test("real child bridge preserves quota evidence and rejects temporary rate limits", {
+	timeout: TEST_TIMEOUT_MS, skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "quota-evidence-child-"));
+	const cwd = join(root, "work");
+	const agentDir = join(root, "agent");
+	await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+	await writeFile(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	const sessionPath = join(root, "child.jsonl");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000137";
+	await writeFile(sessionPath, JSON.stringify({ type: "session", version: 3, id: expectedSessionId, timestamp: new Date().toISOString(), cwd }) + "\n");
+	const launch = await PiChildProcessRuntime.launch({
+		workflowId: "quota-evidence", agentId: "quota-evidence-child", role: "ordinary", expectedSessionId,
+		sessionPath, agentDir, runtimeDirectory: root, skillPaths: [], projectTrusted: true,
+		configuration: { cwd, model: { provider: "openai-codex", modelId: "quota-fixture" }, thinking: "off", tools: [], skills: [],
+			extensions: [fileURLToPath(new URL("./fixtures/quota-evidence-extension.ts", import.meta.url))], loadContextFiles: false },
+		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+	});
+	const runtime = new PiChildHostedRuntime(launch);
+	const ends: Extract<HostedRuntimeEvent, { type: "agent_end" }>[] = [];
+	let settlements = 0;
+	runtime.subscribe(event => {
+		if (event.type === "agent_end") ends.push(event);
+		if (event.type === "agent_settled") settlements++;
+	});
+	try {
+		await runtime.ready;
+		for (const [index, diagnostic] of QUOTA_DIAGNOSTICS.entries()) {
+			await runtime.deliver({ kind: "user", content: `Failure case ${index}` }).completion;
+			await waitUntil(() => settlements === index + 1);
+			assert.equal(ends.length, index + 1);
+			const event = ends[index]!;
+			assert.equal(event.willRetry, false);
+			assert.equal(event.failure?.error, diagnostic);
+			assert.deepEqual(event.quota, index < 3 ? {
+				diagnostic, provider: "openai-codex", model: "quota-fixture",
+				...(index === 1 ? { resetAt: "2030-01-01T00:00:00.000Z" } : {}),
+			} : undefined);
+		}
+	} finally { await runtime.dispose(); }
+});
 
 test("the common Runtime Host supervises one real Control-backed Pi child Runtime", {
 	timeout: TEST_TIMEOUT_MS,
