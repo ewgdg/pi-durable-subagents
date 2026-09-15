@@ -28,19 +28,19 @@ test("incident linkage cold lookup retains first report source without changing 
 	assert.throws(() => reopened.publishRuntime(input, { ...source, incidentKey: " " }), /incident key/);
 });
 
-test("runtime findings append once, survive cold reopen, and leave report and attention unchanged", () => {
+test("new runtime findings restore unread atomically while duplicates preserve later acknowledgment", () => {
 	const manager = fixture();
 	const reports = store(manager);
 	const diagnostic = { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "diagnostic", transcriptPath: manager.getSessionFile()! };
 	const report = reports.publishRuntime(input, diagnostic);
 	reports.setRead(report.reportId, true);
-	const readAt = reports.history()[0]!.readAt;
+	assert.ok(reports.history()[0]!.readAt);
 	const before = manager.getEntries().length;
 	reports.appendRuntimeFinding(diagnostic, { key: "recovered", summary: "Inspection recovered", evidence: ["entry:recovery"] });
 	const reopened = store(SessionManager.open(manager.getSessionFile()!));
 	const item = reopened.history()[0]!;
 	assert.deepEqual(item.report, report);
-	assert.equal(item.readAt, readAt);
+	assert.equal(item.readAt, undefined, "the finding itself restores unread on cold replay");
 	assert.equal(item.findings?.length, 1);
 	assert.equal(item.findings?.[0]?.summary, "Inspection recovered");
 	assert.ok(Number.isFinite(Date.parse(item.findings![0]!.createdAt)));
@@ -48,6 +48,21 @@ test("runtime findings append once, survive cold reopen, and leave report and at
 	reopened.appendRuntimeFinding(diagnostic, { key: "recovered", summary: "changed", evidence: ["other"] });
 	assert.deepEqual(reopened.history(), [item]);
 	assert.equal(SessionManager.open(manager.getSessionFile()!).getEntries().length, before + 1);
+	reopened.setRead(report.reportId, true);
+	const acknowledged = store(SessionManager.open(manager.getSessionFile()!));
+	const readItem = acknowledged.history()[0]!;
+	assert.ok(readItem.readAt);
+	const afterRead = SessionManager.open(manager.getSessionFile()!).getEntries().length;
+	acknowledged.appendRuntimeFinding(diagnostic, { key: "recovered", summary: "changed again", evidence: ["replayed"] });
+	assert.deepEqual(acknowledged.history(), [readItem]);
+	assert.deepEqual(store(SessionManager.open(manager.getSessionFile()!)).history(), [readItem]);
+	assert.equal(SessionManager.open(manager.getSessionFile()!).getEntries().length, afterRead);
+	acknowledged.appendRuntimeFinding(diagnostic, { key: "later-observation", summary: "New recovery evidence", evidence: ["entry:later"] });
+	const updated = store(SessionManager.open(manager.getSessionFile()!)).history();
+	assert.equal(updated.length, 1);
+	assert.equal(updated[0]?.readAt, undefined);
+	assert.deepEqual(updated[0]?.report, report);
+	assert.equal(updated[0]?.findings?.length, 2);
 	assert.equal(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "agent-coordination.moderator-report").length, 1);
 	assert.throws(() => reopened.appendRuntimeFinding({ ...diagnostic, agentId: "missing" }, { key: "x", summary: "Missing", evidence: ["ref"] }), /Unknown runtime report/);
 });

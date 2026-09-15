@@ -2549,7 +2549,7 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 	);
 	await waitForCondition(() => harness.owner.operationalAttention().length === 0);
 	assert.deepEqual(harness.owner.reportHistory()[0]?.report, incidentReport.report);
-	assert.ok(harness.owner.reportHistory()[0]?.readAt);
+	assert.equal(harness.owner.reportHistory()[0]?.readAt, undefined, "clearance is new retained evidence");
 	assert.ok(harness.owner.reportHistory()[0]?.findings?.some(finding => finding.key === "condition-cleared"));
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
@@ -2570,6 +2570,8 @@ test("a same-obligation Stall recurrence publishes fresh attention after its pri
 	await sendMessageFromView(host.session, owner, "restart-recurring-stall", child.agentId, "Continue working, without answering yet.");
 	await waitForCondition(() => started);
 	await waitForCondition(() => owner.operationalAttention().length === 0);
+	assert.equal(owner.reportHistory()[0]?.readAt, undefined, "condition clearance restores attention");
+	owner.setReportRead(original.report.reportId, true);
 	release();
 	await waitForCondition(() => owner.operationalAttention().length === 1);
 	assert.equal(owner.reportHistory().length, 2, "the same Request set can begin a distinct operational episode");
@@ -2585,7 +2587,7 @@ test("a same-obligation Stall recurrence publishes fresh attention after its pri
 	await waitForCondition(() => owner.reportHistory()[0]?.findings?.some(finding => finding.summary.includes("400 late original Moderator failed")) ?? false);
 	assert.equal(owner.reportHistory().length, 2);
 	assert.deepEqual(owner.reportHistory()[1]?.findings, recurrenceFindings, "old Moderator evidence cannot contaminate the recurrent episode");
-	assert.ok(owner.reportHistory()[0]?.readAt);
+	assert.equal(owner.reportHistory()[0]?.readAt, undefined, "late evidence reopens its original report");
 });
 
 test("intentional child termination does not publish a Run failure report", async (t) => {
@@ -2666,7 +2668,8 @@ test("an un-obligated terminal Run failure is retained without widening Moderato
 	await owner.reachSafeBoundary();
 	assert.deepEqual(owner.reportHistory()[0]?.report, original.report);
 	assert.ok(owner.reportHistory()[0]?.findings?.some(finding => finding.key.startsWith("successor:")));
-	assert.ok(owner.reportHistory()[0]?.readAt);
+	assert.equal(owner.reportHistory()[0]?.readAt, undefined, "successor evidence restores attention");
+	owner.setReportRead(original.report.reportId, true);
 	const manager = SessionManager.open(host.session.sessionManager.getSessionFile()!);
 	const reopened = new ModeratorReportStore({ transcript: transcriptFromSessionManager(manager), appendCustomEntry: (type, data) => manager.appendCustomEntry(type, data) });
 	assert.deepEqual(reopened.history(), owner.reportHistory());
@@ -3969,7 +3972,7 @@ test("a blocked replacement Moderator preparation receives deadline attention be
 	await waitForCondition(async () => (await findModerators(host)).length === 2);
 	assert.equal(owner.operationalAttention().length, 0);
 	assert.deepEqual(owner.reportHistory()[0]?.report, item.report, "later completion does not rewrite the earlier observation");
-	assert.ok(owner.reportHistory()[0]?.readAt);
+	assert.equal(owner.reportHistory()[0]?.readAt, undefined, "new Moderator startup evidence restores attention");
 	assert.equal(preparations, 2);
 });
 

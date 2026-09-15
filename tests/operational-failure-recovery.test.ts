@@ -63,13 +63,15 @@ test("a successor after obligation clearance appends to the retained failed Run 
 		incidents.deliveryProgressChanged();
 		await incidents.reachSafeBoundary();
 		assert.ok(reports.history()[0]?.findings?.some(finding => finding.key === "condition-cleared"));
+		assert.equal(reports.history()[0]?.readAt, undefined);
+		reports.setRead(original.report.reportId, true);
 		failStartup = false;
 		await child.record.host.lane.run(() => child.record.host.startInLane());
 		await incidents.reachSafeBoundary();
 		const updated = reports.history()[0]!;
 		assert.ok(updated.findings?.some(finding => finding.key === "successor:2"));
 		assert.deepEqual(updated.report, original.report);
-		assert.ok(updated.readAt);
+		assert.equal(updated.readAt, undefined, "later successor evidence restores attention after re-acknowledgment");
 		assert.equal(reports.history().length, 1);
 	} finally {
 		shuttingDown = true;

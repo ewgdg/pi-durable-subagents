@@ -1083,7 +1083,7 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 	await waitForCondition(async () => reopenedReports.history()[0]?.findings?.some(finding => finding.summary.includes("400 recovered Moderator attempt failed")) ?? false);
 	assert.equal(reopenedReports.history().length, 1, "cold attempt is grouped into original retained incident");
 	assert.deepEqual(reopenedReports.history()[0]?.report, retained.report);
-	assert.ok(reopenedReports.history()[0]?.readAt, "later finding does not undo acknowledgment");
+	assert.equal(reopenedReports.history()[0]?.readAt, undefined, "new cold-recovered failure restores attention on the same report");
 	assert.equal(await countModeratorSessions(directory), 2, "no reconstructed replacement budget");
 	await reopened.runtime.dispose();
 });

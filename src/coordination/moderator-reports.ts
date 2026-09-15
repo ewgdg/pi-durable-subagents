@@ -94,6 +94,9 @@ export class ModeratorReportStore {
 				if (retained.some(existing => existing.key === finding.key)) throw new Error(`Duplicate report finding ${finding.key}`);
 				retained.push(finding);
 				findings.set(finding.reportId, retained);
+				// A finding atomically restores attention; a later explicit read
+				// acknowledges all findings retained before that read entry.
+				reads.delete(finding.reportId);
 			} else if (entry.customType === MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE) {
 				const parsed = readCoordinationRecord(transcript, transcript.sessionId, entry, () => validateModeratorReportReadState(entry.data));
 				if (!parsed.accepted) continue;

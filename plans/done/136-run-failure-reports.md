@@ -23,7 +23,7 @@ Implement issue #136: retain an acknowledgeable explanation of every unexpected 
 
 ## Design challenge
 
-A startup failure may occur before the child can append any transcript error. A pointer to the child's tail cannot explain this failure. Preserve the host-observed error at the failure boundary and retain that evidence in the Owner report path. Likewise, a report read before a recovery attempt fails must remain acknowledged: later findings need an explicit linked-history policy, not another unacknowledgeable attention row.
+A startup failure may occur before the child can append any transcript error. A pointer to the child's tail cannot explain this failure. Preserve the host-observed error at the failure boundary and retain that evidence in the Owner report path. Later findings need an explicit linked-history policy, not another unacknowledgeable attention row. Following user review, a new finding restores unread status on that same acknowledgeable report; repeated observations do not.
 
 ## Validation
 
@@ -40,7 +40,7 @@ Target failures with and without obligations; startup without child-side evidenc
 
 ## Decisions and outcomes
 
-- Reports and dated findings are immutable separate Owner custom entries; findings do not change read state. Reopening/copying a report includes retained findings.
+- Reports and dated findings are immutable separate Owner custom entries. Initial implementation preserved read state across findings; user review superseded that choice: new findings mark the same report unread, while duplicates leave read state unchanged. Reopening/copying a report includes retained findings.
 - Cold Moderator linkage uses validated committed Input and retained incident identity, not reconstructed timers, attempt budgets, or live handling.
 - Native persistence is unchanged: before the first real Owner assistant entry, custom report/read/finding entries share Pi's in-memory lifetime.
 - Installed Pi has no structured terminal quota-suspension discriminator. Preserve retry/termination signals and active provider recovery; do not guess from provider error strings. This external limitation is documented.
