@@ -38,6 +38,8 @@ export type PostMortemAgentView = Readonly<{
 	label: string;
 	transcript: TranscriptInspection;
 	preparationError: string;
+	/** Cold quota navigation is read-only without attempting Runtime preparation. */
+	quotaSuspended?: boolean;
 }>;
 
 export type PostMortemAgentPresenter = Readonly<{
@@ -85,6 +87,7 @@ export function openPostMortemAgentViewSurface(
 			label: view.label,
 			transcript: view.transcript,
 			preparationError: view.preparationError,
+			quotaSuspended: view.quotaSuspended,
 			done,
 		}),
 		{
@@ -109,6 +112,7 @@ export class PostMortemAgentViewSurface implements Component {
 	readonly #agentId: string;
 	readonly #label: string;
 	readonly #preparationError: string;
+	readonly #quotaSuspended: boolean;
 	readonly #done: (result: PostMortemAgentViewResult) => void;
 	readonly #transcript: Component;
 	#scrollTop = Number.POSITIVE_INFINITY;
@@ -123,6 +127,7 @@ export class PostMortemAgentViewSurface implements Component {
 		label: string;
 		transcript: TranscriptInspection;
 		preparationError: unknown;
+		quotaSuspended?: boolean;
 		done(result: PostMortemAgentViewResult): void;
 	}) {
 		this.#tui = options.tui;
@@ -130,6 +135,7 @@ export class PostMortemAgentViewSurface implements Component {
 		this.#agentId = sanitizeTerminalText(options.agentId);
 		this.#label = sanitizeTerminalText(options.label);
 		this.#preparationError = sanitizeTerminalText(errorMessage(options.preparationError));
+		this.#quotaSuspended = options.quotaSuspended === true;
 		this.#done = options.done;
 		this.#transcript = createTranscriptPresentation(
 			sanitizeTranscript(options.transcript),
@@ -148,11 +154,15 @@ export class PostMortemAgentViewSurface implements Component {
 		if (!Number.isFinite(this.#scrollTop)) this.#scrollTop = this.#maximumScrollTop;
 		this.#scrollTop = clamp(this.#scrollTop, 0, this.#maximumScrollTop);
 		const title = `${this.#label} · ${this.#agentId}`;
-		const availability = `Runtime unavailable: ${this.#preparationError}`;
+		const availability = this.#quotaSuspended
+			? "Run retained; explicit resume required. Runtime remains stopped."
+			: `Runtime unavailable: ${this.#preparationError}`;
 		const help = "↑/k ↓/j scroll · PgUp/PgDn · Home/End · a agents · Esc/q back";
 		return [
 			truncateToWidth(
-				this.#theme.fg("accent", this.#theme.bold("Post-mortem · read-only")),
+				this.#theme.fg("accent", this.#theme.bold(this.#quotaSuspended
+					? "Suspended · Usage limit reached · read-only"
+					: "Post-mortem · read-only")),
 				boundedWidth,
 				"",
 			),

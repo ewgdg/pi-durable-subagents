@@ -110,7 +110,15 @@ test("post-mortem rendering removes terminal controls from metadata and evidence
 	assert.doesNotMatch(rendered, /\x1b_pi:/);
 });
 
-function createHarness(): {
+test("cold quota view shows a retained stop, not a fabricated preparation failure", () => {
+	const { surface } = createHarness(true);
+	const rendered = stripTerminalSequences(surface.render(120).join("\n"));
+	assert.match(rendered, /Suspended · Usage limit reached · read-only/);
+	assert.match(rendered, /Run retained; explicit resume required. Runtime remains stopped./);
+	assert.doesNotMatch(rendered, /Runtime unavailable|Post-mortem|preparation failure/);
+});
+
+function createHarness(quotaSuspended = false): {
 	surface: PostMortemAgentViewSurface;
 	results: PostMortemAgentViewResult[];
 	sessionManager: SessionManager;
@@ -140,6 +148,7 @@ function createHarness(): {
 			label: "Failed Moderator",
 			transcript: transcriptFromSessionManager(sessionManager).inspect(),
 			preparationError: new Error("deterministic preparation failure"),
+			quotaSuspended,
 			done: (result) => results.push(result),
 		}),
 		results,
