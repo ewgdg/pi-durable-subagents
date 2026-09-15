@@ -94,7 +94,7 @@ Primary interactive human input or eligible inbound delivery may preempt agent_w
 const AGENT_SPAWN_PROMPT_GUIDE = `<agent_spawn>
 A successful agent_spawn returns spawnStatus "created", confirming that the child exists. Its Creation Request requires its own title, independent of the Agent label, and follows the shared Agent Delegation rules.
 
-For conversation forks, omit template and config to preserve the parent setup and maximize cache reuse potential; cache hits are not guaranteed.
+Children have isolated context. Pass needed context explicitly in the Creation Request.
 </agent_spawn>`;
 
 const AGENT_OBSERVE_PROMPT_GUIDE = `<agent_observe>
@@ -347,9 +347,6 @@ const agentSpawnParameters = Type.Object(
 	{
 		title: requestTitleParameters,
 		request: Type.String({ minLength: 1 }),
-		conversation: Type.Optional(Type.Literal("fork", {
-			description: "Inherit the completed parent conversation independently of Runtime configuration.",
-		})),
 		template: Type.Optional(
 			Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
 		),
@@ -677,8 +674,8 @@ export function registerParticipantCoordinationTools<
 			name: "agent_spawn",
 			label: "Spawn Agent",
 			description:
-				"Create one fresh durable child Agent with isolated context or a cache-affine conversation fork, then deliver its initial Creation Request.",
-			promptSnippet: "Create a fresh child Agent with isolated work or a cache-affine conversation fork.",
+				"Create one fresh durable child Agent with isolated context, then deliver its initial Creation Request.",
+			promptSnippet: "Create a fresh child Agent with isolated context.",
 			promptGuidelines: [
 				AGENT_SPAWN_PROMPT_GUIDE,
 				AGENT_DELEGATION_PROMPT_GUIDE,

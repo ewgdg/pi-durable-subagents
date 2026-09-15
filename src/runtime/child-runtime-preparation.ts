@@ -50,7 +50,6 @@ export type AgentRuntimeRole = "ordinary" | "moderator";
 
 export type ResolvedParentRuntime = Readonly<{
 	configuration: InheritableRuntimeConfiguration;
-	activeTools?: readonly string[];
 	projectTrusted: boolean;
 	skillSources: readonly Readonly<Pick<Skill, "name" | "filePath">>[];
 }>;
@@ -59,7 +58,6 @@ type PreparedRuntimeFields = Readonly<{
 	agentId: string;
 	creationPreset: AgentCreationPreset;
 	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot;
-	initialTools?: readonly string[];
 	projectTrusted: boolean;
 	skillSources: readonly Readonly<{ name: string; path: string }>[];
 }>;

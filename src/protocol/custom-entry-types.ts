@@ -1,4 +1,5 @@
 export const AGENT_IDENTITY_CUSTOM_TYPE = "agent-coordination.identity";
+// Retained only to classify historical handoffs as inert context during replay, never to spawn children.
 export const CONVERSATION_FORK_CUSTOM_TYPE =
 	"agent-coordination.conversation-fork";
 export const MODERATOR_INPUT_CUSTOM_TYPE =

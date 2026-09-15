@@ -1,7 +1,6 @@
 import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,12 +24,10 @@ import {
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import {
-	currentCoordinationScope,
 	deriveMessageIdentity,
 	ProtocolInvariantError,
 } from "../src/protocol/identities.ts";
 import { transcriptFromSessionFile } from "../src/pi-integration/session-manager-transcript.ts";
-import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
 	bindTestOwnerHost,
@@ -167,20 +164,8 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	]);
 	const spawn = host.session.getToolDefinition("agent_spawn");
 	assert.ok(spawn);
-	const spawnSchemaVariants = (spawn.parameters as {
-		anyOf: Array<{ properties: Record<string, unknown> }>;
-	}).anyOf;
-	assert.deepEqual(
-		[...new Set(spawnSchemaVariants.flatMap(({ properties }) => Object.keys(properties)))].sort(),
-		[
-			"config",
-			"conversation",
-			"description",
-			"label",
-			"request",
-			"template",
-		],
-	);
+	const schema = spawn.parameters as { properties: Record<string, unknown> };
+	assert.deepEqual(Object.keys(schema.properties).sort(), ["config", "description", "label", "request", "template", "title"]);
 
 	await host.session.prompt("Delegate this inspection to a fresh child.");
 	await host.session.waitForIdle();
@@ -225,21 +210,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			cwd: host.cwd,
 			model: { provider: "coordination-test", modelId: "deterministic-owner" },
 			thinking: "off",
-			allowedTools: [
-				"read",
-				"bash",
-				"edit",
-				"write",
-				"grep",
-				"find",
-				"ls",
-				"agent_message",
-				"agent_wait",
-				"agent_control",
-				"agent_observe",
-				"agent_spawn",
-				"ask_user",
-			],
+			allowedTools: ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls", "workflow_resume", "agent_message", "agent_wait", "agent_control", "agent_observe", "agent_spawn", "ask_user"],
 			skills: [],
 			extensions: processExtensions,
 			loadContextFiles: true,
@@ -334,6 +305,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: host.session.sessionId,
 		spawnSource,
+		creationPreset: null,
 		metadata: {
 			label: "agent",
 			description: "Inspects one coordination boundary",
@@ -366,477 +338,216 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	await host.runtime.dispose();
 });
 
-test("a conversation fork copies only completed parent context before its child Identity cutoff", async (t) => {
+test("removed conversation mode creates neither child nor Creation Request", { timeout: 5_000 }, async (t) => {
 	const harness = await createCoordinatorHarness(t, {});
-	const parentSession = harness.host.session.sessionManager;
-	parentSession.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Shared parent question before delegation." }],
-		timestamp: Date.now(),
-	});
-	parentSession.appendMessage(
-		fauxAssistantMessage("Completed parent answer retained by the conversation fork."),
-	);
-	const completedParentBranch = parentSession.getBranch();
-	const completedParentContext = parentSession.buildSessionContext().messages;
-	const parentSessionFile = parentSession.getSessionFile();
-	assert.ok(parentSessionFile);
-
-	const receipt = await harness.spawn("spawn-conversation-fork", {
-		title: "Fixture request",
-		request: "Continue from the completed parent conversation.",
-		conversation: "fork",
-		label: "continuation",
-	});
-	if (receipt.spawnStatus !== "created") {
-		throw new Error(`Conversation fork was not created: ${JSON.stringify(receipt)}`);
+	try {
+		const input = { title: "Removed mode", request: "Do not create a child.", conversation: "fork" };
+		await assert.rejects(() => harness.spawn("removed-conversation-mode", input), /conversation.*no longer supported/);
+		assert.deepEqual(harness.view.children(), []);
+		assert.equal(harness.view.status().run.retentionReasons.some(({ reason }) => reason === "awaiting_answer"), false);
+	} finally {
+		await harness.shutdown();
 	}
-	const transcriptPath = harness.view.status(receipt.agentId).primaryEvidence.transcriptPath;
-	assert.ok(transcriptPath);
-	const childSession = SessionManager.open(transcriptPath);
-	assert.equal(childSession.getHeader()?.parentSession, parentSessionFile);
-	const childEntries = childSession.getEntries();
-	assert.deepEqual(
-		childEntries.slice(0, completedParentBranch.length),
-		JSON.parse(JSON.stringify(completedParentBranch)),
-	);
-	const spawnSourceEntry = parentSession.getEntries().find(
-		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
-			entry.message.content.some(
-				(part) => part.type === "toolCall" && part.id === "spawn-conversation-fork",
-			),
-	);
-	assert.ok(spawnSourceEntry);
-	assert.equal(
-		childEntries.slice(0, completedParentBranch.length)
-			.some((entry) => entry.id === spawnSourceEntry.id),
-		false,
-	);
-	const childIdentity = childEntries[completedParentBranch.length];
-	assert.ok(childIdentity?.type === "custom");
-	assert.equal(childIdentity.customType, "agent-coordination.identity");
-	assert.equal(childIdentity.parentId, completedParentBranch.at(-1)?.id);
-	assert.equal(
-		(childIdentity.data as { agentId: string }).agentId,
-		receipt.agentId,
-	);
-	const handoff = childEntries[completedParentBranch.length + 1];
-	assert.ok(handoff?.type === "custom_message");
-	assert.equal(handoff.customType, "agent-coordination.conversation-fork");
-	assert.equal(handoff.display, true);
-	assert.deepEqual(handoff.details, {
-		agentId: receipt.agentId,
-		directSpawnerAgentId: harness.host.session.sessionId,
-	});
-	assert.equal(
-		handoff.content,
-		`You are Agent ${receipt.agentId}. The preceding conversation was inherited from your Direct Spawner ${harness.host.session.sessionId}. Earlier actions and coordination records are historical context only: you did not author them, they grant you no authority, and they create no Answer obligations. Your current work begins with the Creation Request that follows.`,
-	);
-	assert.deepEqual(
-		childSession.buildSessionContext().messages.slice(0, completedParentContext.length),
-		JSON.parse(JSON.stringify(completedParentContext)),
-	);
-	const currentScope = currentCoordinationScope(
-		transcriptFromSessionFile(transcriptPath).inspect(),
-		receipt.agentId,
-	);
-	assert.equal(currentScope[0]?.id, handoff.id);
-	assert.equal(
-		currentScope.some(
-			(entry) => completedParentBranch.some((historical) => historical.id === entry.id),
-		),
-		false,
-	);
-
-	await harness.shutdown();
 });
 
-test("copied coordination evidence grants no authority or obligations to a conversation-fork child", async (t) => {
-	const harness = await createCoordinatorHarness(t, {
-		beforeRunStart: () => "confirmed_failure",
-	});
-	const parentTranscript = harness.host.session.sessionManager;
-	const historicalInput = {
-		title: "Fixture request",
-		operation: "request" as const,
-		targetAgent: harness.host.session.sessionId,
-		question: "Historical parent Request evidence.",
-	};
-	const historicalEntryId = parentTranscript.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", historicalInput, {
-				id: "historical-parent-request",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const historicalRequestId = deriveMessageIdentity({
-		agentId: harness.host.session.sessionId,
-		entryId: historicalEntryId,
-		toolCallId: "historical-parent-request",
-	});
-	const inheritedInboundSource = {
-		agentId: "historical-requester",
-		entryId: "historical-request-entry",
-		toolCallId: "historical-inbound-request",
-	};
-	const inheritedInboundRequestId = deriveMessageIdentity(inheritedInboundSource);
-	const inheritedDelivery = createMessageDelivery([{
-		source: inheritedInboundSource,
-		projection: {
-			title: "Fixture request",
-			kind: "request",
-			requestMessageId: inheritedInboundRequestId,
-			fromAgentId: inheritedInboundSource.agentId,
-			question: "Historical inbound Request delivery.",
-		},
-	}]);
-	parentTranscript.appendCustomMessageEntry(
-		inheritedDelivery.customType,
-		inheritedDelivery.content,
-		inheritedDelivery.display,
-		inheritedDelivery.details,
-	);
-
-	const receipt = await harness.spawn("spawn-with-historical-coordination", {
-		title: "Fixture request",
-		request: "Do not acquire authority or obligations from copied coordination evidence.",
-		conversation: "fork",
-	});
-	if (receipt.spawnStatus !== "created") {
-		throw new Error(`Conversation fork was not created: ${JSON.stringify(receipt)}`);
-	}
-	const childTranscriptPath = harness.view.status(receipt.agentId).primaryEvidence.transcriptPath;
-	assert.ok(childTranscriptPath);
-	const childTranscript = SessionManager.open(childTranscriptPath);
-	const childView = harness.coordinator.forAgent(receipt.agentId);
-
-	const pollInput = { operation: "poll" as const, messageId: historicalRequestId };
-	childTranscript.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", pollInput, {
-				id: "poll-copied-parent-request",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	await assert.rejects(
-		() => childView.message("poll-copied-parent-request", pollInput),
-		/wrong_participant: Agent .* did not author Message/,
-	);
-
-	const waitInput = {};
-	childTranscript.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_wait", waitInput, {
-				id: "wait-on-copied-parent-request",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	await assert.rejects(
-		() => childView.wait(
-			"wait-on-copied-parent-request",
-			waitInput,
-			new AbortController().signal,
-		),
-		/invalid_input: Agent Wait requires at least one outstanding outbound Agent Request/,
-	);
-
-	const answerInput = {
-		operation: "answer" as const, requestId: "copied-request",
-		answer: "Copied Delivery evidence cannot create an Answer obligation.",
-	};
-	childTranscript.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", answerInput, {
-				id: "answer-copied-inbound-request",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	await assert.rejects(
-		() => childView.message("answer-copied-inbound-request", answerInput),
-		/invalid_input: Agent has no active Request to answer/,
-	);
-
-	await harness.shutdown();
-});
-
-test("a conversation fork keeps the parent provider prefix cache-affine", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
+test(`a successor Runtime retains its creation preset while resolving current project resources (isolated)`, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const templateRoot = join(host.cwd, "template-root");
+	const effectiveCwd = join(host.cwd, "subproject");
+	await mkdir(templateRoot, { recursive: true });
+	await mkdir(join(effectiveCwd, ".agents", "agents"), { recursive: true });
+	new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
+	await writeFile(
+		join(templateRoot, "research.md"),
+		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nTemplate context",
+	);
+	await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
+	await writeFile(
+		join(effectiveCwd, ".agents", "agents", "research.md"),
+		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: low\n---\nWrong discovery root",
+	);
+
+	let observedSystemPrompt = "";
+	let observedTools: string[] = [];
+	host.model.setResponses([
+		(context) => {
+			observedSystemPrompt = context.systemPrompt ?? "";
+			observedTools = context.tools?.map(({ name }) => name) ?? [];
+			return fauxAssistantMessage("Configured child Run observed.");
+		},
+	]);
+	let coordinator: WorkflowCoordinator;
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		packageRoot: host.cwd,
+		templateRoots: (parentCwd, projectTrusted) => {
+			assert.equal(projectTrusted, true);
+			if (parentCwd === host.cwd) {
+				return [{ scope: "trusted-project", path: templateRoot }];
+			}
+			assert.equal(parentCwd, effectiveCwd);
+			return [{
+				scope: "trusted-project",
+				path: join(effectiveCwd, ".agents", "agents"),
+			}];
+		},
+	});
+	const view = coordinator.forAgent(identity.agentId);
 	const spawnInput = {
 		title: "Fixture request",
-		request: "Continue from this exact provider prefix.",
-		conversation: "fork" as const,
+		request: "Inspect the configured child Run.",
+		template: "research-agent",
+		description: "  Research specialist  ",
+		config: {
+			cwd: "subproject",
+			allowedTools: ["grep"],
+			systemPrompt: "Spawn context",
+			systemPromptMode: "append" as const,
+		},
 	};
-	let parentRequest: Context | undefined;
-	let childRequest: Context | undefined;
-	const routeResponse = (context: Context) => {
-		const serializedMessages = JSON.stringify(context.messages);
-		if (serializedMessages.includes("Earlier actions and coordination records are historical context only")) {
-			childRequest ??= structuredClone(context);
-			return fauxAssistantMessage(
-				fauxToolCall("agent_message", {
-					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
-					answer: "The cache-affine conversation fork was observed.",
-				}, { id: "answer-cache-affine-fork" }),
-				{ stopReason: "toolUse" },
-			);
-		}
-		if (!parentRequest) {
-			parentRequest = structuredClone(context);
-			return fauxAssistantMessage(
-				fauxToolCall("agent_spawn", spawnInput, {
-					id: "spawn-cache-affine-fork",
-				}),
-				{ stopReason: "toolUse" },
-			);
-		}
-		return fauxAssistantMessage("The parent continued independently.");
-	};
-	host.model.setResponses(Array.from({ length: 5 }, () => routeResponse));
-
-	await host.session.prompt("Preserve this provider prefix when delegating.");
-	await host.session.waitForIdle();
-	const receipt = findSpawnReceipt(host.session.sessionManager);
-	assert.equal(receipt.spawnStatus, "created", JSON.stringify(receipt));
-	assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");
-	await waitForCondition(() => childRequest !== undefined);
-	assert.ok(parentRequest);
-	assert.ok(childRequest);
-	assert.deepEqual(childRequest.tools, parentRequest.tools);
-	assert.deepEqual(
-		childRequest.messages.slice(0, parentRequest.messages.length),
-		parentRequest.messages,
-	);
-	const appendedMessages = JSON.stringify(
-		childRequest.messages.slice(parentRequest.messages.length),
-	);
-	assert.match(
-		appendedMessages,
-		/Earlier actions and coordination records are historical context only/,
-	);
-	assert.match(appendedMessages, /Continue from this exact provider prefix/);
-	assert.equal(
-		childRequest.messages.some(
-			(message) => message.role === "assistant" && message.content.some(
-				(part) => part.type === "toolCall" && part.id === "spawn-cache-affine-fork",
-			),
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: "spawn-configured-child" }),
+			{ stopReason: "toolUse" },
 		),
-		false,
+	);
+	const receipt = await view.spawn("spawn-configured-child", spawnInput);
+	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
+		throw new Error(`Configured child was not created: ${JSON.stringify(receipt)}`);
+	}
+	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
+	assert.match(
+		receipt.effectiveConfiguration.extensions[0]!,
+		/process-model-broker-extension\.mjs$/,
+	);
+	const processExtensions = receipt.effectiveConfiguration.extensions;
+	assert.deepEqual(receipt.effectiveConfiguration, {
+		cwd: effectiveCwd,
+		model: { provider: "coordination-test", modelId: "deterministic-owner" },
+		thinking: "off",
+		allowedTools: [
+			"grep",
+			"agent_message",
+			"agent_wait",
+			"agent_control",
+			"agent_observe",
+			"agent_spawn",
+			"ask_user",
+		],
+		skills: [],
+		extensions: processExtensions,
+		systemPrompt: {
+			mode: "append",
+			body: "Template context\n\nSpawn context",
+		},
+		loadContextFiles: true,
+	});
+	assert.deepEqual(
+		view.children().map(({ label, description }) => ({ label, description })),
+		[{ label: "research-agent", description: "Research specialist" }],
+	);
+	await waitForCondition(() => observedSystemPrompt.length > 0);
+	assert.match(observedSystemPrompt, /Native effective-cwd context/);
+	assert.match(observedSystemPrompt, /Template context/);
+	assert.match(observedSystemPrompt, /Spawn context/);
+	assert.doesNotMatch(observedSystemPrompt, /Wrong discovery root/);
+	assert.equal(observedTools.includes("read"), false);
+	for (const toolName of receipt.effectiveConfiguration.allowedTools) {
+		assert.ok(observedTools.includes(toolName), `missing model-visible tool ${toolName}`);
+	}
+
+	const workflowDirectory = join(
+		host.session.sessionManager.getSessionDir(),
+		"pi-agent-coordination",
+		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+	);
+	const childSessionFile = await waitForChildSessionFile(
+		effectiveCwd,
+		workflowDirectory,
+		receipt.agentId,
+	);
+	const configuredChildTranscript = SessionManager.open(childSessionFile);
+	const configuredChildEntries = configuredChildTranscript.getEntries();
+	const childIdentity = configuredChildEntries.findLast(
+		(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
+	);
+	assert.ok(childIdentity && childIdentity.type === "custom");
+	assert.deepEqual(
+		(childIdentity.data as { metadata: object }).metadata,
+		{
+			label: "research-agent",
+			description: "Research specialist",
+		},
+	);
+	assert.deepEqual(
+		configuredChildEntries.flatMap(
+			(entry) => entry.type === "custom" ? [entry.customType] : [],
+		),
+		["agent-coordination.identity"],
 	);
 
-	await host.runtime.dispose();
-});
-
-for (const conversation of [undefined, "fork"] as const) {
-	test(`a successor Runtime retains its creation preset while resolving current project resources (${conversation ?? "isolated"})`, async (t) => {
-		const host = await createUnboundTestOwnerHost(t, () => undefined, {
-			persistent: true,
-			processVisibleModel: true,
-		});
-		await bindTestOwnerHost(host, "tui");
-		const identity = adoptOrValidateOwnerIdentity(host.runtime);
-		const templateRoot = join(host.cwd, "template-root");
-		const effectiveCwd = join(host.cwd, "subproject");
-		await mkdir(templateRoot, { recursive: true });
-		await mkdir(join(effectiveCwd, ".agents", "agents"), { recursive: true });
-		new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
-		await writeFile(
-			join(templateRoot, "research.md"),
-			"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nTemplate context",
-		);
-		await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
-		await writeFile(
-			join(effectiveCwd, ".agents", "agents", "research.md"),
-			"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: low\n---\nWrong discovery root",
-		);
-
-		let observedSystemPrompt = "";
-		let observedTools: string[] = [];
-		host.model.setResponses([
-			(context) => {
-				observedSystemPrompt = context.systemPrompt ?? "";
-				observedTools = context.tools?.map(({ name }) => name) ?? [];
-				return fauxAssistantMessage("Configured child Run observed.");
-			},
-		]);
-		let coordinator: WorkflowCoordinator;
-		coordinator = await createTestWorkflowCoordinator(host, identity, {
-			entryModulePath: "<inline:pi-agent-coordination>",
-			packageRoot: host.cwd,
-			templateRoots: (parentCwd, projectTrusted) => {
-				assert.equal(projectTrusted, true);
-				if (parentCwd === host.cwd) {
-					return [{ scope: "trusted-project", path: templateRoot }];
-				}
-				assert.equal(parentCwd, effectiveCwd);
-				return [{
-					scope: "trusted-project",
-					path: join(effectiveCwd, ".agents", "agents"),
-				}];
-			},
-		});
-		const view = coordinator.forAgent(identity.agentId);
-		const spawnInput = {
-			title: "Fixture request",
-			request: "Inspect the configured child Run.",
-			...(conversation === undefined ? {} : { conversation }),
-			template: "research-agent",
-			description: "  Research specialist  ",
-			config: {
-				cwd: "subproject",
-				allowedTools: ["grep"],
-				systemPrompt: "Spawn context",
-				systemPromptMode: "append" as const,
-			},
-		};
-		host.session.sessionManager.appendMessage(
-			fauxAssistantMessage(
-				fauxToolCall("agent_spawn", spawnInput, { id: "spawn-configured-child" }),
-				{ stopReason: "toolUse" },
-			),
-		);
-		const receipt = await view.spawn("spawn-configured-child", spawnInput);
-		if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
-			throw new Error(`Configured child was not created: ${JSON.stringify(receipt)}`);
-		}
-		assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
-		assert.match(
-			receipt.effectiveConfiguration.extensions[0]!,
-			/process-model-broker-extension\.mjs$/,
-		);
-		const processExtensions = receipt.effectiveConfiguration.extensions;
-		assert.deepEqual(receipt.effectiveConfiguration, {
-			cwd: effectiveCwd,
-			model: { provider: "coordination-test", modelId: "deterministic-owner" },
-			thinking: "off",
-			allowedTools: [
-				"grep",
-				"agent_message",
-				"agent_wait",
-				"agent_control",
-				"agent_observe",
-				"agent_spawn",
-				"ask_user",
-			],
-			skills: [],
-			extensions: processExtensions,
-			systemPrompt: {
-				mode: "append",
-				body: "Template context\n\nSpawn context",
-			},
-			loadContextFiles: true,
-		});
-		assert.deepEqual(
-			view.children().map(({ label, description }) => ({ label, description })),
-			[{ label: "research-agent", description: "Research specialist" }],
-		);
-		await waitForCondition(() => observedSystemPrompt.length > 0);
-		assert.match(observedSystemPrompt, /Native effective-cwd context/);
-		assert.match(observedSystemPrompt, /Template context/);
-		assert.match(observedSystemPrompt, /Spawn context/);
-		assert.doesNotMatch(observedSystemPrompt, /Wrong discovery root/);
-		assert.equal(observedTools.includes("read"), false);
-		for (const toolName of receipt.effectiveConfiguration.allowedTools) {
-			assert.ok(observedTools.includes(toolName), `missing model-visible tool ${toolName}`);
-		}
-
-		const workflowDirectory = join(
-			host.session.sessionManager.getSessionDir(),
-			"pi-agent-coordination",
-			Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
-		);
-		const childSessionFile = await waitForChildSessionFile(
-			effectiveCwd,
-			workflowDirectory,
-			receipt.agentId,
-		);
-		const configuredChildTranscript = SessionManager.open(childSessionFile);
-		const configuredChildEntries = configuredChildTranscript.getEntries();
-		const childIdentity = configuredChildEntries.findLast(
-			(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
-		);
-		assert.ok(childIdentity && childIdentity.type === "custom");
-		assert.deepEqual(
-			(childIdentity.data as { metadata: object }).metadata,
-			{
-				label: "research-agent",
-				description: "Research specialist",
-			},
-		);
-		assert.deepEqual(
-			configuredChildEntries.flatMap(
-				(entry) => entry.type === "custom" ? [entry.customType] : [],
-			),
-			conversation === "fork"
-				? ["agent-coordination.identity", "agent-coordination.identity"]
-				: ["agent-coordination.identity"],
-		);
-
-		const agentId = receipt.agentId;
-		await waitForCondition(() => {
-			const run = view.status(agentId).run;
-			return run.phase === "live" && run.work === "settled";
-		});
-		const terminationInput = { operation: "terminate" as const, agentId };
-		host.session.sessionManager.appendMessage(
-			fauxAssistantMessage(
-				fauxToolCall("agent_control", terminationInput, {
-					id: "terminate-configured-child-v1",
-				}),
-				{ stopReason: "toolUse" },
-			),
-		);
-		const termination = await view.control(
-			"terminate-configured-child-v1",
-			terminationInput,
-		);
-		assert.ok("disposition" in termination);
-		assert.equal(termination.disposition, "terminated");
-		await writeFile(
-			join(templateRoot, "research.md"),
-			"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nChanged Template context",
-		);
-		await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
-		let successorSystemPrompt = "";
-		host.model.setResponses([
-			(context) => {
-				successorSystemPrompt = context.systemPrompt ?? "";
-				return fauxAssistantMessage("Dynamically prepared successor observed.");
-			},
-		]);
-		const successorInput = {
-			operation: "send" as const,
-			targetAgent: agentId,
-			content: "Start a successor from current configuration and resources.",
-		};
-		host.session.sessionManager.appendMessage(
-			fauxAssistantMessage(
-				fauxToolCall("agent_message", successorInput, { id: "start-configured-child-v2" }),
-				{ stopReason: "toolUse" },
-			),
-		);
-		const successorReceipt = await view.message(
-			"start-configured-child-v2",
-			successorInput,
-		);
-		assert.ok("messageStatus" in successorReceipt);
-		assert.equal(successorReceipt.messageStatus, "sent");
-		await waitForCondition(() => successorSystemPrompt.length > 0);
-		assert.match(successorSystemPrompt, /Changed effective-cwd context/);
-		assert.match(successorSystemPrompt, /Template context/);
-		assert.doesNotMatch(successorSystemPrompt, /Changed Template context/);
-		assert.match(successorSystemPrompt, /Spawn context/);
-		assert.doesNotMatch(successorSystemPrompt, /Native effective-cwd context/);
-		await coordinator.shutdown(async () => host.runtime.dispose());
+	const agentId = receipt.agentId;
+	await waitForCondition(() => {
+		const run = view.status(agentId).run;
+		return run.phase === "live" && run.work === "settled";
 	});
-
-}
+	const terminationInput = { operation: "terminate" as const, agentId };
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_control", terminationInput, {
+				id: "terminate-configured-child-v1",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const termination = await view.control(
+		"terminate-configured-child-v1",
+		terminationInput,
+	);
+	assert.ok("disposition" in termination);
+	assert.equal(termination.disposition, "terminated");
+	await writeFile(
+		join(templateRoot, "research.md"),
+		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nChanged Template context",
+	);
+	await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
+	let successorSystemPrompt = "";
+	host.model.setResponses([
+		(context) => {
+			successorSystemPrompt = context.systemPrompt ?? "";
+			return fauxAssistantMessage("Dynamically prepared successor observed.");
+		},
+	]);
+	const successorInput = {
+		operation: "send" as const,
+		targetAgent: agentId,
+		content: "Start a successor from current configuration and resources.",
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", successorInput, { id: "start-configured-child-v2" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const successorReceipt = await view.message(
+		"start-configured-child-v2",
+		successorInput,
+	);
+	assert.ok("messageStatus" in successorReceipt);
+	assert.equal(successorReceipt.messageStatus, "sent");
+	await waitForCondition(() => successorSystemPrompt.length > 0);
+	assert.match(successorSystemPrompt, /Changed effective-cwd context/);
+	assert.match(successorSystemPrompt, /Template context/);
+	assert.doesNotMatch(successorSystemPrompt, /Changed Template context/);
+	assert.match(successorSystemPrompt, /Spawn context/);
+	assert.doesNotMatch(successorSystemPrompt, /Native effective-cwd context/);
+	await coordinator.shutdown(async () => host.runtime.dispose());
+});
 
 test("a catalogued model under an unconfigured provider fails before Agent Identity", async (t) => {
 	const harness = await createCoordinatorHarness(t, {});
@@ -1290,68 +1001,6 @@ test("contradictory child Identity evidence is an invariant violation", async (t
 		await assert.rejects(
 			() => harness.spawn("spawn-contradictory-identity"),
 			/invariant_violation: child transcript contains 2 ordinary Identity entries/,
-		);
-	} finally {
-		await harness.shutdown();
-	}
-});
-
-test("post-commit conversation-fork prefix mutation is an invariant violation", async (t) => {
-	const harness = await createCoordinatorHarness(t, {
-		afterIdentityCommit: ({ identity }) => {
-			const sessionFile = capturedSessionManager(identity.agentId).getSessionFile();
-			assert.ok(sessionFile);
-			const transcript = readFileSync(sessionFile, "utf8");
-			assert.match(transcript, /Original inherited context/);
-			writeFileSync(
-				sessionFile,
-				transcript.replace("Original inherited context", "Mutated inherited context"),
-				"utf8",
-			);
-		},
-	});
-	harness.host.session.sessionManager.appendMessage(
-		fauxAssistantMessage("Original inherited context"),
-	);
-	try {
-		await assert.rejects(
-			() => harness.spawn("spawn-mutated-fork-prefix", {
-				title: "Fixture request",
-				request: "Reject the mutated prefix.",
-				conversation: "fork",
-			}),
-			/inherited context contradicts its parent source/,
-		);
-	} finally {
-		await harness.shutdown();
-	}
-});
-
-test("duplicate conversation-fork handoff evidence is an invariant violation", async (t) => {
-	const harness = await createCoordinatorHarness(t, {
-		afterIdentityCommit: ({ identity }) => {
-			const transcript = openDurableCapturedSession(identity.agentId);
-			const handoff = transcript.getEntries().find(
-				(entry) => entry.type === "custom_message" &&
-					entry.customType === "agent-coordination.conversation-fork",
-			);
-			assert.ok(handoff?.type === "custom_message");
-			transcript.appendCustomMessageEntry(
-				handoff.customType,
-				handoff.content,
-				handoff.display,
-				handoff.details,
-			);
-		},
-	});
-	try {
-		await assert.rejects(
-			() => harness.spawn("spawn-duplicate-fork-handoff", {
-				title: "Fixture request",
-				request: "Reject the duplicate handoff.",
-				conversation: "fork",
-			}),
-			/contains 2 current conversation fork handoffs/,
 		);
 	} finally {
 		await harness.shutdown();

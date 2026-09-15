@@ -10,7 +10,6 @@ import {
 export type AgentSpawnInput = Readonly<{
 	title: string;
 	request: string;
-	conversation?: "fork";
 	template?: string;
 	label?: string;
 	description?: string;
@@ -19,10 +18,12 @@ export type AgentSpawnInput = Readonly<{
 
 export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSpawnInput {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CoordinationRecordValidationError("invalid_input: coordination input must be an object");
+	if (Object.hasOwn(value, "conversation")) {
+		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn conversation is no longer supported; pass context explicitly in request");
+	}
 	requireExactKeys(value, [
 		"title",
 		"request",
-		...(value.conversation === undefined ? [] : ["conversation"]),
 		...(value.template === undefined ? [] : ["template"]),
 		...(value.label === undefined ? [] : ["label"]),
 		...(value.description === undefined ? [] : ["description"]),
@@ -34,7 +35,6 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 	if (typeof value.title !== "string" || !value.title.trim()) {
 		throw new CoordinationRecordValidationError("invalid_input: Creation Request title must not be blank");
 	}
-	const conversation = validateConversation(value.conversation);
 	const template = optionalString(value.template, "template");
 	if (template !== undefined) {
 		if (!isAgentTemplateName(template)) {
@@ -50,17 +50,11 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 	return {
 		title: value.title,
 		request: value.request,
-		...(conversation === undefined ? {} : { conversation }),
 		...(template === undefined ? {} : { template }),
 		...(label === undefined ? {} : { label }),
 		...(description === undefined ? {} : { description }),
 		...(config === undefined ? {} : { config }),
 	};
-}
-
-function validateConversation(value: unknown): "fork" | undefined {
-	if (value === undefined || value === "fork") return value;
-	throw new CoordinationRecordValidationError('invalid_input: Agent Spawn conversation must be "fork"');
 }
 
 function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {

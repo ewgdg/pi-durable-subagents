@@ -12,10 +12,9 @@ import {
 import {
 	commitChildAgentIdentity,
 	type ChildAgentIdentity,
-	validateColdChildConversationMode,
+	validateChildIdentityBootstrap,
 	validateCommittedChildIdentity,
 } from "../protocol/child-identity.ts";
-import { validateConversationForkTranscript } from "../protocol/conversation-fork.ts";
 import {
 	deriveMessageIdentity,
 	ProtocolInvariantError,
@@ -30,7 +29,6 @@ import type {
 import { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
 import {
-	materializeForkedAgentTranscript,
 	materializeNewAgentTranscript,
 	transcriptFromSessionFile,
 } from "../pi-integration/session-manager-transcript.ts";
@@ -117,6 +115,7 @@ export class DefaultChildSpawner {
 		if (this.#isShuttingDown()) {
 			throw new Error("host_shutting_down: Workflow is shutting down");
 		}
+		validateAgentSpawnInput(providedInput);
 		const parent = this.#requireAgent(callerAgentId);
 		const parentTranscript = parent.transcript.inspect();
 		const { source, input: committedInput } = resolveCommittedSpawnSource({
@@ -148,9 +147,6 @@ export class DefaultChildSpawner {
 				agentId,
 				parent,
 				spawnInput: input,
-				// Configured forks use their resolved tools, not the parent active surface.
-				preserveParentPromptSurface: input.conversation === "fork" &&
-					input.template === undefined && input.config === undefined,
 			});
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
@@ -186,10 +182,9 @@ export class DefaultChildSpawner {
 			creationPreset: prepared.creationPreset,
 			metadata,
 		};
-		if (input.conversation !== "fork") {
-			try {
-				commitChildAgentIdentity(sessionManager, identity);
-			} catch (error) {
+		try {
+			commitChildAgentIdentity(sessionManager, identity);
+		} catch (error) {
 				if (error instanceof ProtocolInvariantError) throw error;
 				return {
 					spawnStatus: "not_created",
@@ -197,26 +192,17 @@ export class DefaultChildSpawner {
 					reason: errorMessage(error),
 				};
 			}
-		}
 
 		let sessionPath: string;
 		let materializationUncertain = false;
 		try {
-			sessionPath = input.conversation === "fork"
-				? await materializeForkedAgentTranscript({
-					sessionManager,
-					parentTranscript,
-					identity,
-				})
-				: await materializeNewAgentTranscript(sessionManager);
+			sessionPath = await materializeNewAgentTranscript(sessionManager);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
 			const candidatePath = sessionManager.getSessionFile();
 			if (!candidatePath || !this.#hasExactDurableEvidence(
 				candidatePath,
 				identity,
-				input.conversation === "fork",
-				parentTranscript,
 			)) {
 				return {
 					spawnStatus: "not_created",
@@ -232,20 +218,11 @@ export class DefaultChildSpawner {
 		validateCommittedChildIdentity(
 			childInspection,
 			identity,
-			{ inheritedConversation: input.conversation === "fork" },
 		);
-		validateColdChildConversationMode({
+		validateChildIdentityBootstrap({
 			entries: childInspection.entries,
 			identity,
-			inheritedConversation: input.conversation === "fork",
 		});
-		if (input.conversation === "fork") {
-			validateConversationForkTranscript({
-				parentTranscript,
-				childTranscript: childInspection,
-				identity,
-			});
-		}
 
 		const child = this.#sessionFactory.createAgentRecord({
 			identity,
@@ -362,28 +339,17 @@ export class DefaultChildSpawner {
 	#hasExactDurableEvidence(
 		sessionPath: string,
 		identity: ChildAgentIdentity,
-		inheritedConversation: boolean,
-		parentTranscript: ReturnType<AgentRecord["transcript"]["inspect"]>,
 	): boolean {
 		try {
 			const inspection = transcriptFromSessionFile(sessionPath).inspect();
 			validateCommittedChildIdentity(
 				inspection,
 				identity,
-				{ inheritedConversation },
 			);
-			validateColdChildConversationMode({
+			validateChildIdentityBootstrap({
 				entries: inspection.entries,
 				identity,
-				inheritedConversation,
 			});
-			if (inheritedConversation) {
-				validateConversationForkTranscript({
-					parentTranscript,
-					childTranscript: inspection,
-					identity,
-				});
-			}
 			return true;
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;

@@ -180,141 +180,49 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	await reopenedAgain.runtime.dispose();
 });
 
-test("a fresh Owner host rediscovers a conversation-fork child without copied obligations", async (t) => {
+test("historical child fork evidence is quarantined without rewriting either transcript", { timeout: 5_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
-	const historicalSource = {
-		agentId: "historical-requester",
-		entryId: "historical-request-entry",
-		toolCallId: "historical-inbound-request",
+	const owner = host.session.sessionManager;
+	const historicalPrefix = owner.getEntries();
+	const entryId = owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", {
+		title: "Historical fork", request: "Inherited work.", conversation: "fork",
+	}, { id: "historical-fork-spawn" }), { stopReason: "toolUse" }));
+	const directory = workflowSessionDirectory(host);
+	await mkdir(directory, { recursive: true });
+	const child = SessionManager.create(host.cwd, directory);
+	const childId = child.getSessionId();
+	const header = child.getHeader();
+	assert.ok(header);
+	const identity = {
+		agentId: childId, workflowId: owner.getSessionId(), directSpawnerAgentId: owner.getSessionId(),
+		spawnSource: { agentId: owner.getSessionId(), entryId, toolCallId: "historical-fork-spawn" },
+		creationPreset: null, metadata: { label: "agent" },
 	};
-	const historicalRequestId = deriveMessageIdentity(historicalSource);
-	const historicalDelivery = createMessageDelivery([{
-		source: historicalSource,
-		projection: {
-			title: "Fixture request",
-			kind: "request",
-			requestMessageId: historicalRequestId,
-			fromAgentId: historicalSource.agentId,
-			question: "Remain an obligation of the parent only.",
-		},
-	}]);
-	host.session.sessionManager.appendCustomMessageEntry(
-		historicalDelivery.customType,
-		historicalDelivery.content,
-		historicalDelivery.display,
-		historicalDelivery.details,
-	);
-	host.model.setResponses([
-		(context) => fauxAssistantMessage(
-			fauxToolCall("agent_message", {
-				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
-				answer: "The conversation-fork child completed its own Creation Request.",
-			}, { id: "answer-fork-before-host-loss" }),
-			{ stopReason: "toolUse" },
-		),
-	]);
-	const spawned = await executeTool(host, "agent_spawn", "spawn-fork-before-host-loss", {
-		title: "Fixture request",
-		request: "Continue with inherited conversation before host loss.",
-		conversation: "fork",
-		label: "recovered-fork",
-		config: { allowedTools: ["read"], systemPrompt: "Recovered fork setup" },
-	}) as { agentId: string };
-	const childSessionFile = await waitForSessionFile(
-		workflowSessionDirectory(host),
-		spawned.agentId,
-	);
-	await waitForTranscriptEntry(
-		childSessionFile,
-		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
-			entry.message.toolName === "agent_message",
-	);
-	const forkSource = host.session.sessionManager.getEntries().find(
-		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
-			entry.message.content.some(
-				(part) => part.type === "toolCall" && part.id === "spawn-fork-before-host-loss",
-			),
-	);
-	assert.ok(forkSource?.parentId);
-	host.session.sessionManager.branch(forkSource.parentId);
-	host.session.sessionManager.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Continue the parent on an alternate branch." }],
-		timestamp: Date.now(),
-	});
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage("The alternate parent branch does not revoke the child fork."),
-	);
-	const ownerSessionFile = host.session.sessionManager.getSessionFile();
-	assert.ok(ownerSessionFile);
+	const inheritedTail = historicalPrefix.at(-1);
+	assert.ok(inheritedTail);
+	const childPath = child.getSessionFile();
+	const ownerPath = owner.getSessionFile();
+	assert.ok(childPath && ownerPath);
+	// Model a saved retired-mode child, including its copied Identity before the current cutoff.
+	const records = [
+		{ ...header, parentSession: ownerPath },
+		...historicalPrefix,
+		{ type: "custom", id: "child-cutoff", parentId: inheritedTail.id,
+			timestamp: new Date().toISOString(), customType: "agent-coordination.identity", data: identity },
+	];
+	await writeFile(childPath, records.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
 	await host.runtime.dispose();
-
-	const reopened = await reopenOwner(t, host, ownerSessionFile);
+	const ownerBefore = await readFile(ownerPath, "utf8");
+	const childBefore = await readFile(childPath, "utf8");
+	const reopened = await reopenOwner(t, host, ownerPath);
 	const observe = reopened.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
-	const children = await observe.execute(
-		"observe-recovered-conversation-fork",
-		{ operation: "search", scope: "direct_children" },
-		undefined,
-		undefined,
-		reopened.session.extensionRunner.createContext(),
-	);
-	assert.deepEqual(
-		(children.details as { matches: Array<{ agentId: string; label: string }> }).matches
-			.map(({ agentId, label }) => ({ agentId, label })),
-		[{ agentId: spawned.agentId, label: "recovered-fork" }],
-	);
-	const parentStatus = await observe.execute(
-		"observe-parent-historical-obligation",
-		{ operation: "status" },
-		undefined,
-		undefined,
-		reopened.session.extensionRunner.createContext(),
-	);
-	assert.equal(
-		retentionCount(
-			(parentStatus.details as {
-				run: { retentionReasons: Array<{ reason: string; count: number }> };
-			}).run,
-			"answer_owed",
-		),
-		1,
-	);
-	const childStatus = await observe.execute(
-		"observe-fork-without-historical-obligation",
-		{ operation: "status", agentId: spawned.agentId },
-		undefined,
-		undefined,
-		reopened.session.extensionRunner.createContext(),
-	);
-	assert.equal(
-		retentionCount(
-			(childStatus.details as {
-				run: { retentionReasons: Array<{ reason: string; count: number }> };
-			}).run,
-			"answer_owed",
-		),
-		0,
-	);
-
-	let recoveredContext: Context | undefined;
-	reopened.model.setResponses([(context) => {
-		recoveredContext = structuredClone(context);
-		return fauxAssistantMessage("Configured fork recovery observed.");
-	}]);
-	await executeTool(reopened, "agent_message", "restart-configured-fork", {
-		title: "Fixture request",
-		operation: "request",
-		targetAgent: spawned.agentId,
-		question: "Verify the configured fork after cold recovery.",
-	});
-	await waitForCondition(async () => recoveredContext !== undefined);
-	assert.match(recoveredContext!.systemPrompt ?? "", /Recovered fork setup/);
-	const recoveredTools = recoveredContext!.tools?.map(({ name }) => name) ?? [];
-	assert.ok(recoveredTools.includes("read"));
-	assert.equal(recoveredTools.includes("bash"), false);
-	assert.match(JSON.stringify(recoveredContext!.messages), /Remain an obligation of the parent only/);
+	await assert.rejects(observe.execute("historical-fork-status", {
+		operation: "status", agentId: childId,
+	}, undefined, undefined, reopened.session.extensionRunner.createContext()), /evidence_unavailable/);
+	assert.equal(await readFile(childPath, "utf8"), childBefore);
+	assert.equal(await readFile(ownerPath, "utf8"), ownerBefore);
 	await reopened.runtime.dispose();
 });
 

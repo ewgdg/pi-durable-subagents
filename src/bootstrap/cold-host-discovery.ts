@@ -10,13 +10,12 @@ import { isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { resolveOrdinaryAgentMetadata } from "../protocol/agent-metadata.ts";
-import { validateConversationForkTranscript } from "../protocol/conversation-fork.ts";
 import {
 	type AgentSpawnInput,
 	validateAgentSpawnInput,
 } from "../protocol/agent-spawn-input.ts";
 import {
-	validateColdChildConversationMode,
+	validateChildIdentityBootstrap,
 	validateColdChildIdentity,
 	type ChildAgentIdentity,
 } from "../protocol/child-identity.ts";
@@ -186,18 +185,10 @@ export async function discoverColdWorkflow(options: {
 			}
 			const input = validateAgentSpawnInput(committed.input);
 			const childInspection = await candidate.transcript.refresh();
-			validateColdChildConversationMode({
+			validateChildIdentityBootstrap({
 				entries: childInspection.entries,
 				identity: candidate.identity,
-				inheritedConversation: input.conversation === "fork",
 			});
-			if (input.conversation === "fork") {
-				validateConversationForkTranscript({
-					parentTranscript: parentInspection,
-					childTranscript: childInspection,
-					identity: candidate.identity,
-				});
-			}
 			const metadata = resolveOrdinaryAgentMetadata({
 				explicitLabel: input.label,
 				explicitDescription: input.description,

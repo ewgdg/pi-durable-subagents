@@ -12,7 +12,6 @@ export function buildPiChildCliLaunch(options: {
 	cliPath: string;
 	sessionPath: string;
 	configuration: AgentRunLaunchConfiguration;
-	initialTools?: readonly string[];
 	skillPaths: readonly string[];
 	bridgeExtensionPath: string;
 	inputExtensionPath: string;
@@ -23,7 +22,6 @@ export function buildPiChildCliLaunch(options: {
 		cliPath,
 		sessionPath,
 		configuration,
-		initialTools = configuration.allowedTools,
 		skillPaths,
 		bridgeExtensionPath,
 		inputExtensionPath,
@@ -70,18 +68,12 @@ export function buildPiChildCliLaunch(options: {
 	if (inputExtensionPath === bridgeExtensionPath) {
 		throw new Error("invalid_child_launch: bridge and input extensions must be distinct");
 	}
-	const allowedToolNames = new Set(configuration.allowedTools);
-	if (new Set(initialTools).size !== initialTools.length) {
-		throw new Error("invalid_child_launch: initial tools contain duplicates");
+	if (new Set(configuration.allowedTools).size !== configuration.allowedTools.length) {
+		throw new Error("invalid_child_launch: allowed tools contain duplicates");
 	}
-	for (const toolName of initialTools) {
+	for (const toolName of configuration.allowedTools) {
 		if (toolName.includes(",")) {
 			throw new Error(`invalid_child_launch: tool name cannot contain a comma: ${toolName}`);
-		}
-		if (!allowedToolNames.has(toolName)) {
-			throw new Error(
-				`invalid_child_launch: initial tool exceeds the capability ceiling: ${toolName}`,
-			);
 		}
 	}
 	if ((systemPromptArtifactPath === undefined) !== (configuration.systemPrompt === undefined)) {
@@ -99,9 +91,9 @@ export function buildPiChildCliLaunch(options: {
 		...(configuration.thinking === undefined
 			? []
 			: ["--thinking", configuration.thinking]),
-		...(initialTools.length === 0
+		...(configuration.allowedTools.length === 0
 			? ["--no-tools"]
-			: ["--tools", initialTools.join(",")]),
+			: ["--tools", configuration.allowedTools.join(",")]),
 		"--no-extensions",
 		// Control must be connected before inherited session_start handlers run: an
 		// inherited extension may synchronously open UI or initiate Agent work.

@@ -6,8 +6,6 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { AgentCreationPreset } from "../templates/agent-templates.ts";
 import { validateAgentCreationPreset } from "./agent-creation-preset.ts";
-import { validateConversationForkHandoff } from "./conversation-fork.ts";
-import { CONVERSATION_FORK_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "./owner-identity.ts";
 import type { ToolCallPointer } from "./identities.ts";
 import { ProtocolInvariantError } from "./identities.ts";
@@ -29,13 +27,12 @@ export type ChildAgentIdentity = Readonly<{
 export function commitChildAgentIdentity(
 	sessionManager: SessionManager,
 	identity: ChildAgentIdentity,
-	options?: { inheritedConversation?: boolean },
 ): void {
 	if (sessionManager.getSessionId() !== identity.agentId) {
 		throw new Error("Child Identity Agent ID does not match its Pi session");
 	}
 	const entries = sessionManager.getEntries();
-	if (!options?.inheritedConversation && entries.length !== 0) {
+	if (entries.length !== 0) {
 		throw new Error("Child transcript is not empty before Identity commit");
 	}
 	if (
@@ -53,24 +50,16 @@ export function commitChildAgentIdentity(
 export function validateCommittedChildIdentity(
 	transcript: TranscriptInspection,
 	expected: ChildAgentIdentity,
-	options?: { inheritedConversation?: boolean },
 ): void {
 	if (transcript.sessionId !== expected.agentId) {
 		throw new ProtocolInvariantError("child Identity does not match its Pi session identity");
 	}
-	const ordinaryIdentities = transcript.entries.filter(
+	const identities = transcript.entries.filter(
 		(entry) => entry.type === "custom" && entry.customType === AGENT_IDENTITY_CUSTOM_TYPE,
 	);
-	const identities = options?.inheritedConversation
-		? ordinaryIdentities.filter(
-			(entry) => entry.type === "custom" &&
-				isRecord(entry.data) && entry.data.agentId === expected.agentId,
-		)
-		: ordinaryIdentities;
 	if (identities.length !== 1) {
-		const identityKind = options?.inheritedConversation ? "current ordinary" : "ordinary";
 		throw new ProtocolInvariantError(
-			`child transcript contains ${identities.length} ${identityKind} Identity entries`,
+			`child transcript contains ${identities.length} ordinary Identity entries`,
 		);
 	}
 	const identity = identities[0];
@@ -157,10 +146,9 @@ export function validateColdChildIdentity(options: {
 	};
 }
 
-export function validateColdChildConversationMode(options: {
+export function validateChildIdentityBootstrap(options: {
 	entries: readonly SessionEntry[];
 	identity: ChildAgentIdentity;
-	inheritedConversation: boolean;
 }): void {
 	const identityIndex = options.entries.findIndex(
 		(entry) => entry.type === "custom" &&
@@ -177,35 +165,9 @@ export function validateColdChildConversationMode(options: {
 	if (latestOrdinaryIdentityIndex !== identityIndex) {
 		throw new ProtocolInvariantError("child Identity is not the latest ordinary Identity");
 	}
-	const currentHandoffs = options.entries.slice(identityIndex + 1).filter(
-		(entry) => entry.type === "custom_message" &&
-			entry.customType === CONVERSATION_FORK_CUSTOM_TYPE,
-	);
-	const expectedHandoffCount = options.inheritedConversation ? 1 : 0;
-	if (currentHandoffs.length !== expectedHandoffCount) {
-		throw new ProtocolInvariantError(
-			`child transcript contains ${currentHandoffs.length} current conversation fork handoffs`,
-		);
+	if (identityIndex !== 0 || identityEntry.parentId !== null) {
+		throw new ProtocolInvariantError("child Identity is not the transcript bootstrap entry");
 	}
-	if (!options.inheritedConversation) {
-		if (identityIndex !== 0 || identityEntry.parentId !== null) {
-			throw new ProtocolInvariantError("child Identity is not the transcript bootstrap entry");
-		}
-		return;
-	}
-	const inheritedTail = options.entries[identityIndex - 1];
-	if (identityIndex === 0 || !inheritedTail || identityEntry.parentId !== inheritedTail.id) {
-		throw new ProtocolInvariantError(
-			"conversation fork Identity does not follow its inherited context",
-		);
-	}
-	const handoff = options.entries[identityIndex + 1];
-	if (!handoff || handoff.parentId !== identityEntry.id) {
-		throw new ProtocolInvariantError(
-			"conversation fork handoff does not follow its child Identity",
-		);
-	}
-	validateConversationForkHandoff(handoff, options.identity);
 }
 
 function requireExactRecord(

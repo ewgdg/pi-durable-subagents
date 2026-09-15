@@ -118,7 +118,6 @@ export class ProcessChildSessionFactory {
 		parent: AgentRecord;
 		spawnInput: AgentSpawnInput;
 		creationPreset?: AgentCreationPreset;
-		preserveParentPromptSurface?: boolean;
 	}): Promise<PreparedOrdinaryChildRuntime> {
 		return this.#prepareOrdinaryRun(options, new Set());
 	}
@@ -313,7 +312,6 @@ export class ProcessChildSessionFactory {
 			parent: AgentRecord;
 			spawnInput: AgentSpawnInput;
 			creationPreset?: AgentCreationPreset;
-			preserveParentPromptSurface?: boolean;
 		},
 		resolving: Set<string>,
 		captureTemplates = true,
@@ -343,13 +341,7 @@ export class ProcessChildSessionFactory {
 				projectTrusted: preparedRuntime.projectTrusted,
 			}),
 		};
-		if (!options.preserveParentPromptSurface) return prepared;
-		if (!parentRuntime.activeTools) {
-			throw new Error(
-				"conversation_fork_unavailable: parent active tool surface is unavailable",
-			);
-		}
-		return { ...prepared, initialTools: [...parentRuntime.activeTools] };
+		return prepared;
 	}
 
 	async #resolveCurrentRuntime(
@@ -375,7 +367,6 @@ export class ProcessChildSessionFactory {
 						(path) => !this.#isCoordinationExtension(path),
 					),
 				},
-				activeTools: [...snapshot.tools],
 				projectTrusted: snapshot.projectTrusted,
 				skillSources: snapshot.skillSources.map(({ name, filePath }) => ({
 					name,
@@ -437,7 +428,6 @@ export class ProcessChildSessionFactory {
 					.extensions.map(({ resolvedPath }) => resolvedPath)
 					.filter((path) => !this.#isCoordinationExtension(path)),
 			},
-			activeTools: [...session.getActiveToolNames()],
 			projectTrusted: this.#ownerRuntime.services.settingsManager.isProjectTrusted(),
 			skillSources: skills.map(({ name, filePath }) => ({ name, filePath })),
 		};
@@ -462,9 +452,6 @@ export class ProcessChildSessionFactory {
 			expectedSessionId: identity.agentId,
 			sessionPath,
 			configuration: prepared.configuration,
-			...(prepared.initialTools === undefined
-				? {}
-				: { initialTools: prepared.initialTools }),
 			skillPaths: prepared.skillSources.map(({ path }) => path),
 			projectTrusted: prepared.projectTrusted,
 			agentDir: this.#ownerRuntime.services.agentDir,

@@ -75,7 +75,6 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	expectedSessionId: string;
 	sessionPath: string;
 	configuration: AgentRunLaunchConfiguration;
-	initialTools?: readonly string[];
 	skillPaths: readonly string[];
 	projectTrusted: boolean;
 	agentDir?: string;
@@ -215,9 +214,6 @@ export class PiChildProcessRuntime {
 				cliPath: options.cliPath ?? resolveInstalledPiCliPath(),
 				sessionPath: options.sessionPath,
 				configuration: options.configuration,
-				...(options.initialTools === undefined
-					? {}
-					: { initialTools: options.initialTools }),
 				skillPaths: options.skillPaths,
 				bridgeExtensionPath,
 				inputExtensionPath,

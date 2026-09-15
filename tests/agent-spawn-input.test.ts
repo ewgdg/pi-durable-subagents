@@ -6,28 +6,19 @@ import { participantCoordinationToolSchemas } from "../src/tools/participant-coo
 
 import { validateAgentSpawnInput } from "../src/protocol/agent-spawn-input.ts";
 
-test("Agent Spawn accepts an unconfigured conversation fork", () => {
-	assert.deepEqual(validateAgentSpawnInput({
-		title: "Fixture request",
-		request: "Continue from the spawning conversation.",
-		conversation: "fork",
-		label: "continuation",
-	}), {
-		title: "Fixture request",
-		request: "Continue from the spawning conversation.",
-		conversation: "fork",
-		label: "continuation",
-	});
+test("Agent Spawn rejects every removed conversation field", () => {
+	for (const conversation of ["fork", "copy", null, undefined]) {
+		const input = { title: "Fixture request", request: "Use isolated context.", conversation };
+		assert.throws(() => validateAgentSpawnInput(input), /conversation.*no longer supported/);
+		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), false);
+	}
 });
 
-test("conversation forks accept independent Template and Runtime configuration", () => {
-	for (const configuration of [
-		{ template: "reviewer" },
-		{ config: { allowedTools: ["read"] } },
-		{ template: "reviewer", config: { allowedTools: ["read"] } },
-	]) {
-		const input = { title: "Fixture request", request: "Continue with the selected setup.", conversation: "fork", ...configuration };
+test("isolated spawning accepts default, Template and explicit configuration", () => {
+	for (const configuration of [{}, { template: "reviewer" }, { config: { allowedTools: ["read"] } }, { template: "reviewer", config: { allowedTools: ["read"] } }]) {
+		const input = { title: "Fixture request", request: "Use supplied context.", ...configuration };
 		assert.deepEqual(validateAgentSpawnInput(input), input);
+		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
 	}
 });
 
