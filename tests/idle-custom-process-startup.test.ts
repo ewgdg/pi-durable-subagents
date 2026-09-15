@@ -9,7 +9,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
-import { MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
+import { AGENT_IDENTITY_CUSTOM_TYPE, MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
@@ -63,12 +63,15 @@ for (const kind of ["message", "request"] as const) {
 			assert.deepEqual({ customType: entry.customType, content: entry.content, display: entry.display, details: entry.details }, message);
 			assert.match(JSON.stringify(entry.content), new RegExp(messageId));
 			await assertPreparedTurn(child, turn);
+			const kickoffs = entries.filter(candidate => candidate.type === "message" && candidate.message.role === "user");
+			assert.equal(kickoffs.length, turn, "each idle Run commits exactly one empty kickoff");
+			assert.ok(entries.indexOf(kickoffs.at(-1)!) < entries.indexOf(entry), "the empty kickoff precedes canonical Delivery");
 		}
 		await attachNativeChildDisplay(child.runtime);
 		await waitUntil(async () => {
 			await child.runtime.drain();
 			return nativeChildDisplayText(child.runtime).includes(`Prepared ${kind} wake 2`);
-		});
+		}).catch(error => { throw new Error(`${error.message}\n${nativeChildDisplayText(child.runtime)}`); });
 		assert.doesNotMatch(nativeChildDisplayText(child.runtime), /agent-coordination\.message-delivery/,
 			"the retained custom type still uses its registered native renderer");
 		assert.equal(child.humanInputs(), 0, "empty extension kickoffs must not create Human Requests");
@@ -113,9 +116,19 @@ async function startChild(t: TestContext) {
 	const sessionPath = join(root, "child.jsonl");
 	const probePath = join(root, "preparation.jsonl");
 	const agentId = "019a6b4d-1b22-7000-8000-000000000139";
-	await writeFile(sessionPath, JSON.stringify({
-		type: "session", version: 3, id: agentId, timestamp: new Date().toISOString(), cwd,
-	}) + "\n");
+	const timestamp = new Date().toISOString();
+	await writeFile(sessionPath, [
+		{ type: "session", version: 3, id: agentId, timestamp, cwd },
+		{
+			type: "custom", id: "startup-identity", parentId: null, timestamp,
+			customType: AGENT_IDENTITY_CUSTOM_TYPE,
+			data: {
+				agentId, workflowId: "startup-workflow", directSpawnerAgentId: "startup-workflow",
+				spawnSource: { agentId: "startup-workflow", entryId: "spawn-entry", toolCallId: "spawn-call" },
+				creationPreset: null, metadata: { label: "Startup Child" },
+			},
+		},
+	].map(entry => JSON.stringify(entry) + "\n").join(""));
 	await writeFile(probePath, "");
 	let humanInputs = 0;
 	const runtime = await PiChildProcessRuntime.start({
@@ -158,6 +171,14 @@ async function assertPreparedTurn(child: Awaited<ReturnType<typeof startChild>>,
 	assert.deepEqual(probe.filter(event => event.phase === "prepare"),
 		Array.from({ length: turn }, (_, index) => ({ phase: "prepare", inputs: index + 1, preparations: index + 1 })));
 	assert.equal(probe.filter(event => event.phase === "tool").length, turn);
+	const kickoffs = SessionManager.open(child.sessionPath).getEntries().filter(entry =>
+		entry.type === "message" && entry.message.role === "user");
+	assert.equal(kickoffs.length, turn);
+	for (const entry of kickoffs) {
+		assert.ok(entry.type === "message" && entry.message.role === "user");
+		const content = entry.message.content;
+		assert.equal(typeof content === "string" ? content : content.map(part => part.type === "text" ? part.text : "image").join(""), "");
+	}
 }
 
 function ownerHandlers(agentId: string, sessionPath: string, humanInput: () => void): OwnerParticipantRequestHandlers<"ordinary"> {
