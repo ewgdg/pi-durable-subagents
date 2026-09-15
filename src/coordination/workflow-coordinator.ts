@@ -1152,6 +1152,18 @@ export class WorkflowCoordinator {
 			const active = this.#activeAgentView;
 			if (active?.record.identity.agentId === agentId) return { kind: "selected" };
 			const record = this.#requireAgent(agentId);
+			if (record.host.currentQuotaSuspension() && !record.host.currentProjection()) {
+				// Cold recovery retains the logical Run without a model Runtime. Merely
+				// navigating its evidence must neither start nor resume that Runtime.
+				return {
+					kind: "post_mortem",
+					agentId,
+					label: record.identity.metadata.label,
+					transcript: record.transcript.inspect(),
+					quotaSuspended: true,
+					preparationError: "Quota suspension retained; Runtime was not started.",
+				};
+			}
 			let target: AgentViewTarget;
 			try {
 				target = await this.#acquireAgentViewTarget(record);

@@ -54,6 +54,12 @@ test("cold persistent recovery retains suspended child, queued Request work and 
 	assert.ok(view.status(agentId).run.retentionReasons.some(reason => reason.reason === "answer_owed"));
 	assert.ok(view.reportHistory().find(item => item.report.reportId === report.report.reportId)?.readAt);
 	assert.equal(view.reportHistory().length, 1);
+	const retainedView = await view.openAgentPresentation(agentId);
+	assert.equal(retainedView.kind, "post_mortem");
+	if (retainedView.kind !== "post_mortem") assert.fail("Expected retained transcript view");
+	assert.equal(retainedView.quotaSuspended, true);
+	assert.equal(retainedView.transcript.transcriptPath, originalStatus.primaryEvidence.transcriptPath);
+	assert.ok(view.status(agentId).run.suspension, "navigation preserves the quota stop");
 	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("workflow_resume", {}, { id: "cold-recovery" }), { stopReason: "toolUse" }));
 	await view.resumeWorkflow("cold-recovery");
 	for (let index = 0; index < 3; index++) {
