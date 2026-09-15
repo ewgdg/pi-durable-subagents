@@ -28,6 +28,7 @@ import {
 } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 import { bindPrimarySteeringAdmission } from "../pi-integration/primary-steering-admission.ts";
+import { disposeSessionStartup, registerSessionStartup } from "../pi-integration/session-startup.ts";
 
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
@@ -60,6 +61,7 @@ function createParticipantBoundExtension<
 	registerSurfaces: (pi: ExtensionAPI, resolveView: () => View) => void,
 ): ExtensionFactory {
 	return (pi) => {
+		registerSessionStartup(pi);
 		registerMessageDeliveryRenderer(
 			pi,
 			(agentId) => resolveView().agentLabel(agentId),
@@ -135,6 +137,7 @@ export function bindHiddenOwnerAgentExtension(options: {
 	});
 	pi.on("session_shutdown", () => {
 		unbindPrimarySteeringAdmission();
+		disposeSessionStartup(runtime.session);
 		return prepareOwnerReplacement();
 	});
 }
