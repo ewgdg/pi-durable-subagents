@@ -93,3 +93,21 @@ test("report replay retains valid-record provenance and duplicate invariants", (
 	manager.appendCustomEntry("agent-coordination.moderator-report", { ...report, reporter: { ...reporter, agentId: "other" } });
 	assert.throws(() => reports.history(), /reporter must match source Agent/);
 });
+
+test("runtime diagnostic reports retain truthful provenance and read state across cold reopen", () => {
+	const manager = fixture();
+	const reports = store(manager);
+	const source = { kind: "runtime_diagnostic" as const, agentId: manager.getSessionId(), entryId: manager.appendCustomEntry("agent-coordination.operational-diagnostic", { message: "Inspection blocked" }), transcriptPath: manager.getSessionFile()! };
+	const report = reports.publishRuntime(input, source);
+	assert.equal(report.reporter, undefined, "runtime does not impersonate Moderator or Owner");
+	assert.equal(report.source.toolCallId, undefined);
+	reports.setRead(report.reportId, true);
+	const reopened = store(SessionManager.open(manager.getSessionFile()!));
+	assert.deepEqual(reopened.get(report.reportId), report);
+	assert.ok(reopened.history()[0]?.readAt);
+	assert.deepEqual(reopened.publishRuntime({ ...input, symptom: "still failing" }, source), report);
+	assert.equal(reopened.history().length, 1);
+	assert.ok(reopened.history()[0]?.readAt, "publication does not re-notify after read");
+	reopened.setRead(report.reportId, false);
+	assert.equal(reopened.history()[0]?.readAt, undefined);
+});

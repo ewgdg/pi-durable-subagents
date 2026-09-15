@@ -1,5 +1,6 @@
 import { CoordinationRecordValidationError } from "./record-validation.ts";
 import type { ToolCallPointer } from "./identities.ts";
+import type { EntryPointer } from "./moderator-input.ts";
 
 export const MODERATOR_REPORT_CUSTOM_TYPE = "agent-coordination.moderator-report";
 export const MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE = "agent-coordination.moderator-report-read";
@@ -13,14 +14,22 @@ export type ReportToUserInput = Readonly<{
 	evidence: readonly string[];
 }>;
 export type Reporter = Readonly<{ agentId: string; label: string }>;
-export type ModeratorReportSource = ToolCallPointer & Readonly<{ transcriptPath: string }>;
+export type ModeratorReportSource = ToolCallPointer & Readonly<{ transcriptPath: string; kind?: never }>;
+export type RuntimeReportSource = EntryPointer & Readonly<{ kind: "runtime_diagnostic"; transcriptPath: string; toolCallId?: never }>;
 export type ModeratorReport = ReportToUserInput & Readonly<{
 	reportId: string;
 	createdAt: string;
 	reporter: Reporter;
 	source: ModeratorReportSource;
 }>;
-export type ReportHistoryItem = Readonly<{ report: ModeratorReport; readAt?: string }>;
+export type RuntimeReport = ReportToUserInput & Readonly<{
+	reportId: string;
+	createdAt: string;
+	reporter?: never;
+	source: RuntimeReportSource;
+}>;
+export type Report = ModeratorReport | RuntimeReport;
+export type ReportHistoryItem = Readonly<{ report: Report; readAt?: string }>;
 
 export function validateReportToUserInput(value: unknown): ReportToUserInput {
 	if (typeof value !== "object" || value === null) throw new CoordinationRecordValidationError("Report input must be an object");
@@ -40,15 +49,15 @@ export function validateReportToUserInput(value: unknown): ReportToUserInput {
 	});
 }
 
-export function formatModeratorReport(report: ModeratorReport): string {
+export function formatModeratorReport(report: Report): string {
 	return [
-		`# Moderator report ${report.reportId}`,
+		`# ${report.reporter ? "Moderator" : "Runtime"} report ${report.reportId}`,
 		`Created: ${report.createdAt}`,
-		`Reporter: ${report.reporter.label} (${report.reporter.agentId})`,
+		report.reporter ? `Reporter: ${report.reporter.label} (${report.reporter.agentId})` : "Author: Workflow runtime (not an Agent)",
 		`Source transcript: ${report.source.transcriptPath}`,
-		`Source Agent: ${report.source.agentId}`,
+		`${report.reporter ? "Source Agent" : "Diagnostic host Agent"}: ${report.source.agentId}`,
 		`Source entry: ${report.source.entryId}`,
-		`Source tool call: ${report.source.toolCallId}`,
+		...(report.reporter ? [`Source tool call: ${report.source.toolCallId}`] : ["Source kind: runtime diagnostic entry"]),
 		"", "## Symptom", report.symptom,
 		"", "## Suspected defect", report.suspectedDefect,
 		"", "## Uncertainty", report.uncertainty,
@@ -58,16 +67,29 @@ export function formatModeratorReport(report: ModeratorReport): string {
 	].join("\n");
 }
 
-export function validateModeratorReport(value: unknown): ModeratorReport {
+export function validateModeratorReport(value: unknown): Report {
 	const input = validateReportToUserInput(value);
-	const report = value as ModeratorReport;
-	validateReportProvenance(report.reporter, report.source);
+	const report = value as Report;
+	if (report.source?.kind === "runtime_diagnostic") {
+		validateRuntimeReportSource(report.source);
+		if (report.reporter !== undefined) throw new CoordinationRecordValidationError("Runtime report cannot name an Agent reporter");
+	} else {
+		validateReportProvenance(report.reporter!, report.source);
+	}
 	if (typeof report.reportId !== "string" || !report.reportId || typeof report.createdAt !== "string" || !Number.isFinite(Date.parse(report.createdAt)))
 		throw new CoordinationRecordValidationError("Invalid Moderator report identity or timestamp");
 	// Detach nested values before freezing without mutating transcript evidence.
 	return Object.freeze({ ...input, reportId: report.reportId, createdAt: report.createdAt,
-		reporter: Object.freeze({ ...report.reporter }), source: Object.freeze({ ...report.source }),
-	});
+		...(report.reporter ? { reporter: Object.freeze({ ...report.reporter }) } : {}), source: Object.freeze({ ...report.source }),
+	}) as Report;
+}
+
+export function validateRuntimeReportSource(source: RuntimeReportSource): void {
+	if (source?.kind !== "runtime_diagnostic" || source.toolCallId !== undefined)
+		throw new CoordinationRecordValidationError("Runtime report requires diagnostic-entry provenance, not a tool call");
+	for (const value of [source.agentId, source.entryId, source.transcriptPath]) {
+		if (typeof value !== "string" || !value.trim()) throw new CoordinationRecordValidationError("Runtime report source must be nonblank");
+	}
 }
 
 export function validateReportProvenance(reporter: Reporter, source: ModeratorReportSource): void {

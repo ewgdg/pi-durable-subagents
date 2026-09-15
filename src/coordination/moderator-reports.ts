@@ -10,7 +10,9 @@ import {
 	validateModeratorReport,
 	validateModeratorReportReadState,
 	validateReportProvenance,
-	type ModeratorReport,
+	type Report,
+	type RuntimeReportSource,
+	validateRuntimeReportSource,
 	type ModeratorReportSource,
 	type Reporter,
 	type ReportHistoryItem,
@@ -29,21 +31,31 @@ export class ModeratorReportStore {
 		this.#append = options.appendCustomEntry;
 	}
 
-	publish(input: ReportToUserInput, reporter: Reporter, source: ModeratorReportSource): ModeratorReport {
+	publish(input: ReportToUserInput, reporter: Reporter, source: ModeratorReportSource): Report {
 		const validated = validateReportToUserInput(input);
 		validateReportProvenance(reporter, source);
-		const reportId = createHash("sha256").update(JSON.stringify([MODERATOR_REPORT_CUSTOM_TYPE, toolCallPointerKey(source)])).digest("base64url");
+		return this.#publish(validated, source, toolCallPointerKey(source), reporter);
+	}
+
+	publishRuntime(input: ReportToUserInput, source: RuntimeReportSource): Report {
+		const validated = validateReportToUserInput(input);
+		validateRuntimeReportSource(source);
+		return this.#publish(validated, source, JSON.stringify([source.kind, source.agentId, source.entryId]));
+	}
+
+	#publish(validated: ReportToUserInput, source: ModeratorReportSource | RuntimeReportSource, sourceKey: string, reporter?: Reporter): Report {
+		const reportId = createHash("sha256").update(JSON.stringify([MODERATOR_REPORT_CUSTOM_TYPE, sourceKey])).digest("base64url");
 		const existing = this.history().find((item) => item.report.reportId === reportId);
 		// A retried source returns its original publication, never a revised report.
 		if (existing) return existing.report;
-		const report = validateModeratorReport({ ...validated, reportId, createdAt: new Date().toISOString(), reporter, source });
+		const report = validateModeratorReport({ ...validated, reportId, createdAt: new Date().toISOString(), ...(reporter ? { reporter } : {}), source });
 		this.#append(MODERATOR_REPORT_CUSTOM_TYPE, report);
 		return report;
 	}
 
 	history(): readonly ReportHistoryItem[] {
 		const transcript = this.#transcript.inspect();
-		const reports = new Map<string, ModeratorReport>();
+		const reports = new Map<string, Report>();
 		const reads = new Map<string, string>();
 		for (const entry of coordinationEntries(transcript, transcript.sessionId, "coordination")) {
 			if (entry.type !== "custom") continue;
@@ -66,7 +78,7 @@ export class ModeratorReportStore {
 		return Object.freeze([...reports.values()].map((report) => Object.freeze({ report, ...(reads.has(report.reportId) ? { readAt: reads.get(report.reportId)! } : {}) })));
 	}
 
-	get(reportId: string): ModeratorReport {
+	get(reportId: string): Report {
 		const item = this.history().find((item) => item.report.reportId === reportId);
 		if (!item) throw new Error(`Unknown Moderator report ${reportId}`);
 		return item.report;

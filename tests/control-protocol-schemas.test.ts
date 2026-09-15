@@ -620,3 +620,17 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		queuedInputCount: 0,
 	}), true);
 });
+
+test("Control snapshots carry runtime diagnostic reports but reject invented tool or reporter provenance", () => {
+	const report = { reportId: "runtime-report", createdAt: "2026-06-11T00:00:00Z",
+		source: { kind: "runtime_diagnostic", agentId: "owner", entryId: "diagnostic", transcriptPath: "/tmp/owner.jsonl" },
+		symptom: "Inspection unavailable", suspectedDefect: "Unknown", uncertainty: "No incident established",
+		recoveryActions: "None", recoveryOutcome: "Still unavailable", evidence: ["owner/diagnostic"],
+	};
+	const snapshot = { live: [], dormant: [], humanAttention: [], operationalAttention: [], reports: [{ report, readAt: report.createdAt }], selectedAgentId: "owner" };
+	const schema = agentControlMethods["presentation.agents.snapshot"].response;
+	assert.ok(Check(schema, JSON.parse(JSON.stringify(snapshot))));
+	for (const invalid of [ { ...report, reporter: { agentId: "owner", label: "Owner" } }, { ...report, source: { ...report.source, toolCallId: "fake" } } ]) {
+		assert.equal(Check(schema, { ...snapshot, reports: [{ report: invalid }] }), false);
+	}
+});

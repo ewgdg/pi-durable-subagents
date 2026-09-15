@@ -9,7 +9,7 @@ export type ModeratorReportSurfaceResult = "back" | "view_reporter";
 export type ModeratorReportSurfaceOptions = Readonly<{
 	setRead(read: boolean): Promise<void> | void;
 	copyReport(text: string): Promise<void> | void;
-	prepareReporter(): Promise<void> | void;
+	prepareReporter?(): Promise<void> | void;
 }>;
 
 export function openModeratorReportSurface(
@@ -29,6 +29,7 @@ class ModeratorReportSurface implements Component {
 	readonly #options: ModeratorReportSurfaceOptions;
 	readonly #done: (result: ModeratorReportSurfaceResult) => void;
 	readonly #reportText: string;
+	readonly #hasReporter: boolean;
 	readonly #body: Text;
 	#read: boolean;
 	#pending: "action" | "reporter" | undefined;
@@ -45,6 +46,7 @@ class ModeratorReportSurface implements Component {
 		this.#options = options;
 		this.#done = done;
 		this.#read = item.readAt !== undefined;
+		this.#hasReporter = item.report.reporter !== undefined;
 		this.#reportText = formatModeratorReport(item.report);
 		// Plain wrapped Markdown keeps every source reference visible, including link destinations.
 		this.#body = new Text(sanitizeReportTerminalText(this.#reportText), 0, 0);
@@ -58,10 +60,10 @@ class ModeratorReportSurface implements Component {
 		this.#maximumScrollTop = Math.max(0, body.length - this.#viewportRows);
 		this.#scrollTop = Math.min(this.#scrollTop, this.#maximumScrollTop);
 		const lines = [
-			this.#theme.fg("accent", this.#theme.bold(`Moderator report · read-only · ${this.#read ? "Read" : "Unread"}`)),
+			this.#theme.fg("accent", this.#theme.bold(`${this.#hasReporter ? "Moderator" : "Runtime"} report · read-only · ${this.#read ? "Read" : "Unread"}`)),
 			...body.slice(this.#scrollTop, this.#scrollTop + this.#viewportRows),
 			this.#theme.fg("muted", this.#pending === "reporter" ? "Opening reporter…" : this.#pending ? "Working…" : this.#feedback),
-			this.#theme.fg("dim", "m Toggle read · c Copy report · v View reporter · ↑/↓/wheel scroll · PgUp/PgDn · Home/End · Esc/q back"),
+			this.#theme.fg("dim", `m Toggle read · c Copy report · ${this.#hasReporter && this.#options.prepareReporter ? "v View reporter · " : ""}↑/↓/wheel scroll · PgUp/PgDn · Home/End · Esc/q back`),
 		];
 		return lines.slice(0, height).map((line) => truncateToWidth(line, boundedWidth, ""));
 	}
@@ -74,8 +76,9 @@ class ModeratorReportSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, "v")) {
+			if (!this.#hasReporter || !this.#options.prepareReporter) return;
 			if (!this.#pending) void this.#perform(async () => {
-				await this.#options.prepareReporter();
+				await this.#options.prepareReporter!();
 				this.#close("view_reporter");
 			}, "reporter");
 			return;

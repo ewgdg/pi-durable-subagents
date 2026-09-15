@@ -142,16 +142,17 @@ export function registerAgentsCommand(
 					const reportId = action.reportId;
 					const item = view.reportHistory().find(({ report }) => report.reportId === reportId);
 					if (!item) throw new Error("Report is unavailable");
+					const reporter = item.report.reporter;
 					const outcome = await openModeratorReportSurface(ctx.ui, item, {
 						setRead: (read) => view.setReportRead(reportId, read),
 						copyReport: copyToClipboard,
-						prepareReporter: () => prepareSelection({ kind: "select_agent", agentId: item.report.reporter.agentId }, selectorTui!),
+						prepareReporter: reporter ? () => prepareSelection({ kind: "select_agent", agentId: reporter.agentId }, selectorTui!) : undefined,
 					});
-					if (outcome !== "view_reporter") {
+					if (outcome !== "view_reporter" || !reporter) {
 						reopenSelector = true;
 						continue;
 					}
-					action = { kind: "select_agent", agentId: item.report.reporter.agentId };
+					action = { kind: "select_agent", agentId: reporter.agentId };
 				}
 				if (action?.kind === "decide") {
 					try {

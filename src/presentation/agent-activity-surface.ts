@@ -170,7 +170,7 @@ export class AgentActivityDock implements Component {
 			...visibleItems.map((item, index) => {
 				const branch = index === visibleRowCount - 1 ? "└─" : "├─";
 				if (item.kind === "report") {
-					return `${branch} ${this.#theme.fg("warning", "REPORT")} ${boundedToolPreview(sanitizeReportTerminalText(item.report.reporter.label))} · ${boundedToolPreview(sanitizeReportTerminalText(item.report.symptom))}`;
+					return `${branch} ${this.#theme.fg("warning", "REPORT")} ${boundedToolPreview(sanitizeReportTerminalText(item.report.reporter?.label ?? "Runtime"))} · ${boundedToolPreview(sanitizeReportTerminalText(item.report.symptom))}`;
 				}
 				if (item.kind === "human") {
 					return `${branch} ${this.#theme.fg("warning", "DECIDE")} ${this.#theme.bold(item.attention.agentLabel)} · ${boundedToolPreview(item.attention.question)}`;

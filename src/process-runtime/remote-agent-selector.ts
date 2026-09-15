@@ -235,12 +235,13 @@ export function registerRemoteAgentsCommand(
 					if (action?.kind === "open_report") {
 						const item = currentSnapshot.reports.find(({ report }) => report.reportId === action.reportId);
 						if (!item) throw new Error("Report is unavailable");
+						const reporter = "reporter" in item.report ? item.report.reporter : undefined;
 						const outcome = await openModeratorReportSurface(ctx.ui, item, {
 							setRead: (read) => presentation.setReportRead(item.report.reportId, read),
 							copyReport: copyToClipboard,
-							prepareReporter: async () => {
-								postMortemResult = await presentation.select({ kind: "select_agent", agentId: item.report.reporter.agentId });
-							},
+							prepareReporter: reporter ? async () => {
+								postMortemResult = await presentation.select({ kind: "select_agent", agentId: reporter.agentId });
+							} : undefined,
 						});
 						if (outcome !== "view_reporter") {
 							reopenSelector = true;

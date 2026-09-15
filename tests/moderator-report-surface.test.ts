@@ -246,3 +246,30 @@ test("failed Mark unread preserves the read state and retries the desired state"
 	h.component.handleInput?.("q");
 	assert.equal(await result, "back");
 });
+
+test("runtime reports are copyable and acknowledgeable without fictional reporter navigation", async () => {
+	const runtimeItem: ReportHistoryItem = { report: {
+		...item.report, reporter: undefined,
+		source: { kind: "runtime_diagnostic", agentId: "owner", entryId: "diagnostic-exact", transcriptPath: "/tmp/owner.jsonl" },
+	} };
+	const h = harness();
+	const reads: boolean[] = [];
+	let copied = "";
+	let navigations = 0;
+	const result = openModeratorReportSurface(h.ui, runtimeItem, {
+		setRead(read) { reads.push(read); }, copyReport(text) { copied = text; }, prepareReporter() { navigations++; },
+	});
+	assert.match(h.component.render(180).join("\n"), /Runtime report/);
+	assert.doesNotMatch(h.component.render(180).join("\n"), /View reporter/);
+	h.component.handleInput?.("v"); await flush();
+	assert.equal(navigations, 0);
+	h.component.handleInput?.("c"); await flush();
+	assert.match(copied, /Source entry: diagnostic-exact/);
+	assert.doesNotMatch(copied, /Source tool call|Reporter:/);
+	assert.deepEqual(reads, []);
+	h.component.handleInput?.("m"); await flush();
+	h.component.handleInput?.("m"); await flush();
+	assert.deepEqual(reads, [true, false]);
+	h.component.handleInput?.("q");
+	assert.equal(await result, "back");
+});

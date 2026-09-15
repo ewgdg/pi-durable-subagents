@@ -601,13 +601,19 @@ const OperationalIncidentAttentionSchema = closed({
 	}),
 	diagnostics: Type.Array(EntryPointerSchema, { uniqueItems: true }),
 });
-const ModeratorReportSchema = closed({
+const ReportFields = {
 	...participantCoordinationToolSchemas.report_to_user.properties,
 	reportId: NonEmptyStringSchema,
 	createdAt: NonEmptyStringSchema,
+};
+const ModeratorReportSchema = Type.Union([closed({
+	...ReportFields,
 	reporter: OperationalIncidentAgentSchema,
 	source: closed({ ...ToolCallPointerSchema.properties, transcriptPath: NonEmptyStringSchema }),
-});
+}), closed({
+	...ReportFields,
+	source: closed({ ...EntryPointerSchema.properties, kind: Type.Literal("runtime_diagnostic"), transcriptPath: NonEmptyStringSchema }),
+})]);
 const ReportHistoryItemSchema = closed({
 	report: ModeratorReportSchema,
 	readAt: Type.Optional(NonEmptyStringSchema),

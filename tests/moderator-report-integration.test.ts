@@ -75,8 +75,8 @@ test("Moderator reports return without human waiting and survive independent inc
 	const sourceEntry = SessionManager.open(moderatorPath).getEntries().find((entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some((part) => part.type === "toolCall" && part.id === "publish-report"));
 	assert.ok(sourceEntry);
 	assert.deepEqual(item.report.source, { agentId: moderatorId, entryId: sourceEntry.id, toolCallId: "publish-report", transcriptPath: moderatorPath });
-	assert.equal(item.report.reporter.agentId, moderatorId);
-	assert.equal(item.report.reporter.label, coordinator.forModerator(moderatorId).status().label);
+	assert.equal(item.report.reporter?.agentId, moderatorId);
+	assert.equal(item.report.reporter?.label, coordinator.forModerator(moderatorId).status().label);
 	for (const key of Object.keys(input) as Array<keyof typeof input>) assert.deepEqual(item.report[key], input[key]);
 	const published = result("publish-report");
 	assert.ok(published?.type === "message" && published.message.role === "toolResult");

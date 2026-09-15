@@ -662,7 +662,7 @@ class AgentSelectorSurface implements Component {
 		const safeLine = (text: string) => sanitizeReportTerminalText(text).replace(/\s+/g, " ").trim();
 		return {
 			value: `report:${report.reportId}`,
-			label: `REPORT · ${safeLine(report.reporter.label)}`,
+			label: `REPORT · ${safeLine(report.reporter?.label ?? "Runtime")}`,
 			description: `${readAt === undefined ? "Unread" : "Read"} · ${boundedToolPreview(safeLine(report.symptom))}`,
 			kind: "attention",
 			action: { kind: "open_report", reportId: report.reportId },
