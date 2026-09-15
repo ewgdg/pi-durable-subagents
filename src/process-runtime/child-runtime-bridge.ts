@@ -422,6 +422,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			if (bootstrap.ownerPresentation) {
 				await refreshOrdinaryAgentTools?.(event.reason === "reload");
 			}
+			// Set only the initial active selection, not Pi's registry allow-list.
+			// Inherited startup handlers run next; reload preserves native runtime changes.
+			if (!retained) pi.setActiveTools(bootstrap.tools);
 			if (bootstrap.ownerPresentation) {
 				binding.activity.update(
 					await participantRequest("presentation.agents.snapshot", {}),

@@ -197,6 +197,7 @@ export class PiChildProcessRuntime {
 				agentId: requireIdentity("agentId", options.agentId),
 				role: options.role,
 				ownerPresentation: options.ownerRequestHandlers !== undefined,
+				tools: [...options.configuration.tools],
 				expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),
 			};
 			if (options.configuration.systemPrompt !== undefined) {

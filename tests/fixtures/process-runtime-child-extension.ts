@@ -86,6 +86,15 @@ faux.setResponses(process.env.PROCESS_RUNTIME_COORDINATION_TOOLS === "1"
 	]
 	: Array.from({ length: 24 }, () => delayedResponse));
 
+if (process.env.PROCESS_RUNTIME_ACTIVATED_TOOL === "1") {
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("runtime_sequential_probe", {}, {
+			id: "activated-runtime-probe",
+		})], { stopReason: "toolUse" }),
+		delayedResponse,
+	]);
+}
+
 const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 	let queuedPostRunContinuation = false;
 	const visibilityProbe = process.env.PROCESS_RUNTIME_VISIBILITY_PROBE;
@@ -173,6 +182,8 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		const initialToolsProbe = process.env.PROCESS_RUNTIME_INITIAL_TOOLS_PROBE;
+		if (initialToolsProbe) appendFileSync(initialToolsProbe, JSON.stringify(pi.getActiveTools()) + "\n");
 		// Test-only fault injection: the bridge receives the public readonly view,
 		// while Pi owns the writable SessionManager behind that same object.
 		const sessionManager = ctx.sessionManager as unknown as SessionManager;
@@ -228,6 +239,13 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 			await pi.setModel(faux.models[1]!);
 			pi.setActiveTools([]);
 			ctx.ui.setWidget("process-runtime-state", ["PROCESS_RUNTIME_STATE_CHANGED"]);
+		},
+	});
+	pi.registerCommand("runtime-activate", {
+		description: "Activate a registered tool after initial admission",
+		async handler(_args, ctx) {
+			pi.setActiveTools([...pi.getActiveTools(), "runtime_sequential_probe"]);
+			ctx.ui.setWidget("process-runtime-activated", ["PROCESS_RUNTIME_TOOL_ACTIVATED"]);
 		},
 	});
 

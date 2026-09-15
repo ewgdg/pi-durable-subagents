@@ -1139,7 +1139,7 @@ test("startup tool admission compares sets and preserves execution-mode validati
 	assert.throws(() => assertSelectedTools({ tools: ["read"], toolExecutionModes: [] }, ["read"]), /child_runtime_tool_modes_mismatch/);
 });
 
-for (const selection of ["reordered", "missing"] as const) {
+for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as const) {
 	test(`startup checks exact initial tools: ${selection}`, {
 		timeout: TEST_TIMEOUT_MS,
 		skip: process.platform === "win32",
@@ -1165,6 +1165,7 @@ for (const selection of ["reordered", "missing"] as const) {
 			"agent_observe",
 			"agent_spawn",
 			"ask_user",
+			...(selection === "unavailable" ? ["unavailable_selected_tool"] : []),
 		] as const;
 		let runtime: PiChildProcessRuntime | undefined;
 		try {
@@ -1194,9 +1195,12 @@ for (const selection of ["reordered", "missing"] as const) {
 					PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify([
 						...tools.filter((name) => name !== "read"),
 						...(selection === "missing" ? [] : ["read"]),
+						...(selection === "unexpected" ? ["runtime_sequential_probe"] : []),
 					]),
 					// Yield in the inherited session_start handler before changing tools.
 					PROCESS_RUNTIME_STARTUP_DELAY_MS: "250",
+					PROCESS_RUNTIME_ACTIVATED_TOOL: "1",
+					PROCESS_RUNTIME_INITIAL_TOOLS_PROBE: join(root, "initial-tools.jsonl"),
 				},
 				runtimeDirectory: root,
 				ownerRequestHandlers: ordinaryOwnerHandlers({
@@ -1204,8 +1208,9 @@ for (const selection of ["reordered", "missing"] as const) {
 				}),
 			});
 			if (selection !== "reordered") {
-				const missing = ["read"];
-				const unexpected: string[] = [];
+				const missing = selection === "missing" ? ["read"]
+					: selection === "unavailable" ? ["unavailable_selected_tool"] : [];
+				const unexpected = selection === "unexpected" ? ["runtime_sequential_probe"] : [];
 				await assert.rejects(startup.then((admitted) => { runtime = admitted; return admitted; }), (error: unknown) => {
 					assert.ok(error instanceof Error);
 					assert.ok(error.message.includes(`child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`), error.message);
@@ -1214,6 +1219,7 @@ for (const selection of ["reordered", "missing"] as const) {
 				return;
 			}
 			runtime = await startup;
+			assert.deepEqual(JSON.parse(await readFile(join(root, "initial-tools.jsonl"), "utf8")), tools);
 			assert.deepEqual(runtime.snapshot.tools, [
 				"agent_message",
 				"agent_control",
@@ -1226,6 +1232,19 @@ for (const selection of ["reordered", "missing"] as const) {
 			runtime.writeInput("/runtime-state\r");
 			await waitForFrame(runtime, "PROCESS_RUNTIME_STATE_CHANGED");
 			assert.deepEqual((await runtime.channel.request("runtime.snapshot", {})).tools, []);
+			runtime.writeInput("/runtime-activate\r");
+			await waitForFrame(runtime, "PROCESS_RUNTIME_TOOL_ACTIVATED");
+			const activatedSnapshot = await runtime.channel.request("runtime.snapshot", {});
+			assert.deepEqual(activatedSnapshot.tools, ["runtime_sequential_probe"]);
+			assert.deepEqual(activatedSnapshot.toolExecutionModes, [{ name: "runtime_sequential_probe", executionMode: "sequential" }]);
+			await runtime.channel.request("message.deliver", {
+				deliveryId: "activate-new-tool",
+				delivery: { kind: "user", content: "Call the newly activated probe." },
+			});
+			await waitUntil(() => SessionManager.open(sessionPath).getEntries().some(entry =>
+				entry.type === "message" && entry.message.role === "toolResult" &&
+				entry.message.toolName === "runtime_sequential_probe" && !entry.message.isError
+			));
 		} finally {
 			await runtime?.dispose();
 		}

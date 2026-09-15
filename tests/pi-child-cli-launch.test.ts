@@ -49,7 +49,6 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 				"--session", "/sessions/child.jsonl",
 				"--model", "anthropic/claude-test",
 				"--thinking", "high",
-				"--tools", "read,agent_message,agent_spawn",
 				"--no-extensions",
 				// The bridge must bind Control before inherited session_start handlers
 				// can synchronously activate child work.

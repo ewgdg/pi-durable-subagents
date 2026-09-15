@@ -91,9 +91,8 @@ export function buildPiChildCliLaunch(options: {
 		...(configuration.thinking === undefined
 			? []
 			: ["--thinking", configuration.thinking]),
-		...(configuration.tools.length === 0
-			? ["--no-tools"]
-			: ["--tools", configuration.tools.join(",")]),
+		// Pi's --tools/--no-tools filter its tool registry permanently. The bridge
+		// applies the bootstrap selection with setActiveTools before inherited startup.
 		"--no-extensions",
 		// Control must be connected before inherited session_start handlers run: an
 		// inherited extension may synchronously open UI or initiate Agent work.

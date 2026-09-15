@@ -58,6 +58,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		agentId: "agent",
 		role: "ordinary",
 		ownerPresentation: true,
+		tools: [],
 		expectedSessionId: "session",
 	} as const;
 	assert.equal(Check(ControlEndpointSchema, endpoint), true);

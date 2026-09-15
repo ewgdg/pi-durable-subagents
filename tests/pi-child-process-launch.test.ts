@@ -52,6 +52,8 @@ test("launch projects the real startup PTY through runtime admission", {
 		await readiness;
 		const runtime = await launch.ready();
 		assert.equal(runtime.pid, launch.pid);
+		assert.deepEqual(runtime.snapshot.tools, []);
+		assert.deepEqual(JSON.parse(await readFile(options.ownerEnvironment!.PROCESS_RUNTIME_INITIAL_TOOLS_PROBE!, "utf8")), []);
 		assert.deepEqual(runtime.ready, {
 			sessionId: options.expectedSessionId,
 			mode: "tui",
@@ -231,6 +233,7 @@ async function createLaunchOptions(
 			...process.env,
 			PI_SKIP_VERSION_CHECK: "1",
 			PROCESS_RUNTIME_STARTUP_DELAY_MS: String(startupDelayMilliseconds),
+			PROCESS_RUNTIME_INITIAL_TOOLS_PROBE: join(root, "initial-tools.jsonl"),
 		},
 		runtimeDirectory: root,
 		columns: 80,

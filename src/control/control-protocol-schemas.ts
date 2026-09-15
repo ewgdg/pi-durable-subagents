@@ -59,6 +59,7 @@ export const ChildProcessBootstrapSchema = Type.Object({
 	agentId: NonEmptyStringSchema,
 	role: Type.Union([Type.Literal("ordinary"), Type.Literal("moderator")]),
 	ownerPresentation: Type.Boolean(),
+	tools: Type.Array(NonEmptyStringSchema, { uniqueItems: true }),
 	expectedSessionId: NonEmptyStringSchema,
 }, { additionalProperties: false });
 
