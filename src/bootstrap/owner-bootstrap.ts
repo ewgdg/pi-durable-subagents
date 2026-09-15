@@ -153,9 +153,6 @@ export async function initializeOwnerWorkflow(options: {
 		policy,
 		prepareOwnerReplacement,
 	});
-	if (existing && recoveredWorkflow.agents.length > 0) {
-		ctx.ui.notify("Workflow revalidated. Participant Runs were stopped for reload; pending work remains dormant. Check interrupted effects before using workflow_resume.", "warning");
-	}
 	if (recoveredWorkflow.quarantinedCandidateCount > 0) {
 		ctx.ui.notify(
 			`${recoveredWorkflow.quarantinedCandidateCount} Agent transcript candidate${recoveredWorkflow.quarantinedCandidateCount === 1 ? " was" : "s were"} quarantined; independently verified Agents remain available.`,

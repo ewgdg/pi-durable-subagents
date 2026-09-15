@@ -860,7 +860,7 @@ for (const invalidate of [false, true]) {
 		}, undefined, undefined, host.session.extensionRunner.createContext()), /shutting_down/);
 		assert.equal(host.ui.widgets.has("agent-coordination.blockage"), false);
 		assert.ok(host.session.getActiveToolNames().includes("workflow_resume"));
-		assert.ok(host.ui.notifications.some(({ message }) => message.includes("pending work remains dormant")));
+		assert.equal(host.ui.notifications.some(({ message }) => message.includes("Workflow revalidated")), false);
 		const freshObserve = host.session.getToolDefinition("agent_observe")!;
 		const after = await freshObserve.execute("after-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createContext());
 		assert.equal((after.details as { run: { phase: string } }).run.phase, "dormant");

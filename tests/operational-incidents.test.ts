@@ -4046,5 +4046,5 @@ test("Owner reload stops active ordinary Moderators before fresh admission", { t
 	});
 	assert.equal((observed.details as { run: { phase: string } }).run.phase, "dormant");
 	assert.equal((await findModerators(host)).length, 1);
-	assert.ok(host.ui.notifications.some(({ message }) => message.includes("pending work remains dormant")));
+	assert.equal(host.ui.notifications.some(({ message }) => message.includes("Workflow revalidated")), false);
 });
