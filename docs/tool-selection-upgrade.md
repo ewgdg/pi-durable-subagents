@@ -50,6 +50,38 @@ relying on the new checks or assuming `/reload` provides new cleanup guarantees
 to an old coordinator. See [Owner resource reload](cold-host-recovery.md#owner-resource-reload)
 for shutdown and revalidation constraints.
 
+### Bootstrap compatibility checks
+
+Control protocol 8 versions the required bootstrap `tools` field. Incompatible
+bootstrap changes must change `AGENT_CONTROL_PROTOCOL_VERSION`; identical version
+numbers alone do not prove compatible schemas.
+
+Before ordinary child or Moderator preparation, the Owner checks the installed
+bootstrap contract in a fresh, bounded Node process. This is a schema probe, not
+a Pi session, Agent Run, or model call. It avoids the Owner's cached modules and
+does not send connection tokens or Agent descriptors to the probe. The low-level
+launch checks again before allocating its listener, startup artifacts, or PTY,
+including when the launch preparation was cached.
+
+An incompatible or unverifiable contract blocks that factory's launch path for
+the rest of its lifetime. Repeated resume, cancellation-delivery, or Moderator
+preparation attempts reuse the rejection rather than launching a diagnostic
+Agent through the same path. Restoring files alone does not clear that rejection;
+align the installation and restart the Owner. A rejection before runtime binding
+does not create an exact Run failure or resolve any Request. Existing live
+Runtimes are not proactively terminated by this check.
+
+Diagnostics distinguish `control_bootstrap_protocol_mismatch` from
+`control_bootstrap_schema_drift`. `control_bootstrap_probe_failed` means the
+installed contract could not be verified, not that a version difference was
+proved. Bootstrap validation reports schema field failures without printing
+descriptor values or the connection token.
+
+The check is not an atomic installation lock: files can still change between
+verification and launch. It compares the bootstrap schema and protocol version,
+not every implementation detail. Semantic contract changes still require version
+discipline, and stopping the host before upgrading remains the safe procedure.
+
 ## Runtime inspection
 
 Launch configuration `tools` records the selected initial set. Runtime snapshot `tools` reports the current active set. There is no separate allowed-tool ceiling in runtime snapshots. Consumers of the former snapshot field must update accordingly.
