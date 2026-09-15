@@ -126,7 +126,7 @@ async function runScenario(scenario: Scenario): Promise<ScenarioMeasurement> {
           cwd,
           model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
           thinking: "off",
-          allowedTools: [],
+          tools: [],
           skills: [],
           extensions: [CHILD_EXTENSION, RENDER_PROBE_EXTENSION],
           loadContextFiles: true,
