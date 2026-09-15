@@ -112,10 +112,11 @@ export class RunSupervisor {
 					agentId: target.identity.agentId,
 					messageId: message.messageId,
 				};
-				const hold = target.host.currentInterruptionHold();
+				const hold = target.host.currentResumptionHold();
 				if (!hold) {
 					return { ...identity, delivery: "rejected", rejectionReason: "not_held" };
 				}
+				await target.host.prepareQuotaResumptionInLane();
 				const admission = await this.#messages.admitResumeInLane(target, message, hold);
 				if (admission === "pending") return { ...identity, messageStatus: "sent" };
 				return {
@@ -195,6 +196,24 @@ export class RunSupervisor {
 		});
 	}
 
+	resumeQuotaFromHuman(agentId: string): Promise<boolean> {
+		const record = this.#requireAgent(agentId);
+		return record.host.lane.run(async () => {
+			if (!record.host.currentQuotaSuspension()) return false;
+			const hold = record.host.currentResumptionHold()!;
+			await record.host.prepareQuotaResumptionInLane();
+			if (!record.host.beginIsolatedResumptionInLane(hold)) throw new Error("Quota resumption is already in progress");
+			try {
+				await this.submitFromHumanInLane(record, "The human explicitly resumed this quota-suspended Run. Continue the existing work and outstanding Requests.", undefined);
+				if (!record.host.commitIsolatedResumptionInLane(hold)) throw new Error("Quota resumption lost its exact Run");
+				return true;
+			} catch (error) {
+				record.host.cancelIsolatedResumptionInLane(hold);
+				throw error;
+			}
+		});
+	}
+
 	resumeFromHuman(
 		agentId: string,
 		text: string,
@@ -213,6 +232,7 @@ export class RunSupervisor {
 		images: readonly ImageContent[] | undefined,
 		submissionSequence?: number,
 	): Promise<boolean> {
+		if (record.host.currentQuotaSuspension()) return false;
 		const hold = record.host.currentInterruptionHold();
 		if (!hold) return false;
 		if (!record.host.beginIsolatedResumptionInLane(hold)) {

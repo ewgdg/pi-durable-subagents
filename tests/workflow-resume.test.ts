@@ -347,7 +347,7 @@ function runtimeParticipant(agentId: string) {
 	let handle: AgentRunHandle | undefined = { sequence: 1 };
 	let sequence = 1;
 	let hasInput = true;
-	let hold: import("../src/runtime/agent-runtime-host.ts").InterruptionHoldHandle | undefined;
+	let hold: import("../src/runtime/agent-runtime-host.ts").RunResumptionHandle | undefined;
 	let holdSequence = 0;
 	let attention: "none" | "agent_wait" = "none";
 	const ended = new Set<(handle: AgentRunHandle, cause: AgentRunEndCause) => void>();
@@ -370,7 +370,10 @@ function runtimeParticipant(agentId: string) {
 		lane: new SerialLane(),
 		residualRequestCounts: () => ({ incoming: 0, outgoing: 0 }),
 		currentInterruptionHold: () => hold,
-		isCurrentInterruptionHold: (candidate: unknown) => candidate === hold,
+		currentResumptionHold: () => hold,
+		currentQuotaSuspension: () => undefined,
+		prepareQuotaResumptionInLane: async () => undefined,
+		isCurrentResumptionHold: (candidate: unknown) => candidate === hold,
 		currentRunHasInput: () => hasInput,
 		currentHandle: () => handle, latestStartedRunSequence: () => sequence,
 		isCurrent: (candidate: AgentRunHandle) => candidate === handle,

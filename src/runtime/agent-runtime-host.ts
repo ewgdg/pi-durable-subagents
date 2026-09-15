@@ -17,6 +17,13 @@ import type {
 	RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import type { SerialLane } from "./serial-lane.ts";
+import type { QuotaEvidence } from "./quota-evidence.ts";
+
+export type AgentQuotaSuspension = Readonly<{
+	reason: "provider_quota";
+	evidence: QuotaEvidence;
+}>;
+export type QuotaSuspendedNativeInput = Readonly<{ steering: readonly string[]; followUp: readonly string[] }>;
 
 export type RunRetentionReason =
 	| "owner_host_binding"
@@ -37,10 +44,12 @@ export type LiveRunState = Readonly<{
 	phase: "starting" | "live" | "ending";
 	work?: "active" | "settled";
 	attention: "none" | "input_required" | "agent_wait";
+	suspension?: AgentQuotaSuspension;
 	retentionReasons: readonly AgentRetention[];
 }>;
 export type DormantRunState = Readonly<{
 	phase: "dormant";
+	suspension?: never;
 	retentionReasons: readonly [];
 }>;
 export type AgentRunState = LiveRunState | DormantRunState;
@@ -49,7 +58,7 @@ export type ProjectionInputSubmission = Readonly<{ sequence: number }>;
 export type RuntimeInitializationTermination = Readonly<{
 	cancellation: Promise<boolean>;
 }>;
-export type InterruptionHoldHandle = Readonly<{
+export type RunResumptionHandle = Readonly<{
 	run: AgentRunHandle;
 	sequence: number;
 }>;
@@ -176,11 +185,18 @@ export interface AgentRuntimeHost {
 	isCurrent(handle: AgentRunHandle): boolean;
 	blocksOrdinaryDelivery(): boolean;
 	isInterrupting(): boolean;
-	currentInterruptionHold(): InterruptionHoldHandle | undefined;
-	isCurrentInterruptionHold(hold: InterruptionHoldHandle): boolean;
-	beginIsolatedResumptionInLane(hold: InterruptionHoldHandle): boolean;
-	commitIsolatedResumptionInLane(hold: InterruptionHoldHandle): boolean;
-	cancelIsolatedResumptionInLane(hold: InterruptionHoldHandle): void;
+	currentInterruptionHold(): RunResumptionHandle | undefined;
+	currentResumptionHold(): RunResumptionHandle | undefined;
+	currentQuotaSuspension(): AgentQuotaSuspension | undefined;
+	quotaSuspensionBlocksExecution(): boolean;
+	/** Restores durable suspension without starting a Runtime or a successor Run. */
+	restoreQuotaSuspension(suspension: AgentQuotaSuspension, runSequence: number, nativeInput?: QuotaSuspendedNativeInput): void;
+	prepareQuotaResumptionInLane(): Promise<void>;
+	setQuotaSuspensionHandler(handler: (suspension: AgentQuotaSuspension | undefined, handle: AgentRunHandle, nativeInput?: QuotaSuspendedNativeInput) => void): void;
+	isCurrentResumptionHold(hold: RunResumptionHandle): boolean;
+	beginIsolatedResumptionInLane(hold: RunResumptionHandle): boolean;
+	commitIsolatedResumptionInLane(hold: RunResumptionHandle): boolean;
+	cancelIsolatedResumptionInLane(hold: RunResumptionHandle): void;
 	finishIsolatedResumptionInLane(handle: AgentRunHandle): void;
 	interruptCurrentRunInLane(): Promise<"held" | "already_held" | "not_running">;
 	prepareInterruption(): void;

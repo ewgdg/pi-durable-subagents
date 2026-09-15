@@ -60,7 +60,7 @@ import type { AgentWaitResult } from "../protocol/agent-wait.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
 import type {
 	AgentRunHandle,
-	InterruptionHoldHandle,
+	RunResumptionHandle,
 } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import type { UnresolvedAgentRequest } from "./dependency-deadlock.ts";
@@ -733,7 +733,7 @@ export class MessageCoordinator {
 	admitResumeInLane(
 		record: AgentRecord,
 		message: Extract<Message, { kind: "message" }>,
-		hold: InterruptionHoldHandle,
+		hold: RunResumptionHandle,
 	) {
 		return this.#deliveryScheduler.admitResumeInLane(
 			record,

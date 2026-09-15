@@ -2,6 +2,8 @@ import { resumeWorkflow } from "./workflow-resume.ts";
 import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { isDeepStrictEqual } from "node:util";
 import { ModeratorReportStore } from "./moderator-reports.ts";
+import { QuotaSuspensionStore, type RetainedQuotaSuspension } from "./quota-suspensions.ts";
+import { createQuotaSuspensionReport } from "../presentation/quota-suspension-report.ts";
 import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
@@ -156,6 +158,8 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	addAgentActivityChangeHandler(handler: () => void): () => void;
 	refreshAgentActivity(): void;
 	refreshTranscriptFacts(): Promise<void>;
+	/** Human-only Owner command; intentionally absent from child Control transport. */
+	resumeOwnerQuota?(): Promise<boolean>;
 	resumeFromHuman(
 		text: string,
 		images: readonly ImageContent[] | undefined,
@@ -249,6 +253,7 @@ export class WorkflowCoordinator {
 	readonly #agentWaits: AgentWaitCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
 	readonly #reports: ModeratorReportStore;
+	readonly #quotaSuspensions: QuotaSuspensionStore;
 	readonly #runSupervisor: RunSupervisor;
 	readonly #operationalIncidents: OperationalIncidentCoordinator;
 	readonly #agentActivityChangeHandlers = new Set<() => void>();
@@ -312,6 +317,10 @@ export class WorkflowCoordinator {
 			children: [],
 		});
 		this.#reports = new ModeratorReportStore({
+			transcript: this.#requireAgent(identity.agentId).transcript,
+			appendCustomEntry: (customType, data) => runtime.session.sessionManager.appendCustomEntry(customType, data),
+		});
+		this.#quotaSuspensions = new QuotaSuspensionStore({
 			transcript: this.#requireAgent(identity.agentId).transcript,
 			appendCustomEntry: (customType, data) => runtime.session.sessionManager.appendCustomEntry(customType, data),
 		});
@@ -523,6 +532,11 @@ export class WorkflowCoordinator {
 		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
 		await this.#messages.refreshTranscriptFacts();
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
+		for (const record of this.#agents.values()) {
+			if (record.identity.agentId !== this.#ownerIdentity.agentId && record.host.currentQuotaSuspension()) {
+				await record.host.initializeCurrentRunRelationships();
+			}
+		}
 	}
 
 	async refreshAgentTemplateSnapshot(agentId: string): Promise<AgentTemplateCatalogueSnapshot> {
@@ -653,8 +667,15 @@ export class WorkflowCoordinator {
 				this.#assertAdmissionOpen();
 				return this.#handleHumanInput(agentId, text, images, submissionSequence);
 			},
+			...(agentId === this.#ownerIdentity.agentId ? {
+				resumeOwnerQuota: () => {
+					this.#assertAdmissionOpen();
+					return this.#runSupervisor.resumeQuotaFromHuman(agentId);
+				},
+			} : {}),
 			primaryInputQueued: () => {
 				this.#assertAdmissionOpen();
+				if (this.#requireAgent(agentId).host.currentQuotaSuspension()) return Promise.resolve();
 				return this.#agentWaits.preemptForHumanInput(this.#requireAgent(agentId));
 			},
 			selectionRoster: () => this.#selectionRoster(),
@@ -730,7 +751,7 @@ export class WorkflowCoordinator {
 			// Isolated resumption blocks ordinary Delivery, not the resumed execution.
 			if (record.identity.agentId === this.#ownerIdentity.agentId ||
 				this.#waitingForExecution.has(record.identity.agentId) ||
-				record.host.currentInterruptionHold()) continue;
+				record.host.currentInterruptionHold() || record.host.currentQuotaSuspension()) continue;
 			const run = record.host.observe();
 			// Moderator startup belongs to the bounded recovery inspection below.
 			// A hung startup must stop counting when that inspection times out.
@@ -1073,6 +1094,18 @@ export class WorkflowCoordinator {
 	}
 
 	#integrateAgent(record: AgentRecord): void {
+		const retained = this.#quotaSuspensions.current(record.identity.agentId);
+		if (retained) record.host.restoreQuotaSuspension(retained.suspension, retained.runSequence, retained.nativeInput);
+		record.host.setQuotaSuspensionHandler((suspension, handle, nativeInput) => {
+			if (suspension) {
+				const retained = this.#quotaSuspensions.suspend(record.identity.agentId, handle.sequence, suspension, nativeInput);
+				this.#releaseExecution(record.identity.agentId, handle);
+				this.#publishQuotaSuspension(record, retained);
+			} else {
+				this.#quotaSuspensions.clear(record.identity.agentId, handle.sequence);
+			}
+		});
+		if (retained) this.#publishQuotaSuspension(record, retained);
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged());
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged());
 		record.host.addEndedHandler((handle) => {
@@ -1094,6 +1127,19 @@ export class WorkflowCoordinator {
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
 		this.#notifyAgentActivityChanged();
+	}
+
+	#publishQuotaSuspension(record: AgentRecord, retained: RetainedQuotaSuspension): void {
+		const transcriptPath = this.#requireAgent(this.#ownerIdentity.agentId).transcript.inspect().transcriptPath;
+		if (!transcriptPath) return;
+		// The journal entry is the stable incident identity; replay cannot re-notify
+		// a read report, and reading the notice cannot mutate execution permission.
+		this.#reports.publishRuntime(createQuotaSuspensionReport({
+			agentId: record.identity.agentId,
+			label: record.identity.metadata.label,
+			runSequence: retained.runSequence,
+			evidence: retained.suspension.evidence,
+		}), { kind: "runtime_diagnostic", agentId: this.#ownerIdentity.agentId, entryId: retained.entryId, transcriptPath });
 	}
 
 	#openAgentPresentation(agentId: string): Promise<AgentPresentationSelection> {
@@ -1452,6 +1498,9 @@ export class WorkflowCoordinator {
 		record: AgentRecord,
 		submission: ProjectionInputSubmission | undefined,
 	): void {
+		if (record.host.quotaSuspensionBlocksExecution()) {
+			throw new Error("quota_suspended: explicit agent_control resume is required");
+		}
 		if (
 			submission !== undefined &&
 			record.host.projectionInputSubmissionIsFenced(submission)
@@ -1464,6 +1513,7 @@ export class WorkflowCoordinator {
 		this.#assertAdmissionOpen();
 		if (this.#executionPermits.has(agentId)) return;
 		const record = this.#requireAgent(agentId);
+		if (record.host.quotaSuspensionBlocksExecution()) throw new Error("quota_suspended: explicit resume is required");
 		const run = record.host.observe();
 		if (run.phase !== "live" || run.attention === "input_required") return;
 		const handle = record.host.currentHandle();
@@ -1481,6 +1531,10 @@ export class WorkflowCoordinator {
 			this.#operationalIncidents.deliveryProgressChanged();
 		});
 		if (!permit) return;
+		if (record.host.quotaSuspensionBlocksExecution()) {
+			permit.release();
+			throw new Error("quota_suspended: execution admission was suspended");
+		}
 		if (this.#shuttingDown) {
 			permit.release();
 			this.#assertAdmissionOpen();
@@ -1502,6 +1556,7 @@ export class WorkflowCoordinator {
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition> {
 		const record = this.#requireAgent(agentId);
+		if (record.host.currentQuotaSuspension()) return Promise.resolve("discarded");
 		let inputSubmission: ProjectionInputSubmission | undefined;
 		try {
 			inputSubmission = this.#captureInputSubmission(record, submissionSequence);

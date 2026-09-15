@@ -4,6 +4,8 @@ import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import type {
 	AgentRetentionReason,
+	AgentQuotaSuspension,
+	QuotaSuspendedNativeInput,
 	AgentRunEndCause,
 	AgentRunFailure,
 	AgentRunHandle,
@@ -14,7 +16,7 @@ import type {
 	AgentRuntimeHost,
 	AgentRuntimeWorkState,
 	EffectiveRuntimeSnapshot,
-	InterruptionHoldHandle,
+	RunResumptionHandle,
 	ProjectionInputSubmission,
 	ResidualRequestRelationships,
 	RuntimeInitializationTermination,
@@ -28,7 +30,7 @@ export type {
 	AgentRunHandle,
 	AgentRunSettlement,
 	AgentRunState,
-	InterruptionHoldHandle,
+	RunResumptionHandle,
 	ResidualRequestRelationships,
 	RunRetentionReason,
 } from "./agent-runtime-host.ts";
@@ -123,9 +125,16 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	#runEndingHandler: RunEndingHandler | undefined;
 	#inputRequired: { handle: AgentRunHandle; requestId: string } | undefined;
 	#agentWait: { handle: AgentRunHandle; toolCallId: string } | undefined;
-	#interruptionHold: InterruptionHoldHandle | undefined;
+	#interruptionHold: RunResumptionHandle | undefined;
+	#quotaSuspension: AgentQuotaSuspension | undefined;
+	#quotaAfterResumption: AgentQuotaSuspension | undefined;
+	#quotaHold: RunResumptionHandle | undefined;
+	#restoredQuotaRun: AgentRunHandle | undefined;
+	#preparingQuotaResumption = false;
+	#quotaSuspensionHandler: ((suspension: AgentQuotaSuspension | undefined, handle: AgentRunHandle, nativeInput?: QuotaSuspendedNativeInput) => void) | undefined;
+	#quotaQueueCapture: Promise<void> | undefined;
 	#isolatedResumption:
-		| Readonly<{ handle: AgentRunHandle; hold: InterruptionHoldHandle }>
+		| Readonly<{ handle: AgentRunHandle; hold: RunResumptionHandle }>
 		| undefined;
 	#heldNativeQueue: HeldNativeQueue | undefined;
 
@@ -184,6 +193,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			};
 		}
 		const run = this.#runtime;
+		if (this.#quotaSuspension) return {
+			phase: "live", work: "settled", attention: "none", retentionReasons,
+			suspension: this.#quotaSuspension,
+		};
 		if (!run?.admitted) return { phase: "dormant", retentionReasons: [] };
 		return {
 			phase: this.#ending ? "ending" : "live",
@@ -235,17 +248,17 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	async initializeCurrentRunRelationships(): Promise<void> {
-		if (!this.#runtime || this.#starting || this.#ending) {
+		if (!this.currentHandle() || this.#starting || this.#ending) {
 			throw new Error("invariant_violation: Request relationships require a bound Agent Run");
 		}
-		const run = this.#runtime;
+		const handle = this.currentHandle()!;
 		const relationships = await this.#runStartInitializer?.();
-		if (this.#runtime !== run || this.#ending || this.#runStartsClosed) return;
+		if (!this.isCurrent(handle) || this.#ending || this.#runStartsClosed) return;
 		this.#initializeRequestRelationships(relationships);
 	}
 
 	currentHandle(): AgentRunHandle | undefined {
-		return this.#runtime?.admitted ? this.#runtime.handle : this.#startingHandle;
+		return this.#runtime?.admitted ? this.#runtime.handle : this.#restoredQuotaRun ?? this.#startingHandle;
 	}
 
 	currentProjection(): TerminalProjection | undefined {
@@ -278,6 +291,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	currentWorkState(): AgentRuntimeWorkState {
+		if (this.#quotaSuspension) return "settled";
 		const run = this.#runtime;
 		if (!run?.admitted) return "unavailable";
 		return run.runtime.workState();
@@ -306,6 +320,9 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch {
+		if (this.quotaSuspensionBlocksExecution()) {
+			throw new Error("quota_suspended: explicit agent_control resume is required");
+		}
 		const dispatched = this.#requireLiveRuntime().deliver(delivery, confirmation);
 		this.#runtime!.hasInput = true;
 		this.#trackOperation(dispatched.completion);
@@ -313,6 +330,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	async deliverModeratorReminderInLane(commitIfCurrent: CommitModeratorReminderIfCurrent): Promise<ModeratorReminderOutcome> {
+		if (this.#quotaSuspension) return "suppressed";
 		const operation = this.#requireLiveRuntime().deliverModeratorReminder(commitIfCurrent);
 		this.#trackOperation(operation.then(() => undefined));
 		return operation;
@@ -385,43 +403,100 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	isCurrent(handle: AgentRunHandle): boolean {
-		return this.#runtime?.admitted === true && this.#runtime.handle === handle;
+		return this.#restoredQuotaRun === handle ||
+			(this.#runtime?.admitted === true && this.#runtime.handle === handle);
 	}
 
 	blocksOrdinaryDelivery(): boolean {
-		return this.#interruptionHold !== undefined || this.#isolatedResumption !== undefined;
+		return this.#quotaSuspension !== undefined || this.#interruptionHold !== undefined || this.#isolatedResumption !== undefined;
 	}
 
 	isInterrupting(): boolean {
 		return this.#interrupting;
 	}
 
-	currentInterruptionHold(): InterruptionHoldHandle | undefined {
+	currentInterruptionHold(): RunResumptionHandle | undefined {
 		return this.#interruptionHold;
 	}
 
-	isCurrentInterruptionHold(hold: InterruptionHoldHandle): boolean {
-		return this.#interruptionHold === hold && this.#runtime?.handle === hold.run;
+	currentResumptionHold(): RunResumptionHandle | undefined {
+		return this.#quotaHold ?? this.#interruptionHold;
 	}
 
-	beginIsolatedResumptionInLane(hold: InterruptionHoldHandle): boolean {
-		if (!this.isCurrentInterruptionHold(hold) || this.#isolatedResumption) return false;
+	currentQuotaSuspension(): AgentQuotaSuspension | undefined {
+		return this.#quotaSuspension;
+	}
+
+	quotaSuspensionBlocksExecution(): boolean {
+		return this.#quotaAfterResumption !== undefined ||
+			(this.#quotaSuspension !== undefined && this.#isolatedResumption?.hold !== this.#quotaHold);
+	}
+
+	setQuotaSuspensionHandler(handler: (suspension: AgentQuotaSuspension | undefined, handle: AgentRunHandle, nativeInput?: QuotaSuspendedNativeInput) => void): void {
+		this.#quotaSuspensionHandler = handler;
+	}
+
+	restoreQuotaSuspension(suspension: AgentQuotaSuspension, runSequence: number, nativeInput?: QuotaSuspendedNativeInput): void {
+		if (this.#quotaSuspension) throw new Error("invariant_violation: quota suspension already restored");
+		const handle = Object.freeze({ sequence: runSequence });
+		this.#runSequence = Math.max(this.#runSequence, runSequence);
+		if (this.#runtime) this.#runtime.handle = handle;
+		else this.#restoredQuotaRun = handle;
+		this.#quotaSuspension = suspension;
+		this.#quotaHold = { run: handle, sequence: ++this.#holdSequence };
+		if (nativeInput) this.#heldNativeQueue = { handle, steering: [...nativeInput.steering], followUp: [...nativeInput.followUp] };
+		this.#notifyStateChanged();
+	}
+
+	async prepareQuotaResumptionInLane(): Promise<void> {
+		await this.#quotaQueueCapture;
+		if (!this.#restoredQuotaRun) {
+			if (this.#quotaSuspension) await this.#runtime?.runtime.waitForIdle();
+			return;
+		}
+		this.#preparingQuotaResumption = true;
+		try {
+			await this.#ensureRuntimeInLane(true, []);
+			this.#restoredQuotaRun = undefined;
+		} finally {
+			this.#preparingQuotaResumption = false;
+		}
+	}
+
+	isCurrentResumptionHold(hold: RunResumptionHandle): boolean {
+		return this.currentResumptionHold() === hold && this.currentHandle() === hold.run;
+	}
+
+	beginIsolatedResumptionInLane(hold: RunResumptionHandle): boolean {
+		if (!this.isCurrentResumptionHold(hold) || this.#isolatedResumption) return false;
 		this.#isolatedResumption = { handle: hold.run, hold };
 		return true;
 	}
 
-	commitIsolatedResumptionInLane(hold: InterruptionHoldHandle): boolean {
+	commitIsolatedResumptionInLane(hold: RunResumptionHandle): boolean {
 		if (
-			!this.isCurrentInterruptionHold(hold) ||
+			!this.isCurrentResumptionHold(hold) ||
 			this.#isolatedResumption?.hold !== hold
 		) return false;
+		if (this.#quotaHold === hold) {
+			this.#quotaSuspensionHandler?.(undefined, hold.run);
+			// Native generation can finish before the transcript confirmation reaches
+			// the host. Committing the old resume must not authorize a newer failure.
+			this.#quotaSuspension = this.#quotaAfterResumption;
+			this.#quotaAfterResumption = undefined;
+			this.#quotaHold = this.#quotaSuspension ? { run: hold.run, sequence: ++this.#holdSequence } : undefined;
+			if (this.#quotaSuspension) this.#quotaSuspensionHandler?.(this.#quotaSuspension, hold.run, this.#heldNativeQueue);
+		}
 		this.#interruptionHold = undefined;
 		this.#notifyStateChanged();
 		return true;
 	}
 
-	cancelIsolatedResumptionInLane(hold: InterruptionHoldHandle): void {
-		if (this.#isolatedResumption?.hold === hold) this.#isolatedResumption = undefined;
+	cancelIsolatedResumptionInLane(hold: RunResumptionHandle): void {
+		if (this.#isolatedResumption?.hold === hold) {
+			this.#isolatedResumption = undefined;
+			this.#quotaAfterResumption = undefined;
+		}
 	}
 
 	finishIsolatedResumptionInLane(handle: AgentRunHandle): void {
@@ -431,6 +506,8 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	async interruptCurrentRunInLane(): Promise<
 		"held" | "already_held" | "not_running"
 	> {
+		// Interrupting a quota-suspended Run must not convert it to an editor-resumable Hold.
+		if (this.#quotaSuspension) return "already_held";
 		const run = this.#runtime;
 		if (
 			!run?.admitted ||
@@ -595,6 +672,9 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		admitRun: boolean,
 		initialRetentionReasons: readonly AgentRetentionReason[],
 	): Promise<HostedAgentRuntime> {
+		if (this.#quotaSuspension && !this.#preparingQuotaResumption) {
+			throw new Error("quota_suspended: explicit agent_control resume is required");
+		}
 		if (this.#pendingInitializationTermination) {
 			// Cancellation releases the occupied startup lane before its termination
 			// receipt can run. Earlier lane waiters must not fill that gap with Run B.
@@ -635,7 +715,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#starting = true;
 		this.#passivePreparation = !admitRun;
 		// Admission must survive failures before a child Runtime or transcript exists.
-		if (admitRun) this.#startingHandle = Object.freeze({ sequence: ++this.#runSequence });
+		if (admitRun) this.#startingHandle = this.#restoredQuotaRun ?? Object.freeze({ sequence: ++this.#runSequence });
 		for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
 		this.#notifyStateChanged();
 		let startedRun: StartedAgentRuntime | undefined;
@@ -679,6 +759,22 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			return startedRun.runtime;
 		} catch (error) {
 			const cleanupErrors: unknown[] = [error];
+			if (this.#preparingQuotaResumption && this.#quotaHold) {
+				// A failed explicit restart attempt did not resume the suspended Run.
+				// Dispose only the new Runtime; retain the exact logical Run and stop.
+				const run = this.#runtime;
+				if (run) {
+					run.unsubscribe();
+					try {
+						await run.runtime.projection?.dispose();
+						await run.runtime.dispose();
+					} finally {
+						this.#runtime = undefined;
+					}
+				}
+				this.#restoredQuotaRun = this.#quotaHold.run;
+				throw error;
+			}
 			if (startedRun && readiness && !readinessObserved) {
 				const cancellation = requireRuntimeProjection(startedRun.runtime)
 					.cancelInitialization(error);
@@ -770,7 +866,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	addRetentionReason(reason: AgentRetentionReason, requestId?: string): void {
-		if (!this.#runtime && !this.#starting) return;
+		if (!this.#runtime && !this.#starting && !this.#restoredQuotaRun) return;
 		if (isRequestRelationshipReason(reason)) {
 			const exactRequestId = requireRequestRelationshipId(reason, requestId);
 			let relationships = this.#requestRelationships.get(reason);
@@ -848,6 +944,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	async releaseIfEligibleInLane(
 		handle: AgentRunHandle,
 	): Promise<"released" | "retained" | "stale"> {
+		if (this.#quotaSuspension && this.isCurrent(handle)) return "retained";
 		const run = this.#runtime;
 		if (!run?.admitted || run.handle !== handle) return "stale";
 		if (hasInFlightProjectionInput(run)) {
@@ -966,7 +1063,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	): Promise<void> {
 		const run = this.#runtime;
 		if (!run) {
+			const restored = this.#restoredQuotaRun;
+			if (restored && cause !== "shutdown") this.#quotaSuspensionHandler?.(undefined, restored);
 			this.#clearRunScopedState();
+			if (restored) this.#notifyEnded(restored, cause);
 			// The Owner's native Runtime owns process-wide infrastructure beyond its
 			// Agent Run. A terminal Run may already be gone when Workflow shutdown
 			// reaches this boundary, but that infrastructure still must be disposed.
@@ -987,6 +1087,8 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			)
 		);
 		const endedHandle = run.handle;
+		// Shutdown preserves the durable stop; only explicit termination/resumption clears it.
+		if (this.#quotaSuspension && cause !== "shutdown") this.#quotaSuspensionHandler?.(undefined, endedHandle);
 		const failure = cause === "failure" ? run.failure : undefined;
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
@@ -1069,6 +1171,11 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#inputRequired = undefined;
 		this.#agentWait = undefined;
 		this.#interruptionHold = undefined;
+		this.#quotaSuspension = undefined;
+		this.#quotaAfterResumption = undefined;
+		this.#quotaHold = undefined;
+		this.#restoredQuotaRun = undefined;
+		this.#quotaQueueCapture = undefined;
 		this.#isolatedResumption = undefined;
 		this.#interrupting = false;
 		this.#heldNativeQueue = undefined;
@@ -1180,7 +1287,30 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			if (event.type === "agent_end") {
 				const expectedInterruption = run.expectedInterruption;
 				run.expectedInterruption = false;
+				if (event.quota && !event.willRetry && !this.#ending && !expectedInterruption &&
+					(!this.#quotaSuspension || this.#isolatedResumption?.hold === this.#quotaHold)) {
+					const suspension: AgentQuotaSuspension = { reason: "provider_quota", evidence: event.quota };
+					if (this.#quotaSuspension) this.#quotaAfterResumption = suspension;
+					else {
+						this.#quotaSuspension = suspension;
+						this.#quotaHold = { run: run.handle, sequence: ++this.#holdSequence };
+					}
+					this.#quotaSuspensionHandler?.(this.#quotaSuspension, run.handle);
+					this.#notifyStateChanged();
+					this.#quotaQueueCapture = run.runtime.clearQueue().then((queue) => {
+						if (this.#runtime !== run || !this.#quotaSuspension) return;
+						const previous = this.#heldNativeQueue?.handle === run.handle ? this.#heldNativeQueue : undefined;
+						this.#heldNativeQueue = {
+							handle: run.handle,
+							steering: [...(previous?.steering ?? []), ...queue.steering],
+							followUp: [...(previous?.followUp ?? []), ...queue.followUp],
+						};
+						this.#quotaSuspensionHandler?.(this.#quotaSuspension, run.handle, this.#heldNativeQueue);
+					});
+					this.#trackOperation(this.#quotaQueueCapture);
+				}
 				const terminalFailure = event.outcome === "error" &&
+					!this.#quotaSuspension &&
 					!event.willRetry &&
 					// Pi 0.84 can report an error when an interrupted sequential tool
 					// rejects before the abort reaches the model loop. The explicit
@@ -1222,6 +1352,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	): void {
 		const queue = this.#heldNativeQueue;
 		if (
+			this.#quotaSuspension ||
 			this.#isolatedResumption?.handle !== handle ||
 			queue?.handle !== handle
 		) return;

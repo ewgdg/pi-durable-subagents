@@ -15,7 +15,7 @@ import type {
 	AgentRunHandle,
 	AgentRunSettlement,
 	AgentRuntimeDelivery,
-	InterruptionHoldHandle,
+	RunResumptionHandle,
 	TranscriptCommitConfirmation,
 } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
@@ -135,7 +135,7 @@ type FrozenSteerBatch = {
 
 type ReservedResume = Readonly<{
 	delivery: ScheduledMessageDelivery;
-	hold: InterruptionHoldHandle;
+	hold: RunResumptionHandle;
 }>;
 
 type ActiveResume = ReservedResume & {
@@ -445,7 +445,7 @@ export class MessageDeliveryScheduler {
 	async admitResumeInLane(
 		record: AgentRecord,
 		delivery: ScheduledMessageDelivery,
-		hold: InterruptionHoldHandle,
+		hold: RunResumptionHandle,
 	): Promise<MessageDeliveryAdmission> {
 		this.#ensureSettlementHandler(record);
 		const agentId = record.identity.agentId;
@@ -453,7 +453,7 @@ export class MessageDeliveryScheduler {
 			this.#reservedResumeByAgent.has(agentId) ||
 			this.#activeResumeByAgent.has(agentId)
 		) return "capacity_exhausted";
-		if (!record.host.isCurrentInterruptionHold(hold)) return "target_unavailable";
+		if (!record.host.isCurrentResumptionHold(hold)) return "target_unavailable";
 		this.#reservedResumeByAgent.set(agentId, { delivery, hold });
 		this.#addPendingDeliveryReason(record);
 		const release = () => record.host.lane.run(async () => {
@@ -626,6 +626,17 @@ export class MessageDeliveryScheduler {
 		handle: AgentRunHandle,
 		settlement: AgentRunSettlement,
 	): Promise<void> {
+		if (record.host.observe().suspension) {
+			// Quota interrupted this delivery turn, not its admitted Messages. Keep
+			// unproven work queued rather than translating it into terminal failure.
+			this.#removeProvenDeliveriesInLane(record);
+			this.#activeDeferredByAgent.delete(record.identity.agentId);
+			this.#activeWaitPreemptionByAgent.delete(record.identity.agentId);
+			this.#frozenSteerByAgent.delete(record.identity.agentId);
+			this.#activeResumeByAgent.delete(record.identity.agentId);
+			record.host.finishIsolatedResumptionInLane(handle);
+			return;
+		}
 		const reminder = this.#activeModeratorReminderByAgent.get(record.identity.agentId);
 		if (reminder) reminder.settled = true;
 		const activeResume = this.#activeResumeByAgent.get(record.identity.agentId);
@@ -729,7 +740,7 @@ export class MessageDeliveryScheduler {
 		const reservedResume = this.#reservedResumeByAgent.get(record.identity.agentId);
 		if (reservedResume) {
 			if (this.#deferredResumeByAgent.has(record.identity.agentId)) return;
-			if (record.host.isCurrentInterruptionHold(reservedResume.hold)) {
+			if (record.host.isCurrentResumptionHold(reservedResume.hold)) {
 				if (record.host.currentWorkState() === "settled") {
 					await this.#startResumeInLane(record, reservedResume);
 				}
@@ -1055,6 +1066,7 @@ export class MessageDeliveryScheduler {
 		record: AgentRecord,
 		frozen: FrozenSteerBatch,
 	): void {
+		if (record.host.blocksOrdinaryDelivery()) return;
 		if (
 			this.#frozenSteerByAgent.get(record.identity.agentId) !== frozen ||
 			frozen.dispatched
