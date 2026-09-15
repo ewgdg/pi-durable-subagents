@@ -30,6 +30,7 @@ import type {
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
+import { COORDINATION_HISTORY_GUIDANCE } from "../presentation/coordination-history-guidance.ts";
 import {
 	renderWorkflowResumeCall,
 	renderWorkflowResumeResult,
@@ -63,7 +64,7 @@ When agent_message returns messageStatus "sent", the Message was admitted for as
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation. Every Request requires a short, specific title identifying the work; its full body remains authoritative. Request ordering controls attention, not execution order: choose which delivered unresolved Request to work on or answer.
 
-History marks: \`!\` invalid, \`^\` inherited. Both are informational; neither cancels an existing obligation.
+${COORDINATION_HISTORY_GUIDANCE}
 
 While any Answer obligation remains, agent_message operation "send" to its requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
 

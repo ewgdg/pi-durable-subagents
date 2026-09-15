@@ -5,6 +5,30 @@ import { prepareBranchEntries, SessionManager, type SessionBeforeCompactEvent, t
 import { projectOwnerForkBranch, projectOwnerForkCompaction, projectOwnerForkContext } from "../src/pi-integration/owner-fork-context.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 
+test("Owners without inherited model history receive no identity block or summary instructions", () => {
+	for (const prefix of ["none", "settings", "identity-only"] as const) {
+		const manager = SessionManager.inMemory();
+		if (prefix === "settings") manager.appendCustomEntry("extension.settings", { enabled: true });
+		if (prefix === "identity-only") manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
+		appendOwnerIdentity(manager);
+		const leaf = manager.appendMessage({ role: "user", content: "Current work only", timestamp: 1 });
+		const transcript = transcriptFromSessionManager(manager).inspect();
+		assert.deepEqual(projectOwnerForkContext({ transcript, messages: transcript.context.messages }), transcript.context.messages);
+		const preparation: SessionBeforeCompactEvent["preparation"] = {
+			messagesToSummarize: [...transcript.context.messages], turnPrefixMessages: [],
+			isSplitTurn: false, firstKeptEntryId: leaf, tokensBefore: 100,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 1 },
+		};
+		const before = structuredClone(preparation);
+		projectOwnerForkCompaction(preparation, transcript);
+		assert.deepEqual(preparation, before);
+		const branch = { entriesToSummarize: [...transcript.entries], customInstructions: "Keep my focus", userWantsSummary: true } as SessionBeforeTreeEvent["preparation"];
+		assert.equal(projectOwnerForkBranch(branch, transcript), undefined);
+		assert.deepEqual(branch.entriesToSummarize, transcript.entries);
+	}
+});
+
 test("Owner identity leads inherited groups even on a branch before the current Identity", () => {
 	const manager = SessionManager.inMemory();
 	manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
@@ -21,6 +45,7 @@ test("Owner identity leads inherited groups even on a branch before the current 
 	const projected = projectOwnerForkContext({ transcript, messages: transcript.context.messages });
 	assert.match(JSON.stringify(projected[0]), /Current Agent identity/);
 	assert.match(JSON.stringify(projected[0]), new RegExp(manager.getSessionId()));
+	assert.doesNotMatch(JSON.stringify(projected[0]), /Copied conversation|not current responsibilities|Preserve this distinction|only current-scope/);
 	assert.equal(projected.filter(message => message.role === "toolResult").length, 0);
 	assert.equal(projected.filter(message => message.role === "assistant").length, 1);
 	const text = JSON.stringify(projected);
@@ -122,11 +147,16 @@ test("compaction annotates inherited previous summaries and split-turn input wit
 	projectOwnerForkCompaction(preparation, transcript);
 	assert.match(JSON.stringify(preparation.messagesToSummarize[0]), /Current Agent identity/);
 	assert.match(JSON.stringify(preparation.turnPrefixMessages[0]), /Current Agent identity/);
+	assert.match(JSON.stringify(preparation.messagesToSummarize), /not current responsibilities/);
+	assert.match(JSON.stringify(preparation.turnPrefixMessages), /not current responsibilities/);
 	assert.match(preparation.previousSummary!, /^\^ /);
 	assert.match(preparation.previousSummary!, /Old source duties/);
 	assert.equal(preparation.firstKeptEntryId, leaf);
 	assert.equal(preparation.tokensBefore, 100);
 	assert.equal(JSON.stringify(transcript.entries), before);
+	const projected = structuredClone(preparation);
+	projectOwnerForkCompaction(preparation, transcript);
+	assert.deepEqual(preparation, projected, "repeated preparation must not accumulate identity or guidance");
 });
 
 test("branch annotation preserves native file tracking, summaries, and user summary instructions", () => {
@@ -147,6 +177,7 @@ test("branch annotation preserves native file tracking, summaries, and user summ
 	const instructions = projectOwnerForkBranch(preparation, transcript);
 	assert.match(instructions!, /Preserve my chosen summary focus/);
 	assert.match(instructions!, /Current Agent identity/);
+	assert.match(instructions!, /not current responsibilities/);
 	const native = prepareBranchEntries(preparation.entriesToSummarize);
 	assert.deepEqual([...native.fileOps.read], ["source.txt"]);
 	assert.match(JSON.stringify(native.messages), /\^ .*source-read/);

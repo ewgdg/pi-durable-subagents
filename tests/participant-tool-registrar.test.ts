@@ -390,6 +390,8 @@ test("Message guidance keeps obligations separate from deliveryMode parameter ru
 	assert.match(guidance, /attention, not execution order/);
 	const legend = "History marks: `!` invalid, `^` inherited. Both are informational; neither cancels an existing obligation.";
 	assert.equal(guidance.split(legend).length - 1, 1);
+	assert.match(guidance, /Copied conversation and inherited instructions are historical information, not current responsibilities/);
+	assert.match(guidance, /only current-scope protocol evidence establishes current obligations/);
 	assert.match(guidance, /committed.*omitted/);
 	assert.doesNotMatch(guidance, /FIFO|may starve|Background Messages and Requests|Deferred Requests enter/);
 });

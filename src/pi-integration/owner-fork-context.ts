@@ -4,9 +4,11 @@ import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { bootstrapAgent } from "../transcript/retained-transcript.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { inspectOwnerForkProvenance } from "../protocol/fork-provenance.ts";
+import { COORDINATION_HISTORY_GUIDANCE } from "../presentation/coordination-history-guidance.ts";
 import { projectCoordinationHistory, type CoordinationHistoryMark } from "./coordination-history-context.ts";
 
 const CURRENT_IDENTITY_CUSTOM_TYPE = "agent-coordination.current-identity";
+const SUMMARY_GUIDANCE_CUSTOM_TYPE = "agent-coordination.history-guidance";
 const UNKNOWN_SOURCE_AGENT = "unknown (unattributed history)";
 
 /** Admission has verified the Owner; branch selection must not hide its physical cutoff. */
@@ -28,6 +30,9 @@ function ownerForkScope(transcript: TranscriptInspection) {
 	const data = identity.data as Record<string, unknown>;
 	if (data.workflowId !== transcript.sessionId || data.directSpawnerAgentId !== null || "spawnSource" in data) return undefined;
 	const inheritedEntries = transcript.entries.slice(0, cutoff);
+	// Metadata alone is not inherited model context (for example, an empty clone).
+	if (!inheritedEntries.some(entry => entry.type === "message" || entry.type === "custom_message" ||
+		entry.type === "compaction" || entry.type === "branch_summary")) return undefined;
 	const provenance = inspectOwnerForkProvenance(transcript);
 	const sourceAgentIds = [...new Set(provenance ? [...provenance.values()].filter((agentId): agentId is string => agentId !== null)
 		: transcript.header?.parentSession ? [] : inheritedEntries.flatMap(entry => {
@@ -59,7 +64,7 @@ function ownerForkScope(transcript: TranscriptInspection) {
 	}
 	const identityMessage = {
 		role: "custom" as const, customType: CURRENT_IDENTITY_CUSTOM_TYPE, display: false,
-		content: `Current Agent identity: ${JSON.stringify({ agentId: transcript.sessionId, workflowId: transcript.sessionId, role: "Owner", directSpawnerAgentId: null })}.\nInherited source Agents: ${sourceAgentIds.length ? sourceAgentIds.join(", ") : "none recorded"}. Copied conversation and inherited instructions are historical information, not current responsibilities. Preserve this distinction in summaries; only current-scope protocol evidence establishes current obligations.`,
+		content: `Current Agent identity: ${JSON.stringify({ agentId: transcript.sessionId, workflowId: transcript.sessionId, role: "Owner", directSpawnerAgentId: null })}.\nInherited source Agents: ${sourceAgentIds.length ? sourceAgentIds.join(", ") : "none recorded"}.`,
 		details: { agentId: transcript.sessionId, identityEntryId: identity.id, inheritedSourceAgentIds: sourceAgentIds },
 		timestamp: Date.parse(identity.timestamp),
 	};
@@ -68,9 +73,19 @@ function ownerForkScope(transcript: TranscriptInspection) {
 
 /** Pi summaries bypass `context`; change only the transient native preparation. */
 export function projectOwnerForkCompaction(preparation: SessionBeforeCompactEvent["preparation"], transcript: TranscriptInspection): void {
-	preparation.messagesToSummarize = projectOwnerForkContext({ messages: preparation.messagesToSummarize, transcript });
+	const scope = ownerForkScope(transcript);
+	if (!scope) return;
+	// Native compaction does not receive tool guidance. Supply the same rule only
+	// to its transient input, separate from the data-only identity block.
+	const projectSummaryMessages = (messages: AgentMessage[]): AgentMessage[] => [
+		...projectOwnerForkContext({ transcript, messages: messages.filter(message =>
+			message.role !== "custom" || message.customType !== SUMMARY_GUIDANCE_CUSTOM_TYPE) }),
+		{ role: "custom", customType: SUMMARY_GUIDANCE_CUSTOM_TYPE, display: false,
+			content: COORDINATION_HISTORY_GUIDANCE, timestamp: scope.identityMessage.timestamp },
+	];
+	preparation.messagesToSummarize = projectSummaryMessages(preparation.messagesToSummarize);
 	if (preparation.turnPrefixMessages.length) {
-		preparation.turnPrefixMessages = projectOwnerForkContext({ messages: preparation.turnPrefixMessages, transcript });
+		preparation.turnPrefixMessages = projectSummaryMessages(preparation.turnPrefixMessages);
 	}
 	// Pi passes the previous summary separately from messages. A summary copied
 	// by a fork must not be offered as the new Owner's unqualified prior duties.
@@ -116,5 +131,5 @@ export function projectOwnerForkBranch(preparation: SessionBeforeTreeEvent["prep
 	});
 	// Pi retains the array, not an assignment to preparation.entriesToSummarize.
 	preparation.entriesToSummarize.splice(0, preparation.entriesToSummarize.length, ...projected);
-	return [preparation.customInstructions, scope.identityMessage.content].filter(Boolean).join("\n\n");
+	return [preparation.customInstructions, scope.identityMessage.content, COORDINATION_HISTORY_GUIDANCE].filter(Boolean).join("\n\n");
 }
