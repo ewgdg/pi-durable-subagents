@@ -4,6 +4,11 @@ import type { AgentSession, ExtensionAPI, BeforeAgentStartEventResult } from "@e
 type CustomMessage = Parameters<AgentSession["sendCustomMessage"]>[0];
 type CustomOptions = Parameters<AgentSession["sendCustomMessage"]>[1];
 type Dispatch = { completion: Promise<void>; preflight: Promise<void> };
+type CustomMessageEntry = {
+	original: AgentSession["sendCustomMessage"];
+	wrapper: AgentSession["sendCustomMessage"];
+	dispatch: AgentSession["sendCustomMessage"];
+};
 type CustomStartup = {
 	message: CustomMessage;
 	checkpoint: () => void;
@@ -17,6 +22,8 @@ type Invocation = {
 	cancelled: boolean;
 	finished: boolean;
 	started: boolean;
+	beforeStartReached: boolean;
+	inputHandedOff: boolean;
 	released: Promise<void>;
 	release: () => void;
 };
@@ -52,7 +59,7 @@ export function registerSessionStartup(pi: ExtensionAPI): void {
 export function bindSessionStartup(session: AgentSession): SessionStartupAdmission {
 	let admission = admissions.get(session.sessionManager);
 	if (!admission || admission.isDisposed) {
-		admission = new SessionStartupAdmission(session, admission?.whenAvailable);
+		admission = new SessionStartupAdmission(session, admission?.whenAvailable, admission?.customMessageEntry);
 		admissions.set(session.sessionManager, admission);
 	}
 	return admission;
@@ -64,6 +71,7 @@ export function disposeSessionStartup(session: AgentSession): void {
 
 /** Owns only preparation, leaving native streaming/settlement to Pi and its host. */
 export class SessionStartupAdmission {
+	readonly customMessageEntry: CustomMessageEntry;
 	readonly #session: AgentSession;
 	readonly #invocations = new AsyncLocalStorage<Invocation>();
 	readonly #kickoffs = new AsyncLocalStorage<CustomStartup>();
@@ -73,7 +81,7 @@ export class SessionStartupAdmission {
 	#cancellation = new AbortController();
 	#previousPreparation: Promise<void> | undefined;
 
-	constructor(session: AgentSession, previousPreparation?: Promise<void>) {
+	constructor(session: AgentSession, previousPreparation?: Promise<void>, retainedCustomEntry?: CustomMessageEntry) {
 		this.#session = session;
 		this.#previousPreparation = previousPreparation;
 		void previousPreparation?.then(() => {
@@ -97,12 +105,16 @@ export class SessionStartupAdmission {
 				},
 			}));
 		};
-		const originalCustom = session.sendCustomMessage;
+		// Keep this forwarding function in place under wrappers installed after
+		// binding. Re-wrapping the outer method on reload would skip those wrappers
+		// whenever idle custom startup switches to the prepared prompt path.
+		const customEntry = this.customMessageEntry = retainedCustomEntry ?? createCustomMessageEntry(session);
+		const originalCustom = customEntry.original;
 		const custom: AgentSession["sendCustomMessage"] = (message, options) => {
 			const pending = this.#kickoffs.getStore();
 			const ownDispatch = pending && !pending.invocation && !pending.nativeAccepted && pending.message === message;
 			if (this.#disposed || !options?.triggerTurn || options.deliverAs === "nextTurn" || session.isStreaming) {
-				if (this.#disposed && options?.triggerTurn && !session.isStreaming && this.whenAvailable) {
+				if (this.#disposed && options?.triggerTurn && options.deliverAs !== "nextTurn" && !session.isStreaming && this.whenAvailable) {
 					return Promise.reject(new StartupPreparationBusyError(this.whenAvailable));
 				}
 				if (ownDispatch) pending.checkpoint();
@@ -133,13 +145,14 @@ export class SessionStartupAdmission {
 			return originalAbort.call(session);
 		};
 		session.prompt = prompt;
-		session.sendCustomMessage = custom;
+		customEntry.dispatch = custom;
+		if (session.sendCustomMessage === originalCustom) session.sendCustomMessage = customEntry.wrapper;
 		agent.prompt = nativePrompt;
 		session.abort = abort;
 		this.#restore = () => {
 			if (session.abort === abort) session.abort = originalAbort;
 			if (agent.prompt === nativePrompt) agent.prompt = originalNativePrompt;
-			if (session.sendCustomMessage === custom) session.sendCustomMessage = originalCustom;
+			if (customEntry.dispatch === custom && session.sendCustomMessage === customEntry.wrapper) session.sendCustomMessage = originalCustom;
 			if (session.prompt === prompt) session.prompt = originalPrompt;
 		};
 	}
@@ -152,11 +165,26 @@ export class SessionStartupAdmission {
 
 	beforeStart(): BeforeAgentStartEventResult | undefined {
 		const invocation = this.#invocations.getStore();
+		if (invocation) invocation.beforeStartReached = true;
 		const custom = invocation?.custom;
 		if (this.#disposed || !invocation || invocation.cancelled || invocation.finished ||
 			this.#owner !== invocation || !custom || custom.invocation !== invocation || custom.injected) return;
 		custom.injected = true;
 		return { message: custom.message };
+	}
+
+	/** Only the terminal input handler may transfer its exact, now-handled submission. */
+	captureInputHandoff(): (() => void) | undefined {
+		const invocation = this.#invocations.getStore();
+		if (!invocation || invocation.custom || invocation.beforeStartReached || this.#owner !== invocation) return;
+		return () => {
+			this.#checkpoint(invocation);
+			if (invocation.finished || invocation.beforeStartReached || this.#owner !== invocation) {
+				throw new Error("startup_input_handoff_stale");
+			}
+			invocation.inputHandedOff = true;
+			this.#release(invocation);
+		};
 	}
 
 	dispatchCustom(message: CustomMessage, options: CustomOptions, checkpoint: () => void = () => {}): Dispatch {
@@ -175,7 +203,9 @@ export class SessionStartupAdmission {
 		this.cancelPreparation();
 		// A paused Pi hook can still assign its prompt override before final preflight.
 		// Retain that exclusion across reload until the old invocation actually exits.
-		this.#restore();
+		const preparation = this.whenAvailable;
+		if (preparation) void preparation.then(this.#restore);
+		else this.#restore();
 	}
 
 	#promptCustom(): Promise<void> {
@@ -204,7 +234,10 @@ export class SessionStartupAdmission {
 		let release!: () => void;
 		const released = new Promise<void>(resolve => { release = resolve; });
 		const pending = this.#kickoffs.getStore();
-		const invocation: Invocation = { cancelled: false, finished: false, started: false, released, release };
+		const invocation: Invocation = {
+			cancelled: false, finished: false, started: false, beforeStartReached: false,
+			inputHandedOff: false, released, release,
+		};
 		// Nested calls inherit async context; only the first exact prompt may claim it.
 		if (pending && !pending.invocation) {
 			invocation.custom = pending;
@@ -222,6 +255,9 @@ export class SessionStartupAdmission {
 
 	#checkpoint(invocation: Invocation): void {
 		if (this.#disposed || invocation.cancelled) throw new Error("startup_admission_cancelled");
+		if (invocation.inputHandedOff && invocation.beforeStartReached) {
+			throw new Error("startup_input_handoff_not_handled");
+		}
 		invocation.custom?.checkpoint();
 		if (invocation.custom && !invocation.custom.injected) {
 			throw new Error("custom_startup_not_started: kickoff input was handled before delivery preparation");
@@ -233,6 +269,15 @@ export class SessionStartupAdmission {
 		this.#owner = undefined;
 		invocation.release();
 	}
+}
+
+function createCustomMessageEntry(session: AgentSession): CustomMessageEntry {
+	const entry: CustomMessageEntry = {
+		original: session.sendCustomMessage,
+		dispatch: session.sendCustomMessage.bind(session),
+		wrapper: (message, options) => entry.dispatch(message, options),
+	};
+	return entry;
 }
 
 export async function waitForStartupRelease(released: Promise<void>, signal: AbortSignal): Promise<void> {
