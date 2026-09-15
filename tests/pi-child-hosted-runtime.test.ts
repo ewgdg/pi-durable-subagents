@@ -32,14 +32,15 @@ const CHILD_EXTENSION = fileURLToPath(
 	new URL("./fixtures/process-runtime-child-extension.ts", import.meta.url),
 );
 
-test("real child bridge preserves quota evidence and rejects temporary rate limits", {
+for (const scenario of ["evidence", "terminal-queue", "native-retry"]) {
+test(`real child bridge quota handling: ${scenario}`, {
 	timeout: TEST_TIMEOUT_MS, skip: process.platform === "win32",
 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "quota-evidence-child-"));
 	const cwd = join(root, "work");
 	const agentDir = join(root, "agent");
 	await Promise.all([mkdir(cwd), mkdir(agentDir)]);
-	await writeFile(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	await writeFile(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: scenario === "native-retry", maxRetries: 1, baseDelayMs: 1 } }));
 	const sessionPath = join(root, "child.jsonl");
 	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000137";
 	await writeFile(sessionPath, JSON.stringify({ type: "session", version: 3, id: expectedSessionId, timestamp: new Date().toISOString(), cwd }) + "\n");
@@ -48,7 +49,7 @@ test("real child bridge preserves quota evidence and rejects temporary rate limi
 		sessionPath, agentDir, runtimeDirectory: root, skillPaths: [], projectTrusted: true,
 		configuration: { cwd, model: { provider: "openai-codex", modelId: "quota-fixture" }, thinking: "off", tools: [], skills: [],
 			extensions: [fileURLToPath(new URL("./fixtures/quota-evidence-extension.ts", import.meta.url))], loadContextFiles: false },
-		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1", QUOTA_FIXTURE_SCENARIO: scenario },
 	});
 	const runtime = new PiChildHostedRuntime(launch);
 	const ends: Extract<HostedRuntimeEvent, { type: "agent_end" }>[] = [];
@@ -59,6 +60,22 @@ test("real child bridge preserves quota evidence and rejects temporary rate limi
 	});
 	try {
 		await runtime.ready;
+		if (scenario !== "evidence") {
+			await runtime.deliver({ kind: "user", content: "Exercise native quota continuation." }).completion;
+			await waitUntil(() => settlements === 1);
+			if (scenario === "native-retry") {
+				assert.equal(ends.length, 2, "configured Pi retry must complete before suspension");
+				assert.equal(ends[0]!.willRetry, true);
+				assert.ok(ends[0]!.quota);
+				assert.equal(ends[1]!.outcome, "completed");
+			} else {
+				assert.equal(ends.length, 1, "terminal quota must not start queued follow-up generation");
+				assert.ok(ends[0]!.quota);
+				assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: ["Retain this follow-up until explicit resume."] });
+				assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
+			}
+			return;
+		}
 		for (const [index, diagnostic] of QUOTA_DIAGNOSTICS.entries()) {
 			await runtime.deliver({ kind: "user", content: `Failure case ${index}` }).completion;
 			await waitUntil(() => settlements === index + 1);
@@ -73,6 +90,7 @@ test("real child bridge preserves quota evidence and rejects temporary rate limi
 		}
 	} finally { await runtime.dispose(); }
 });
+}
 
 test("the common Runtime Host supervises one real Control-backed Pi child Runtime", {
 	timeout: TEST_TIMEOUT_MS,

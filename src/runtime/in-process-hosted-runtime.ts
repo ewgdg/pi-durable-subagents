@@ -1,5 +1,6 @@
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import { classifyQuotaEvidence } from "./quota-evidence.ts";
+import { RetainedRuntimeQueue } from "./retained-runtime-queue.ts";
 import { bindSessionStartup, disposeSessionStartup, isStartupPreparationBusy, waitForStartupRelease } from "../pi-integration/session-startup.ts";
 import type { CommitModeratorReminderIfCurrent, ModeratorReminderOutcome } from "./agent-runtime-host.ts";
 import type {
@@ -23,6 +24,7 @@ import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
 
 export class InProcessHostedRuntime implements HostedAgentRuntime {
 	readonly #session: AgentSession;
+	readonly #quotaQueue: RetainedRuntimeQueue;
 	#compacting: boolean;
 	readonly projection: HostedAgentProjection | undefined;
 	readonly #inspectSnapshot: () => EffectiveRuntimeSnapshot;
@@ -33,6 +35,7 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		inspectSnapshot(): EffectiveRuntimeSnapshot;
 	}) {
 		this.#session = options.session;
+		this.#quotaQueue = new RetainedRuntimeQueue(() => this.#session.clearQueue());
 		this.#compacting = options.session.isCompacting;
 		this.projection = options.projection;
 		this.#inspectSnapshot = options.inspectSnapshot;
@@ -153,6 +156,9 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 					: "completed";
 				const quota = outcome === "error" && assistant?.role === "assistant"
 					? classifyQuotaEvidence(assistant) : undefined;
+				// Pi checks queued continuation after this synchronous callback. Leave
+				// configured retries untouched, but fence terminal quota before publishing.
+				if (quota && !event.willRetry) this.#quotaQueue.capture();
 				handler({
 					type: "agent_end", outcome, willRetry: event.willRetry,
 					...(quota ? { quota } : {}),
@@ -166,7 +172,7 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 	}
 
 	async clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>> {
-		return this.#session.clearQueue();
+		return this.#quotaQueue.clear();
 	}
 
 	abort(): Promise<void> {

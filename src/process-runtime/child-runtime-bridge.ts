@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { classifyQuotaEvidence } from "../runtime/quota-evidence.ts";
+import { RetainedRuntimeQueue } from "../runtime/retained-runtime-queue.ts";
 import { ModeratorReminderAdmission } from "./moderator-reminder-admission.ts";
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-mode.ts";
@@ -91,6 +92,7 @@ type DeliveryExecution = {
 type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
+	quotaQueue: RetainedRuntimeQueue;
 	turnCompaction: ChildTurnCompactionGateway;
 	startupAdmission: SessionStartupAdmission;
 	nativeInputHandoff?: { submissionSequence: number; transfer: () => void; transferred: boolean };
@@ -571,6 +573,7 @@ export function createChildRuntimeBinding(
 	binding = {
 		context,
 		runtime,
+		quotaQueue: new RetainedRuntimeQueue(() => runtime.session.clearQueue()),
 		turnCompaction,
 		startupAdmission,
 		reminderAdmission,
@@ -773,7 +776,7 @@ async function handleOwnerRequest(
 			const cleared = await binding.turnCompaction.admit(() =>
 				sequenceQueueIntention(state, () => {
 					requireCurrentOrLatestRun(state, request.payload.runId);
-					return binding.runtime.session.clearQueue();
+					return binding.quotaQueue.clear();
 				})
 			);
 			return { ...cleared, queuedInputCount: binding.runtime.session.pendingMessageCount };
@@ -952,6 +955,9 @@ async function reportRuntimeLifecycle(
 		activity.setScopeFailed(state.currentRunOutcome === "failed");
 		const quota = state.currentRunOutcome === "failed" && assistant?.role === "assistant"
 			? classifyQuotaEvidence(assistant) : undefined;
+		// Session subscribers are synchronous: drain before the first transport await
+		// so Pi cannot consume follow-ups while the Owner learns of terminal quota.
+		if (quota && !event.willRetry) binding.quotaQueue.capture();
 		await state.channel.sendEvent("agent.end", {
 			runId: state.currentRunId,
 			outcome: state.currentRunOutcome,
