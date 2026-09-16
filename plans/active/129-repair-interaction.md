@@ -41,3 +41,33 @@ completion and no hidden coordination membership. Capture failures before fixes.
 
 - User-reported behavior at `5711af6`; read-only run evidence extraction started.
 - PR is being returned to draft while these acceptance gaps are corrected.
+- Reproduced native command freeze with a held helper: the awaited full repair
+  inside `withSession` and blanket raw-input consumption blocked the editor.
+  The callback now contains only verified handoff; retained helper completion
+  uses the fresh context after native replacement returns.
+- Reproduced Owner auto-turn with a reasoning-enabled real CLI model and an
+  actual thinking-level change: runtime state change triggers operational
+  reconciliation, Obligation Stall reminder, then startup's empty extension
+  prompt and model call. Earlier reasoning-disabled fixtures did not emit that
+  event and falsely appeared idle. New supervisor awaiting-human state is set
+  before coordinator integration, preserving obligations while fencing delivery
+  and incident generation. New human input, not navigation, releases it.
+- Live helper text/thinking/tool activity and completed persisted messages now
+  refresh in read-only inspection. `/agents` supplies a presentation-only Repair
+  Moderator row and Owner snapshot during repair and archived rows afterward.
+  No ordinary Agent identity/lifecycle route is fabricated.
+- Added red/green regression for uncommitted native reopening newly exposed by
+  responsive input: switch authority is now exact to the active controlled
+  transition, not the whole attempt. Open menu/view teardown is joined and
+  editor drafts survive the final replacement.
+- Independently reviewed at `30676b4`; one required stale-live-transcript issue
+  was reproduced in a supervised test and fixed at `85de5d0`. Additional
+  approved command-completion fix `53e2b3d` removes the spurious cancellation
+  toast without relaxing actual model cancellation. Review closure approved
+  `53e2b3d` after 14 focused checks; no required findings remain.
+- Fifteen real CLI cases pass, including delayed helper inspection, newly
+  completed tool result in an already-open view, command cancellation, native
+  setting-change hold/no empty user entry, and explicit human prompt release.
+  Direct gate/startup/selector/lifecycle tests and typecheck pass. Actual packed
+  node_modules smoke passes idle-human, live-navigation and command-cancel.
+  No real model calls or changes to the user's live repair artifacts were made.

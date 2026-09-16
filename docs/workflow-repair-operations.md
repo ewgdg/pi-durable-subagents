@@ -31,9 +31,16 @@ supplies model selection and guidance, not additional tool authority.
 
 ## During an attempt
 
-- Progress appears in the same terminal. **Esc cancels before application.**
-  Other terminal input is consumed while the native replacement callback waits;
-  a typed slash command cannot interrupt that native wait.
+- The short native handoff returns editor control before model work. Progress,
+  model text/thinking, tool-argument streaming counts and tool activity appear
+  in the same terminal. `/agents` opens the Repair Moderator's live read-only
+  transcript or the immutable Owner snapshot; completed native tool arguments
+  and results refresh while the view stays open. Ordinary prompts cannot start
+  work in the repair host, and native reopening of the original is refused until
+  the controlled commit/reopen transition.
+- `/agents repair inspect` and `/agents repair cancel` remain usable while the
+  helper works. **Esc closes an open inspection/menu; outside those views it
+  cancels before application.** No second terminal or confirmation is needed.
 - The Moderator belongs to the verified original Workflow, has a fresh native
   session identity and no Direct Spawner, and is recorded in the separate repair
   store before its first model turn. It is not an ordinary child Request,
@@ -43,7 +50,17 @@ supplies model selection and guidance, not additional tool authority.
   exhaustive generation and records textual and protocol-effect changes.
 - Disk commit precedes reopening. Failed fresh admission retains the committed
   repair, later native writes, and helper diagnostics. Participant Runs are not
-  automatically resumed.
+  automatically resumed. The restored Owner also stays idle until a **new human
+  message**: existing obligations remain pending, but reminders, setting changes
+  and navigation cannot implicitly start a turn or append an empty user message.
+  An unsubmitted editor draft is preserved across the final switch.
+
+The Repair Moderator remains a read-only `/agents` presentation row after
+completion, including archived attempts. Selecting it never creates an ordinary
+Agent Run, Request, membership record or delivery route. Live views are closed
+before automatic Owner reopening. Reloading or leaving the repair host can
+invalidate its retained native context; a committed repair then remains on disk
+for explicit recovery rather than forcing a switch through that stale context.
 
 After refusal, `/agents repair` opens read-only progress, Owner snapshot,
 Moderator transcript, and validation-audit pages. `/agents repair inspect`
@@ -66,9 +83,8 @@ failed cleanup, cancellation, stale files, and invalid or ambiguous proposals
 refuse repair. Reloading does not erase a failed cleanup result. Repair cannot
 correct unrelated runtime policy or model configuration failures.
 
-- `/agents repair cancel` requests cancellation when command input is available.
-  During active replacement use **Esc** instead. Application cannot be cancelled
-  once it has begun.
+- `/agents repair cancel` requests cancellation from the responsive repair-host
+  editor. Application cannot be cancelled once it has begun.
 - `/agents repair recover` asks the retained helper to recover its existing
   journal, then explicitly reopens the Owner if recovery establishes a safe
   generation. It requires the positively acknowledged retirement handoff and is
