@@ -83,4 +83,15 @@ completion and no hidden coordination membership. Capture failures before fixes.
   repair or model calls were used in preparation. The old user run is untouched.
 - Current operations and architecture documents describe responsive navigation,
   presentation-only Moderator history, exact switch permission, and explicit
-  human resumption. PR publication update remains the final handoff step.
+  human resumption. Corrected code and documentation are pushed to
+  [PR #143](https://github.com/ewgdg/pi-durable-subagents/pull/143), whose description
+  now records the interaction fixes and expanded verification. It was returned
+  to ready for review after independent review and parent acceptance checks.
+
+## Outcome
+
+The real-model feedback exposed an important fixture blind spot: reasoning-disabled
+models did not exercise native thinking-level reconciliation. The regression now
+reproduces that path and asserts no fabricated user message or model request before
+human input. Repair is navigable while the independent model works, and the
+repair-only Moderator is visible without granting ordinary Agent authority.
