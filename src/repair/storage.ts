@@ -268,15 +268,25 @@ async function checkCandidateGeneration(scope: RepairScope, manifest: RepairMani
 	}
 }
 
-async function loadSeal(scope: RepairScope, manifest: RepairManifest, manifestHash: string, seal: RepairSeal): Promise<SealRecord> {
+async function loadSealRecord(scope: RepairScope, manifest: RepairManifest, manifestHash: string, seal: RepairSeal): Promise<SealRecord> {
 	const dir = sealPath(scope, seal.id);
 	const raw = await readStable(join(dir, "seal.json"));
 	requireCondition(raw.hash === seal.hash, "seal changed");
 	const record = JSON.parse(raw.bytes.toString("utf8")) as SealRecord;
 	requireCondition(record.version === 1 && record.attemptId === scope.attemptId && record.manifestHash === manifestHash
 		&& record.valid === true && Array.isArray(record.files) && record.files.length === manifest.files.length, "seal binding invalid");
+	requireCondition(typeof record.reportHash === "string" && /^[a-f0-9]{64}$/.test(record.reportHash), "seal report binding invalid");
 	for (const [index, file] of record.files.entries()) {
-		requireCondition(file.id === manifest.files[index].id && validIdentity(file.identity), "seal write set invalid");
+		requireCondition(file.id === manifest.files[index].id && validIdentity(file.identity)
+			&& typeof file.hash === "string" && /^[a-f0-9]{64}$/.test(file.hash), "seal write set invalid");
+	}
+	return record;
+}
+
+async function loadSeal(scope: RepairScope, manifest: RepairManifest, manifestHash: string, seal: RepairSeal): Promise<SealRecord> {
+	const record = await loadSealRecord(scope, manifest, manifestHash, seal);
+	const dir = sealPath(scope, seal.id);
+	for (const file of record.files) {
 		requireCondition((await readStable(join(dir, file.id))).hash === file.hash, "sealed candidate changed");
 	}
 	requireCondition((await readStable(join(dir, "report.txt"))).hash === record.reportHash, "validation report changed");
@@ -455,7 +465,10 @@ export async function recoverRepair(options: RepairScope & { io?: RepairIO }): P
 		requireCondition(intent.version === 1 && intent.attemptId === options.attemptId
 			&& typeof intent.manifestHash === "string" && intent.seal && typeof intent.seal.hash === "string", "invalid transaction intent");
 		const { manifest, hash } = await loadManifest(options, intent.manifestHash);
-		const seal = await loadSeal(options, manifest, hash, intent.seal);
+		// Recovery authenticates the journal's sealed hashes, not mutable review
+		// payloads: rejecting a changed report/candidate must not strand rollback.
+		// Apply still verifies every payload; recovery only writes verified backups.
+		const seal = await loadSealRecord(options, manifest, hash, intent.seal);
 		const commitBytes = await optionalRead(join(dir, "committed.json"));
 		if (commitBytes) {
 			const commit = JSON.parse(commitBytes.toString("utf8"));

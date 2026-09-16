@@ -144,6 +144,9 @@ test("late candidate or report edits during durable preparation invalidate appli
 		await assert.rejects(snapshot.apply(seal, { authorizedAttemptId: options.attemptId }), /changed|stale/);
 		assert.equal(await readFile(options.ownerPath, "utf8"), "owner before\n");
 		await snapshot.release();
+		assert.equal((await recoverRepair(options)).status, "restored");
+		const next = await createRepairSnapshot({ ...options, attemptId: "attempt-2" });
+		await next.release();
 	}
 });
 
@@ -353,4 +356,61 @@ test("snapshot read accessor returns bound immutable bytes, not edited candidate
 	await writeFile(path, "snapshot changed\n");
 	await assert.rejects(snapshot.readSnapshot("file-0"), /snapshot changed/);
 	await snapshot.release();
+});
+
+test("rollback restores a replaced destination even when rejected review artifacts changed", async () => {
+	const options = await interruptedFixture();
+	const seals = join(options.root, options.attemptId, "seals");
+	const [sealId] = await readdir(seals);
+	const { chmod } = await import("node:fs/promises");
+	for (const name of ["report.txt", "file-0"]) {
+		const path = join(seals, sealId, name);
+		await chmod(path, 0o600);
+		await writeFile(path, "rejected review artifact changed\n");
+	}
+	assert.equal(await readFile(options.ownerPath, "utf8"), "repaired\n");
+	assert.equal((await recoverRepair(options)).status, "restored");
+	assert.equal(await readFile(options.ownerPath, "utf8"), "owner before\n");
+	assert.equal(await readFile(options.child, "utf8"), "invalid before\n");
+});
+
+test("terminal recovery ignores absent or changed review payloads and preserves later native writes", async () => {
+	for (const terminal of ["committed", "restored"] as const) {
+		for (const mutation of ["absent", "changed"]) {
+			const options = terminal === "restored" ? await interruptedFixture() : await fixture();
+			if (terminal === "restored") await recoverRepair(options);
+			else {
+				const snapshot = await createRepairSnapshot(options);
+				await writeFile(snapshot.candidatePath("file-0"), "repaired\n");
+				const seal = await snapshot.seal(async () => ({ valid: true, report: "valid" }));
+				await snapshot.apply(seal, { authorizedAttemptId: options.attemptId });
+				await snapshot.release();
+			}
+			const dir = join(options.root, options.attemptId);
+			const [sealId] = await readdir(join(dir, "seals"));
+			const { chmod } = await import("node:fs/promises");
+			for (const path of [join(dir, "seals", sealId, "report.txt"),
+				join(dir, "seals", sealId, "file-0"), join(dir, "candidate", "file-0")]) {
+				if (mutation === "absent") await rename(path, `${path}.removed`);
+				else { await chmod(path, 0o600); await writeFile(path, "review payload changed\n"); }
+			}
+			await writeFile(options.ownerPath, "native append\n", { flag: "a" });
+			const beforeRecovery = await readFile(options.ownerPath, "utf8");
+			assert.equal((await recoverRepair(options)).status, terminal);
+			assert.equal(await readFile(options.ownerPath, "utf8"), beforeRecovery);
+		}
+	}
+});
+
+test("recovery still refuses changed authoritative seal metadata without touching destinations", async () => {
+	const options = await interruptedFixture();
+	const seals = join(options.root, options.attemptId, "seals");
+	const [sealId] = await readdir(seals);
+	const path = join(seals, sealId, "seal.json");
+	const { chmod } = await import("node:fs/promises");
+	await chmod(path, 0o600);
+	await writeFile(path, "changed authoritative seal");
+	await assert.rejects(recoverRepair(options), /seal changed/);
+	assert.equal(await readFile(options.ownerPath, "utf8"), "repaired\n");
+	assert.equal(await readFile(options.child, "utf8"), "invalid before\n");
 });
