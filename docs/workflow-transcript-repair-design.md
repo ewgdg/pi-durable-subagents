@@ -31,6 +31,21 @@ remain proposed repair mechanics; they are not prerequisites for ordinary
 navigation. A future repair writer fence is a temporary consistency requirement,
 not a consequence of rejecting a historical coordination record.
 
+### Local-launch feasibility result
+
+**Upstream changes are excluded by the user.** A disposable proof against stock
+Pi demonstrated clean stop/reopen and a limited preflight journal, but falsified
+two assumptions of a small local launcher: public `node-pty` launch did not
+retain its inherited lease, and Pi wrote native startup metadata before the
+admission acknowledgement. See the
+[executable evidence and complexity evaluation](research/local-repair-launch-feasibility.md).
+
+The recommendation is to defer a production launcher for repair alone, not to
+weaken the safety conditions below. Complete local integration would require
+explicit writer ownership and a startup/write contract in addition to restart.
+Neither that larger design nor a reduced manual-offline scope has been selected.
+The following flow remains a proposed target, not a proven implementation path.
+
 ### Proposed repair scope
 
 - One repair transaction per Workflow; one fresh repair-only Moderator per attempt.
@@ -350,18 +365,19 @@ Cleanup/retention policy is separate from this first repair path.
 
 ## Reopening and admission
 
-After replacement, reopen the exact canonical Owner session path through native
-session replacement, not `/reload`. The old session's cached entries must never
-flush over repaired bytes. The host owns the replacement call and transfers the
-repair fence across extension/session lifecycle replacement.
+After replacement, reopen the exact canonical Owner session path into a fresh
+native manager, not `/reload`. The old session's cached entries must never flush
+over repaired bytes. The host owns reopening and retains the repair fence across
+extension/session replacement or a controlled process restart.
 
 Stock Pi's same-path switch reads too early. The required host route must finish
 and verify old-writer shutdown before replacement and before opening the new
 manager, and must not run another unfenced old shutdown callback afterward.
 Calling `abort()` first or using the synchronous UI invalidation callback does
-not establish that ordering for all writers. Prove a supported lifecycle
-interface (upstream if necessary); do not patch private native state as a repair
-shortcut.
+not establish that ordering for all writers. Any local lifecycle interface must
+prove that ordering without upstream changes or private native-state patches.
+The local-launch proof establishes clean reread, not complete writer exclusion
+or the write-free admission phase required below.
 
 Authorize only this transaction's exact Owner path and expected native identity
 through the blocked-admission switch guard. The authorization is single-use and
@@ -434,7 +450,9 @@ research; no runtime or migration is changed.
    deterministic preauthorization in the first scope?
 2. **Pause and host prerequisites:** accept paused Owner conversation through
    review, and a required exclusive-writer/native pre-open fence capability
-   (potentially upstream Pi work) rather than a hash-only online stopgap?
+   implemented locally without upstream changes? The simple-launcher proof does
+   not establish that capability; decide whether the larger local integration is
+   worth its cost before creating implementation work.
 3. **Failure policy:** accept rollback of the entire changeset on application or
    post-apply admission failure, with exclusive restart when writer retirement
    cannot be established?
