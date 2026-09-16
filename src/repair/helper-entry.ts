@@ -9,8 +9,9 @@ import { createRepairSnapshot, recoverRepair, type RepairSnapshot } from "./stor
 import { validateRepairProposal, readRepairOwnerIdentity } from "./workflow-validation.ts";
 
 const REPAIR_PROMPT = `You are a repair-only Moderator belonging to the verified Workflow in your bootstrap.
-Inspect the immutable full Workflow snapshots. Correct only coordination evidence whose historical intent is unambiguous.
-Preserve native entries, identity/cutoffs, accepted facts, conversation, and entry relationships. Never invent Requests, Answers, intent, or membership.
+The Owner actually failed transcript admission. Inspect the immutable full Workflow snapshots and the retained admission failure.
+The ONLY supported correction is removal of redundant exact copies of valid Message Delivery envelopes. Keep the first copy unchanged, remove only later identical envelopes, and rewire native parentId links only when their parent was a removed duplicate.
+Do not repair rejected historical records, add missing fields, turn them into text, or resurrect stale Requests. Preserve every other entry, identity/cutoff, accepted fact, message body, source, ordering and conversation. Ambiguous references, conflicting duplicates, other admission blockers and healthy histories are unsupported.
 Use repair_snapshot to list and read immutable inputs, repair_candidate to write complete candidate copies, and repair_report for progress and a final complete/refuse report.
 There is no shell, live transcript write, ordinary messaging, spawn, approval, or apply tool. A complete report is a proposal, not permission: the host independently validates and journals the whole Workflow.
 If evidence is ambiguous, report refusal. Finish with repair_report(kind="complete") only after preparing all required candidate corrections, then stop.`;
@@ -101,7 +102,7 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 				phase = "model";
 				await progress("Writers retired. Verified Workflow-owned repair Moderator inspecting immutable snapshots.");
 				const settled = new Promise<void>((resolve) => { resolveModel = resolve; });
-				pi.sendUserMessage(`Repair attempt ${launch.attemptId}; verified Workflow ${identity.workflowId}; Moderator ${launch.moderatorAgentId}. Inspect the full snapshot set and prepare an unambiguous correction or refuse.`);
+				pi.sendUserMessage(`Repair attempt ${launch.attemptId}; verified Workflow ${identity.workflowId}; Moderator ${launch.moderatorAgentId}. Actual admission failure: ${JSON.stringify(launch.admissionFailure)}. Inspect the full snapshot set and propose only the supported exact-duplicate Delivery correction or refuse. Existing rejected historical records must remain unchanged.`);
 				await settled;
 				resolveModel = undefined;
 				if (cancelled || !completed) throw new Error(cancelled ? "Repair cancelled or refused by Moderator" : "Moderator settled without a complete repair proposal");

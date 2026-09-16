@@ -828,6 +828,26 @@ test("conflicting valid Owner Deliveries retain admission-failure diagnostics af
 	await host.runtime.dispose();
 });
 
+for (const rejectedHistory of [false, true]) {
+	test(`repair refuses admitted Owner without disturbing ${rejectedHistory ? "rejected history" : "healthy history"}`, async (t) => {
+		const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+		host.session.sessionManager.appendMessage(fauxAssistantMessage("Existing work is complete."));
+		if (rejectedHistory) host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "request", targetAgent: "old-target", question: "Obsolete work must stay rejected",
+		}, { id: "old-rejected-request" })));
+		await bindTestOwnerHost(host, "tui");
+		const manager = host.session.sessionManager;
+		const before = await readFile(manager.getSessionFile()!, "utf8");
+		const command = host.session.extensionRunner.getCommand("agents")!;
+		await command.handler("repair", host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1]);
+		assert.ok(host.ui.notifications.some(({ message }) => message.includes("No repair needed")));
+		assert.equal(host.session.sessionManager, manager);
+		assert.equal(await readFile(manager.getSessionFile()!, "utf8"), before);
+		assert.ok(host.session.getActiveToolNames().includes("agent_message"));
+		await host.runtime.dispose();
+	});
+}
+
 function appendConflictingOwnerDelivery(sessionManager: SessionManager) {
 	const agentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry("agent-coordination.identity", { agentId, workflowId: agentId, directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } });

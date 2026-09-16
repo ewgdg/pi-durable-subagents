@@ -50,7 +50,8 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 		(agentId) => resolveOwnerView?.().agentLabel(agentId),
 	);
 	const bridge = installInteractiveHostBridge(hostPi);
-	const repair = ownerRepairCommand(bridge);
+	const admissionFailures = new WeakMap<object, OwnerRecoveryError>();
+	const repair = ownerRepairCommand(bridge, (manager) => admissionFailures.get(manager));
 	let removeRepairInput: (() => void) | undefined;
 	pi.on("session_shutdown", () => { removeRepairInput?.(); });
 	pi.on("input", (_event, ctx) => isRepairPaused(ctx) ? { action: "handled" } : undefined);
@@ -77,6 +78,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	registerOwnerAgentTools(pi, resolveAdmittedOwnerView);
 
 	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
+		admissionFailures.delete(ctx.sessionManager);
 		ownerAdmissionState = "pending";
 		ownerIdentified = false;
 		deactivateOwnerAgentTools(pi);
@@ -125,6 +127,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			}
 			// A blocked Owner has no coordinator-backed commands. Keep diagnostics
 			// independent of that failed admission and out of restored chat history.
+			admissionFailures.set(ctx.sessionManager, failure);
 			registerAgentsCommand(pi, resolveAdmittedOwnerView, failure, repair);
 			showOwnerBlockage(ctx.ui, failure);
 		} finally {

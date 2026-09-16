@@ -8,6 +8,9 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import * as pty from "node-pty";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { resolveInstalledPiCliPath } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { createRepairModelServer } from "./support/repair-model-server.ts";
 
@@ -16,57 +19,70 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 	while (!await predicate()) { if (Date.now() > end) throw new Error(`Timed out: ${label}`); await delay(25); }
 }
 
-for (const scenario of ["clean", "repeat", "managed-child", "repair-edit", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "initial-admission-fail", "cancel", "helper-kill"] as const) {
-test(`real same-terminal repair: ${scenario}`, { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "cancel", "helper-kill"] as const) {
+test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip: process.platform === "win32" }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "repair-cli-"));
 	const agentDir = join(root, "agent");
-	await mkdir(agentDir);
+	await mkdir(join(agentDir, "config"), { recursive: true });
 	const server = await createRepairModelServer();
+	const noRepair = scenario === "healthy" || scenario === "rejected-only" || scenario === "config-error";
 	let repairRequests = 0;
 	let ordinaryRequests = 0;
-	let ordinaryRequestsBeforeRepair = 0;
 	let releaseModel: (() => void) | undefined;
 	server.setResponses((request) => {
-		const repair = request.tools.some((tool) => JSON.stringify(tool).includes("repair_snapshot"));
-		if (!repair) { ordinaryRequests++; return "Owner ready."; }
+		if (!request.tools.some((tool) => JSON.stringify(tool).includes("repair_snapshot"))) { ordinaryRequests++; return "Ordinary conversation remains usable."; }
 		repairRequests++;
 		assert.deepEqual(request.tools.map((tool) => (tool as { function: { name: string } }).function.name).sort(), ["repair_candidate", "repair_report", "repair_snapshot"]);
-		if ((scenario === "cancel" && repairRequests === 1) || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
-		if (scenario === "repair-edit") {
-			if (repairRequests === 1) return { name: "repair_snapshot", arguments: { id: "file-0" } };
-			if (repairRequests === 2) {
-				const original = request.messages.findLast((message) => (message as { role: string }).role === "tool") as { content: string };
-				assert.equal(typeof original.content, "string");
-				assert.match(original.content, /"question":"Publish the release"/);
-				return { name: "repair_candidate", arguments: { id: "file-0", contents: original.content.replace('"question":"Publish the release"', '"question":"Publish the release","title":"Publish release"') } };
-			}
-			if (repairRequests === 3) return { name: "repair_report", arguments: { kind: "complete", text: "Restored the missing title from the exact existing Request question; no accepted evidence changed." } };
-			return "Proposal complete.";
+		if (scenario === "cancel" || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
+		if (repairRequests === 1) return { name: "repair_snapshot", arguments: { id: "file-0" } };
+		if (repairRequests === 2) {
+			const original = request.messages.findLast((message) => (message as { role: string }).role === "tool") as { content: string };
+			const entries = original.content.trim().split("\n").map((line) => JSON.parse(line));
+			const deliveries = entries.filter((entry) => entry.customType === "agent-coordination.message-delivery");
+			assert.equal(deliveries.length, 2);
+			const duplicate = deliveries[1];
+			// The scripted transport proposes only the lossless duplicate removal.
+			// It is independent of the production certificate/validator.
+			const candidate = entries.filter((entry) => entry.id !== duplicate.id).map((entry) =>
+				entry.parentId === duplicate.id ? { ...entry, parentId: duplicate.parentId } : entry);
+			return { name: "repair_candidate", arguments: { id: "file-0", contents: candidate.map((entry) => JSON.stringify(entry)).join("\n") + "\n" } };
 		}
-		return (scenario === "repeat" ? repairRequests % 2 === 1 : scenario === "cancel" ? repairRequests === 2 : repairRequests === 1)
-			? { name: "repair_report", arguments: { kind: "complete", text: "Full original generation is already valid; preserve it." } }
-			: "Proposal complete.";
+		if (repairRequests === 3) return { name: "repair_report", arguments: { kind: "complete", text: "Removed only the exact redundant Delivery envelope; kept original evidence and rejected history." } };
+		return "Proposal complete.";
 	});
 	await writeFile(join(agentDir, "models.json"), JSON.stringify(server.modelsConfiguration));
 	await writeFile(join(agentDir, "settings.json"), JSON.stringify({ enableInstallTelemetry: false, quietStartup: true, compaction: { enabled: false } }));
-	await mkdir(join(agentDir, "config"));
-	if (scenario === "initial-admission-fail") await writeFile(join(agentDir, "config", "pi-agent-coordination.json"), '{"maxConcurrentAgentRuns":0}');
+	if (scenario === "config-error") await writeFile(join(agentDir, "config", "pi-agent-coordination.json"), '{"maxConcurrentAgentRuns":0}');
 	const ownerPath = join(root, "owner.jsonl");
 	const ownerId = randomUUID();
-	const timestamp = new Date().toISOString();
-	await writeFile(ownerPath, [
-		{ type: "session", version: 3, id: ownerId, timestamp, cwd: root },
-		{ type: "custom", id: "identity", parentId: null, timestamp, customType: "agent-coordination.identity", data: { agentId: ownerId, workflowId: ownerId, directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } } },
-	].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
-	const fixturePath = join(root, "lifecycle-fixture.mjs");
-	await writeFile(fixturePath, `import {writeFileSync, appendFileSync} from 'node:fs';
+	const owner = SessionManager.inMemory(root, { id: ownerId });
+	owner.appendCustomEntry("agent-coordination.identity", { agentId: ownerId, workflowId: ownerId, directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } });
+	let rejectedEntry: unknown;
+	let rejectedRequestId: string | undefined;
+	if (scenario === "rejected-only" || scenario === "preserve-rejected") {
+		const id = owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: ownerId, question: "Obsolete request superseded by later work" }, { id: "old-rejected-request" })));
+		rejectedRequestId = deriveMessageIdentity({ agentId: ownerId, entryId: id, toolCallId: "old-rejected-request" });
+		owner.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: "old-rejected-request", content: [], isError: false, timestamp: Date.now(), details: { requestMessageId: rejectedRequestId, targetAgentId: ownerId, messageStatus: "sent" } });
+		rejectedEntry = owner.getEntries().find((entry) => entry.id === id);
+	}
+	owner.appendMessage(fauxAssistantMessage("Later work is complete. Do not resurrect the obsolete request."));
+	if (!noRepair) {
+		const callId = "duplicate-delivery-source";
+		const entryId = owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: ownerId, title: "Read garden note", question: "Summarize the synthetic garden note." }, { id: callId })));
+		const source = { agentId: ownerId, entryId, toolCallId: callId };
+		const requestMessageId = deriveMessageIdentity(source);
+		owner.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: callId, content: [], isError: false, timestamp: Date.now(), details: { requestMessageId, targetAgentId: ownerId, messageStatus: "sent" } });
+		const delivery = createMessageDelivery([{ source, projection: { kind: "request", requestMessageId, fromAgentId: ownerId, title: "Read garden note", question: "Summarize the synthetic garden note." } }]);
+		for (let copy = 0; copy < 2; copy++) owner.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
+		owner.appendMessage(fauxAssistantMessage("The duplicate is earlier than this unchanged native leaf."));
+	}
+	await writeFile(ownerPath, [owner.getHeader(), ...owner.getEntries()].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+	const fixturePath = join(root, "lifecycle-observation.mjs");
+	await writeFile(fixturePath, `import {writeFileSync} from 'node:fs';
 		import * as hostPi from '@earendil-works/pi-coding-agent';
-		import {fauxAssistantMessage, fauxToolCall} from '@earendil-works/pi-ai';
-		import {deriveMessageIdentity} from ${JSON.stringify(resolve("src/protocol/identities.ts"))};
 		import {installInteractiveHostBridge} from ${JSON.stringify(resolve("src/pi-integration/interactive-host-bridge.ts"))};
 		export default function(pi) {
-			let runtime;
-			let clearNativeFailure;
+			let runtime, clearFailure;
 			pi.on('session_start', async (_event, ctx) => {
 				runtime = (await installInteractiveHostBridge(hostPi).capture(ctx.sessionManager,ctx.ui)).runtime;
 				const host = ctx.sessionManager.getEntries().some(entry => entry.customType === 'agent-coordination.repair-host');
@@ -75,40 +91,15 @@ test(`real same-terminal repair: ${scenario}`, { timeout: 30_000, skip: process.
 				if (${JSON.stringify(scenario)} === 'cleanup-reject' && !host) {
 					const abort = runtime.session.abort.bind(runtime.session);
 					runtime.session.abort = async () => { await abort(); throw new Error('actual native cleanup dependency rejected'); };
-					clearNativeFailure = () => { runtime.session.abort = abort; };
+					clearFailure = () => {runtime.session.abort = abort;};
 				}
-				writeFileSync(${JSON.stringify(join(root, "ready.json"))}, JSON.stringify({pid:process.pid,path:ctx.sessionManager.getSessionFile(),id:ctx.sessionManager.getSessionId(),tools:pi.getActiveTools()}));
+				writeFileSync(${JSON.stringify(join(root, "ready.json"))}, JSON.stringify({pid:process.pid,path:ctx.sessionManager.getSessionFile(),tools:pi.getActiveTools()}));
 			});
 			pi.on('session_before_switch', event => ${JSON.stringify(scenario)} === 'parking-cancel' && event.targetSessionFile?.endsWith('repair-host.jsonl') ? {cancel:true} : undefined);
 			pi.on('session_shutdown', () => pi.appendEntry('repair-test-final-write', {pid:process.pid}));
-			pi.on('agent_settled', () => { if(process.env.PI_AGENT_COORDINATION_BOOTSTRAP) appendFileSync(${JSON.stringify(join(root, "child-settled"))}, 'settled\\n'); });
-			pi.registerCommand('repair-test-spawn', {handler:async () => {
-				const input = {title:'Managed repair writer',request:'Remain available for repair retirement.'};
-				runtime.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall('agent_spawn',input,{id:'repair-spawn'}),{stopReason:'toolUse'}));
-				const result = await runtime.session.getToolDefinition('agent_spawn').execute('repair-spawn',input,undefined,undefined,runtime.session.extensionRunner.createContext());
-				runtime.session.sessionManager.appendMessage({role:'toolResult',toolName:'agent_spawn',toolCallId:'repair-spawn',content:result.content,details:result.details,isError:false,timestamp:Date.now()});
-				if (${JSON.stringify(scenario)} === 'repair-edit') {
-					const input = {operation:'request',targetAgent:result.details.agentId,question:'Publish the release'};
-					const entryId = runtime.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall('agent_message',input,{id:'repair-damaged-title'}),{stopReason:'toolUse'}));
-					const requestMessageId = deriveMessageIdentity({agentId:runtime.session.sessionManager.getSessionId(),entryId,toolCallId:'repair-damaged-title'});
-					runtime.session.sessionManager.appendMessage({role:'toolResult',toolName:'agent_message',toolCallId:'repair-damaged-title',content:[],details:{requestMessageId,targetAgentId:result.details.agentId,messageStatus:'sent'},isError:false,timestamp:Date.now()});
-				}
-				writeFileSync(${JSON.stringify(join(root, "spawn.json"))}, JSON.stringify(result.details));
-			}});
-			pi.registerCommand('repair-test-bash', {handler:async () => {
-				void runtime.session.executeBash('echo BASH_STARTED; sleep 30', chunk => {
-					if (chunk.includes('BASH_STARTED')) writeFileSync(${JSON.stringify(join(root, "bash-started"))}, 'started');
-				});
-			}});
-			pi.registerCommand('repair-test-ping', {handler:(_args,ctx) => writeFileSync(${JSON.stringify(join(root, "ping.json"))}, JSON.stringify({pid:process.pid,path:ctx.sessionManager.getSessionFile(),nativeManagerReplaced:ctx.sessionManager !== globalThis.__repairOriginalManager,entries:ctx.sessionManager.getEntries()}))});
-			pi.registerCommand('repair-test-quit', {handler:(_args,ctx) => ctx.shutdown()});
-			pi.registerCommand('repair-test-clear-failure', {handler:() => clearNativeFailure?.()});
-			pi.registerCommand('repair-test-open', {handler:async (path,ctx) => {await ctx.switchSession(path);}});
-			pi.registerCommand('repair-test-inspect', {handler:async (_args,ctx) => {
-				const command = runtime.session.extensionRunner.getCommand('agents');
-				const ui = {...ctx.ui, notify:(message,type) => {writeFileSync(${JSON.stringify(join(root, "inspected.json"))},JSON.stringify({message}));ctx.ui.notify(message,type);}};
-				await command.handler('repair inspect',{...ctx,ui});
-			}});
+			pi.registerCommand('repair-test-bash', {handler:async () => { void runtime.session.executeBash('echo BASH_STARTED; sleep 30', chunk => {if(chunk.includes('BASH_STARTED'))writeFileSync(${JSON.stringify(join(root,"bash-started"))},'started');}); }});
+			pi.registerCommand('repair-test-clear-failure', {handler:() => clearFailure?.()});
+			pi.registerCommand('repair-test-ping', {handler:(_args,ctx) => writeFileSync(${JSON.stringify(join(root, "ping.json"))}, JSON.stringify({pid:process.pid,path:ctx.sessionManager.getSessionFile(),nativeManagerReplaced:ctx.sessionManager !== globalThis.__repairOriginalManager,tools:pi.getActiveTools()}))});
 		}`);
 	const terminal = pty.spawn(process.execPath, [resolveInstalledPiCliPath(), "--session", ownerPath,
 		"--no-extensions", "--extension", process.env.REPAIR_TEST_EXTENSION ?? resolve("src/index.ts"), "--extension", fixturePath,
@@ -117,141 +108,102 @@ test(`real same-terminal repair: ${scenario}`, { timeout: 30_000, skip: process.
 		{ cwd: root, cols: 100, rows: 35, name: "xterm-256color", env: { PATH: process.env.PATH, HOME: root, PI_CODING_AGENT_DIR: agentDir, TERM: "xterm-256color" } });
 	terminal.onData((chunk) => appendFileSync(join(root, "terminal.log"), chunk));
 	const exited = new Promise<void>((done) => terminal.onExit(() => done()));
+	const repairRoot = join(root, "pi-agent-coordination-repair", Buffer.from(ownerId).toString("base64url"));
 	try {
 		await until(() => existsSync(join(root, "ready.json")), `Owner startup (${root})`);
-		if (scenario === "managed-child" || scenario === "repair-edit") {
-			terminal.write("/repair-test-spawn\r");
-			await until(() => existsSync(join(root, "spawn.json")), "actual managed child spawn");
-			assert.equal(JSON.parse(await readFile(join(root, "spawn.json"), "utf8")).spawnStatus, "created");
-			await until(async () => existsSync(join(root, "child-settled")) && (await readFile(join(root, "child-settled"), "utf8")).trim().split("\n").length >= 2, "managed child settlement");
-		}
-		if (scenario === "bash") { terminal.write("/repair-test-bash\r"); await until(() => existsSync(join(root, "bash-started")), "native user bash started"); }
-		ordinaryRequestsBeforeRepair = ordinaryRequests;
+		const initial = JSON.parse(await readFile(join(root, "ready.json"), "utf8"));
+		assert.equal(initial.tools.includes("agent_message"), scenario === "healthy" || scenario === "rejected-only");
+		if (!noRepair) await until(async () => (await readFile(join(root,"terminal.log"),"utf8")).includes("Subagent coordination blocked"), "actual admission blockage widget");
+		const beforeCommand = await readFile(ownerPath, "utf8");
+		if (scenario === "bash") { terminal.write("/repair-test-bash\r"); await until(() => existsSync(join(root,"bash-started")), "native bash"); }
 		terminal.write("/agents repair\r");
-		const repairRoot = join(root, "pi-agent-coordination-repair", Buffer.from(ownerId).toString("base64url"));
-		if (scenario === "cancel") { await until(() => repairRequests > 0, "repair model started"); terminal.write("\u001b"); }
-		if (scenario === "helper-kill") {
-			await until(() => repairRequests > 0, "repair model started");
-			const [attemptId] = await readdir(join(repairRoot, "hosts"));
-			const helper = JSON.parse(await readFile(join(repairRoot, "hosts", attemptId, "helper.json"), "utf8"));
-			assert.notEqual(helper.pid, terminal.pid);
-			process.kill(helper.pid, "SIGKILL");
+		if (noRepair) {
+			const message = scenario === "config-error" ? "no actual transcript admission" : "No repair needed";
+			await until(async () => (await readFile(join(root,"terminal.log"),"utf8")).includes(message), "preflight refusal");
+			assert.equal(existsSync(repairRoot), false);
+			assert.equal(await readFile(ownerPath, "utf8"), beforeCommand);
+			assert.equal(repairRequests, 0);
+			terminal.write("/repair-test-ping\r");
+			await until(() => existsSync(join(root,"ping.json")), "input remains usable");
+			assert.equal(JSON.parse(await readFile(join(root,"ping.json"),"utf8")).nativeManagerReplaced, false);
+			return;
 		}
-		const refused = scenario === "cleanup-reject" || scenario === "parking-cancel" || scenario === "cancel" || scenario === "helper-kill";
+		if (scenario === "cancel") { await until(() => repairRequests > 0, "model started"); terminal.write("\u001b"); }
+		if (scenario === "helper-kill") {
+			await until(() => repairRequests > 0, "model started");
+			const [attempt] = await readdir(join(repairRoot,"hosts"));
+			const helper = JSON.parse(await readFile(join(repairRoot,"hosts",attempt,"helper.json"),"utf8"));
+			process.kill(helper.pid,"SIGKILL");
+		}
+		let id = "";
 		await until(async () => {
-			if (!existsSync(join(repairRoot, "hosts"))) return false;
-			const [id] = await readdir(join(repairRoot, "hosts"));
-			if (refused) {
-				return existsSync(join(repairRoot, "hosts", id, "outcome.json"));
-			}
-			return existsSync(join(repairRoot, "hosts", id, "admission.jsonl"));
-		}, `repair admission (${root})`);
-		const [id] = await readdir(join(repairRoot, "hosts"));
-		const directory = join(repairRoot, "hosts", id);
-		const secondAttempt = async () => {
-			await delay(250);
-			terminal.write("/agents repair\r");
-			let nextId: string | undefined;
-			await until(async () => {
-				nextId = (await readdir(join(repairRoot, "hosts"))).find((value) => value !== id);
-				return !!nextId && existsSync(join(repairRoot, "hosts", nextId, "outcome.json"));
-			}, "second authorized attempt in same CLI");
-			assert.equal(JSON.parse(await readFile(join(repairRoot, "hosts", nextId!, "outcome.json"), "utf8")).outcome, "admitted");
-			assert.notEqual(nextId, id);
-			return nextId!;
-		};
+			if (!existsSync(join(repairRoot,"hosts"))) return false;
+			[id] = await readdir(join(repairRoot,"hosts"));
+			return !!id && existsSync(join(repairRoot,"hosts",id,"outcome.json"));
+		}, `repair outcome (${root})`);
+		const directory = join(repairRoot,"hosts",id);
+		const refused = ["cleanup-reject","parking-cancel","cancel","helper-kill"].includes(scenario);
+		const outcome = JSON.parse(await readFile(join(directory,"outcome.json"),"utf8"));
 		if (refused) {
-			assert.equal(existsSync(join(repairRoot, "storage", id, "committed.json")), false);
-			if (scenario === "cleanup-reject" || scenario === "parking-cancel") assert.equal(existsSync(join(repairRoot, "storage", id, "manifest.json")), false);
+			assert.equal(outcome.outcome,"refused");
+			assert.equal(existsSync(join(repairRoot,"storage",id,"committed.json")),false);
+			if (scenario === "cleanup-reject" || scenario === "parking-cancel") assert.equal(existsSync(join(repairRoot,"storage",id,"manifest.json")),false);
+			await delay(250);
 			if (scenario === "cleanup-reject") {
-				terminal.write("/repair-test-clear-failure\r");
-				await delay(50);
+				terminal.write("/repair-test-clear-failure\r"); await delay(50);
 				terminal.write("/agents repair park\r");
-				await until(async () => JSON.parse(await readFile(join(root, "ready.json"), "utf8")).path.endsWith("repair-host.jsonl"), "park refused Owner without authorizing repair");
-				// session_start precedes the awaited replacement callback and editor rebind.
+				await until(async () => JSON.parse(await readFile(join(root,"ready.json"),"utf8")).path.endsWith("repair-host.jsonl"),"park refused Owner");
 				await delay(250);
 				terminal.write("/agents repair recover\r");
-				await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("no verified retirement handoff"), "ordinary recovery must refuse missing handoff");
-				assert.equal(existsSync(join(directory, "admission.jsonl")), false);
-				terminal.write("/agents repair recover-stopped\r");
-				await until(() => existsSync(join(directory, "admission.jsonl")), "explicit stopped-writer attestation may recover preapply state");
-				assert.equal(JSON.parse((await readFile(join(directory, "admission.jsonl"), "utf8")).trim()).admitted, true);
+				await until(async () => (await readFile(join(root,"terminal.log"),"utf8")).includes("no verified retirement handoff"),"missing ACK refusal");
+				assert.equal(existsSync(join(directory,"admission.jsonl")),false);
 			}
-			if (scenario === "helper-kill") {
-				terminal.write("/agents repair recover-stopped\r");
-				await until(() => existsSync(join(directory, "admission.jsonl")), "explicit recovery after helper interruption");
-				const recovery = JSON.parse((await readFile(join(directory, "recovery.jsonl"), "utf8")).trim());
-				assert.equal(recovery.kind, "operator-attested");
-				assert.equal(recovery.helperRetirement.kind, "observed-exit");
-				assert.equal(recovery.helperRetirement.signal, "SIGKILL");
-				assert.equal(JSON.parse((await readFile(join(directory, "admission.jsonl"), "utf8")).trim()).admitted, true);
-				assert.equal(existsSync(join(repairRoot, "storage", "lease")), false);
-			}
-			if (scenario === "cancel") {
-				await delay(250);
-				terminal.write("/agents repair recover\r");
-				await until(() => existsSync(join(directory, "admission.jsonl")), "ordinary recovery after positively acknowledged retirement");
-				assert.equal(JSON.parse((await readFile(join(directory, "admission.jsonl"), "utf8")).trim()).admitted, true);
-				await secondAttempt();
+			if (scenario === "cancel" || scenario === "helper-kill" || scenario === "cleanup-reject") {
+				terminal.write(scenario === "cancel" ? "/agents repair recover\r" : "/agents repair recover-stopped\r");
+				await until(() => existsSync(join(directory,"admission.jsonl")),"recovery attempts real admission");
+				// Restoring original blocked evidence is safe disk recovery, not successful admission.
+				assert.equal(JSON.parse((await readFile(join(directory,"admission.jsonl"),"utf8")).trim()).admitted,false);
 			}
 			return;
 		}
-		const admission = JSON.parse((await readFile(join(directory, "admission.jsonl"), "utf8")).trim());
-		assert.equal(admission.admitted, scenario !== "admission-fail" && scenario !== "initial-admission-fail", root);
-		const bootstrap = JSON.parse(await readFile(join(directory, "moderator-bootstrap.json"), "utf8"));
-		assert.equal(bootstrap.workflowId, ownerId);
-		assert.equal(bootstrap.directSpawnerAgentId, null);
-		assert.notEqual(bootstrap.agentId, ownerId);
-		assert.equal(bootstrap.kind, "repair_moderator");
-		assert.ok(existsSync(join(repairRoot, "storage", id, "committed.json")));
-		const snapshot = await readFile(join(repairRoot, "storage", id, "snapshot", "file-0"), "utf8");
-		assert.match(snapshot, /repair-test-final-write/);
-		if (scenario === "managed-child" || scenario === "repair-edit") {
-			const childSnapshot = await readFile(join(repairRoot, "storage", id, "snapshot", "file-1"), "utf8");
-			assert.match(childSnapshot, /repair-test-final-write/);
-			const finalWrite = childSnapshot.trim().split("\n").map((line) => JSON.parse(line)).find((entry) => entry.customType === "repair-test-final-write");
-			assert.notEqual(finalWrite.data.pid, terminal.pid);
+		assert.equal(outcome.outcome, scenario === "admission-fail" ? "committed_admission_failed" : "admitted", root);
+		assert.ok(existsSync(join(repairRoot,"storage",id,"committed.json")));
+		const snapshot = await readFile(join(repairRoot,"storage",id,"snapshot","file-0"),"utf8");
+		assert.match(snapshot,/repair-test-final-write/);
+		assert.equal(snapshot.split('"customType":"agent-coordination.message-delivery"').length-1,2);
+		const repaired = await readFile(ownerPath,"utf8");
+		assert.equal(repaired.split('"customType":"agent-coordination.message-delivery"').length-1,1);
+		if (scenario === "bash") assert.match(snapshot,/"cancelled":true/);
+		if (rejectedEntry) {
+			assert.deepEqual(repaired.trim().split("\n").map(line=>JSON.parse(line)).find(entry=>entry.id===(rejectedEntry as {id:string}).id),rejectedEntry);
+			const [sealId] = await readdir(join(repairRoot,"storage",id,"seals"));
+			const report = JSON.parse(await readFile(join(repairRoot,"storage",id,"seals",sealId,"report.txt"),"utf8"));
+			assert.equal(report.valid,true);
+			assert.equal(report.protocolEffects.changes.some((change: {category:string;after?:{messageId:string}})=>change.category==="pending_delivery" && change.after?.messageId===rejectedRequestId),false);
 		}
-		if (scenario === "repair-edit") {
-			assert.doesNotMatch(snapshot, /"title":"Publish release"/);
-			assert.match(await readFile(ownerPath, "utf8"), /"title":"Publish release"/);
-			const [sealId] = await readdir(join(repairRoot, "storage", id, "seals"));
-			const audit = JSON.parse(await readFile(join(repairRoot, "storage", id, "seals", sealId, "report.txt"), "utf8"));
-			assert.equal(audit.valid, true);
-			assert.ok(audit.protocolEffects.changes.some((change: { category: string }) => change.category === "pending_delivery"));
-		}
-		if (scenario === "bash") {
-			assert.match(snapshot, /BASH_STARTED/);
-			assert.match(snapshot, /"cancelled":true/);
-		}
-		await delay(50);
+		const bootstrap = JSON.parse(await readFile(join(directory,"moderator-bootstrap.json"),"utf8"));
+		assert.equal(bootstrap.workflowId,ownerId);
+		assert.equal(bootstrap.directSpawnerAgentId,null);
+		assert.notEqual(bootstrap.agentId,ownerId);
+		await delay(250);
 		terminal.write("/repair-test-ping\r");
-		await until(() => existsSync(join(root, "ping.json")), "same terminal input after repair");
-		const ping = JSON.parse(await readFile(join(root, "ping.json"), "utf8"));
-		assert.equal(ping.pid, terminal.pid);
-		assert.equal(ping.path, ownerPath);
-		assert.equal(ping.nativeManagerReplaced, true);
-		assert.equal(SessionManager.open(ownerPath).getSessionId(), ownerId);
-		assert.equal(ordinaryRequests, ordinaryRequestsBeforeRepair, "repair must not automatically resume participants");
-		assert.equal(repairRequests, scenario === "repair-edit" ? 4 : 2);
+		await until(()=>existsSync(join(root,"ping.json")),"same terminal after repair");
+		const ping = JSON.parse(await readFile(join(root,"ping.json"),"utf8"));
+		assert.equal(ping.pid,terminal.pid);
+		assert.equal(ping.path,ownerPath);
+		assert.equal(ping.nativeManagerReplaced,true);
+		assert.equal(ping.tools.includes("agent_message"),scenario!=="admission-fail");
+		assert.equal(ordinaryRequests,0,"repair must not automatically resume participants");
+		assert.equal(repairRequests,4);
 		if (scenario === "repeat") {
-			const nextId = await secondAttempt();
-			await delay(250);
-			terminal.write(`/repair-test-open ${join(directory, "repair-host.jsonl")}\r`);
-			await until(async () => JSON.parse(await readFile(join(root, "ready.json"), "utf8")).path === join(directory, "repair-host.jsonl"), "open archived first repair host");
-			await delay(250);
-			terminal.write("/repair-test-inspect\r");
-			await until(() => existsSync(join(root, "inspected.json")), "archived host inspection");
-			const inspected = JSON.parse(await readFile(join(root, "inspected.json"), "utf8"));
-			assert.ok(inspected.message.includes(id));
-			assert.equal(inspected.message.includes(nextId), false);
+			terminal.write("/agents repair\r");
+			await until(async ()=>(await readFile(join(root,"terminal.log"),"utf8")).includes("No repair needed"),"successful admission no longer authorizes no-op repair");
+			assert.deepEqual(await readdir(join(repairRoot,"hosts")),[id]);
+			assert.equal(repairRequests,4);
+			terminal.write("/agents repair inspect\r");
+			await until(async ()=>(await readFile(join(root,"terminal.log"),"utf8")).includes("Validation audit"),"historical diagnostics remain available");
 			terminal.write("q");
 		}
-	} finally {
-		releaseModel?.();
-		terminal.kill();
-		await exited;
-		await server.close();
-	}
+	} finally { releaseModel?.(); terminal.kill(); await exited; await server.close(); }
 });
 }

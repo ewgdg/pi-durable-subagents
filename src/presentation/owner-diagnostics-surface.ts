@@ -75,6 +75,8 @@ function summaryText(failure: OwnerRecoveryError | undefined): string {
 		"",
 		"Recovery",
 		"/agents repair authorizes one same-terminal repair attempt without another confirmation.",
+		"Only actual transcript admission blockers are eligible; current support removes exact duplicate Message Delivery envelopes.",
+		"Successful admission needs no repair. Rejected historical records remain unchanged, even when a separate blocker is repaired.",
 		"Persisted Owner identity, actual writer retirement, and complete validation must succeed; otherwise repair refuses.",
 		"Native /fork preserves selected conversation in a new independent Workflow; /clone copies the active branch.",
 		"Owner role identification must have succeeded; otherwise fork is refused. Native /new remains available.",

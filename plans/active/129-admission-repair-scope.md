@@ -49,6 +49,13 @@ model report, synthetic diagnostic, or a repaired record that never blocked.
 - PR #143 converted to draft; no code correction is claimed yet.
 - Existing Owner-bootstrap tests already demonstrate duplicate valid Deliveries
   causing a real strict protocol admission failure and the warning widget.
+- Command preflight now retains the actual OwnerRecoveryError on its native
+  manager; healthy/rejected-only admission returns without helper creation,
+  input retirement or mutation. Configuration failures refuse separately.
+- Added red/green admitted-Owner command tests and real CLI no-op cases. Rebuilt
+  positive CLI fixture from strict duplicate-Delivery admission failure; its
+  expected successful repair currently fails against the old validator, as
+  intended pending the isolated certificate implementation.
 
 ## Decisions
 

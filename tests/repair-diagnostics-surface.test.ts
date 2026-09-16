@@ -22,7 +22,8 @@ test("repair inspection selects read-only Owner, Moderator and audit evidence wi
 	const launch: RepairLaunch = { version: 1, attemptId, moderatorAgentId: "moderator", storageRoot,
 		owner: { path: "/original/owner.jsonl", workflowId: "owner", sessionId: "owner", identityEntryId: "identity" },
 		participantDirectory: "/participants", cwd: directory, agentDir: directory,
-		model: { provider: "fixture", modelId: "fixture" }, thinking: "off", creationPreset: null };
+		model: { provider: "fixture", modelId: "fixture" }, thinking: "off", creationPreset: null,
+		admissionFailure: { stage: "Owner transcript recovery", reason: "duplicate Deliveries", transcriptPath: "/original/owner.jsonl", agentId: "owner" } };
 	let component!: Component;
 	let ready!: () => void;
 	const created = new Promise<void>((resolve) => { ready = resolve; });

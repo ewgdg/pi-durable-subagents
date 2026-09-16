@@ -8,6 +8,7 @@ export type RepairLaunch = Readonly<{
 	attemptId: string;
 	moderatorAgentId: string;
 	owner: { path: string; workflowId: string; sessionId: string; identityEntryId: string };
+	admissionFailure: { stage: string; reason: string; transcriptPath: string; agentId: string };
 	storageRoot: string;
 	participantDirectory: string;
 	cwd: string;
@@ -19,7 +20,9 @@ export type RepairLaunch = Readonly<{
 
 export async function readRepairLaunch(path: string): Promise<RepairLaunch> {
 	const value = JSON.parse(await readFile(path, "utf8")) as RepairLaunch;
-	if (!value || value.version !== 1 || !value.owner || !value.model ||
+	if (!value || value.version !== 1 || !value.owner || !value.model || !value.admissionFailure ||
+		value.admissionFailure.transcriptPath !== value.owner.path || value.admissionFailure.agentId !== value.owner.workflowId ||
+		![value.admissionFailure.stage, value.admissionFailure.reason].every((field) => typeof field === "string" && field.length > 0) ||
 		![value.attemptId, value.moderatorAgentId, value.owner.workflowId, value.owner.identityEntryId,
 			value.model.provider, value.model.modelId, value.thinking].every((field) => typeof field === "string" && field.length > 0 && !field.includes("\0")) ||
 		value.owner.workflowId !== value.owner.sessionId || value.moderatorAgentId === value.owner.workflowId ||

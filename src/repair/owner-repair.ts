@@ -4,6 +4,7 @@ import { mkdir, readFile, realpath, writeFile, lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { isOwnerAdmitted, ownerRetirementFor } from "../bootstrap/owner-bootstrap.ts";
+import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
 import { workflowSessionDirectory } from "../runtime/workflow-session-directory.ts";
 import { captureAgentCreationPreset, selectAgentTemplateForCreation } from "../templates/agent-templates.ts";
 import { defaultAgentTemplateRoots, discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
@@ -75,7 +76,7 @@ export function presentRepairHost(ctx: ExtensionContext, host: RepairHost): () =
 	});
 }
 
-export function ownerRepairCommand(bridge: InteractiveHostBridge) {
+export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailure: (manager: object) => OwnerRecoveryError | undefined) {
 	return async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 		let presentation: Attempt | undefined;
 		try {
@@ -83,8 +84,8 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge) {
 			const action = args.trim();
 			let attempt = currentAttempt(ctx);
 			const host = readRepairHost(ctx.sessionManager);
-			// A new bare invocation is new authorization after successful admission.
-			// Explicit inspection and archived host tags remain bound to their old attempt.
+			// Keep historical inspection bound to its attempt; a bare invocation must
+			// independently establish a new admission blocker, never normalize history.
 			if (!action && !host && attempt?.outcome === "admitted" && !attempt.running) attempt = undefined;
 			if (action === "recover-stopped") {
 				if (!host) throw new Error("Recover-stopped is only available in the tagged repair host. Use /agents repair park after a failed attempt.");
@@ -160,6 +161,14 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge) {
 				return;
 			}
 			if (action) throw new Error("No repair attempt in this attachment. Invoke /agents repair to authorize one attempt.");
+			if (isOwnerAdmitted(ctx.sessionManager)) {
+				ctx.ui.notify("No repair needed: Owner admission succeeded. Rejected historical records remain unchanged.", "info");
+				return;
+			}
+			const failure = admissionFailure(ctx.sessionManager);
+			if (!failure) throw new Error("Transcript repair is unavailable: no actual transcript admission failure is retained. Configuration, model, and cleanup failures require their own diagnostics.");
+			if (failure.agentId !== ctx.sessionManager.getSessionId() || failure.transcriptPath !== ctx.sessionManager.getSessionFile()) throw new Error("Admission failure does not belong to this exact Owner session");
+			if (failure.protocolError.message !== "invariant_violation: Message has duplicate Deliveries") throw new Error("Unsupported transcript admission failure: only exact duplicate Message Delivery envelopes can currently be repaired");
 			if (process.platform === "win32") throw new Error("Workflow repair currently requires POSIX file durability; Windows is not supported");
 			const sessionPath = ctx.sessionManager.getSessionFile();
 			if (!sessionPath) throw new Error("Repair requires a persisted Owner transcript");
@@ -184,6 +193,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge) {
 			const participantDirectory = workflowSessionDirectory(ctx.sessionManager.getSessionDir(), owner.workflowId);
 			await mkdir(participantDirectory, { recursive: true, mode: 0o700 });
 			const launch: RepairLaunch = { version: 1, attemptId, moderatorAgentId: randomUUID(), owner: { path: ownerPath, workflowId: owner.workflowId, sessionId: owner.sessionId, identityEntryId: owner.identityEntryId },
+				admissionFailure: { stage: failure.stage, reason: failure.protocolError.message, transcriptPath: ownerPath, agentId: failure.agentId },
 				storageRoot: join(root, "storage"), participantDirectory, cwd: ctx.cwd, agentDir: runtime.services.agentDir,
 				model, thinking: candidate?.thinking ?? runtime.session.thinkingLevel, creationPreset: preset };
 			const bootstrapPath = join(directory, "launch.json");
