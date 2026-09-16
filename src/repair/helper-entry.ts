@@ -28,6 +28,7 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		let snapshot: RepairSnapshot | undefined;
 		let phase: "waiting" | "snapshot" | "model" | "validating" | "applying" | "committed" | "refused" = "waiting";
 		let cancelled = false;
+		let retirementAcknowledged = false;
 		let completed = false;
 		let resolveModel: (() => void) | undefined;
 		let active: Promise<unknown> | undefined;
@@ -83,7 +84,9 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		async function repair() {
 			if (phase !== "waiting" || cancelled) throw new Error("Repair handoff was already consumed or cancelled");
 			phase = "snapshot";
+			retirementAcknowledged = true;
 			try {
+				await writeRepairRecord(join(directory, "retirement.json"), { kind: "host-verified-retirement", attemptId: launch.attemptId, time: new Date().toISOString() });
 				snapshot = await createRepairSnapshot({ ...scope,
 					retirement: { verified: true, evidence: "Host verified original coordinator cleanup, native bash/abort/idle joins and completed unrelated-session replacement before IPC handoff." } });
 				const identity = readRepairOwnerIdentity(await snapshot.readSnapshot("file-0"), launch.owner.path);
@@ -145,6 +148,9 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 						case "refuse": cancelled = true; if (phase !== "committed") phase = "refused"; await progress(String(message.payload)); return null;
 						case "admission": await writeRepairRecord(join(directory, "admission.jsonl"), message.payload, true); return null;
 						case "recover":
+							// No journal intent proves only unchanged bytes, not writer cleanup.
+							// Ordinary recovery cannot turn an unacknowledged refusal into permission.
+							if (!retirementAcknowledged) throw new Error("Repair has no verified retirement handoff; stop all affected writers and use recover-stopped");
 							if (active && phase !== "refused" && phase !== "committed") throw new Error("Repair is still running");
 							await snapshot?.release(); return await recoverRepair(scope);
 						case "inspect": return { phase, directory, launch, events: await readFile(join(directory, "events.jsonl"), "utf8").catch(() => "No progress recorded.") };

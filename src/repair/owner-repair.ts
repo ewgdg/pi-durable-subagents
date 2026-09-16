@@ -27,9 +27,14 @@ const registry = globalThis as typeof globalThis & { [REGISTRY_KEY]?: Map<string
 const attempts = registry[REGISTRY_KEY] ??= new Map();
 const recoverySwitches = registry.__piAgentCoordinationRepairRecoverySwitches ??= new WeakMap();
 
+function findAttempt(ownerPath: string, attemptId?: string): Attempt | undefined {
+	return [...attempts.values()].reverse().find((attempt) => attempt.launch.owner.path === ownerPath &&
+		(attemptId === undefined || attempt.launch.attemptId === attemptId));
+}
+
 function currentAttempt(ctx: ExtensionContext): Attempt | undefined {
 	const host = readRepairHost(ctx.sessionManager);
-	return attempts.get(host?.ownerPath ?? ctx.sessionManager.getSessionFile() ?? "");
+	return findAttempt(host?.ownerPath ?? ctx.sessionManager.getSessionFile() ?? "", host?.attemptId);
 }
 
 export function isRepairPaused(ctx: ExtensionContext): boolean {
@@ -48,7 +53,7 @@ export function isRepairSwitchAuthorized(ctx: ExtensionContext, target: string |
 }
 
 export function presentRepairHost(ctx: ExtensionContext, host: RepairHost): () => void {
-	const attempt = attempts.get(host.ownerPath);
+	const attempt = findAttempt(host.ownerPath, host.attemptId);
 	if (attempt) attempt.ui = ctx.ui;
 	ctx.ui.setStatus("workflow-repair", "Workflow repair host · Owner writers retired or awaiting retirement verification");
 	ctx.ui.setWidget("workflow-repair", [
@@ -76,8 +81,11 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge) {
 		try {
 			if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error("Workflow repair requires the original interactive CLI terminal");
 			const action = args.trim();
-			const attempt = currentAttempt(ctx);
+			let attempt = currentAttempt(ctx);
 			const host = readRepairHost(ctx.sessionManager);
+			// A new bare invocation is new authorization after successful admission.
+			// Explicit inspection and archived host tags remain bound to their old attempt.
+			if (!action && !host && attempt?.outcome === "admitted" && !attempt.running) attempt = undefined;
 			if (action === "recover-stopped") {
 				if (!host) throw new Error("Recover-stopped is only available in the tagged repair host. Use /agents repair park after a failed attempt.");
 				if (attempt?.running) throw new Error("An attempt is still running in this host; cancel or await it first");
@@ -137,6 +145,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge) {
 						} });
 						if (transition.cancelled) throw new Error("Recovery reopening cancelled");
 					} finally { attempt.running = false; }
+					if (attempt.outcome === "admitted") await attempt.helper.stop();
 					return;
 				}
 				if (action && action !== "inspect") throw new Error("Usage: /agents repair [inspect|cancel|recover|park|recover-stopped]");
@@ -190,7 +199,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge) {
 			});
 			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true };
 			presentation = launched;
-			attempts.set(ownerPath, launched);
+			attempts.set(attemptId, launched);
 			closeRepairInput(runtime.session);
 			launched.outcome = await runSameTerminalRepair({ context: ctx, ownerPath, repairHostPath: hostPath, retirement,
 				admission: (fresh) => isOwnerAdmitted(fresh.sessionManager), helper: {
