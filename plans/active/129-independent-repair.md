@@ -121,13 +121,22 @@ integration suite. Record exact commands and outcomes at completion.
   it. The CLI regression proves missing-handoff refusal, explicit operator
   recovery, positive post-handoff cancellation recovery, and a subsequent attempt.
   The same commit binds archived hosts to exact attempt IDs and permits new
-  repair authorization after successful admission. Targeted closure review is
-  pending; no broader review completion is claimed.
+  repair authorization after successful admission. Independent targeted closure
+  review approved both fixes and reran the three selected real-CLI regressions;
+  no remaining required findings in that bounded review.
 - Existing `Owner reload publishes one prospective policy or preserves the
   prior snapshot` fails its capacity assertion on the unchanged baseline too
   (verified with pre-change source). It is not silently repaired by this task.
-  Independent lifecycle/helper review and final focused verification are still
-  pending; README/design/PR consolidation belongs to the parent.
+  Existing `Moderator attempts use process Runtimes and one committed failure
+  creates one linked replacement` also times out unchanged at 45 seconds on
+  detached baseline `cb39445`; it is not repaired by this task.
+- Final focused verification passed: typecheck; all repair-specific fast files;
+  helper-process, child-contract probe and eleven-case real CLI files; existing
+  Owner bootstrap and process factory files with only the two independently
+  reproduced baseline failures explicitly skipped. Packed-package clean and
+  managed repair-edit smoke both passed using an actual `node_modules` location.
+  Read-only diagnostics tabs and terminal-size bounds are tested. Final
+  README/design/PR consolidation and final acceptance belong to the parent.
 
 ## Decisions and evidence
 

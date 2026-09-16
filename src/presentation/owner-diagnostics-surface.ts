@@ -74,11 +74,12 @@ function summaryText(failure: OwnerRecoveryError | undefined): string {
 		"This diagnostic does not establish the state of other running processes.",
 		"",
 		"Recovery",
-		"Transcript repair is unavailable in this build.",
+		"/agents repair authorizes one same-terminal repair attempt without another confirmation.",
+		"Persisted Owner identity, actual writer retirement, and complete validation must succeed; otherwise repair refuses.",
 		"Native /fork preserves selected conversation in a new independent Workflow; /clone copies the active branch.",
 		"Owner role identification must have succeeded; otherwise fork is refused. Native /new remains available.",
 		"Copied coordination history grants no authority or pending obligations; the source transcript is unchanged.",
-		"Keep the original session; inspect technical details before planning a repair.",
+		"Keep the original evidence. If repair is unfinished, use its tagged repair host for explicit recovery before reopening affected sessions.",
 	].join("\n");
 }
 
