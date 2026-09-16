@@ -2,7 +2,7 @@
 
 Scope correction: this is historical implementation evidence. Its rejected-record
 restoration and successful-admission repeat behavior were superseded by the
-admission-failure-only correction; see `129-admission-repair-scope.md` when complete
+admission-failure-only correction; see `129-admission-repair-scope.md`
 and `docs/workflow-transcript-repair-design.md` for the current contract.
 
 ## Goal

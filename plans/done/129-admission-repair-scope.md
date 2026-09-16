@@ -97,4 +97,15 @@ behavior rather than add another normalization path or confirmation prompt.
   duplicate Deliveries still block and the old rejected Request remains inert.
   No model repair has been run against that user input.
 - Current README, repair contract, and diagnostics documentation have been
-  aligned with admission-only scope. PR publication update remains the final step.
+  aligned with admission-only scope. Corrected code and documentation are pushed
+  to [PR #143](https://github.com/ewgdg/pi-durable-subagents/pull/143), whose title
+  and description now state admission-only scope and exact-duplicate support.
+  The PR was returned to ready for review after independent review and checks.
+
+## Outcome
+
+Rejected historical coordination records are no longer a repair target. Healthy
+admission is a no-op, and the supported blocked-admission correction has a
+lossless structural certificate. The old missing-title-only manual scenario is
+intentionally ineligible; the separately prepared duplicate-Delivery scenario
+shows a genuine blockage without changing the user's existing open files.
