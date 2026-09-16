@@ -811,7 +811,7 @@ class AgentSelectorSurface implements Component {
 				bodyText = line;
 				line += this.#theme.fg("dim", item.childControl);
 			}
-			if (item.action || item.status) {
+			if (item.action || item.status || this.#options.presentations?.some(presentation => presentation.id === item.value)) {
 				regions.push({ start: 0, end: bodyEnd, text: bodyText, action: { kind: "open", value: item.value } });
 			}
 			lines.push({ text: line, regions, roster: true });

@@ -1,6 +1,6 @@
 import type { AgentSession, ExtensionCommandContext, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, writeFile, lstat } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, writeFile, lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { isOwnerAdmitted, ownerRetirementFor } from "../bootstrap/owner-bootstrap.ts";
@@ -21,14 +21,25 @@ import { sanitizeReportTerminalText } from "../presentation/moderator-report-sur
 type Attempt = {
 	launch: RepairLaunch; directory: string; hostPath: string; helper: IndependentRepairHelper;
 	ui: ExtensionUIContext; running: boolean; outcome?: RepairOutcome;
+	switchTarget?: string;
 	liveText: string; liveStatus: string; listeners: Set<() => void>;
 	view?: { controller: AbortController; closed: Promise<void> };
 };
 const REGISTRY_KEY = "__piAgentCoordinationRepairAttempts";
 const registry = globalThis as typeof globalThis & { [REGISTRY_KEY]?: Map<string, Attempt>;
-	__piAgentCoordinationRepairRecoverySwitches?: WeakMap<object, string> };
+	__piAgentCoordinationRepairRecoverySwitches?: WeakMap<object, string>;
+	__piAgentCoordinationRepairHumanWait?: Set<string> };
 const attempts = registry[REGISTRY_KEY] ??= new Map();
 const recoverySwitches = registry.__piAgentCoordinationRepairRecoverySwitches ??= new WeakMap();
+const humanWait = registry.__piAgentCoordinationRepairHumanWait ??= new Set();
+
+export function repairOwnerRequiresHumanInput(ctx: ExtensionContext): boolean {
+	return humanWait.has(ctx.sessionManager.getSessionFile() ?? "");
+}
+
+export function repairOwnerTurnStarted(ctx: ExtensionContext): void {
+	humanWait.delete(ctx.sessionManager.getSessionFile() ?? "");
+}
 
 function findAttempt(ownerPath: string, attemptId?: string): Attempt | undefined {
 	return [...attempts.values()].reverse().find((attempt) => attempt.launch.owner.path === ownerPath &&
@@ -49,7 +60,7 @@ export function isRepairPaused(ctx: ExtensionContext): boolean {
 export function isRepairSwitchAuthorized(ctx: ExtensionContext, target: string | undefined): boolean {
 	if (target && recoverySwitches.get(ctx.sessionManager) === target) return true;
 	const attempt = currentAttempt(ctx);
-	if (!attempt || !target || !attempt.running) return false;
+	if (!attempt || !target || !attempt.running || attempt.switchTarget !== target) return false;
 	const source = ctx.sessionManager.getSessionFile();
 	return source === attempt.launch.owner.path && target === attempt.hostPath ||
 		source === attempt.hostPath && target === attempt.launch.owner.path;
@@ -57,7 +68,7 @@ export function isRepairSwitchAuthorized(ctx: ExtensionContext, target: string |
 
 export function presentRepairHost(ctx: ExtensionContext, host: RepairHost): () => void {
 	const attempt = findAttempt(host.ownerPath, host.attemptId);
-	if (attempt) attempt.ui = ctx.ui;
+	if (attempt) { attempt.ui = ctx.ui; attempt.switchTarget = undefined; }
 	ctx.ui.setStatus("workflow-repair", "Workflow repair host · Owner writers retired or awaiting retirement verification");
 	ctx.ui.setWidget("workflow-repair", [
 		"Workflow repair — this is not an Owner Workflow.",
@@ -108,10 +119,22 @@ export const repairNavigation = {
 	},
 	async entries(ctx: ExtensionCommandContext) {
 		const path = ctx.sessionManager.getSessionFile();
-		return [...attempts.values()].filter((attempt) => attempt.launch.owner.path === path).map((attempt) => ({
+		const entries = [...attempts.values()].filter((attempt) => attempt.launch.owner.path === path).map((attempt) => ({
 			id: `repair:${attempt.launch.attemptId}`, label: "Repair Moderator", description: `${attempt.running ? "Running" : attempt.outcome} · read-only · ${attempt.launch.moderatorAgentId}`,
 			open: () => inspectAttempt(ctx, attempt.launch, attempt.directory, attempt),
 		}));
+		if (!path) return entries;
+		const hosts = join(dirname(path), "pi-agent-coordination-repair", Buffer.from(ctx.sessionManager.getSessionId()).toString("base64url"), "hosts");
+		const directories = await readdir(hosts).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+		for (const id of directories) {
+			if (entries.some(entry => entry.id === `repair:${id}`)) continue;
+			const directory = join(hosts, id);
+			const launch = await readRepairArchiveLaunch(join(directory, "launch.json"));
+			if (launch.attemptId !== id || launch.owner.path !== path || launch.owner.workflowId !== ctx.sessionManager.getSessionId()) continue;
+			entries.push({ id: `repair:${id}`, label: "Repair Moderator", description: `Archived · read-only · ${launch.moderatorAgentId}`,
+				open: () => inspectAttempt(ctx, launch, directory, undefined) });
+		}
+		return entries;
 	},
 };
 
@@ -144,6 +167,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 				if (leaseExists) await clearAbandonedRepairLease({ root: launch.storageRoot, helperRetirement: { verified: true, evidence } });
 				await recoverRepair({ root: launch.storageRoot, attemptId: launch.attemptId, ownerPath: launch.owner.path, participantDirectory: launch.participantDirectory });
 				const retiredManager = ctx.sessionManager;
+				humanWait.add(launch.owner.path);
 				recoverySwitches.set(retiredManager, launch.owner.path);
 				try {
 					const transition = await ctx.switchSession(launch.owner.path, { withSession: async (fresh) => {
@@ -163,8 +187,9 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 				if (action === "park") {
 					if (attempt.running || host) throw new Error("Park is only available after a refused attempt still attached to its old Owner");
 					attempt.running = true;
+					attempt.switchTarget = attempt.hostPath;
 					try { await ctx.switchSession(attempt.hostPath, { withSession: async (fresh) => { attempt.ui = fresh.ui; } }); }
-					finally { attempt.running = false; }
+					finally { attempt.running = false; attempt.switchTarget = undefined; }
 					return;
 				}
 				if (action === "cancel") { await attempt.helper.request("cancel"); ctx.ui.notify("Repair cancellation requested; no automatic Owner reopening.", "info"); return; }
@@ -174,6 +199,8 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 					const result = await attempt.helper.request("recover") as { safeToReopen?: boolean };
 					if (result?.safeToReopen !== true) throw new Error("Recovery did not establish a safe Owner generation");
 					attempt.running = true;
+					humanWait.add(attempt.launch.owner.path);
+					attempt.switchTarget = attempt.launch.owner.path;
 					try {
 						const transition = await ctx.switchSession(attempt.launch.owner.path, { withSession: async (fresh) => {
 							attempt.ui = fresh.ui;
@@ -184,7 +211,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 							fresh.ui.notify(admitted ? "Owner reopened after explicit recovery. Participants remain dormant." : "Recovery completed, but fresh Owner admission failed. Committed data remains intact.", admitted ? "info" : "error");
 						} });
 						if (transition.cancelled) throw new Error("Recovery reopening cancelled");
-					} finally { attempt.running = false; }
+					} finally { attempt.running = false; attempt.switchTarget = undefined; }
 					if (attempt.outcome === "admitted") await attempt.helper.stop();
 					return;
 				}
@@ -253,12 +280,16 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 					for (const refresh of launched.listeners) refresh();
 				},
 			});
-			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true, liveText: "", liveStatus: "", listeners: new Set() };
+			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true, switchTarget: hostPath, liveText: "", liveStatus: "", listeners: new Set() };
 			presentation = launched;
 			attempts.set(attemptId, launched);
 			closeRepairInput(runtime.session);
 			const started = await startSameTerminalRepair({ context: ctx, ownerPath, repairHostPath: hostPath, retirement,
-				beforeReopen: async () => { const view = launched?.view; view?.controller.abort(); await view?.closed; },
+				beforeReopen: async () => {
+					const view = launched?.view; view?.controller.abort(); await view?.closed;
+					humanWait.add(ownerPath);
+					if (launched) launched.switchTarget = ownerPath;
+				},
 				admission: (fresh) => isOwnerAdmitted(fresh.sessionManager), helper: {
 					async repair() {
 						const result = await helper.request("retired") as { status?: string };
@@ -271,6 +302,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 			void started.completion.then(async (outcome) => {
 				active.outcome = outcome;
 				active.running = false;
+				active.switchTarget = undefined;
 				await writeRepairRecord(join(directory, "outcome.json"), { outcome, time: new Date().toISOString() });
 				if (outcome === "admitted") await helper.stop();
 			}).catch((error: unknown) => { active.running = false; active.ui.notify(`Repair completion: ${String(error)}`, "error"); });

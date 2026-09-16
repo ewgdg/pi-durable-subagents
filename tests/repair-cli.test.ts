@@ -121,6 +121,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			pi.registerCommand('repair-test-bash', {handler:async () => { void runtime.session.executeBash('echo BASH_STARTED; sleep 30', chunk => {if(chunk.includes('BASH_STARTED'))writeFileSync(${JSON.stringify(join(root,"bash-started"))},'started');}); }});
 			pi.registerCommand('repair-test-clear-failure', {handler:() => clearFailure?.()});
 			pi.registerCommand('repair-test-native-change', {handler:() => runtime.session.setThinkingLevel('high')});
+			pi.registerCommand('repair-test-unsafe-open', {handler:async (_args,ctx) => writeFileSync(${JSON.stringify(join(root,"unsafe-open.json"))}, JSON.stringify(await ctx.switchSession(${JSON.stringify(ownerPath)})))});
 			pi.registerCommand('repair-test-ping', {handler:(_args,ctx) => writeFileSync(${JSON.stringify(join(root, "ping.json"))}, JSON.stringify({pid:process.pid,path:ctx.sessionManager.getSessionFile(),nativeManagerReplaced:ctx.sessionManager !== globalThis.__repairOriginalManager,tools:pi.getActiveTools()}))});
 		}`);
 	const terminal = pty.spawn(process.execPath, [resolveInstalledPiCliPath(), "--session", ownerPath,
@@ -156,6 +157,9 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			terminal.write("/repair-test-ping\r");
 			await delay(500);
 			assert.ok(existsSync(join(root, "ping.json")), "repair must leave native slash commands responsive while helper is held");
+			terminal.write("/repair-test-unsafe-open\r");
+			await until(() => existsSync(join(root, "unsafe-open.json")), "native reopening attempt refused while uncommitted");
+			assert.equal(JSON.parse(await readFile(join(root, "unsafe-open.json"), "utf8")).cancelled, true);
 			terminal.write("/agents\r");
 			await delay(250);
 			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("Repair Moderator"), "repair-only Moderator must be navigable during repair");
@@ -239,15 +243,28 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.equal(ordinaryRequests,0,"repair must not automatically resume participants");
 		assert.equal(repairRequests,4);
 		if (scenario === "live-navigation") {
+			const previousOutput = (await readFile(join(root, "terminal.log"), "utf8")).length;
 			terminal.write("/agents\r");
 			await delay(200);
-			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("Repair Moderator"), "retained repair Moderator remains in normal /agents navigation");
+			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).slice(previousOutput).includes("Repair Moderator"), "retained repair Moderator remains in normal /agents navigation");
+			terminal.write("\r");
+			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).slice(previousOutput).includes("Persisted Moderator transcript"), "retained Moderator selection opens actual transcript");
+			terminal.write("q");
+			await delay(100);
 			terminal.write("\u001b");
+			assert.equal(ordinaryRequests, 0, "selecting and closing Moderator cannot start Owner work");
 		}
 		if (scenario === "idle-human") {
+			const originalUsers = repaired.trim().split("\n").map(line => JSON.parse(line)).filter(entry => entry.type === "message" && entry.message.role === "user");
+			terminal.write("/agents repair inspect\r");
+			await delay(100);
+			terminal.write("q");
 			terminal.write("/repair-test-native-change\r");
 			await delay(2000);
 			assert.equal(ordinaryRequests, 0, "repaired Owner must not auto-continue its unanswered Request");
+			const heldEntries = (await readFile(ownerPath, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+			assert.deepEqual(heldEntries.filter(entry => entry.type === "message" && entry.message.role === "user"), originalUsers, "no synthetic empty user message may be appended while held");
+			assert.equal(heldEntries.some(entry => entry.customType === "agent-coordination.obligation-reminder"), false);
 			terminal.write("Please continue now.\r");
 			await until(() => ordinaryRequests === 1, "new human prompt starts Owner exactly once");
 		}

@@ -10,7 +10,7 @@ import type {
 
 import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
 import { OwnerRecoveryError } from "./bootstrap/owner-recovery-error.ts";
-import { ownerRepairCommand, isRepairPaused, isRepairSwitchAuthorized, presentRepairHost, repairNavigation } from "./repair/owner-repair.ts";
+import { ownerRepairCommand, isRepairPaused, isRepairSwitchAuthorized, presentRepairHost, repairNavigation, repairOwnerRequiresHumanInput, repairOwnerTurnStarted } from "./repair/owner-repair.ts";
 import { readRepairHost } from "./repair/repair-host.ts";
 import { closeRepairInput } from "./repair/input-retirement.ts";
 import { ProtocolInvariantError } from "./protocol/identities.ts";
@@ -52,6 +52,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	const bridge = installInteractiveHostBridge(hostPi);
 	const admissionFailures = new WeakMap<object, OwnerRecoveryError>();
 	const repair = ownerRepairCommand(bridge, (manager) => admissionFailures.get(manager));
+	pi.on("agent_start", (_event, ctx) => repairOwnerTurnStarted(ctx));
 	let removeRepairInput: (() => void) | undefined;
 	pi.on("session_shutdown", () => { removeRepairInput?.(); });
 	pi.on("input", (_event, ctx) => isRepairPaused(ctx) ? { action: "handled" } : undefined);
@@ -95,6 +96,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				return;
 			}
 			resolveOwnerView = await initializeOwnerWorkflow({
+				waitForHumanInput: repairOwnerRequiresHumanInput(ctx),
 				pi,
 				ctx,
 				bridge,
