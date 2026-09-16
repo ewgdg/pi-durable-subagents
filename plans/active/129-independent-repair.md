@@ -71,8 +71,13 @@ integration suite. Record exact commands and outcomes at completion.
   `0af464b`; main remains unchanged. Production architecture review is underway.
 - User explicitly superseded the proposal's per-changeset approval requirement:
   the repair command itself is authorization, with no further confirmation.
-  Production code is not yet implemented; Linux/Python and second-terminal UX
-  remain proposed operating restrictions awaiting the user's response.
+  Production code is not yet implemented.
+- User rejected the proposed Linux/Python/second-terminal operating burden.
+  Pause production implementation while reassessing a same-terminal, Node-only
+  lifecycle. The original request was to stop the Owner session: reconsider
+  whether full Owner process exit is necessary, without assuming native session
+  disposal proves all final writes and callbacks are retired. The prior proof
+  establishes only its tested process-exit topology, not the required UX.
 
 ## Decisions and evidence
 
