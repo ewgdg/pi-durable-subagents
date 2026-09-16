@@ -639,7 +639,10 @@ test("a valid child Identity is not reclassified as Workflow Owner", async (t) =
 		true,
 	);
 	assertOwnerToolsRegisteredButInactive(host);
-	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
+	const diagnostics = host.session.extensionRunner.getCommand("agents");
+	assert.ok(diagnostics);
+	await diagnostics.handler("", host.session.extensionRunner.createContext() as Parameters<typeof diagnostics.handler>[1]);
+	assert.ok(host.ui.notifications.some(({ message }) => message.includes("Subagent coordination is unavailable")));
 	host.model.setResponses([fauxAssistantMessage("Child prompt completed.")]);
 	await host.session.prompt("Continue as the existing child Agent.");
 	assert.equal(
@@ -677,7 +680,7 @@ test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async (t)
 		true,
 	);
 	assertOwnerToolsRegisteredButInactive(host);
-	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
+	assert.ok(host.session.extensionRunner.getCommand("agents"), "failed identity retains host-only diagnostics, not invented membership");
 	await host.runtime.dispose();
 });
 

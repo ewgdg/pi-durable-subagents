@@ -34,18 +34,22 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 		const body = new Text(pages[page].contents, 0, 0);
 		return {
 			render(width) {
-				const rows = Math.max(1, tui.terminal.rows - 5);
+				const height = Math.max(1, tui.terminal.rows);
+				const rows = Math.max(0, height - 5);
 				const lines = body.render(Math.max(1, width));
 				maximumTop = Math.max(0, lines.length - rows);
 				top = Math.max(0, Math.min(top, maximumTop));
-				return [
+				const linesToShow = [
 					theme.fg("accent", `Repair ${launch.attemptId} · Workflow ${launch.owner.workflowId}`),
 					`Moderator ${launch.moderatorAgentId} · read-only; no Runs resume`,
 					pages[page].path,
 					...Array.from({ length: rows }, (_, index) => lines[top + index] ?? ""),
 					pages.map(({ label }, index) => `${index + 1} ${label}${page === index ? " *" : ""}`).join(" · "),
 					"q/Esc close · ↑/↓/PgUp/PgDn scroll",
-				].map((line) => truncateToWidth(line, width, "", true));
+				];
+				// Even a one-row terminal keeps a close hint without drawing offscreen.
+				const fitted = height >= 5 ? linesToShow : [...linesToShow.slice(0, height - 1), linesToShow.at(-1)!];
+				return fitted.map((line) => truncateToWidth(line, width, "", true));
 			},
 			handleInput(data) {
 				if (matchesKey(data, Key.escape) || matchesKey(data, "q")) { done(); return; }

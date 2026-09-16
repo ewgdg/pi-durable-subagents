@@ -93,6 +93,42 @@ integration suite. Record exact commands and outcomes at completion.
   production writer inventory/bootstrap, and transaction/recovery remain unproved.
   See `docs/research/same-terminal-repair-feasibility.md` for evidence and limits.
 
+- 2026-09-16: Production lifecycle committed in `d357d88`, isolated helper/host
+  launcher in `33e750b`, and end-to-end commands/Moderator/recovery in `192bceb`.
+  Integrated storage and validator implementation plus independent-review fixes
+  through original commits `d0e52ce` and `c7f591b`. These are actual production
+  call sites, not the disposable prototype's observer or environment bypass.
+- Focused `repair-cli.test.ts` covers eleven real stock-CLI scenarios:
+  clean, managed child final writes, actual missing-title candidate correction
+  with protocol-effect audit, native user bash, actual cleanup rejection, parking
+  cancellation, fresh and initial failed admission, Esc cancellation, repeat
+  attempts with archived-host binding, and helper
+  SIGKILL followed by explicit operator-attested recovery. Same CLI PID and a
+  fresh native manager are checked; no participant Runs automatically resume.
+- Native replacement waits for `withSession` before accepting another slash
+  command. Production therefore provides a raw Esc cancellation listener and
+  consumes other input while the repair callback waits. This is now exercised
+  by the real CLI test, not inferred from the earlier prototype.
+- Packed npm package under an actual `node_modules` path passed clean repair,
+  including the independent helper loading shipped TypeScript through stock Pi.
+  Installed managed-child scenario exposed a pre-existing direct-Node `.ts`
+  contract probe failure under `node_modules`. Parent-approved enabling fix
+  `f25d41c` uses built-in Node stripping only for the known dependency-free schema
+  probe. Packed clean and managed repair-edit scenarios now both pass.
+- Independent lifecycle review found that ordinary recovery could mistake a
+  no-intent journal for successful writer retirement. Fixed in `4e6674e`: only an
+  actual consumed retired IPC acknowledges cleanup, and ordinary recovery requires
+  it. The CLI regression proves missing-handoff refusal, explicit operator
+  recovery, positive post-handoff cancellation recovery, and a subsequent attempt.
+  The same commit binds archived hosts to exact attempt IDs and permits new
+  repair authorization after successful admission. Targeted closure review is
+  pending; no broader review completion is claimed.
+- Existing `Owner reload publishes one prospective policy or preserves the
+  prior snapshot` fails its capacity assertion on the unchanged baseline too
+  (verified with pre-change source). It is not silently repaired by this task.
+  Independent lifecycle/helper review and final focused verification are still
+  pending; README/design/PR consolidation belongs to the parent.
+
 ## Decisions and evidence
 
 The accepted lifecycle and twelve bounded proof cases are recorded in
