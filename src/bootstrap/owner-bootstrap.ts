@@ -90,9 +90,11 @@ export async function initializeOwnerWorkflow(options: {
 	const previousRetirement = ownerRetirements.get(nativeSession.sessionManager);
 	if (previousRetirement) await previousRetirement.cleanupCoordinator();
 	const retirement = new OwnerRetirement(nativeSession);
-	retirement.establishNoCoordinator();
-	ownerRetirements.set(nativeSession.sessionManager, retirement);
 	const existing = initializedWorkflows.get(runtime.session);
+	// The ordinary cleanup owner can predate repair's evidence registry after an
+	// extension upgrade. Retain its real result before declaring no managed writers.
+	if (existing) retirement.setCoordinatorCleanup(existing.prepareOwnerReplacement);
+	ownerRetirements.set(nativeSession.sessionManager, retirement);
 	if (existing) {
 		// Shutdown closes ordinary admission before its first await and joins all
 		// managed writers. Keep the registry entry on failure: another reload must
@@ -100,6 +102,7 @@ export async function initializeOwnerWorkflow(options: {
 		await existing.prepareOwnerReplacement();
 		initializedWorkflows.delete(runtime.session);
 	}
+	retirement.establishNoCoordinator();
 	assertOwnerAgentExtensionBindingReady({ runtime, bootstrapHandler });
 
 	const initialPolicy = await readWorkflowPolicy(runtime.services.agentDir);

@@ -74,6 +74,22 @@ test("repair retirement retains actual cleanup rejection across resource reload"
 	}
 });
 
+test("reload cannot invent no-coordinator cleanup when an earlier bootstrap lacks repair evidence", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	await bindTestOwnerHost(host, "tui");
+	const nativeAbort = host.session.abort.bind(host.session);
+	// The ordinary Workflow registry survives extension upgrades independently of
+	// repair's later-added evidence registry. Exercise that stable reload boundary.
+	const registry = (globalThis as typeof globalThis & {
+		__piAgentCoordinationOwnerRetirements: WeakMap<object, unknown>;
+	}).__piAgentCoordinationOwnerRetirements;
+	registry.delete(host.session.sessionManager);
+	host.session.abort = async () => { throw new Error("prior bootstrap cleanup failed"); };
+	await host.session.reload();
+	host.session.abort = nativeAbort;
+	await assert.rejects(ownerRetirementFor(host.session.sessionManager).prepare(), /Workflow shutdown failed/);
+});
+
 test("initial pre-coordinator failure can retire native session without invented cleanup", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
