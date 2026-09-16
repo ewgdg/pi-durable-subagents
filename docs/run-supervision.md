@@ -64,12 +64,12 @@ An unresolved Answer Obligation still determines eligibility for ordinary Run Fa
 
 A terminal, evidence-backed quota error displays **Suspended · Usage limit reached** after Pi's configured native retry/fallback has finished. It retains the exact Run instead of failing it or starting a Moderator. The status and its acknowledgeable Runtime Report retain provider/model and the exact diagnostic; a reset time appears only when the provider supplied it. Each continuous suspension has one notice. Reading it does not resume execution.
 
-Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Messages, heartbeat scheduling, Workflow continuation, and native editor input cannot release it. Suspended children relinquish execution capacity so unrelated children can progress. Quota-blocked work and its genuinely blocked dependency path do not generate obligation reminders, stall/deadlock moderation, or Moderator replacements; unrelated incidents remain eligible.
+Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Agent Messages, heartbeat scheduling, and Workflow continuation cannot release it. A new human message in the selected Agent's editor is deliberate resumption, using that message as the resumption instructions. Suspended children relinquish execution capacity so unrelated children can progress. Quota-blocked work and its genuinely blocked dependency path do not generate obligation reminders, stall/deadlock moderation, or Moderator replacements; unrelated incidents remain eligible.
 
 Restore quota or deliberately select an available model/account, then explicitly resume:
 
 - A supervisor uses `agent_control` with `operation: "resume"`, the child Agent ID, and resumption instructions.
-- The human uses `/quota-resume` to resume the Owner. Agent controls do not gain authority over the Owner.
+- The human sends a message in the Owner's or selected child's editor. There is no separate quota-resume command, and Agent controls do not gain authority over the Owner.
 
 Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. Explicit termination ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
 

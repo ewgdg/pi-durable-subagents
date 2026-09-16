@@ -12,7 +12,7 @@ export function createQuotaSuspensionReport(input: Readonly<{
 		symptom: `Suspended · Usage limit reached · ${input.label} · Run ${input.runSequence}`,
 		suspectedDefect: "The provider reported exhausted quota after Pi's configured native recovery finished. This is a resource block, not a diagnosed coordination defect.",
 		uncertainty: "Only this Run is suspended. Other accounts and Runs are not presumed blocked. Quota recovery is not verified; no reset time is inferred.",
-		recoveryActions: "Restore quota or deliberately change the model/account, then explicitly resume. Use agent_control resume for a supervised child, or /quota-resume for the Owner. No automatic retry or paid fallback is introduced.",
+		recoveryActions: "Restore quota or deliberately change the model/account, then send a human message in this Agent's editor to explicitly resume with those instructions. An authorized supervisor may also use agent_control resume. Ordinary Agent Messages remain queued. No automatic retry or paid fallback is introduced.",
 		recoveryOutcome: "The Run, Requests, Answer Obligations, and queued work are retained. Reading this notice does not resume work, cancel Requests, or establish quota recovery.",
 		evidence: [
 			`Agent: ${input.label} (${input.agentId})`,

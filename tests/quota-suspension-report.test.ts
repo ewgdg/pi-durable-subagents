@@ -12,6 +12,8 @@ test("quota notice preserves exact evidence without inventing a reset time", () 
 	assert.ok(report.evidence.includes("Model: gpt-5"));
 	assert.ok(report.evidence.every(line => !line.startsWith("Reset time:")));
 	assert.match(report.recoveryActions, /explicit/i);
+	assert.match(report.recoveryActions, /human message/i);
+	assert.doesNotMatch(report.recoveryActions, /\/quota-resume/);
 	assert.match(report.recoveryOutcome, /Reading.*does not resume/);
 });
 

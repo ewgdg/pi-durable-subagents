@@ -1,5 +1,7 @@
 # Quota-exhausted Run suspension
 
+Historical implementation record: the command-only human resumption and cold read-only quota view described below are superseded by the human-message resumption follow-up. Current supported behavior is documented in `docs/run-supervision.md`.
+
 ## Goal and intention
 
 Implement #137: known exhausted quota pauses the affected Run instead of treating it as terminal Run Failure and spending more model calls on moderation. Keep unrelated Workflow work runnable.
