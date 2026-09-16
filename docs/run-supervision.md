@@ -73,11 +73,13 @@ Restore quota or deliberately select an available model/account, then explicitly
 
 Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. Explicit termination ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
 
+If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota establishes a new suspension notice, and another terminal error follows ordinary failure handling. An aborted attempt before confirmation retains the original stop and notice rather than inventing a human Interruption Hold.
+
 The Owner transcript retains suspension independently of report read state. Cold recovery restores the stop before scheduling work, rather than silently starting a successor. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
 
 ### Provider evidence and upstream limitation
 
-The classifier accepts retained `usage_limit_reached` / `insufficient_quota` JSON error codes or types (including Pi's HTTP-status-prefixed JSON), and the exact observed Codex diagnostic `Codex error: The usage limit has been reached`. An explicit unrelated code takes precedence over prose. Generic HTTP 429, `rate_limit_exceeded`, arbitrary text containing “limit”, and ambiguous friendly usage-limit wording are not quota evidence. Temporary throttling stays on Pi's native recovery path; unknown terminal errors remain ordinary failures.
+The classifier accepts retained `usage_limit_reached` / `insufficient_quota` JSON error codes or types, including Pi's bare HTTP-status and OpenAI/Azure formatter envelopes. It also recognizes the exact observed Codex diagnostic `Codex error: The usage limit has been reached` and Codex's exact code-only variants. An explicit unrelated code takes precedence over prose. Generic HTTP 429, `rate_limit_exceeded`, arbitrary text containing “limit”, and ambiguous friendly usage-limit wording are not quota evidence. Temporary throttling stays on Pi's native recovery path; unknown terminal errors remain ordinary failures.
 
 The installed Pi provider exposes `AssistantMessage.errorMessage`, not the original structured provider error. Codex streaming errors construct a `CodexApiError` with code/payload, but error formatting discards those fields. The HTTP formatter also conflates quota, temporary throttling, and other 429 responses into friendly text. This package cannot recover facts already discarded upstream.
 
