@@ -150,6 +150,49 @@ candidate, adding a file, changing versions, or discovering a new source invalid
 validation and approval. Any semantically ambiguous correction requires a human
 decision; passing a shape validator does not prove historical intent.
 
+### Repair review after skip-and-mark replay
+
+Repair is now an explicit correction of historical evidence, not a prerequisite
+for using a Workflow that contains rejected coordination records. Keep that
+distinction visible in the review: “admission succeeds” does not mean the repair
+is necessary, nor that it preserves coordination meaning.
+
+**Concrete failure case:** a rejected Request has no accepted Delivery, but its
+text says an external action was requested. Correcting its record shape can make
+it an authored Request and a pending Delivery candidate. A later explicit
+`workflow_resume` could then dispatch it. Neither a small textual diff nor valid
+record shape proves the action was never performed. Keeping participants dormant
+at repair completion prevents immediate execution, but does not remove this
+later effect.
+
+The proposed review therefore includes a protocol-effect diff, computed with the
+same read-only readers on the snapshot and sealed candidate generation:
+
+- Records newly accepted, newly rejected, changed, or removed, attributed to
+  their physical Agent/entry/call sources.
+- Requests and local Answer obligations introduced, resolved, or removed;
+  separately report Answer commitment and Answer Delivery evidence.
+- Pending Message/Request/Answer/Cancellation Delivery candidates and responder
+  continuations that become eligible or cease to be eligible on explicit recovery.
+- Facts that cannot be compared because the original does not project. Label
+  these unknown rather than claiming an unchanged or empty before-state.
+
+For each change in protocol effect, the proposal must explain the supporting
+evidence and intended correction. The human reviews these effects as part of the
+single whole-changeset approval; there is no separate automatic acceptance for
+apparently cosmetic corrections. Missing historical intent needs a human
+decision, not a guessed Answer, Cancellation, or Delivery proof. Approval does
+not itself grant permission to run pending work.
+
+This is a repair audit requirement, not a change to #131's replay policy or a
+missing-title migration. The existing
+[`inspectCoordinationRejections`](../src/protocol/replay-rejection.ts) reader
+provides physical rejection attribution; the recovery selection in
+[`workflow-resume.ts`](../src/coordination/workflow-resume.ts) identifies the
+observable effects the audit must compare. Do not call `resumeWorkflow` to obtain
+the report: it activates responders and schedules Messages. Any extraction of
+its read-only selection must preserve ordinary recovery behavior.
+
 Before application, Cancel stops and joins the repair Moderator, archives the
 attempt, and releases the writer fence only when originals are known unchanged
 relative to the post-drain snapshot.
@@ -371,6 +414,8 @@ Before enabling writes, exercise these observable contracts with bounded tests:
 | Owner identity changes while quiescing | Frozen identity check refuses before repair Moderator bootstrap. |
 | Delayed child append, pending spawn, active Owner compaction, extension append, second host | Snapshot waits for proven retirement/exclusion or refuses; no lost write. |
 | Candidate changes during validation/review; source/directory/version changes | Seal or approval is rejected; originals unchanged. |
+| Rejected Request becomes valid without accepted Delivery evidence | Review exposes the newly eligible Request and later recovery effect; approval/application alone dispatches nothing. |
+| Original cannot project, or Answer committed with its Request source unavailable | Review distinguishes unknown before-state and local commitment from Delivery; no fabricated proof or claim of semantic equivalence. |
 | Malformed off-branch entry, bad cross-Agent Answer, hidden quarantine | Whole-Workflow certification fails; originals unchanged. |
 | Moderator crash or misleading completion report | Repair report remains inspectable; no validation/approval bypass or ordinary Request dependency. |
 | Fail before/after each rename, journal write, directory flush, or backup operation | Either untouched originals or verified whole-set rollback; uncertainty fences admission. |
@@ -397,8 +442,10 @@ research; no runtime or migration is changed.
    archived with the same Workflow but never silently promoted into ordinary
    incident moderation or routing?
 
-After those mechanics and the shared interface from #131 are accepted, create
-bounded native child issues under #129 for: host writer exclusion and journal
+The #131 replay and presentation contracts are implemented; a separate
+partial-admission interface is no longer a prerequisite. After the remaining
+repair mechanics above are accepted, create bounded native child issues under
+#129 for: host writer exclusion and journal
 preflight; repair identity/bootstrap
 and reporting; read-only whole-Workflow validation; snapshot-bound review and
 transactional apply/rollback; native reopening and admission acknowledgment.
