@@ -13,6 +13,21 @@ import { describeError, diffProtocolEffects, inspectProtocolEffects, type Eviden
 	type ProtocolEffectChange, type ProtocolEffectSnapshot } from "./protocol-effects.ts";
 
 export type RepairTranscriptFile = Readonly<{ path: string; contents: string }>;
+export type RepairOwnerIdentity = Readonly<{
+	workflowId: string; sessionId: string; ownerPath: string; identityEntryId: string;
+}>;
+
+/** A preflight hint, not writer-retirement proof. Caller verifies persistence and the active native session binding. */
+export function readRepairOwnerIdentity(contents: string, ownerPath: string): RepairOwnerIdentity {
+	if (!isAbsolute(ownerPath) || normalize(ownerPath) !== ownerPath || ownerPath.includes("\0")) {
+		throw new Error("Repair Owner path must be canonical absolute");
+	}
+	// Failed coordination replay must not erase an independently verifiable native Owner identity.
+	const transcript = parseRepairTranscript(contents, ownerPath, { projectCoordination: false });
+	const { identity, identityEntryId } = verifyOwnerIdentity(transcript, transcript.sessionId);
+	return { workflowId: identity.workflowId, sessionId: transcript.sessionId, ownerPath, identityEntryId };
+}
+
 export type RepairFileChange = Readonly<{
 	path: string; before: string; after: string;
 	entries: readonly { entryId: string; before?: string; after?: string }[];
@@ -118,7 +133,7 @@ async function inspectGeneration(files: ReadonlyMap<string, RepairTranscriptFile
 	try {
 		const owner = inspections.get(ownerPath);
 		if (!owner) throw new Error("Owner transcript is absent");
-		const ownerIdentity = verifyOwnerIdentity(owner, workflowId);
+		const { identity: ownerIdentity } = verifyOwnerIdentity(owner, workflowId);
 		const transcripts = new Map([...inspections].map(([path, inspection]) =>
 			[path, new AgentTranscript({ read: () => inspection })]));
 		const recovery = await inspectColdWorkflowEvidence({ ownerIdentity,
@@ -170,7 +185,7 @@ function validateSpawnClaims(agents: ReadonlyMap<string, AgentEvidence>): void {
 	}
 }
 
-function verifyOwnerIdentity(transcript: TranscriptInspection, workflowId: string): OwnerIdentity {
+function verifyOwnerIdentity(transcript: TranscriptInspection, workflowId: string): { identity: OwnerIdentity; identityEntryId: string } {
 	if (transcript.sessionId !== workflowId) throw new Error("Owner native ID does not match the verified Workflow");
 	if (transcript.entries.some(entry => entry.type === "custom_message" && entry.customType === MODERATOR_INPUT_CUSTOM_TYPE &&
 		isRecord(entry.details) && entry.details.agentId === workflowId)) throw new Error("Owner transcript claims Moderator identity");
@@ -181,7 +196,7 @@ function verifyOwnerIdentity(transcript: TranscriptInspection, workflowId: strin
 	if (current?.type !== "custom" || !isDeepStrictEqual(current.data, identity)) {
 		throw new Error("Persisted canonical Owner identity cannot be verified without adoption or rewriting");
 	}
-	return identity;
+	return { identity, identityEntryId: current.id };
 }
 
 function identityEntries(entries: readonly SessionEntry[]) {

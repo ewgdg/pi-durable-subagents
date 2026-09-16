@@ -4,7 +4,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
-import { validateRepairProposal } from "../src/repair/workflow-validation.ts";
+import { readRepairOwnerIdentity, validateRepairProposal } from "../src/repair/workflow-validation.ts";
 
 const ownerPath = "/frozen/owner.jsonl";
 const childPath = "/frozen/child.jsonl";
@@ -233,4 +233,28 @@ test("a successful Spawn receipt cannot hide a missing participant behind zero q
 			requestMessageId: deriveMessageIdentity({ agentId: "owner", entryId, toolCallId: "spawn" }) } });
 	const ownerOnly = [f.files()[0]!];
 	assert.equal((await validate(ownerOnly)).valid, false);
+});
+
+test("Owner preflight verifies persisted identity independently of poisoned coordination replay", () => {
+	const f = fixture();
+	const source = { agentId: "child", entryId: "external", toolCallId: "request" };
+	const delivery = createMessageDelivery([{ source, projection: { kind: "request", requestMessageId: deriveMessageIdentity(source),
+		fromAgentId: "child", title: "Duplicate", question: "Bad replay" } }]);
+	f.owner.appendCustomMessageEntry(delivery.customType, delivery.content, true, delivery.details);
+	f.owner.appendCustomMessageEntry(delivery.customType, delivery.content, true, delivery.details);
+	const contents = f.files()[0]!.contents;
+	assert.deepEqual(readRepairOwnerIdentity(contents, ownerPath), {
+		workflowId: "owner", sessionId: "owner", ownerPath, identityEntryId: f.owner.getEntries()[0]!.id,
+	});
+	assert.equal(f.files()[0]!.contents, contents);
+});
+
+test("Owner preflight refuses child, missing identity and noncanonical path without adopting", () => {
+	const f = fixture();
+	assert.throws(() => readRepairOwnerIdentity(f.files()[1]!.contents, childPath), /canonical Owner identity/);
+	const manager = SessionManager.inMemory("/frozen", { id: "new-owner" });
+	const contents = file(ownerPath, manager).contents;
+	assert.throws(() => readRepairOwnerIdentity(contents, ownerPath), /canonical Owner identity/);
+	assert.throws(() => readRepairOwnerIdentity(f.files()[0]!.contents, "relative.jsonl"), /canonical absolute/);
+	assert.equal(file(ownerPath, manager).contents, contents);
 });

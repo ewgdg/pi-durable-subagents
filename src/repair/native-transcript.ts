@@ -5,7 +5,8 @@ import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { RetainedTranscript } from "../transcript/retained-transcript.ts";
 
 /** Parse without Pi's tolerant loader, migration, or filesystem side effects. */
-export function parseRepairTranscript(contents: string, path: string): TranscriptInspection {
+export function parseRepairTranscript(contents: string, path: string,
+	options: { projectCoordination?: boolean } = {}): TranscriptInspection {
 	const lines = contents.split("\n");
 	if (lines.at(-1) === "") lines.pop();
 	let header: SessionHeader | undefined;
@@ -54,7 +55,8 @@ export function parseRepairTranscript(contents: string, path: string): Transcrip
 		}
 	}
 	if (!header) throw new Error(`${path}: line 1: missing session header`);
-	const retained = new RetainedTranscript(header, path, initializeCoordinationProjections);
+	const retained = new RetainedTranscript(header, path,
+		options.projectCoordination === false ? undefined : initializeCoordinationProjections);
 	for (const entry of entries) retained.append(entry);
 	retained.setLeaf(entries.at(-1)?.id ?? null);
 	return retained.inspection;
