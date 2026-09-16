@@ -11,6 +11,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import piAgentCoordination from "../src/index.ts";
+import { ownerRetirementFor } from "../src/bootstrap/owner-bootstrap.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import {
@@ -54,6 +55,35 @@ test("Owner bootstrap leaves native Runtime disposal under Pi ownership", async 
 
 	assert.equal(host.runtime.dispose, nativeDispose);
 	await host.runtime.dispose();
+});
+
+test("repair retirement retains actual cleanup rejection across resource reload", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	await bindTestOwnerHost(host, "tui");
+	const retirement = ownerRetirementFor(host.session.sessionManager);
+	const nativeAbort = host.session.abort.bind(host.session);
+	host.session.abort = async () => { throw new Error("native abort failed"); };
+	try {
+		await assert.rejects(retirement.prepare(), /retirement failed/);
+		await host.session.reload();
+		assert.equal(ownerRetirementFor(host.session.sessionManager), retirement);
+		await assert.rejects(retirement.prepare(), /retirement failed/);
+		assertOwnerToolsRegisteredButInactive(host);
+	} finally {
+		host.session.abort = nativeAbort;
+	}
+});
+
+test("initial pre-coordinator failure can retire native session without invented cleanup", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
+	await writeFile(join(host.services.agentDir, "config", "pi-agent-coordination.json"), '{"maxConcurrentAgentRuns":0}');
+	await bindTestOwnerHost(host, "tui");
+	const retirement = ownerRetirementFor(host.session.sessionManager);
+	await retirement.prepare();
+	assert.throws(() => retirement.assertRetired(), /replacement/);
+	retirement.replacementCompleted();
+	retirement.assertRetired();
 });
 
 test("a fresh Owner Identity records its role description", async (t) => {

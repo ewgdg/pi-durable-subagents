@@ -5,6 +5,7 @@ import {
 import { dirname, resolve } from "node:path";
 
 import { ChildLaunchContractGuard } from "../process-runtime/child-launch-contract.ts";
+import { ManagedWriterInventory } from "../repair/managed-writer-inventory.ts";
 
 import type { AgentRecord } from "../coordination/agent-record.ts";
 import { admitControlTransportPlatform } from "../control/control-platform.ts";
@@ -65,6 +66,7 @@ type ParticipantHandlers =
 export class ProcessChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
 	readonly #launchContract: ChildLaunchContractGuard;
+	readonly #writers = new ManagedWriterInventory();
 	readonly #onRuntimeQuit: ((agentId: string, projection: HostedAgentProjection) => boolean) | undefined;
 	readonly #templateLoads = new Map<string, Promise<Readonly<{
 		discovery: AgentTemplateDiscovery;
@@ -112,6 +114,10 @@ export class ProcessChildSessionFactory {
 
 	admitProcessRuntimePlatform(): void {
 		admitControlTransportPlatform();
+	}
+
+	retireWriters(): Promise<void> {
+		return this.#writers.retire();
 	}
 
 	/**
@@ -458,7 +464,8 @@ export class ProcessChildSessionFactory {
 			throw new Error("invariant_violation: Agent Identity and Runtime preparation roles differ");
 		}
 		// The low-level launch rechecks even when initial preparation was cached.
-		const launch = await PiChildProcessRuntime.launch({
+		const launch = await this.#writers.launch((observeProcessExit) => PiChildProcessRuntime.launch({
+			observeProcessExit,
 			launchContract: this.#launchContract,
 			workflowId: identity.workflowId,
 			agentId: identity.agentId,
@@ -473,7 +480,7 @@ export class ProcessChildSessionFactory {
 				prepared.role,
 				identity.agentId,
 			) as StartPiChildProcessRuntimeOptions["ownerRequestHandlers"],
-		});
+		}));
 		const runtime = new PiChildHostedRuntime(
 			launch,
 			(projection) => this.#onRuntimeQuit?.(identity.agentId, projection) === true,

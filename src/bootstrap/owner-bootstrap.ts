@@ -32,6 +32,7 @@ import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { OwnerRecoveryError } from "./owner-recovery-error.ts";
+import { OwnerRetirement } from "../repair/owner-retirement.ts";
 
 type InitializedWorkflow = {
 	policy: WorkflowPolicyStore;
@@ -45,6 +46,20 @@ const globalWorkflowRegistry = globalThis as typeof globalThis & {
 // Retain only the shutdown owner across module reload. New code must not trust
 // the previous coordinator or its cached protocol projections.
 const initializedWorkflows = (globalWorkflowRegistry[WORKFLOW_REGISTRY_KEY] ??= new WeakMap());
+
+const RETIREMENT_REGISTRY_KEY = "__piAgentCoordinationOwnerRetirements";
+const retirementRegistry = globalThis as typeof globalThis & {
+	[RETIREMENT_REGISTRY_KEY]?: WeakMap<object, OwnerRetirement>;
+};
+// Also covers failed initialization, before hidden lifecycle handlers exist.
+// Never replace a rejected cleanup result on reload with a no-coordinator claim.
+const ownerRetirements = (retirementRegistry[RETIREMENT_REGISTRY_KEY] ??= new WeakMap());
+
+export function ownerRetirementFor(sessionManager: object): OwnerRetirement {
+	const retirement = ownerRetirements.get(sessionManager);
+	if (!retirement) throw new Error("Owner managed-writer cleanup is unknown");
+	return retirement;
+}
 
 export async function initializeOwnerWorkflow(options: {
 	pi: ExtensionAPI;
@@ -60,6 +75,12 @@ export async function initializeOwnerWorkflow(options: {
 		ctx.sessionManager as AgentSession["sessionManager"],
 		ctx.ui,
 	);
+	const nativeSession = runtime.session;
+	const previousRetirement = ownerRetirements.get(nativeSession.sessionManager);
+	if (previousRetirement) await previousRetirement.cleanupCoordinator();
+	const retirement = new OwnerRetirement(nativeSession);
+	retirement.establishNoCoordinator();
+	ownerRetirements.set(nativeSession.sessionManager, retirement);
 	const existing = initializedWorkflows.get(runtime.session);
 	if (existing) {
 		// Shutdown closes ordinary admission before its first await and joins all
@@ -97,6 +118,14 @@ export async function initializeOwnerWorkflow(options: {
 		workflowPolicy: policy,
 		recoveredWorkflow,
 	});
+	let parkingBinding: OwnerSettlementParkingBinding | undefined;
+	let ownerReplacementPreparation: Promise<void> | undefined;
+	const prepareOwnerReplacement = () => {
+		// Capture the original session, not Runtime.session after replacement.
+		return ownerReplacementPreparation ??= coordinator.shutdown(() => nativeSession.abort())
+			.finally(() => parkingBinding?.dispose());
+	};
+	retirement.setCoordinatorCleanup(prepareOwnerReplacement);
 	try {
 		await coordinator.initialize();
 	} catch (error) {
@@ -115,15 +144,6 @@ export async function initializeOwnerWorkflow(options: {
 		if (cleanupError !== undefined) throw new AggregateError([error, cleanupError], "Owner admission and cleanup failed");
 		throw error;
 	}
-	let parkingBinding: OwnerSettlementParkingBinding | undefined;
-	let ownerReplacementPreparation: Promise<void> | undefined;
-	const prepareOwnerReplacement = () => {
-		if (ownerReplacementPreparation) return ownerReplacementPreparation;
-		// Pi owns native Runtime disposal after awaited session shutdown handlers.
-		ownerReplacementPreparation = coordinator.shutdown(() => runtime.session.abort())
-			.finally(() => parkingBinding?.dispose());
-		return ownerReplacementPreparation;
-	};
 	const resolveView = () => coordinator.forAgent(identity.agentId);
 	installResolvedAgentActivityDock(ctx.ui, resolveView);
 	bindHiddenOwnerAgentExtension({

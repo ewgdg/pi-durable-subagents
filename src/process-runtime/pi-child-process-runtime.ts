@@ -74,6 +74,8 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	workflowId: string;
 	agentId: string;
 	launchContract?: ChildLaunchContractGuard;
+	/** Register the actual process exit immediately after spawn, before admission. */
+	observeProcessExit?(exit: Promise<unknown>): void;
 	role: ChildProcessBootstrap["role"];
 	expectedSessionId: string;
 	sessionPath: string;
@@ -332,6 +334,7 @@ export class PiChildProcessRuntime {
 				rows: options.rows ?? DEFAULT_ROWS,
 			});
 			const exactProjection = projection;
+			options.observeProcessExit?.(exactProjection.exited);
 			const exactSystemPromptArtifactPath = systemPromptArtifactPath;
 			const cleanup = () => {
 				cleanupPromise ??= completeCleanup([
