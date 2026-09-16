@@ -16,20 +16,20 @@ the mere presence of invalid historical evidence.
 
 ### Accepted availability direction
 
-Keep `/agents`, diagnostics, and verified Owner ↔ repair Moderator navigation
-available independently of ordinary coordination replay. Block operations that
-depend on unverified state; allow independently verified capabilities to remain
-usable without repair. Preserve rejected evidence and uncertainty rather than
-silently dropping entries or historical responsibilities.
+[#131 — skip-and-mark replay](coordination-replay-rejection-design.md)
+supersedes the earlier partial-admission proposal. Invalid coordination record
+shapes have no protocol effect and do not block admission; their evidence stays
+visible as informational context. Valid obligations remain. There is no
+uncertainty graph or separate verified-identity/availability interface required
+for ordinary navigation. Identity, membership, and bootstrap validation remain
+strict.
 
-[#131 — partial admission](https://github.com/ewgdg/pi-durable-subagents/issues/131)
-owns uncertainty propagation, per-operation admission, and the shared verified
-identity/availability interface. This repair design depends on that contract,
-but does not implement it. When the affected scope cannot be established,
-broader blockage may still be necessary. The repair writer fence is a temporary
-consistency requirement, not a policy that any validation failure disables the
-plugin. These availability principles are accepted; the repair mechanics below
-still need the decisions listed at the end.
+`/agents` uses the admitted Workflow's existing participants, including
+Moderators. Genuine admission failures retain diagnostics and safe recovery,
+not invented membership. The repair-only navigation and writer exclusion below
+remain proposed repair mechanics; they are not prerequisites for ordinary
+navigation. A future repair writer fence is a temporary consistency requirement,
+not a consequence of rejecting a historical coordination record.
 
 ### Proposed repair scope
 
@@ -116,16 +116,16 @@ treated as a supported concurrent participant.
 
 ## Progress and human control
 
-`/agents` retains a host-owned navigation surface without requiring a healthy
-ordinary coordinator or refreshing its Message projections. It uses verified
-Owner identity, repair membership, and explicit availability facts from the
-shared partial-admission interface. It can select the Owner or this Workflow's
-repair Moderator, show diagnostics, and expose repair progress. Selection must
-not implicitly resume uncertain ordinary work or lift a writer fence. During
+Proposed repair integration would keep host-owned navigation available even
+during a genuine ordinary admission failure. The repair feature must establish
+its own Workflow membership before exposing a repair Moderator; skip-and-mark
+replay does not provide a repair bootstrap. The surface would select the Owner
+or this Workflow's repair Moderator, show diagnostics, and expose repair
+progress. Selection must not implicitly resume work or lift a writer fence. During
 repair the Owner view remains selectable, but conversation writes stay paused;
 the repair Moderator operates only on its permitted workspace. If identity is
 unverified, expose diagnostics and safe recovery rather than inventing rows or
-membership. Other Agent navigation is governed by the partial-admission design.
+membership. Ordinary Agent navigation uses the existing admitted Workflow.
 
 `/agents repair` opens the repair surface without successful ordinary admission.
 It shows identity, current phase, paused-writer state, snapshot/proposal digests,
@@ -156,8 +156,8 @@ relative to the post-drain snapshot.
 No automatic participant restart follows. Once application starts, Cancel cannot
 interrupt between replacements: finish the bounded apply-or-rollback path first.
 After safe cancellation, independently verified capabilities can become available
-again under the partial-admission contract; cancellation does not make rejected
-evidence valid or erase its limitations.
+again under ordinary admission and skip-and-mark replay; cancellation does not
+make rejected evidence valid or cancel valid obligations.
 Diagnostics remain readable during it. Safe fork/new can proceed after the
 transaction reaches a consistent state and the old session's stale writers are
 retired; never fork from an unverified mixture or claim rollback restored the
@@ -251,7 +251,7 @@ The host validates the **whole frozen Workflow**, not just changed lines:
   available. When the original cannot project, state that limitation rather than
   claiming semantic equivalence. No invented Answers, effects, or Delivery proofs.
 - Zero unexplained quarantine, missing referenced files, or unresolved candidates.
-  Existing partial-admission success is not a passing repair audit.
+  Successful admission with skipped records is not a passing repair audit.
 - Side-effect-free full recovery/admission rehearsal: no native transcript writes,
   startup, scheduling, reminder/report publication, or identity adoption. Any
   necessary extraction of validation from initialization is an enabling refactor,
@@ -336,8 +336,8 @@ after the durable `admitted` record. Recovered participant Runs remain dormant.
 
 If switching is cancelled, throws, or admission fails, retire any partially
 opened writer first, roll back all originals, and reopen the restored Owner with
-diagnostics and fresh partial-admission evaluation. Only independently verified
-capabilities can return; the original damaged evidence still imposes its limits.
+diagnostics and fresh ordinary admission. Rejected coordination records remain
+informational; strict identity and bootstrap failures still block admission.
 Successful rollback does not make the old in-memory session valid. If
 restored-session reopening also fails, keep application fenced
 and display an out-of-band recovery report; a controlled host restart must
@@ -354,8 +354,8 @@ retired; safe fork additionally requires a verified, consistent Owner source.
 One repair module owns identity verification, writer-lease lifetime, snapshots,
 proposal sealing, approval, apply/rollback, and recovery journal reconciliation.
 Its interface is the host repair command/progress surface plus explicit human
-approve/cancel actions. The navigation surface consumes the verified
-identity/availability interface without requiring ordinary Message replay.
+approve/cancel actions. Future repair navigation must use the membership
+established by that repair module without requiring ordinary Message replay.
 Ordinary coordination calls no repair transforms. Pi
 session replacement is the host seam; do not scatter repair exceptions across
 Message validators or give a Moderator raw coordinator access.
@@ -364,9 +364,9 @@ Before enabling writes, exercise these observable contracts with bounded tests:
 
 | Scenario | Required outcome |
 | --- | --- |
-| Invalid historical Request/Answer evidence, valid persisted Owner identity | Repair Moderator starts in that Workflow without replaying bad evidence; dependent operations remain blocked and the repair transaction fences all ordinary writers. |
+| Invalid historical Request/Answer record shapes, valid persisted Owner identity | Ordinary admission skips rejected records and preserves valid obligations. Repair is not required for navigation; an explicitly started repair transaction fences all ordinary writers. |
 | Ordinary admission fails while Owner/repair membership is verified | `/agents` and diagnostics remain available; Owner ↔ repair Moderator selection does not replay invalid Message history or resume uncertain work. |
-| No repair transaction, or safely cancelled repair | Independently verified operations remain usable under partial admission; rejected evidence and dependent-operation limitations remain visible. |
+| No repair transaction, or safely cancelled repair | Ordinary admission uses skip-and-mark replay; rejected evidence remains visible and valid obligations survive. |
 | Missing/ambiguous identity, child, Moderator, or ephemeral source | No invented repair membership; diagnostic explains the refusal. |
 | Owner identity changes while quiescing | Frozen identity check refuses before repair Moderator bootstrap. |
 | Delayed child append, pending spawn, active Owner compaction, extension append, second host | Snapshot waits for proven retirement/exclusion or refuses; no lost write. |

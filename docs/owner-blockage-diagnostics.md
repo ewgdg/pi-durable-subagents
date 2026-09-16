@@ -1,6 +1,8 @@
 # Owner blockage diagnostics
 
-When saved coordination evidence fails protocol validation during Owner admission, ordinary coordination stays disabled in that attachment. Pi and its editor remain usable. The extension retains the failure independently of the coordinator and shows a persistent warning-colored box above the editor:
+Invalid historical coordination record shapes do not block Owner admission. Replay skips their protocol effects, preserves the source evidence, and marks their projected call/result groups with `!`. Valid obligations remain, and `/agents` navigation stays available through the ordinary admitted Workflow. See [skip-and-mark replay](coordination-replay-rejection-design.md).
+
+When required identity, membership, or other strict bootstrap evidence fails protocol validation during Owner admission, ordinary coordination stays disabled in that attachment. Pi and its editor remain usable. The extension retains the failure independently of the coordinator and shows a persistent warning-colored box above the editor:
 
 > ⚠ Subagent coordination blocked
 >
@@ -8,11 +10,11 @@ When saved coordination evidence fails protocol validation during Owner admissio
 >
 > /agents diagnostics
 
-This is an admission failure, not permission to skip invalid evidence and resume coordination. Core protocol validators still throw; the Owner boundary contains known protocol failures, attempts partial-coordinator cleanup without disposing the native Pi session, and does not publish a healthy coordinator. Unrelated configuration and unsupported-role errors are not reclassified as invalid saved protocol data.
+This is a genuine admission failure, not an ordinary rejected coordination record. Identity, membership, and bootstrap validation remain strict; the Owner boundary contains known protocol failures, attempts partial-coordinator cleanup without disposing the native Pi session, and does not publish a healthy coordinator. Unrelated configuration and unsupported-role errors are not reclassified as invalid saved protocol data.
 
 ## Inspecting the failure
 
-Run `/agents diagnostics` from the Owner presentation. When blocked, plain `/agents` reports “Subagent coordination is unavailable. Use /agents diagnostics.” It does not open diagnostics implicitly.
+Run `/agents diagnostics` from the Owner presentation. After a genuine admission failure, plain `/agents` reports “Subagent coordination is unavailable. Use /agents diagnostics.” It does not invent a roster or open diagnostics implicitly. `/agents owner` cannot bypass failed admission or enable coordination tools; the native Owner presentation remains mounted.
 
 The read-only panel fills the terminal viewport, including blank space below short content, with its controls pinned to the bottom. It starts with **Problem**, **Impact**, and **Recovery**. It explains the underlying validation reason when retained, identifies the failure as the first encountered problem rather than a complete audit, and distinguishes disabled local coordination from the unknown state of other processes. A protocol version change is a possible explanation, not an asserted cause.
 

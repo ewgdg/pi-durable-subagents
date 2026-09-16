@@ -8,6 +8,26 @@ The mounted participant’s label is bold with an immediately attached `*` (`Bui
 
 Agent selection prepares the target mode before dismissing the roster. The focused row shows an animated loading indicator throughout preparation. When switching between children, the current selector keeps rendering until the replacement frame takes over; the previous Runtime remains retained through the handoff. The selector retains keyboard focus during asynchronous preparation and ignores further selector input until the handoff completes. Its rendered rectangle blocks pointer fallthrough inside the panel. Outside the panel, Pi retains its native pointer behavior: clicks or wheel events can reach the underlying UI, and a click may move keyboard focus there. Pi 0.85.1 couples pointer blocking to painted overlay bounds; the selector does not blank the chat to create a full-screen input shield.
 
+## Replay and admission
+
+Opening the selector, including from another Agent, and returning to Owner use
+the existing admitted Workflow projection. These navigation paths do not require
+a fresh transcript replay. Ordinary lifecycle updates still update the roster
+and Reports; navigation is not a recovery or `workflow_resume` operation.
+
+Invalid historical Request/Answer record shapes are skipped and marked under
+[skip-and-mark replay](coordination-replay-rejection-design.md), not treated as
+failed Workflow admission. The existing verified participants remain navigable,
+including Owner ↔ Moderator switching, without creating a repair participant or
+resending rejected work. Selection alone does not start a model turn.
+
+Genuine identity or bootstrap failures still refuse coordinator-backed
+navigation: no Agent rows or membership are fabricated. The native Owner view
+stays mounted, and `/agents diagnostics` remains available independently of the
+failed coordinator. See [Owner blockage diagnostics](owner-blockage-diagnostics.md).
+There is no repair bootstrap or repair writer-pause mechanism in this navigation
+path.
+
 ## Pointer controls (fullscreen)
 
 Pi's public fullscreen mouse routing supplies parsed events and component-local cell coordinates. The selector uses that API (verified with Pi 0.85.1), not terminal escape decoding or private overlay geometry. Regular terminal mode remains keyboard-only.
