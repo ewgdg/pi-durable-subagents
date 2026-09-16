@@ -86,6 +86,18 @@ test("initial pre-coordinator failure can retire native session without invented
 	retirement.assertRetired();
 });
 
+test("repair command is available after initial admission failure but absent persisted identity refuses", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
+	await writeFile(join(host.services.agentDir, "config", "pi-agent-coordination.json"), '{"maxConcurrentAgentRuns":0}');
+	await bindTestOwnerHost(host, "tui");
+	const command = host.session.extensionRunner.getCommand("agents");
+	assert.ok(command);
+	await command.handler("repair", host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1]);
+	assert.ok(host.ui.notifications.some(({ message }) => message.startsWith("Repair unavailable:")));
+	assert.equal(host.session.sessionManager.getEntries().some((entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity"), false);
+});
+
 test("a fresh Owner Identity records its role description", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	await bindTestOwnerHost(host, "tui");

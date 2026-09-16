@@ -71,6 +71,7 @@ export async function launchRepairHelper(options: {
 		if (typeof value !== "object" || value === null) return;
 		const message = value as Record<string, unknown>;
 		if (message.type === "ready") resolveReady();
+		else if (message.type === "ready_error" && typeof message.error === "string") rejectReady(new Error(message.error));
 		else if (message.type === "progress" && typeof message.message === "string") options.onProgress?.(message.message);
 		else if (message.type === "result" && typeof message.id === "string") {
 			const request = pending.get(message.id);

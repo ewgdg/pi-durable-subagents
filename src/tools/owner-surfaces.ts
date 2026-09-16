@@ -1,7 +1,7 @@
 import { copyToClipboard } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { openModeratorReportSurface } from "../presentation/moderator-report-surface.ts";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import type {
 	HumanPresentationCoordinatorView,
@@ -28,7 +28,7 @@ import {
 	type ParticipantCoordinationToolHandlers,
 } from "./participant-coordination-tools.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
-import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
+import { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
 import { openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
 
 type AgentCoordinatorView =
@@ -60,22 +60,29 @@ export function deactivateOwnerAgentTools(pi: ExtensionAPI): void {
 export function registerAgentsCommand(
 	pi: ExtensionAPI,
 	resolveView: () => HumanPresentationCoordinatorView,
-	ownerAdmission?: OwnerRecoveryError | "admitted",
+	ownerAdmission?: Error | "admitted",
+	repair?: (args: string, ctx: ExtensionCommandContext) => Promise<void>,
 ): void {
 	const admissionFailure = ownerAdmission === "admitted" ? undefined : ownerAdmission;
 	pi.registerCommand("agents", {
 		description: ownerAdmission ? "Show Agents or inspect coordination diagnostics" : "Show Agents in the current Workflow",
 		getArgumentCompletions: (prefix) => {
 			const completions = [
+				...(repair && "repair".startsWith(prefix.trim()) ? [{ value: "repair", label: "repair" }] : []),
 				...(getAgentsArgumentCompletions(prefix) ?? []),
 				...(ownerAdmission && "diagnostics".startsWith(prefix.trim()) ? [{ value: "diagnostics", label: "diagnostics" }] : []),
 			];
 			return completions.length ? completions : null;
 		},
 		handler: async (args, ctx) => {
+			if (repair && /^repair(?:\s|$)/.test(args.trim())) {
+				await repair(args.trim().slice("repair".length).trim(), ctx);
+				return;
+			}
 			if (ownerAdmission && args.trim() === "diagnostics") {
 				if (ctx.mode !== "tui") return;
-				await openOwnerDiagnostics(ctx.ui, admissionFailure);
+				if (admissionFailure && !(admissionFailure instanceof OwnerRecoveryError)) ctx.ui.notify(admissionFailure.message, "error");
+				else await openOwnerDiagnostics(ctx.ui, admissionFailure);
 				return;
 			}
 			if (admissionFailure) {
