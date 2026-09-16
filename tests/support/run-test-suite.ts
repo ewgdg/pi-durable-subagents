@@ -54,6 +54,8 @@ const PROCESS_TEST_FILES = new Set([
 	"pty-terminal-projection.test.ts",
 	"request-inspection-process.test.ts",
 	"run-supervision.test.ts",
+	"quota-lifecycle-integration.test.ts",
+	"quota-cold-recovery.test.ts",
 	"run-test-suite.test.ts",
 	"steer-request-preemption.test.ts",
 	"unix-control-transport.test.ts",
