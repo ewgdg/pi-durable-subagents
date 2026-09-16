@@ -340,3 +340,17 @@ test("starting release immediately revokes the snapshot while directory fsync is
 		await assert.rejects(snapshot.apply(seal, { authorizedAttemptId: options.attemptId }), /released/);
 	} finally { resume(); await release; }
 });
+
+test("snapshot read accessor returns bound immutable bytes, not edited candidate contents", async () => {
+	const options = await fixture();
+	const snapshot = await createRepairSnapshot(options);
+	await writeFile(snapshot.candidatePath("file-0"), "candidate changed\n");
+	assert.equal(await snapshot.readSnapshot("file-0"), "owner before\n");
+	await assert.rejects(snapshot.readSnapshot("../owner.jsonl"), /unknown snapshot ID/);
+	const path = join(options.root, options.attemptId, "snapshot", "file-0");
+	const { chmod } = await import("node:fs/promises");
+	await chmod(path, 0o600);
+	await writeFile(path, "snapshot changed\n");
+	await assert.rejects(snapshot.readSnapshot("file-0"), /snapshot changed/);
+	await snapshot.release();
+});

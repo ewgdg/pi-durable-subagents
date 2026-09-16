@@ -285,6 +285,7 @@ async function loadSeal(scope: RepairScope, manifest: RepairManifest, manifestHa
 
 export interface RepairSnapshot {
 	readonly manifest: RepairManifest;
+	readSnapshot(id: string): Promise<string>;
 	candidatePath(id: string): string;
 	seal(validator: RepairValidator): Promise<RepairSeal>;
 	apply(seal: RepairSeal, authorization: { authorizedAttemptId: string }): Promise<RepairRecovery>;
@@ -343,6 +344,17 @@ export async function createRepairSnapshot(options: RepairSnapshotOptions): Prom
 		return {
 			// A caller may inspect this copy, but cannot mutate the authority held here.
 			manifest: structuredClone(manifest),
+			async readSnapshot(id) {
+				ensureActive();
+				const file = manifest.files.find((file) => file.id === id);
+				requireCondition(file, "unknown snapshot ID");
+				requireCondition(!file.unreadable && file.hash, `unreadable candidate: ${file.path}`);
+				const value = await readStable(snapshotPath(scope, id));
+				requireCondition(value.hash === file.hash, "snapshot changed");
+				const contents = value.bytes.toString("utf8");
+				requireCondition(Buffer.from(contents).equals(value.bytes), "non-UTF8 transcript cannot be validated");
+				return contents;
+			},
 			candidatePath(id) {
 				ensureActive();
 				requireCondition(manifest.files.some((file) => file.id === id), "unknown candidate ID");
