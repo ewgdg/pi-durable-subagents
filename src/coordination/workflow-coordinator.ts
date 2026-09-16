@@ -158,8 +158,6 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	addAgentActivityChangeHandler(handler: () => void): () => void;
 	refreshAgentActivity(): void;
 	refreshTranscriptFacts(): Promise<void>;
-	/** Human-only Owner command; intentionally absent from child Control transport. */
-	resumeOwnerQuota?(): Promise<boolean>;
 	resumeFromHuman(
 		text: string,
 		images: readonly ImageContent[] | undefined,
@@ -197,6 +195,7 @@ type AgentViewTarget = Readonly<{
 }>;
 
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
+	humanInputMode(): "agent" | "answer" | "quota_suspended";
 	answerTargetAgent(toolCallId: string): string | undefined;
 	children(agentId?: string): readonly AgentStatus[];
 	search(input: AgentSearchInput): AgentSearchResult;
@@ -638,6 +637,9 @@ export class WorkflowCoordinator {
 				toolCallId,
 			}),
 			agentActivity: () => this.#agentActivity(agentId),
+			humanInputMode: () => this.#requireAgent(agentId).host.quotaSuspensionBlocksExecution()
+				? "quota_suspended"
+				: this.#agentActivity(agentId).answerMode ? "answer" : "agent",
 			addAgentActivityChangeHandler: (handler) => {
 				this.#agentActivityChangeHandlers.add(handler);
 				return () => this.#agentActivityChangeHandlers.delete(handler);
@@ -667,12 +669,6 @@ export class WorkflowCoordinator {
 				this.#assertAdmissionOpen();
 				return this.#handleHumanInput(agentId, text, images, submissionSequence);
 			},
-			...(agentId === this.#ownerIdentity.agentId ? {
-				resumeOwnerQuota: () => {
-					this.#assertAdmissionOpen();
-					return this.#runSupervisor.resumeQuotaFromHuman(agentId);
-				},
-			} : {}),
 			primaryInputQueued: () => {
 				this.#assertAdmissionOpen();
 				if (this.#requireAgent(agentId).host.currentQuotaSuspension()) return Promise.resolve();
@@ -1152,18 +1148,6 @@ export class WorkflowCoordinator {
 			const active = this.#activeAgentView;
 			if (active?.record.identity.agentId === agentId) return { kind: "selected" };
 			const record = this.#requireAgent(agentId);
-			if (record.host.currentQuotaSuspension() && !record.host.currentProjection()) {
-				// Cold recovery retains the logical Run without a model Runtime. Merely
-				// navigating its evidence must neither start nor resume that Runtime.
-				return {
-					kind: "post_mortem",
-					agentId,
-					label: record.identity.metadata.label,
-					transcript: record.transcript.inspect(),
-					quotaSuspended: true,
-					preparationError: "Quota suspension retained; Runtime was not started.",
-				};
-			}
 			let target: AgentViewTarget;
 			try {
 				target = await this.#acquireAgentViewTarget(record);
@@ -1224,7 +1208,7 @@ export class WorkflowCoordinator {
 				return { projection: initializingProjection, retryIfChanged: false };
 			}
 		}
-		if (phase === "dormant" && !record.host.currentProjection()) {
+		if ((phase === "dormant" || record.host.currentQuotaSuspension()) && !record.host.currentProjection()) {
 			return this.#prepareAgentViewTarget(record);
 		}
 		const liveTarget = await record.host.lane.run(() => {
@@ -1241,8 +1225,15 @@ export class WorkflowCoordinator {
 	}
 
 	async #prepareAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
-		const preparation = record.host.lane.run(() => {
+		const preparation = record.host.lane.run(async () => {
 			if (record.host.currentProjection()) {
+				record.host.addRetentionReason("interactive_selection");
+				return;
+			}
+			if (record.host.currentQuotaSuspension()) {
+				// Selecting a cold suspended Agent prepares its editor and exact retained
+				// Run, but supplies no model input and leaves the quota stop in place.
+				await record.host.prepareQuotaResumptionInLane();
 				record.host.addRetentionReason("interactive_selection");
 				return;
 			}
@@ -1510,9 +1501,6 @@ export class WorkflowCoordinator {
 		record: AgentRecord,
 		submission: ProjectionInputSubmission | undefined,
 	): void {
-		if (record.host.quotaSuspensionBlocksExecution()) {
-			throw new Error("quota_suspended: explicit agent_control resume is required");
-		}
 		if (
 			submission !== undefined &&
 			record.host.projectionInputSubmissionIsFenced(submission)
@@ -1523,9 +1511,9 @@ export class WorkflowCoordinator {
 
 	async #ensureExecution(agentId: string): Promise<void> {
 		this.#assertAdmissionOpen();
-		if (this.#executionPermits.has(agentId)) return;
 		const record = this.#requireAgent(agentId);
 		if (record.host.quotaSuspensionBlocksExecution()) throw new Error("quota_suspended: explicit resume is required");
+		if (this.#executionPermits.has(agentId)) return;
 		const run = record.host.observe();
 		if (run.phase !== "live" || run.attention === "input_required") return;
 		const handle = record.host.currentHandle();
@@ -1568,7 +1556,6 @@ export class WorkflowCoordinator {
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition> {
 		const record = this.#requireAgent(agentId);
-		if (record.host.currentQuotaSuspension()) return Promise.resolve("discarded");
 		let inputSubmission: ProjectionInputSubmission | undefined;
 		try {
 			inputSubmission = this.#captureInputSubmission(record, submissionSequence);
@@ -1597,7 +1584,7 @@ export class WorkflowCoordinator {
 					currentHandle &&
 					active.attachment.projection() === active.record.host.currentProjection()
 				) {
-					if (active.record.host.currentInterruptionHold()) {
+					if (active.record.host.currentResumptionHold()) {
 						return await this.#runSupervisor.resumeFromHumanInLane(
 							active.record,
 							text,

@@ -8,6 +8,9 @@ import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { WorkflowPolicyStore, parseWorkflowPolicy } from "../src/policy/workflow-policy.ts";
 import type { AgentRunState } from "../src/runtime/agent-runtime-host.ts";
+import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
+import { participantLifecycleHandlers } from "../src/bootstrap/agent-extension.ts";
+import { registerParticipantLifecycle } from "../src/pi-integration/participant-lifecycle.ts";
 
 function suspension(run: AgentRunState) { return run.phase === "dormant" ? undefined : run.suspension; }
 
@@ -19,8 +22,11 @@ async function until(predicate: () => boolean, description: string) {
 	}
 }
 
-async function harness(t: TestContext, retry = false) {
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+async function harness(t: TestContext, retry = false, nativeOwnerLifecycle = false) {
+	let view!: OrdinaryAgentCoordinatorView;
+	const host = await createUnboundTestOwnerHost(t, pi => {
+		if (nativeOwnerLifecycle) registerParticipantLifecycle(pi, participantLifecycleHandlers(() => view));
+	}, {
 		persistent: true, processVisibleModel: true,
 		additionalExtensionPaths: [fileURLToPath(new URL("./fixtures/quota-evidence-extension.ts", import.meta.url))],
 		settings: { retry: { enabled: retry, maxRetries: 1, baseDelayMs: 1 } },
@@ -31,7 +37,7 @@ async function harness(t: TestContext, retry = false) {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}')),
 	});
-	const view = coordinator.forAgent(identity.agentId);
+	view = coordinator.forAgent(identity.agentId);
 	let sequence = 0;
 	function call(tool: string, input: Record<string, unknown>) {
 		const id = `quota-integration-${++sequence}`;
@@ -67,8 +73,6 @@ for (const diagnostic of [
 		const beforeReminders = reminders();
 		const selected = await view.openAgentView(agentId);
 		assert.ok(selected);
-		selected.projection().dispatchInput("EDITOR_MUST_NOT_RESUME_QUOTA");
-		selected.projection().dispatchInput("\r");
 		const message = { operation: "send" as const, targetAgent: agentId, content: "QUEUED_BEHIND_QUOTA", deliveryMode: "steer" as const };
 		await view.message(call("agent_message", message), message);
 		for (let index = 0; index < 3; index++) {
@@ -78,7 +82,6 @@ for (const diagnostic of [
 		}
 		assert.ok(suspension(view.status(agentId).run));
 		assert.equal(JSON.stringify(entries()).includes("QUEUED_BEHIND_QUOTA"), false);
-		assert.equal(JSON.stringify(entries()).includes("EDITOR_MUST_NOT_RESUME_QUOTA"), false);
 		assert.equal(reminders(), beforeReminders);
 		assert.ok(view.reportHistory().length > 0, "quota publishes a human report");
 		for (const item of view.reportHistory()) view.setReportRead(item.report.reportId, true);
@@ -113,7 +116,7 @@ for (const diagnostic of [
 }
 
 test("native Workflow suspends structured quota without terminal failure", { timeout: 15_000 }, async t => {
-	const { host, view, identity } = await harness(t);
+	const { host, view, identity } = await harness(t, false, true);
 	host.model.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: '{"error":{"code":"usage_limit_reached"}}' })]);
 	await host.session.prompt("Exercise native quota evidence.");
 	await until(() => Boolean(suspension(view.status(identity.agentId).run)), "native quota suspension");
@@ -121,11 +124,23 @@ test("native Workflow suspends structured quota without terminal failure", { tim
 	await view.reachSafeBoundary();
 	assert.ok(suspension(view.status(identity.agentId).run));
 	await assert.rejects(view.beginExecution(), /quota_suspended/);
-	assert.equal(await view.resumeFromHuman("ordinary editor input", undefined), "discarded");
 	assert.ok(suspension(view.status(identity.agentId).run));
+	let programmaticGenerations = 0;
+	host.model.setResponses([() => { programmaticGenerations++; return fauxAssistantMessage("PROGRAMMATIC_MUST_NOT_GENERATE"); }]);
+	for (const submit of [
+		() => host.session.sendUserMessage("Extension input must not resume quota"),
+		() => host.session.prompt("RPC input must not resume quota", { source: "rpc" }),
+	]) {
+		await submit().catch(error => assert.match(String(error), /quota_suspended/));
+		assert.ok(suspension(view.status(identity.agentId).run));
+	}
+	assert.equal(programmaticGenerations, 0);
 	host.model.setResponses([fauxAssistantMessage("Owner explicitly resumed")]);
-	assert.equal(await view.resumeOwnerQuota!(), true);
+	const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+	await host.session.prompt("Continue after I changed the account", { source: "interactive", images: [image] });
 	await until(() => !suspension(view.status(identity.agentId).run), "explicit Owner resume");
+	assert.ok(host.session.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "user" &&
+		JSON.stringify(entry.message.content) === JSON.stringify([{ type: "text", text: "Continue after I changed the account" }, image])));
 });
 
 test("exact Codex diagnostic suspends through the real process Workflow", { timeout: 20_000 }, async t => {

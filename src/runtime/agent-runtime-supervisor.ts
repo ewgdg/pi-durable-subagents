@@ -194,6 +194,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 				phase: "starting",
 				attention: "none",
 				retentionReasons,
+				...(this.#quotaSuspension ? { suspension: this.#quotaSuspension } : {}),
 			};
 		}
 		const run = this.#runtime;
@@ -325,7 +326,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch {
 		if (this.quotaSuspensionBlocksExecution()) {
-			throw new Error("quota_suspended: explicit agent_control resume is required");
+			throw new Error("quota_suspended: human input or authorized agent_control resume is required");
 		}
 		const dispatched = this.#requireLiveRuntime().deliver(delivery, confirmation);
 		this.#runtime!.hasInput = true;
@@ -452,10 +453,12 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#notifyStateChanged();
 	}
 
-	async prepareQuotaResumptionInLane(): Promise<void> {
+	async prepareQuotaResumptionInLane(options?: { humanInputPending: boolean }): Promise<void> {
 		await this.#quotaQueueCapture;
 		if (!this.#restoredQuotaRun) {
-			if (this.#quotaSuspension) await this.#runtime?.runtime.waitForIdle();
+			// Interactive input preflight awaits this host decision. Waiting for its
+			// native prompt to become idle here would deadlock that same submission.
+			if (this.#quotaSuspension && !options?.humanInputPending) await this.#runtime?.runtime.waitForIdle();
 			return;
 		}
 		this.#preparingQuotaResumption = true;
@@ -689,7 +692,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		initialRetentionReasons: readonly AgentRetentionReason[],
 	): Promise<HostedAgentRuntime> {
 		if (this.#quotaSuspension && !this.#preparingQuotaResumption) {
-			throw new Error("quota_suspended: explicit agent_control resume is required");
+			throw new Error("quota_suspended: human input or authorized agent_control resume is required");
 		}
 		if (this.#pendingInitializationTermination) {
 			// Cancellation releases the occupied startup lane before its termination

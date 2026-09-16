@@ -191,7 +191,7 @@ export interface AgentRuntimeHost {
 	quotaSuspensionBlocksExecution(): boolean;
 	/** Restores durable suspension without starting a Runtime or a successor Run. */
 	restoreQuotaSuspension(suspension: AgentQuotaSuspension, runSequence: number, nativeInput?: QuotaSuspendedNativeInput): void;
-	prepareQuotaResumptionInLane(): Promise<void>;
+	prepareQuotaResumptionInLane(options?: { humanInputPending: boolean }): Promise<void>;
 	setQuotaSuspensionHandler(handler: (suspension: AgentQuotaSuspension | undefined, handle: AgentRunHandle, nativeInput?: QuotaSuspendedNativeInput) => void): void;
 	isCurrentResumptionHold(hold: RunResumptionHandle): boolean;
 	beginIsolatedResumptionInLane(hold: RunResumptionHandle): boolean;

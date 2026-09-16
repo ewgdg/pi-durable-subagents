@@ -8,7 +8,7 @@ import { createProcessModelBroker } from "./support/process-model-broker.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { discoverColdWorkflow } from "../src/bootstrap/cold-host-discovery.ts";
 
-test("cold persistent recovery retains suspended child, queued Request work and read notice without launching", { timeout: 30_000 }, async t => {
+test("cold recovery prepares a suspended editor without generation, then resumes on its human message", { timeout: 30_000 }, async t => {
 	const broker = await createProcessModelBroker();
 	t.after(() => broker.close());
 	const first = await createUnboundTestOwnerHost(t, () => undefined, {
@@ -55,11 +55,12 @@ test("cold persistent recovery retains suspended child, queued Request work and 
 	assert.ok(view.reportHistory().find(item => item.report.reportId === report.report.reportId)?.readAt);
 	assert.equal(view.reportHistory().length, 1);
 	const retainedView = await view.openAgentPresentation(agentId);
-	assert.equal(retainedView.kind, "post_mortem");
-	if (retainedView.kind !== "post_mortem") assert.fail("Expected retained transcript view");
-	assert.equal(retainedView.quotaSuspended, true);
-	assert.equal(retainedView.transcript.transcriptPath, originalStatus.primaryEvidence.transcriptPath);
+	assert.equal(retainedView.kind, "selected");
+	if (retainedView.kind !== "selected" || !retainedView.view) assert.fail("Expected a prepared editor without model generation");
 	assert.ok(view.status(agentId).run.suspension, "navigation preserves the quota stop");
+	const projection = retainedView.view.projection();
+	const detach = await projection.physicalTerminal.beginAttachment(() => undefined);
+	t.after(async () => { detach(); await projection.physicalTerminal.endAttachment(); });
 	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("workflow_resume", {}, { id: "cold-recovery" }), { stopReason: "toolUse" }));
 	await view.resumeWorkflow("cold-recovery");
 	for (let index = 0; index < 3; index++) {
@@ -70,10 +71,10 @@ test("cold persistent recovery retains suspended child, queued Request work and 
 	assert.ok(view.status(agentId).run.suspension);
 	assert.equal(JSON.stringify(SessionManager.open(originalStatus.primaryEvidence.transcriptPath!).getEntries()).includes("PRESERVED_QUEUE"), false);
 	broker.setResponses([fauxAssistantMessage("EXPLICIT_COLD_RESUME")]);
-	const resume = { operation: "resume" as const, agentId, content: "Explicitly resume the retained Run." };
-	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_control", resume, { id: "resume-cold-quota" }), { stopReason: "toolUse" }));
-	await view.control("resume-cold-quota", resume);
+	retainedView.view.projection().dispatchInput("Continue the original work after my account change.");
+	retainedView.view.projection().dispatchInput("\r");
 	await until(() => !view.status(agentId).run.suspension);
+	assert.ok(JSON.stringify(SessionManager.open(originalStatus.primaryEvidence.transcriptPath!).getEntries()).includes("Continue the original work after my account change."));
 	assert.equal(view.status(agentId).primaryEvidence.transcriptPath, originalStatus.primaryEvidence.transcriptPath);
 	assert.deepEqual(coordinator.forAgent(agentId).obligationFrames(), originalObligations);
 	const checkpoints = reopened.session.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "agent-coordination.quota-suspension");

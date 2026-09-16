@@ -182,7 +182,7 @@ export function participantLifecycleHandlers(
 			),
 		primaryInputQueued: () => resolveView().primaryInputQueued(),
 		async humanInputMode() {
-			return resolveView().agentActivity().answerMode ? "answer" : "agent";
+			return resolveView().humanInputMode();
 		},
 		async toolResultCommitting(input) {
 			await resolveView().refreshTranscriptFacts();
