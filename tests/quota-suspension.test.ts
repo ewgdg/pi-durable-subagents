@@ -133,3 +133,68 @@ test("an immediate renewed quota before resume transcript confirmation cannot cl
 	assert.equal(host.currentRunFailed(), false);
 	assert.equal(host.blocksOrdinaryDelivery(), true);
 });
+
+test("successful resume before confirmation releases held input once after confirmation", async () => {
+	const { host, emit, delivered } = fixture();
+	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 20, { steering: ["held steer"], followUp: ["held followup"] });
+	await host.prepareQuotaResumptionInLane();
+	const hold = host.currentResumptionHold()!;
+	assert.equal(host.beginIsolatedResumptionInLane(hold), true);
+	host.deliverInLane({ kind: "user", content: "resume" });
+	emit({ type: "agent_end", outcome: "completed", willRetry: false });
+	emit({ type: "agent_settled" });
+	assert.equal(delivered.length, 1, "queued input cannot overtake transcript confirmation");
+	assert.equal(host.commitIsolatedResumptionInLane(hold), true);
+	assert.equal(delivered.length, 3);
+	host.finishIsolatedResumptionInLane(hold.run);
+	emit({ type: "agent_end", outcome: "completed", willRetry: false });
+	assert.equal(delivered.length, 3, "later success cannot duplicate queued input");
+	assert.equal(host.queuedInputCount(), 0);
+});
+
+test("ordinary terminal error before resume confirmation remains a failed settlement", async () => {
+	const { host, emit } = fixture();
+	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 21);
+	await host.prepareQuotaResumptionInLane();
+	const hold = host.currentResumptionHold()!;
+	const settlements: string[] = [];
+	const ended: unknown[] = [];
+	host.addSettledHandler((_handle, settlement) => settlements.push(settlement));
+	host.addEndedHandler((...args) => ended.push(args));
+	assert.equal(host.beginIsolatedResumptionInLane(hold), true);
+	host.deliverInLane({ kind: "user", content: "resume" });
+	const failure = { stage: "model", error: "invalid model", provenance: "test" };
+	emit({ type: "agent_end", outcome: "error", willRetry: false, failure });
+	emit({ type: "agent_settled" });
+	assert.deepEqual(settlements, [], "terminal classification waits for resume commitment");
+	assert.equal(host.commitIsolatedResumptionInLane(hold), true);
+	assert.equal(host.currentRunFailed(), true);
+	assert.equal(host.currentQuotaSuspension(), undefined);
+	assert.deepEqual(settlements, ["failed"]);
+	await host.discardAndEndInLane("failure");
+	assert.deepEqual(ended, [[hold.run, "failure", failure]]);
+});
+
+test("aborted resume before confirmation retains the original quota stop and queued input", async () => {
+	const { host, emit, delivered } = fixture();
+	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 22, { steering: [], followUp: ["still held"] });
+	await host.prepareQuotaResumptionInLane();
+	const hold = host.currentResumptionHold()!;
+	const suspension = host.currentQuotaSuspension();
+	let persistedTransitions = 0;
+	host.setQuotaSuspensionHandler(() => persistedTransitions++);
+	assert.equal(host.beginIsolatedResumptionInLane(hold), true);
+	host.deliverInLane({ kind: "user", content: "resume" });
+	emit({ type: "agent_end", outcome: "aborted", willRetry: false });
+	emit({ type: "agent_settled" });
+	assert.equal(host.commitIsolatedResumptionInLane(hold), true);
+	assert.equal(host.currentQuotaSuspension(), suspension);
+	assert.equal(host.currentResumptionHold(), hold);
+	assert.equal(host.currentInterruptionHold(), undefined);
+	assert.equal(host.quotaSuspensionBlocksExecution(), true);
+	assert.equal(host.currentRunFailed(), false);
+	assert.equal(host.queuedInputCount(), 1);
+	assert.equal(delivered.length, 1);
+	assert.equal(persistedTransitions, 0, "same continuous suspension does not create a new notice");
+	assert.equal(host.beginIsolatedResumptionInLane(hold), true, "a later explicit retry remains possible");
+});

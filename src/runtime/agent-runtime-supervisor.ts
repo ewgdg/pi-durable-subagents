@@ -74,6 +74,11 @@ type HeldNativeQueue = {
 	followUp: string[];
 };
 
+type CapturedRunEnd = Readonly<{
+	event: Extract<HostedRuntimeEvent, { type: "agent_end" }>;
+	expectedInterruption: boolean;
+}>;
+
 type StartSession = () => Promise<StartedAgentRuntime>;
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
 type EndedHandler = (handle: AgentRunHandle, cause: AgentRunEndCause, failure?: AgentRunFailure) => void;
@@ -127,14 +132,13 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	#agentWait: { handle: AgentRunHandle; toolCallId: string } | undefined;
 	#interruptionHold: RunResumptionHandle | undefined;
 	#quotaSuspension: AgentQuotaSuspension | undefined;
-	#quotaAfterResumption: AgentQuotaSuspension | undefined;
 	#quotaHold: RunResumptionHandle | undefined;
 	#restoredQuotaRun: AgentRunHandle | undefined;
 	#preparingQuotaResumption = false;
 	#quotaSuspensionHandler: ((suspension: AgentQuotaSuspension | undefined, handle: AgentRunHandle, nativeInput?: QuotaSuspendedNativeInput) => void) | undefined;
 	#quotaQueueCapture: Promise<void> | undefined;
 	#isolatedResumption:
-		| Readonly<{ handle: AgentRunHandle; hold: RunResumptionHandle }>
+		| { handle: AgentRunHandle; hold: RunResumptionHandle; committed: boolean; pendingEnd?: CapturedRunEnd; settledBeforeCommit: boolean }
 		| undefined;
 	#heldNativeQueue: HeldNativeQueue | undefined;
 
@@ -428,7 +432,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	quotaSuspensionBlocksExecution(): boolean {
-		return this.#quotaAfterResumption !== undefined ||
+		return this.#isolatedResumption?.pendingEnd !== undefined ||
 			(this.#quotaSuspension !== undefined && this.#isolatedResumption?.hold !== this.#quotaHold);
 	}
 
@@ -469,7 +473,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 
 	beginIsolatedResumptionInLane(hold: RunResumptionHandle): boolean {
 		if (!this.isCurrentResumptionHold(hold) || this.#isolatedResumption) return false;
-		this.#isolatedResumption = { handle: hold.run, hold };
+		this.#isolatedResumption = { handle: hold.run, hold, committed: false, settledBeforeCommit: false };
 		return true;
 	}
 
@@ -478,24 +482,36 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			!this.isCurrentResumptionHold(hold) ||
 			this.#isolatedResumption?.hold !== hold
 		) return false;
+		const resumption = this.#isolatedResumption;
+		const run = this.#runtime!;
+		if (this.#quotaHold === hold && resumption.pendingEnd?.event.outcome === "aborted") {
+			// An unqualified aborted attempt is not proof of quota recovery or of a
+			// human interruption. Keep the original stop, notice and queued input.
+			this.#isolatedResumption = undefined;
+			this.#notifyStateChanged();
+			if (resumption.settledBeforeCommit) this.#notifySettled(run);
+			return true;
+		}
 		if (this.#quotaHold === hold) {
 			this.#quotaSuspensionHandler?.(undefined, hold.run);
-			// Native generation can finish before the transcript confirmation reaches
-			// the host. Committing the old resume must not authorize a newer failure.
-			this.#quotaSuspension = this.#quotaAfterResumption;
-			this.#quotaAfterResumption = undefined;
-			this.#quotaHold = this.#quotaSuspension ? { run: hold.run, sequence: ++this.#holdSequence } : undefined;
-			if (this.#quotaSuspension) this.#quotaSuspensionHandler?.(this.#quotaSuspension, hold.run, this.#heldNativeQueue);
+			this.#quotaSuspension = undefined;
+			this.#quotaHold = undefined;
 		}
 		this.#interruptionHold = undefined;
+		resumption.committed = true;
+		const pendingEnd = resumption.pendingEnd;
+		resumption.pendingEnd = undefined;
+		// One outcome path owns both normal event order and events that outran the
+		// transcript ACK: success drains held input, quota suspends, other errors fail.
+		if (pendingEnd) this.#processRunEnd(run, pendingEnd);
 		this.#notifyStateChanged();
+		if (resumption.settledBeforeCommit) this.#notifySettled(run);
 		return true;
 	}
 
 	cancelIsolatedResumptionInLane(hold: RunResumptionHandle): void {
 		if (this.#isolatedResumption?.hold === hold) {
 			this.#isolatedResumption = undefined;
-			this.#quotaAfterResumption = undefined;
 		}
 	}
 
@@ -1172,7 +1188,6 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#agentWait = undefined;
 		this.#interruptionHold = undefined;
 		this.#quotaSuspension = undefined;
-		this.#quotaAfterResumption = undefined;
 		this.#quotaHold = undefined;
 		this.#restoredQuotaRun = undefined;
 		this.#quotaQueueCapture = undefined;
@@ -1287,54 +1302,58 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			if (event.type === "agent_end") {
 				const expectedInterruption = run.expectedInterruption;
 				run.expectedInterruption = false;
-				if (event.quota && !event.willRetry && !this.#ending && !expectedInterruption &&
-					(!this.#quotaSuspension || this.#isolatedResumption?.hold === this.#quotaHold)) {
-					const suspension: AgentQuotaSuspension = { reason: "provider_quota", evidence: event.quota };
-					if (this.#quotaSuspension) this.#quotaAfterResumption = suspension;
-					else {
-						this.#quotaSuspension = suspension;
-						this.#quotaHold = { run: run.handle, sequence: ++this.#holdSequence };
-					}
-					this.#quotaSuspensionHandler?.(this.#quotaSuspension, run.handle);
+				const resumption = this.#isolatedResumption;
+				if (resumption?.handle === run.handle && !resumption.committed && !event.willRetry) {
+					resumption.pendingEnd = { event, expectedInterruption };
 					this.#notifyStateChanged();
-					this.#quotaQueueCapture = run.runtime.clearQueue().then((queue) => {
-						if (this.#runtime !== run || !this.#quotaSuspension) return;
-						const previous = this.#heldNativeQueue?.handle === run.handle ? this.#heldNativeQueue : undefined;
-						this.#heldNativeQueue = {
-							handle: run.handle,
-							steering: [...(previous?.steering ?? []), ...queue.steering],
-							followUp: [...(previous?.followUp ?? []), ...queue.followUp],
-						};
-						this.#quotaSuspensionHandler?.(this.#quotaSuspension, run.handle, this.#heldNativeQueue);
-					});
-					this.#trackOperation(this.#quotaQueueCapture);
-				}
-				const terminalFailure = event.outcome === "error" &&
-					!this.#quotaSuspension &&
-					!event.willRetry &&
-					// Pi 0.84 can report an error when an interrupted sequential tool
-					// rejects before the abort reaches the model loop. The explicit
-					// interruption request owns that terminal transition; do not turn it
-					// into Run Failure before the exact Hold is established.
-					!this.#interrupting &&
-					!expectedInterruption;
-				if (terminalFailure) {
-					if (!run.failed) run.failure = event.failure;
-					this.#markRunFailed(run, run.handle);
+				} else {
+					this.#processRunEnd(run, { event, expectedInterruption });
 				}
 			}
 			if (event.type === "agent_settled") {
 				run.expectedInterruption = false;
-				for (const handler of this.#settledHandlers) {
-					handler(run.handle, run.failed ? "failed" : "settled");
+				const resumption = this.#isolatedResumption;
+				if (resumption?.handle === run.handle && !resumption.committed) {
+					resumption.settledBeforeCommit = true;
+				} else {
+					this.#notifySettled(run);
 				}
-			}
-			if (event.type === "agent_end") {
-				this.#restoreHeldNativeQueueAfterIsolatedTurn(run, run.handle, event);
 			}
 		});
 		this.#ending = false;
 		this.#notifyStateChanged();
+	}
+
+	#processRunEnd(run: BoundAgentRuntime, { event, expectedInterruption }: CapturedRunEnd): void {
+		if (event.quota && !event.willRetry && !this.#ending && !expectedInterruption && !this.#quotaSuspension) {
+			this.#quotaSuspension = { reason: "provider_quota", evidence: event.quota };
+			this.#quotaHold = { run: run.handle, sequence: ++this.#holdSequence };
+			this.#quotaSuspensionHandler?.(this.#quotaSuspension, run.handle, this.#heldNativeQueue);
+			this.#notifyStateChanged();
+			this.#quotaQueueCapture = run.runtime.clearQueue().then((queue) => {
+				if (this.#runtime !== run || !this.#quotaSuspension) return;
+				const previous = this.#heldNativeQueue?.handle === run.handle ? this.#heldNativeQueue : undefined;
+				this.#heldNativeQueue = {
+					handle: run.handle,
+					steering: [...(previous?.steering ?? []), ...queue.steering],
+					followUp: [...(previous?.followUp ?? []), ...queue.followUp],
+				};
+				this.#quotaSuspensionHandler?.(this.#quotaSuspension, run.handle, this.#heldNativeQueue);
+			});
+			this.#trackOperation(this.#quotaQueueCapture);
+		}
+		// Pi may report error for a tool rejection racing an explicit interruption;
+		// that interruption, not Run Failure, owns the pending Hold transition.
+		if (event.outcome === "error" && !this.#quotaSuspension && !event.willRetry &&
+			!this.#interrupting && !expectedInterruption) {
+			if (!run.failed) run.failure = event.failure;
+			this.#markRunFailed(run, run.handle);
+		}
+		this.#restoreHeldNativeQueueAfterIsolatedTurn(run, run.handle, event);
+	}
+
+	#notifySettled(run: BoundAgentRuntime): void {
+		for (const handler of this.#settledHandlers) handler(run.handle, run.failed ? "failed" : "settled");
 	}
 
 	#notifyStateChanged(): void {
