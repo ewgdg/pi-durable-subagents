@@ -171,5 +171,20 @@ process exit, and never fabricates missing initial handoff evidence.
   repeat/archived attempt binding, and earlier-bootstrap cleanup retention.
 - README and maintained recovery documentation now describe implemented behavior;
   the superseded full-automatic design has been removed from the current contract.
-- Code, tests, operations docs, and installed-package smoke are complete. PR
-  publication is the remaining handoff step.
+- Additional focused reader checks reproduced two unchanged baseline failures:
+  Workflow resume expects `continuation_admitted` instead of `already_running`,
+  and a cold recovery test reads the obsolete `activations` receipt field. These
+  are recorded in the PR alongside the two process-test baseline failures above,
+  not reported as passing.
+- Published ready-for-review [PR #143](https://github.com/ewgdg/pi-durable-subagents/pull/143)
+  from `feat/129-independent-repair` against `main`. Code, tests, documentation,
+  independent review, and installed-package verification are complete; CI was
+  queued at publication, not claimed passing.
+
+## Outcome
+
+The feature uses the existing terminal and Node runtime without upstream changes
+or a second approval. The production implementation is larger than the disposable
+proof because identity, complete validation/audit, durable recovery, and operator
+controls are real interfaces now. Supported scope and refusal conditions remain
+explicit rather than relying on the prototype's test-only observers.
