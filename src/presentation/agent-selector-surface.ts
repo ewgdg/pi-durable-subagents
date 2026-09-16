@@ -144,6 +144,7 @@ class AgentSelectorSurface implements Component {
 	#selectedValueByTab: { live?: string; dormant?: string; reports?: string };
 	#items: AgentSelectorItem[] = [];
 	#selectedIndex = 0;
+	#focusedAgentRow: { agentId: string; index: number } | undefined;
 	#visibleRows = 1;
 	#rosterScrollOffset = 0;
 	#list: SelectList;
@@ -189,6 +190,9 @@ class AgentSelectorSurface implements Component {
 		};
 		this.#list = this.#createList();
 		this.#removeChangeHandler = options.addChangeHandler?.((snapshot) => {
+			const focused = this.#items[this.#selectedIndex];
+			this.#focusedAgentRow = focused?.kind === "agent"
+				? { agentId: focused.value, index: this.#selectedIndex } : undefined;
 			this.#options = { ...this.#options, ...snapshot };
 			this.#partitionRoster();
 			this.#list = this.#createList(true);
@@ -315,6 +319,7 @@ class AgentSelectorSurface implements Component {
 			this.#selectedIndex = index;
 			this.#selectedValueByTab[this.#activeTab] = action.value;
 			this.#list.setSelectedIndex(index);
+			this.#releaseUnfocusedRow();
 			if (action.kind === "children") this.#zoomIn();
 			else this.#selectItem(action.value);
 		}
@@ -326,6 +331,7 @@ class AgentSelectorSurface implements Component {
 	}
 
 	dispose(): void {
+		this.#focusedAgentRow = undefined;
 		this.#removeChangeHandler?.();
 		this.#removeChangeHandler = undefined;
 		this.#stopSelectionSpinner();
@@ -421,12 +427,26 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#createList(preserveScroll = false, ensureSelection = false): SelectList {
+		const preferredValue = this.#selectedValueByTab[this.#activeTab];
+		if (!preserveScroll || this.#focusedAgentRow?.agentId !== preferredValue) {
+			this.#focusedAgentRow = undefined;
+		}
 		// Owner ends the shared keyboard order but is painted only in the fixed footer.
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
 			: this.#activeTab === "reports"
 				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), this.#ownerItem()]
 				: [...this.#dormantRoster.map((status) => this.#agentItem(status)), this.#ownerItem()];
+		const focused = this.#focusedAgentRow;
+		if (focused && !this.#items.some(({ value }) => value === focused.agentId)) {
+			const status = [...this.#options.live, ...this.#options.dormant].find(
+				({ agentId }) => agentId === focused.agentId,
+			);
+			// A roster migration must not turn an imminent Enter into another Agent's
+			// action. Retain only the focused row, with current status, until navigation.
+			if (status) this.#items.splice(Math.min(focused.index, this.#items.length - 1), 0, this.#agentItem(status));
+			else this.#focusedAgentRow = undefined;
+		}
 		this.#hitRegions = [];
 		this.#rosterRows.clear();
 		this.#visibleRows = this.#maximumVisibleRows();
@@ -435,7 +455,6 @@ class AgentSelectorSurface implements Component {
 			this.#visibleRows,
 			this.#selectListTheme(),
 		);
-		const preferredValue = this.#selectedValueByTab[this.#activeTab];
 		const preferredIndex = this.#items.findIndex(({ value }) => value === preferredValue);
 		this.#selectedIndex = preferredIndex >= 0 ? preferredIndex : Math.max(
 			0, this.#items.findIndex(({ kind }) => kind !== "owner"),
@@ -458,6 +477,7 @@ class AgentSelectorSurface implements Component {
 			if (index < 0) return;
 			this.#selectedIndex = index;
 			this.#selectedValueByTab[this.#activeTab] = selected.value;
+			this.#releaseUnfocusedRow();
 		};
 		if (!preserveScroll || ensureSelection) this.#ensureSelectedVisible();
 		list.onSelect = ({ value }) => this.#selectItem(value);
@@ -469,6 +489,15 @@ class AgentSelectorSurface implements Component {
 			this.#updateSelectionSpinner();
 		}
 		return list;
+	}
+
+	#releaseUnfocusedRow(): void {
+		if (this.#focusedAgentRow &&
+			this.#focusedAgentRow.agentId !== this.#selectedValueByTab[this.#activeTab]) {
+			// Resolve the arrow/click destination in the displayed list before removing
+			// the migrated row, then rebuild by identity rather than its shifted index.
+			this.#list = this.#createList(true, true);
+		}
 	}
 
 	#selectItem(value: string): void {

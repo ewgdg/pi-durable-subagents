@@ -8,6 +8,12 @@ The mounted participant’s label is bold with an immediately attached `*` (`Bui
 
 Agent selection prepares the target mode before dismissing the roster. The focused row shows an animated loading indicator throughout preparation. When switching between children, the current selector keeps rendering until the replacement frame takes over; the previous Runtime remains retained through the handoff. The selector retains keyboard focus during asynchronous preparation and ignores further selector input until the handoff completes. Its rendered rectangle blocks pointer fallthrough inside the panel. Outside the panel, Pi retains its native pointer behavior: clicks or wheel events can reach the underlying UI, and a click may move keyboard focus there. Pi 0.85.1 couples pointer blocking to painted overlay bounds; the selector does not blank the chat to create a full-screen input shield.
 
+### Focus stability during roster updates
+
+When an automatic roster update moves the focused Agent between Live and Dormant, its row stays in its current list position and tab until focus moves away. Its status and details still update: an `ending` Agent can therefore become `dormant` while remaining focused in Live, and Enter still opens that same Agent. Repeated refreshes do not replace it with Owner or a sibling.
+
+Moving focus away, changing tabs or browsing scope, or closing the selector releases this temporary row retention. Navigation chooses its destination before removing the retained row, so removal does not skip a neighbor. If the Agent disappears from both rosters, ordinary focus fallback applies instead. This is presentation-only retention of the focused row, not the mounted Agent: it neither retains a Runtime or Run nor delays dormancy.
+
 ## Replay and admission
 
 Opening the selector, including from another Agent, and returning to Owner use

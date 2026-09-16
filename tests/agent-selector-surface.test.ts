@@ -832,6 +832,137 @@ test("Owner-default focus stays on the resolved child when attention arrives", a
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
 });
 
+for (const withSibling of [false, true]) test(`focused ending Agent stays in Live after becoming Dormant (sibling=${withSibling})`, async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const child = { ...agentStatus("child", "Child", "owner"), run: { phase: "ending" as const, attention: "none" as const, retentionReasons: [] } };
+	const siblings = withSibling ? [agentStatus("sibling", "Sibling", "owner")] : [];
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, child, ...siblings], dormant: [], selectedAgentId: "owner",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	const before = renderPanel(harness.component, 80);
+	const childRow = before.findIndex(line => line.includes("→ Child"));
+	assert.ok(childRow >= 0);
+	for (const compacting of [false, true, false]) {
+		publish({ live: [owner, ...siblings], dormant: [{ ...dormantAgentStatus("child", "Child", "owner"), compacting }] });
+		const after = renderPanel(harness.component, 80);
+		assert.match(after[childRow]!, /→ Child.*dormant/);
+		if (withSibling) assert.ok(after.findIndex(line => line.includes("Sibling")) > childRow);
+	}
+	harness.component!.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
+});
+
+for (const navigation of ["j", "k", "pointer"] as const) test(`leaving a migrated focused row releases it without changing the ${navigation} destination`, async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const previous = agentStatus("previous", "Previous", "owner");
+	const child = agentStatus("child", "Child", "owner");
+	const next = agentStatus("next", "Next", "owner");
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, previous, child, next], dormant: [], selectedAgentId: "child",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	publish({ live: [owner, previous, next], dormant: [dormantAgentStatus("child", "Child", "owner")] });
+	const component = harness.component!;
+	const before = renderPanel(component, 80);
+	assert.ok(before.findIndex(line => line.includes("Previous")) < before.findIndex(line => line.includes("→ Child")));
+	assert.ok(before.findIndex(line => line.includes("→ Child")) < before.findIndex(line => line.includes("Next")));
+	if (navigation === "pointer") {
+		const lines = component.render(80).map(stripTerminalSequences);
+		const y = lines.findIndex(line => line.includes("Next"));
+		const x = lines[y]!.indexOf("Next");
+		component.handleMouse?.({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: 80, height: 24, shift: false, alt: false, ctrl: false });
+	} else {
+		component.handleInput?.(navigation);
+		assert.match(renderPanel(component, 80).join("\n"), navigation === "j" ? /→ Next/ : /→ Previous/);
+	}
+	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /Child/);
+	if (navigation !== "pointer") component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: navigation === "k" ? "previous" : "next" });
+});
+
+test("changing tabs releases a migrated row and returning restores normal membership", async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const child = agentStatus("child", "Child", "owner");
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, child], dormant: [], selectedAgentId: "owner",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	publish({ live: [owner], dormant: [dormantAgentStatus("child", "Child", "owner")] });
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Child.*dormant/);
+	harness.component!.handleInput?.("\t");
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Child.*dormant/);
+	harness.component!.handleInput?.("\x1b[Z");
+	assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Child/);
+	harness.component!.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("focused Dormant Agent becoming Live keeps its row until focus leaves", async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const child = dormantAgentStatus("child", "Child", "owner");
+	const sibling = dormantAgentStatus("sibling", "Sibling", "owner");
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner], dormant: [child, sibling], selectedAgentId: "child",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	publish({ live: [owner, agentStatus("child", "Child", "owner")], dormant: [sibling] });
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Child\*.*idle/);
+	harness.component!.handleInput?.("j");
+	assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Child/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Sibling/);
+	harness.component!.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
+});
+
+test("changing scope releases a migrated focused row", async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const branch = agentStatus("branch", "Branch", "owner");
+	const child = agentStatus("child", "Child", "branch");
+	const sibling = agentStatus("sibling", "Sibling", "branch");
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, branch, child, sibling], dormant: [], selectedAgentId: "child",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	publish({ live: [owner, branch, sibling], dormant: [dormantAgentStatus("child", "Child", "branch")] });
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Child\*.*dormant/);
+	harness.component!.handleInput?.("h");
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Branch/);
+	harness.component!.handleInput?.("l");
+	assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Child/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Sibling/);
+	harness.component!.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
+});
+
+test("a mounted but unfocused Agent is not retained when it migrates", async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const child = agentStatus("child", "Child", "owner");
+	const sibling = agentStatus("sibling", "Sibling", "owner");
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, child, sibling], dormant: [], selectedAgentId: "child",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	harness.component!.handleInput?.("j");
+	publish({ live: [owner, sibling], dormant: [dormantAgentStatus("child", "Child", "owner")] });
+	assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Child/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Sibling/);
+	harness.component!.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
+});
+
 test("a disappeared selection's fallback stays focused on subsequent refreshes", async () => {
 	const harness = surfaceHarness(24);
 	const owner = agentStatus("owner", "Owner", null);
@@ -1125,11 +1256,15 @@ test("roster refresh retains a newly Dormant parent until its last live descenda
 	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("h");
 	publish({ live: [owner], dormant: [sleepingParent, sleepingChild] });
+	assert.match(renderPanel(component, 80).join("\n"), /→ Parent.*dormant/);
+	component.handleInput?.("j"); // Leaving the focused row releases its presentation-only pin.
 	assert.match(renderPanel(component, 80).join("\n"), /No live Agents/);
 	component.handleInput?.("\t");
 	assert.match(renderPanel(component, 80).join("\n"), /Parent/);
 	assert.match(renderPanel(component, 80).join("\n"), /Child/);
 	publish({ live: [owner, child], dormant: [sleepingParent] });
+	assert.match(renderPanel(component, 80).join("\n"), /→ Parent.*dormant/);
+	component.handleInput?.("j");
 	assert.match(renderPanel(component, 80).join("\n"), /No dormant Agents/);
 	component.handleInput?.("\x1b[Z");
 	assert.match(renderPanel(component, 80).join("\n"), /Parent.*1 child/);
