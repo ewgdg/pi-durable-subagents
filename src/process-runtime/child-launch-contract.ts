@@ -36,13 +36,23 @@ export class ChildLaunchContractGuard {
 		try {
 			// A cache-busted import in this process still shares cached transitive modules.
 			// Both the child validator and this dependency-free probe use the same contract.
+			// Node will not strip .ts files inside node_modules. Strip only our known
+			// dependency-free contract with Node's built-in API (available since 22.13),
+			// then evaluate those exact fresh bytes, without installing a general loader.
 			const { stdout } = await execFileAsync(process.execPath, [
 				"--input-type=module", "--eval",
 				`try {
-					const schema = await import(${JSON.stringify(this.#schemaModuleUrl.href)});
+					let moduleUrl = ${JSON.stringify(this.#schemaModuleUrl.href)};
+					if (${this.#schemaModuleUrl.href === SCHEMA_MODULE_URL.href}) {
+						const { readFile } = await import("node:fs/promises");
+						const { stripTypeScriptTypes } = await import("node:module");
+						const source = stripTypeScriptTypes(await readFile(new URL(moduleUrl), "utf8"));
+						moduleUrl = "data:text/javascript;base64," + Buffer.from(source).toString("base64");
+					}
+					const schema = await import(moduleUrl);
 					process.stdout.write(JSON.stringify({version: schema.AGENT_CONTROL_PROTOCOL_VERSION, bootstrap: schema.ChildProcessBootstrapSchema}));
 				} catch (error) {
-					const failure = error?.code === "ERR_MODULE_NOT_FOUND" ? "module_unavailable"
+					const failure = error?.code === "ERR_MODULE_NOT_FOUND" || error?.code === "ENOENT" ? "module_unavailable"
 						: error instanceof SyntaxError ? "invalid_module" : "module_load_failed";
 					process.stdout.write(JSON.stringify({failure}));
 				}`,
