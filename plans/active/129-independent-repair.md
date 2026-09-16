@@ -13,9 +13,15 @@ permanent Owner launcher is permitted.
 - Actual coordinator cleanup success and observed retirement of supported
   transcript writers precede snapshots. Missing or failed handoff refuses repair;
   Owner death, quiet files, or an unlocked helper lease alone are insufficient.
+- Invoking the repair command authorizes this repair attempt, including clean
+  handoff, validated replacement, and Owner relaunch. Do not ask for a second
+  confirmation of handoff or of the eventual changeset.
 - Repair candidates are separate from immutable post-shutdown snapshots. Validate
-  the whole Workflow, present textual and protocol-effect changes, and require
-  explicit human approval of the entire frozen changeset before replacing files.
+  the whole Workflow and retain textual and protocol-effect changes as an audit
+  report, not a human approval gate. Bind application to the exact validated
+  generation and authorized attempt; changed candidates require revalidation.
+  Authorization does not waive writer retirement, validation, or freshness checks,
+  authorize unrelated edits, or authorize inventing ambiguous historical intent.
 - Back up and journal replacement. Interrupted, uncommitted application restores
   the whole preimage only when destination hashes are known. Unknown state refuses.
 - Commit validated disk repair before launching a fresh Owner. Failed fresh
@@ -45,8 +51,9 @@ Public behavior, not prototype monkeypatches, is the acceptance surface:
   snapshot; cleanup rejection and abrupt Owner death cannot authorize repair.
 - Verified Workflow membership independent of ordinary replay, with refusal when
   identity cannot be established.
-- Candidate edits, source changes, validation failures, or stale approval cannot
-  authorize replacement. Review includes changed obligations and recovery effects.
+- A repair command authorizes a valid in-scope attempt without another confirmation.
+  Candidate edits invalidate validation; source changes and validation failures
+  prevent replacement. The audit includes changed obligations and recovery effects.
 - Interrupted multi-file application restores all preimages or refuses unknown
   hashes without partial recovery. A committed repair is never rolled back over
   fresh Owner writes.
@@ -62,6 +69,10 @@ integration suite. Record exact commands and outcomes at completion.
 - 2026-09-16: Resumed implementation after user-requested context pause. Created
   `.worktrees/129-independent-repair` on `feat/129-independent-repair` from
   `0af464b`; main remains unchanged. Production architecture review is underway.
+- User explicitly superseded the proposal's per-changeset approval requirement:
+  the repair command itself is authorization, with no further confirmation.
+  Production code is not yet implemented; Linux/Python and second-terminal UX
+  remain proposed operating restrictions awaiting the user's response.
 
 ## Decisions and evidence
 
