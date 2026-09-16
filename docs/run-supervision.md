@@ -71,6 +71,8 @@ Restore quota or deliberately select an available model/account, then explicitly
 - A supervisor uses `agent_control` with `operation: "resume"`, the child Agent ID, and resumption instructions.
 - The human sends a message in the Owner's or selected child's editor. There is no separate quota-resume command, and Agent controls do not gain authority over the Owner.
 
+Human intent uses Pi's trusted `interactive` input provenance; queued follow-ups, extension `sendUserMessage`, and RPC input cannot resume the Run. Direct noninteractive native input is consumed before generation while suspended; ordinary coordination Messages remain queued with their original identities. This is not an authentication boundary: SDK callers must label their source truthfully (`session.prompt()` defaults to interactive).
+
 Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. Explicit termination ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
 
 If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota establishes a new suspension notice, and another terminal error follows ordinary failure handling. An aborted attempt before confirmation retains the original stop and notice rather than inventing a human Interruption Hold.
