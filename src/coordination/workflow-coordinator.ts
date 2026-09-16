@@ -19,11 +19,13 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { dirname, resolve } from "node:path";
 
 import {
+	EvidenceUnavailableError,
 	requireAgentRecord,
 	statusOf,
 	type AgentRecord,
 	type AgentStatus,
 } from "./agent-record.ts";
+import { resolveAgentTarget, resolveIdentityCandidate } from "./agent-target.ts";
 import {
 	DefaultChildSpawner,
 	type AgentSpawnInput,
@@ -808,7 +810,35 @@ export class WorkflowCoordinator {
 	}
 
 	#statusFor(callerAgentId: string, targetAgentId = callerAgentId): AgentStatus {
-		return statusOf(this.#requireObservable(callerAgentId, targetAgentId));
+		const selector = targetAgentId.trim();
+		if (!selector) throw new Error("invalid_input: Agent selector must not be blank");
+		if (this.#agents.has(selector) || this.#quarantinedAgentIds.has(selector)) {
+			return statusOf(this.#requireObservable(callerAgentId, selector));
+		}
+		const candidates = [...this.#agents.values()].map(({ identity }) => ({
+			agentId: identity.agentId,
+			label: identity.metadata.label,
+		}));
+		// Only this Workflow's quarantined IDs affect selector ambiguity;
+		// known foreign candidates must not block otherwise valid lookups.
+		const identity = resolveIdentityCandidate([
+			...candidates,
+			...[...this.#quarantinedWorkflowAgentIds]
+				.filter((agentId) => !this.#agents.has(agentId))
+				.map((agentId) => ({ agentId, label: "" })),
+		], selector);
+		if (identity) return statusOf(this.#requireObservable(callerAgentId, identity.agentId));
+		if (this.#quarantinedWorkflowAgentIds.size > 0) {
+			throw new EvidenceUnavailableError(
+				`Agent status target ${selector} depends on quarantined Agent proof`,
+			);
+		}
+		const labels = this.#searchCandidates(callerAgentId, "authorized").map(({ identity }) => ({
+			agentId: identity.agentId,
+			label: identity.metadata.label,
+		}));
+		const target = resolveAgentTarget([], labels, selector);
+		return statusOf(this.#requireObservable(callerAgentId, target.agentId));
 	}
 
 	#searchFor(callerAgentId: string, input: AgentSearchInput): AgentSearchResult {

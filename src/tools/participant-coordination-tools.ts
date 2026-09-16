@@ -99,6 +99,7 @@ Children have isolated context. Pass needed context explicitly in the Creation R
 </agent_spawn>`;
 
 const AGENT_OBSERVE_PROMPT_GUIDE = `<agent_observe>
+For status, agentId accepts a full Agent ID, unique Workflow-wide ID suffix, or exact label within your observation scope. Labels do not grant additional observation authority; ambiguous selectors are rejected. Omit agentId to observe yourself.
 To locate the transcript for the caller or an authorized Agent, use primaryEvidence.transcriptPath from an operation "status" result. A null path means the session is not file-backed.
 </agent_observe>`;
 
@@ -442,7 +443,7 @@ const agentObserveParameters = objectRootUnion(Type.Union([
 			operation: Type.Literal("status"),
 			agentId: Type.Optional(Type.String({
 				minLength: 1,
-				description: "Agent to observe. Omit to observe the calling Agent.",
+				description: "Full Agent ID, unique Workflow-wide ID suffix, or exact label within your observation scope. Omit to observe the calling Agent.",
 			})),
 		},
 		{ additionalProperties: false },

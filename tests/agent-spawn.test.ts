@@ -1050,6 +1050,78 @@ test("direct children remain in physical Agent Spawn call order", async (t) => {
 	await harness.shutdown();
 });
 
+test("Agent observation status resolves labels and unique ID suffixes without broadening authority", { timeout: 15_000 }, async (t) => {
+	const harness = await createCoordinatorHarness(t, {
+		beforeRunStart: () => "confirmed_failure",
+	});
+	const reviewer = await harness.spawn("status-reviewer", {
+		title: "Fixture request", request: "Review the contract.", label: "Reviewer",
+	});
+	const builder = await harness.spawn("status-builder", {
+		title: "Fixture request", request: "Build the contract.", label: "Builder",
+	});
+	assert.ok("agentId" in reviewer);
+	assert.ok("agentId" in builder);
+	const expected = harness.view.status(reviewer.agentId);
+	assert.deepEqual(harness.view.status("Reviewer"), expected);
+	assert.deepEqual(harness.view.status(`  ${reviewer.agentId.slice(-8)}  `), expected);
+	assert.equal(harness.view.status("Owner").agentId, harness.view.status().agentId);
+	assert.equal(harness.view.status("Reviewer").run.phase, "dormant");
+	assert.throws(() => harness.view.status("Missing"), /unknown_identity/);
+	assert.throws(() => harness.view.status("   "), /invalid_input/);
+
+	const reviewerView = harness.coordinator.forAgent(reviewer.agentId);
+	assert.equal(reviewerView.status("Reviewer").agentId, reviewer.agentId);
+	assert.throws(() => reviewerView.status("Builder"), /unknown_identity/);
+	assert.throws(() => reviewerView.status(builder.agentId.slice(-8)), /unauthorized/);
+	assert.throws(() => reviewerView.status(builder.agentId), /unauthorized/);
+
+	await harness.spawn("status-duplicate-reviewer", {
+		title: "Fixture request", request: "Review another contract.", label: "Reviewer",
+	});
+	assert.throws(() => harness.view.status("Reviewer"), /ambiguous_target/);
+	assert.equal(harness.view.status(reviewer.agentId).agentId, reviewer.agentId);
+	// An unrelated duplicate label cannot make self-observation ambiguous.
+	assert.equal(reviewerView.status("Reviewer").agentId, reviewer.agentId);
+	await harness.shutdown();
+});
+
+test("Agent observation status respects Workflow-scoped quarantine and identity precedence", { timeout: 15_000 }, async (t) => {
+	for (const scenario of ["foreign", "same-workflow", "label-collision", "suffix-collision"] as const) {
+		await t.test(scenario, async (t) => {
+			const host = await createUnboundTestOwnerHost(t, () => undefined, { persistent: true });
+			await bindTestOwnerHost(host, "tui");
+			const identity = adoptOrValidateOwnerIdentity(host.runtime);
+			const suffix = identity.agentId.slice(-8);
+			const quarantinedId = scenario === "label-collision" ? "Owner"
+				: scenario === "same-workflow" ? "quarantined-agent"
+				: `other-${identity.agentId}`;
+			const coordinator = await createTestWorkflowCoordinator(host, identity, {
+				entryModulePath: "<inline:pi-agent-coordination>",
+				recoveredWorkflow: {
+					agents: [], transcriptPathByAgentId: new Map(), agentIdBySpawnSource: new Map(),
+					quarantinedAgentIds: new Set([quarantinedId]),
+					quarantinedWorkflowAgentIds: new Set(scenario === "foreign" ? [] : [quarantinedId]),
+					quarantinedCandidateCount: 1,
+				},
+			});
+			const view = coordinator.forAgent(identity.agentId);
+			assert.equal(view.status(identity.agentId).agentId, identity.agentId);
+			assert.throws(() => view.status(quarantinedId), /evidence_unavailable/);
+			if (scenario === "foreign") {
+				assert.equal(view.status("Owner").agentId, identity.agentId);
+			} else {
+				assert.throws(() => view.status("Owner"), /evidence_unavailable/);
+			}
+			if (scenario === "suffix-collision") {
+				assert.throws(() => view.status(suffix), /ambiguous_target/);
+			} else {
+				assert.equal(view.status(suffix).agentId, identity.agentId);
+			}
+		});
+	}
+});
+
 test("Agent observation search composes metadata, phase, identity, scope, and bounds", async (t) => {
 	const harness = await createCoordinatorHarness(t, {
 		beforeRunStart: () => "confirmed_failure",

@@ -3,49 +3,7 @@ import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { deliveriesBySource } from "../protocol/message-delivery.ts";
 import { EvidenceUnavailableError, type AgentRecord } from "./agent-record.ts";
-
-export type AgentMessageTargetCandidate = Readonly<{
-	agentId: string;
-	label: string;
-}>;
-
-/** Resolve the public target selector without ever choosing an arbitrary match. */
-export function resolveAgentMessageTarget<Candidate extends AgentMessageTargetCandidate>(
-	identityCandidates: Iterable<Candidate>,
-	labelCandidates: Iterable<Candidate>,
-	targetAgent: string,
-): Candidate {
-	const selector = targetAgent.trim();
-	if (!selector) {
-		throw new Error("invalid_input: Agent Message targetAgent must not be blank");
-	}
-	const identity = resolveIdentityCandidate([...identityCandidates], selector);
-	if (identity) return identity;
-	const labelMatches = [...labelCandidates].filter(({ label }) => label === selector);
-	if (labelMatches.length === 1) return labelMatches[0]!;
-	if (labelMatches.length > 1) {
-		throw new Error(
-			`ambiguous_target: Agent label ${selector} matches ${labelMatches.length} addressable Agents`,
-		);
-	}
-	throw new Error(`unknown_identity: Agent Message target ${selector}`);
-}
-
-function resolveIdentityCandidate<Candidate extends AgentMessageTargetCandidate>(
-	candidates: readonly Candidate[],
-	selector: string,
-): Candidate | undefined {
-	const exactIdentity = candidates.find(({ agentId }) => agentId === selector);
-	if (exactIdentity) return exactIdentity;
-	const suffixMatches = candidates.filter(({ agentId }) => agentId.endsWith(selector));
-	if (suffixMatches.length === 1) return suffixMatches[0]!;
-	if (suffixMatches.length > 1) {
-		throw new Error(
-			`ambiguous_target: Agent ID suffix ${selector} matches ${suffixMatches.length} Agents`,
-		);
-	}
-	return undefined;
-}
+import { resolveAgentTarget, resolveIdentityCandidate } from "./agent-target.ts";
 
 type CommittedAgentMessageTargetInspection =
 	| Readonly<{ state: "resolved"; targetAgentId: string }>
@@ -189,7 +147,7 @@ function resolveCurrentAgentMessageTargetId(
 		);
 	}
 	const labelCandidateIds = labelCandidateAgentIds(agents, authorAgentId);
-	return resolveAgentMessageTarget(
+	return resolveAgentTarget(
 		[],
 		knownCandidates.filter(({ agentId }) => labelCandidateIds.has(agentId)),
 		targetAgent,

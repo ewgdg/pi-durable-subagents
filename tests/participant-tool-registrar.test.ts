@@ -223,7 +223,7 @@ test("Agent Wait accepts all outbound Requests or a non-empty Request selection"
 	}
 });
 
-test("Agent Observe schema describes omitted status identity as self-observation", () => {
+test("Agent Observe schema describes status selectors and omitted identity as self-observation", () => {
 	const variants = (participantCoordinationToolSchemas.agent_observe as {
 		anyOf: Array<{
 			properties: Record<string, { const?: string; description?: string }>;
@@ -235,7 +235,7 @@ test("Agent Observe schema describes omitted status identity as self-observation
 	assert.ok(status);
 	assert.equal(
 		status.properties.agentId?.description,
-		"Agent to observe. Omit to observe the calling Agent.",
+		"Full Agent ID, unique Workflow-wide ID suffix, or exact label within your observation scope. Omit to observe the calling Agent.",
 	);
 });
 

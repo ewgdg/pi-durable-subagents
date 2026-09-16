@@ -4,10 +4,8 @@ import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import {
-	resolveAgentMessageTarget,
-	resolveCommittedAgentMessageTargetId,
-} from "../src/coordination/agent-message-target.ts";
+import { resolveCommittedAgentMessageTargetId } from "../src/coordination/agent-message-target.ts";
+import { resolveAgentTarget } from "../src/coordination/agent-target.ts";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { RequestEvidence } from "../src/coordination/request-evidence.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
@@ -22,22 +20,22 @@ const agents = [
 
 test("Agent Message targets resolve exact labels and unique ID suffixes", () => {
 	assert.equal(
-		resolveAgentMessageTarget(agents, agents, "Researcher").agentId,
+		resolveAgentTarget(agents, agents, "Researcher").agentId,
 		"agent-research-2222bbbb",
 	);
 	assert.equal(
-		resolveAgentMessageTarget(agents, agents, "3333bbbb").agentId,
+		resolveAgentTarget(agents, agents, "3333bbbb").agentId,
 		"agent-review-3333bbbb",
 	);
 });
 
 test("Agent Message target resolution never chooses an ambiguous match", () => {
 	assert.throws(
-		() => resolveAgentMessageTarget(agents, agents, "bbbb"),
+		() => resolveAgentTarget(agents, agents, "bbbb"),
 		/ambiguous_target: Agent ID suffix bbbb matches 2 Agents/,
 	);
 	assert.throws(
-		() => resolveAgentMessageTarget([
+		() => resolveAgentTarget([
 			...agents,
 			{ agentId: "agent-second-researcher", label: "Researcher" },
 		], [
@@ -51,7 +49,7 @@ test("Agent Message target resolution never chooses an ambiguous match", () => {
 test("an exact full Agent ID wins before label and suffix matching", () => {
 	const exactId = "agent-research-2222bbbb";
 	assert.equal(
-		resolveAgentMessageTarget([
+		resolveAgentTarget([
 			...agents,
 			{ agentId: "agent-other", label: exactId },
 		], [
@@ -64,12 +62,12 @@ test("an exact full Agent ID wins before label and suffix matching", () => {
 
 test("Agent Message target resolution rejects blank and unknown selectors", () => {
 	assert.throws(
-		() => resolveAgentMessageTarget(agents, agents, "  "),
-		/invalid_input: Agent Message targetAgent must not be blank/,
+		() => resolveAgentTarget(agents, agents, "  "),
+		/invalid_input: Agent selector must not be blank/,
 	);
 	assert.throws(
-		() => resolveAgentMessageTarget(agents, agents, "Missing"),
-		/unknown_identity: Agent Message target Missing/,
+		() => resolveAgentTarget(agents, agents, "Missing"),
+		/unknown_identity: Agent target Missing/,
 	);
 });
 
@@ -80,7 +78,7 @@ test("Agent labels resolve only within the caller's coordination neighborhood", 
 		label: "Researcher",
 	};
 	assert.equal(
-		resolveAgentMessageTarget(
+		resolveAgentTarget(
 			[...agents, remoteResearcher],
 			[agents[0]!, localResearcher],
 			"Researcher",
@@ -88,7 +86,7 @@ test("Agent labels resolve only within the caller's coordination neighborhood", 
 		localResearcher.agentId,
 	);
 	assert.equal(
-		resolveAgentMessageTarget(
+		resolveAgentTarget(
 			[...agents, remoteResearcher],
 			[agents[0]!, localResearcher],
 			"4444cccc",

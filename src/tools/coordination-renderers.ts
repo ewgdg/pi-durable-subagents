@@ -225,12 +225,16 @@ export function renderAgentObserveResult(
 	result: AgentToolResult<unknown>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	_context: Readonly<{ args: AgentObserveInput }>,
+	context: Readonly<{ args: AgentObserveInput; isError?: boolean }>,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Component {
 	if (options.isPartial) return pending(theme, "inspecting");
+	if (context.isError) {
+		const error = toolResultText(result);
+		return new Text(theme.fg("error", options.expanded ? error : boundedToolPreview(error)), 0, 0);
+	}
 	const details = asRecord(result.details);
-	if (_context.args.operation === "obligations" && Array.isArray(details?.requests)) {
+	if (context.args.operation === "obligations" && Array.isArray(details?.requests)) {
 		const requests = details.requests as readonly OpenIncomingRequest[];
 		return new Text([
 			theme.fg("success", `${requests.length} outstanding Request${requests.length === 1 ? "" : "s"}`),
@@ -240,7 +244,7 @@ export function renderAgentObserveResult(
 				} · ${formatMessageIdentity(request.requestMessageId, options.expanded)}`),
 		].join("\n"), 0, 0);
 	}
-	if (_context.args.operation === "request" && typeof details?.question === "string" &&
+	if (context.args.operation === "request" && typeof details?.question === "string" &&
 		typeof details.title === "string" && typeof details.requestMessageId === "string" &&
 		typeof details.requesterAgentId === "string") {
 		const container = new Container();

@@ -6,7 +6,7 @@ Workflow Owners, Direct Spawners, and Moderators can inspect and control authori
 
 The Workflow Owner may observe and control any verified non-Owner Agent. A Direct Spawner may observe and control only its immediate children. A Moderator may observe any known Workflow Agent and control any current non-Owner Run. An Agent may observe itself, but cannot control itself; a Moderator also cannot control the Owner Run. Knowing an Agent identity or exchanging Messages does not grant supervision authority.
 
-`agent_observe` supports exact status lookup or bounded search:
+`agent_observe` supports single-Agent status lookup or bounded search:
 
 ```json
 {
@@ -14,6 +14,10 @@ The Workflow Owner may observe and control any verified non-Owner Agent. A Direc
   "agentId": "child-agent-id"
 }
 ```
+
+For `status`, `agentId` accepts a full Agent ID, a unique Workflow-wide ID suffix, or an exact case-sensitive label. Full IDs take precedence over suffixes, then labels; ambiguous selectors fail rather than selecting an arbitrary Agent. Labels resolve only within the caller's observation scope: the Owner and Moderator can use any verified Workflow Agent's label; ordinary Agents can use their own and their direct children's labels. ID lookup does not bypass these permissions. Omit `agentId` to observe yourself. Unlike Message addressing, status labels do not include an ordinary Agent's Direct Spawner.
+
+Quarantined identities still participate in ID matching. When quarantined label evidence prevents proving uniqueness, use a verified full ID instead. Lookup errors display their actual diagnostic, not a successful `observed` receipt. Observation never starts an Agent Run or prepares its Runtime.
 
 ```json
 {
