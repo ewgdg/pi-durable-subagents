@@ -73,8 +73,9 @@ model report, synthetic diagnostic, or a repaired record that never blocked.
   contract tests, plus typecheck. No full suite was run.
 - Actual npm-packed `node_modules` smoke passed 3 cases: blocked duplicate
   correction, older rejected-history preservation, and rejected-only no-op.
-  Independent lifecycle retarget review is requested against `0c3c14b`; final
-  closure remains pending. Parent owns final current-document/PR consolidation.
+  Independent lifecycle retarget review approved `0c3c14b` with no blockers;
+  reviewer reran 16 scoped checks and inspected certificate-before-model order
+  and archive isolation. Parent owns final current-document/PR consolidation.
 
 ## Decisions
 
