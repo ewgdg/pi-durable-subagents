@@ -10,8 +10,9 @@ import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-co
 
 test("launch preflight works from an installed extension with host-provided peers only", { timeout: 20_000 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-installed-launch-contract-"));
-	await cp(new URL("../src/", import.meta.url), join(root, "src"), { recursive: true });
-	const extensionPath = join(root, "probe.ts");
+	const installed = join(root, "node_modules", "pi-durable-subagents");
+	await cp(new URL("../src/", import.meta.url), join(installed, "src"), { recursive: true });
+	const extensionPath = join(installed, "probe.ts");
 	await writeFile(extensionPath, `
 		import { ChildLaunchContractGuard } from "./src/process-runtime/child-launch-contract.ts";
 		export default async function () { await new ChildLaunchContractGuard().assertCompatible(); }

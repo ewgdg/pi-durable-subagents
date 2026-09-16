@@ -273,6 +273,7 @@ export class WorkflowCoordinator {
 	readonly #shutdownController = new AbortController();
 	#shuttingDown = false;
 	readonly #pendingSpawns = new Set<Promise<unknown>>();
+	#writerRetirement: Promise<void> | undefined;
 
 	constructor(
 		runtime: AgentSessionRuntime,
@@ -797,6 +798,8 @@ export class WorkflowCoordinator {
 
 	#beginShutdown(): void {
 		this.#shuttingDown = true;
+		this.#writerRetirement ??= this.#sessionFactory.retireWriters();
+		void this.#writerRetirement.catch(() => undefined);
 		this.#shutdownController.abort();
 		this.#agentWaits.shutdown();
 	}
@@ -1640,6 +1643,7 @@ export class WorkflowCoordinator {
 				this.#shutdownAgentInLane(owner, disposeNativeRuntime)
 			),
 		);
+		await collectCleanupFailure(cleanupErrors, () => this.#writerRetirement!);
 		if (cleanupErrors.length > 0) {
 			throw new AggregateError(cleanupErrors, "Workflow shutdown failed");
 		}

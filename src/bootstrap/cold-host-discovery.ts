@@ -113,12 +113,28 @@ export async function discoverColdWorkflow(options: {
 		};
 	}
 
+	return inspectColdWorkflowEvidence({ ownerIdentity,
+		ownerTranscript: transcriptFromSessionManager(ownerSessionManager),
+		candidates: filenames.map(filename => {
+			const path = join(directory, filename);
+			return { path, transcript: transcriptFromSessionFile(path, { fresh: true }) };
+		}),
+	});
+}
+
+/** Shared membership audit: supplied readers may be immutable copies, never native session opens. */
+export async function inspectColdWorkflowEvidence(options: {
+	ownerIdentity: OwnerIdentity;
+	ownerTranscript: AgentTranscript;
+	candidates: readonly { path: string; transcript: AgentTranscript }[];
+}): Promise<ColdWorkflowRecovery> {
+	const { ownerIdentity, ownerTranscript } = options;
 	const candidates: Candidate[] = [];
 	const quarantinedAgentIds = new Set<string>();
 	let unreadableCandidateCount = 0;
-	for (const filename of filenames) {
+	for (const candidate of options.candidates) {
 		try {
-			candidates.push(await readCandidate(join(directory, filename)));
+			candidates.push(await readCandidate(candidate.path, candidate.transcript));
 		} catch (error) {
 			unreadableCandidateCount += 1;
 			if (error instanceof CandidateError && error.agentId) {
@@ -160,7 +176,7 @@ export async function discoverColdWorkflow(options: {
 		}
 		if (candidate.role === "moderator") continue;
 		const parentTranscript = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
-			? transcriptFromSessionManager(ownerSessionManager)
+			? ownerTranscript
 			: (() => {
 				const parentCandidate = uniqueByAgentId.get(
 					candidate.identity.directSpawnerAgentId,
@@ -328,9 +344,7 @@ export async function discoverColdWorkflow(options: {
 	};
 }
 
-async function readCandidate(path: string): Promise<Candidate> {
-	// Discovery is an admission audit, never a continuation of cached validation.
-	const transcript = transcriptFromSessionFile(path, { fresh: true });
+async function readCandidate(path: string, transcript: AgentTranscript): Promise<Candidate> {
 	let inspection;
 	try {
 		inspection = await transcript.refresh();

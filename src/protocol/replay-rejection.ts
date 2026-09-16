@@ -51,6 +51,11 @@ const CUSTOM_VALIDATORS: Readonly<Record<string, (entry: SessionEntry) => unknow
 	[MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE]: validateModeratorObligationReminderRecord,
 };
 
+/** Names whose persisted calls/results are coordination evidence, not arbitrary tool output. */
+export function isCoordinationEvidenceTool(name: string): boolean {
+	return Object.hasOwn(CALL_VALIDATORS, name);
+}
+
 function rejections(transcript: TranscriptInspection, agentId: string) {
 	const state = indexedState(transcript);
 	return state.memo(rejections, agentId, state.scopeVersion, () => new Map<string, CoordinationRejection>());

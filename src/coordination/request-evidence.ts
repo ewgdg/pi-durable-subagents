@@ -7,7 +7,7 @@ import {
 	withAgentTranscriptObservations,
 	EvidenceUnavailableError,
 	requireAgentRecord,
-	type AgentRecord,
+	type AgentEvidence,
 } from "./agent-record.ts";
 import {
 	inspectCreationRequestDelivery,
@@ -63,7 +63,7 @@ type Answer = Extract<Message, { kind: "answer" }>;
 type Cancellation = Extract<Message, { kind: "request_cancellation" }>;
 
 export class RequestEvidence {
-	readonly #agents: Map<string, AgentRecord>;
+	readonly #agents: Map<string, AgentEvidence>;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	// The transcript is authoritative. These entries only bridge the interval after
@@ -72,7 +72,7 @@ export class RequestEvidence {
 	readonly #admittedCancellationsByRequest = new Map<string, Cancellation>();
 
 	constructor(
-		agents: Map<string, AgentRecord>,
+		agents: Map<string, AgentEvidence>,
 		quarantinedAgentIds: ReadonlySet<string> = new Set(),
 		quarantinedWorkflowAgentIds: ReadonlySet<string> = quarantinedAgentIds,
 	) {
@@ -85,20 +85,7 @@ export class RequestEvidence {
 		this.#admittedAnswersByRequest.set(answer.requestId, answer);
 	}
 
-	isAnswerAwaitingAuthorResult(answer: Answer): boolean {
-		const responder = this.#requireAgent(answer.fromAgentId);
-		const resultRequestId = answerSourceResultRequestId({
-			transcript: responder.transcript.inspect(),
-			source: answer.source,
-		});
-		return (
-			resultRequestId === undefined &&
-			responder.host.currentHandle() !== undefined &&
-			!responder.host.currentRunFailed()
-		);
-	}
-
-	findAnswerBySource(responder: AgentRecord, toolCallId: string): Answer | undefined {
+	findAnswerBySource(responder: AgentEvidence, toolCallId: string): Answer | undefined {
 		const matches = new Map<string, Answer>();
 		for (const answer of this.#admittedAnswersByRequest.values()) {
 			if (
@@ -133,7 +120,7 @@ export class RequestEvidence {
 		);
 	}
 
-	discardAdmittedAuthorshipBy(author: AgentRecord): void {
+	discardAdmittedAuthorshipBy(author: AgentEvidence): void {
 		for (const [requestId, answer] of this.#admittedAnswersByRequest) {
 			if (answer.fromAgentId === author.identity.agentId) {
 				this.#admittedAnswersByRequest.delete(requestId);
@@ -234,7 +221,7 @@ export class RequestEvidence {
 	}
 
 	/** Independently valid recipient evidence remains useful without authored authority. */
-	findDeliveredRequest(responder: AgentRecord, requestId: string) {
+	findDeliveredRequest(responder: AgentEvidence, requestId: string) {
 		const deliveries = deliveriesForRequest({
 			recipientAgentId: responder.identity.agentId, transcript: responder.transcript.inspect(), requestId,
 		}).filter(delivery => delivery.projection.kind === "request");
@@ -262,7 +249,7 @@ export class RequestEvidence {
 		throw new Error(`unknown_identity: Request ${requestId}`);
 	}
 
-	findLocalAnswer(responder: AgentRecord, requestId: string): Answer | undefined {
+	findLocalAnswer(responder: AgentEvidence, requestId: string): Answer | undefined {
 		const transcript = responder.transcript.inspect();
 		const delivered = deliveriesForRequest({ recipientAgentId: responder.identity.agentId, transcript, requestId })
 			.find(delivery => delivery.projection.kind === "request");
@@ -283,7 +270,7 @@ export class RequestEvidence {
 		return canonical[0] ?? admitted;
 	}
 
-	isLocalCancellationDelivered(responder: AgentRecord, requestId: string): boolean {
+	isLocalCancellationDelivered(responder: AgentEvidence, requestId: string): boolean {
 		const deliveries = deliveriesForRequest({ recipientAgentId: responder.identity.agentId, transcript: responder.transcript.inspect(), requestId });
 		const request = deliveries.find(delivery => delivery.projection.kind === "request");
 		if (!request) return false;
@@ -297,7 +284,7 @@ export class RequestEvidence {
 		return cancellations.length > 0;
 	}
 
-	outstandingRequestIdsAt(author: AgentRecord, waitSource: ToolCallPointer, selectors?: readonly string[]): readonly string[] {
+	outstandingRequestIdsAt(author: AgentEvidence, waitSource: ToolCallPointer, selectors?: readonly string[]): readonly string[] {
 		if (waitSource.agentId !== author.identity.agentId) {
 			throw new Error("wrong_participant: Agent Wait source belongs to another Agent");
 		}
@@ -348,16 +335,16 @@ export class RequestEvidence {
 		return outstanding.filter(id => selected.has(id));
 	}
 
-	obligationFrames(agent: AgentRecord): readonly ObligationFrame[] {
+	obligationFrames(agent: AgentEvidence): readonly ObligationFrame[] {
 		const owed = new Set(this.residualRelationshipsFor(agent).answerOwedRequestIds);
 		return obligationStack(agent.transcript.inspect(), agent.identity.agentId).filter(frame => owed.has(frame.requestId));
 	}
 
-	openIncomingRequests(agent: AgentRecord): OpenIncomingRequestList {
+	openIncomingRequests(agent: AgentEvidence): OpenIncomingRequestList {
 		return summarizeRequestObligations(this.obligationFrames(agent));
 	}
 
-	inspectRequest(agent: AgentRecord, selector: string): RequestInspection {
+	inspectRequest(agent: AgentEvidence, selector: string): RequestInspection {
 		const reference = selector.trim();
 		if (!reference) throw new Error("invalid_input: Request reference must not be blank");
 		const agentId = agent.identity.agentId;
@@ -403,11 +390,11 @@ export class RequestEvidence {
 		return request;
 	}
 
-	outstandingRequestIdsFor(agent: AgentRecord): readonly string[] {
+	outstandingRequestIdsFor(agent: AgentEvidence): readonly string[] {
 		return this.residualRelationshipsFor(agent).awaitingAnswerRequestIds;
 	}
 
-	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
+	residualRelationshipsFor(agent: AgentEvidence): ResidualRequestRelationships {
 		return withAgentTranscriptObservations(this.#agents.values(), () => {
 			const graph = this.#relationshipGraph(agent);
 			do {
@@ -421,11 +408,11 @@ export class RequestEvidence {
 		});
 	}
 
-	async refreshRelationshipsFor(agent: AgentRecord): Promise<ResidualRequestRelationships> {
+	async refreshRelationshipsFor(agent: AgentEvidence): Promise<ResidualRequestRelationships> {
 		let result: ResidualRequestRelationships | undefined;
 		do {
 			const records = [...this.#agents.values()];
-			const inspections = new Map<AgentRecord, TranscriptInspection>();
+			const inspections = new Map<AgentEvidence, TranscriptInspection>();
 			for (const record of records) inspections.set(record, await record.transcript.refresh());
 			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) continue;
 			// Pin these already-refreshed views. A synchronous read here would drain
@@ -451,7 +438,7 @@ export class RequestEvidence {
 		return result;
 	}
 
-	#relationshipGraph(agent: AgentRecord): RelationshipGraph {
+	#relationshipGraph(agent: AgentEvidence): RelationshipGraph {
 		return indexedState(agent.transcript.inspect()).memo(
 			RequestEvidence.prototype.residualRelationshipsFor,
 			agent.identity.agentId,
@@ -466,7 +453,7 @@ export class RequestEvidence {
 		);
 	}
 
-	#startRelationshipUpdate(agent: AgentRecord, graph: RelationshipGraph): void {
+	#startRelationshipUpdate(agent: AgentEvidence, graph: RelationshipGraph): void {
 		const observations = [...this.#agents.values()].map((record) => ({
 			record,
 			state: indexedState(record.transcript.inspect()),
@@ -508,7 +495,7 @@ export class RequestEvidence {
 					creationIds.push(deriveMessageIdentity(child.identity.spawnSource));
 			}
 		}
-		const cursors = new Map<AgentRecord, RelationshipCursor>();
+		const cursors = new Map<AgentEvidence, RelationshipCursor>();
 		for (const { record, state } of observations) {
 			cursors.set(record, {
 				state,
@@ -527,10 +514,10 @@ export class RequestEvidence {
 	}
 
 	*#updateRelationships(
-		agent: AgentRecord,
+		agent: AgentEvidence,
 		graph: RelationshipGraph,
 		creationIds: readonly string[],
-		cursors: Map<AgentRecord, RelationshipCursor>,
+		cursors: Map<AgentEvidence, RelationshipCursor>,
 	): Generator<void> {
 		const changed = new Set(creationIds);
 		for (const [record, cursor] of cursors) {
@@ -576,7 +563,7 @@ export class RequestEvidence {
 	}
 
 	#relationshipForRequest(
-		agent: AgentRecord,
+		agent: AgentEvidence,
 		requestId: string,
 	): { awaiting: boolean; owed: boolean } {
 		const transcript = agent.transcript.inspect();
@@ -651,7 +638,7 @@ export class RequestEvidence {
 		return { awaiting, owed };
 	}
 
-	#findBoundAuthoredRequest(agent: AgentRecord, requestId: string): Request | undefined {
+	#findBoundAuthoredRequest(agent: AgentEvidence, requestId: string): Request | undefined {
 		const transcript = agent.transcript.inspect();
 		const source = findAuthoredAgentMessageSource({
 			authorAgentId: agent.identity.agentId,
@@ -685,7 +672,7 @@ export class RequestEvidence {
 	}
 
 	callerWaitAnswer(
-		caller: AgentRecord,
+		caller: AgentEvidence,
 		requestId: string,
 	): AgentWaitAnswer | undefined {
 		const message = this.requireCallerAuthoredMessage(caller, requestId);
@@ -722,7 +709,7 @@ export class RequestEvidence {
 			};
 	}
 
-	resolveRecoveryMessage(author: AgentRecord, messageId: string): Message | undefined {
+	resolveRecoveryMessage(author: AgentEvidence, messageId: string): Message | undefined {
 		const authored = findAuthoredAgentMessageSource({
 			authorAgentId: author.identity.agentId,
 			transcript: author.transcript.inspect(),
@@ -743,7 +730,7 @@ export class RequestEvidence {
 		return this.requireCallerAuthoredMessage(author, messageId);
 	}
 
-	requireCallerAuthoredMessage(caller: AgentRecord, messageId: string): Message {
+	requireCallerAuthoredMessage(caller: AgentEvidence, messageId: string): Message {
 		const ownMessage = this.#resolveAuthoredMessage(caller, messageId);
 		if (ownMessage) return ownMessage;
 		const creationRequest = this.#findCreationRequest(messageId);
@@ -774,7 +761,7 @@ export class RequestEvidence {
 		});
 	}
 
-	#hasCanonicalAuthoredCancellation(author: AgentRecord, requestId: string): boolean {
+	#hasCanonicalAuthoredCancellation(author: AgentEvidence, requestId: string): boolean {
 		const transcript = author.transcript.inspect();
 		const canonical = cancellationSourcesForRequest({ authorAgentId: author.identity.agentId, transcript, requestId })
 			.filter(({ source, input }) => input.operation === "cancel" && input.requestMessageId === requestId &&
@@ -786,7 +773,7 @@ export class RequestEvidence {
 		return canonical.length === 1;
 	}
 
-	#inspectRequestDelivery(request: Request, recipient: AgentRecord) {
+	#inspectRequestDelivery(request: Request, recipient: AgentEvidence) {
 		return request.origin === "agent_spawn"
 			? inspectCreationRequestDelivery({
 				recipientAgentId: recipient.identity.agentId,
@@ -824,7 +811,7 @@ export class RequestEvidence {
 		return undefined;
 	}
 
-	#resolveAuthoredMessage(author: AgentRecord, messageId: string): Message | undefined {
+	#resolveAuthoredMessage(author: AgentEvidence, messageId: string): Message | undefined {
 		const authored = findAuthoredAgentMessageSource({
 			authorAgentId: author.identity.agentId,
 			transcript: author.transcript.inspect(),
@@ -944,7 +931,7 @@ export class RequestEvidence {
 		});
 	}
 
-	#requireResponderRequest(responder: AgentRecord, requestId: string): Request {
+	#requireResponderRequest(responder: AgentEvidence, requestId: string): Request {
 		const request = this.requireRequest(requestId);
 		if (request.targetAgentId !== responder.identity.agentId) {
 			throw new Error(
@@ -955,7 +942,7 @@ export class RequestEvidence {
 	}
 
 	#inspectMessageTarget(
-		author: AgentRecord,
+		author: AgentEvidence,
 		authorTranscript: TranscriptInspection,
 		toolCallId: string,
 		targetAgent: string,
@@ -971,7 +958,7 @@ export class RequestEvidence {
 	}
 
 	#resolveMessageTargetId(
-		author: AgentRecord,
+		author: AgentEvidence,
 		authorTranscript: TranscriptInspection,
 		toolCallId: string,
 		targetAgent: string,
@@ -986,7 +973,7 @@ export class RequestEvidence {
 		});
 	}
 
-	#requireAgent(agentId: string): AgentRecord {
+	#requireAgent(agentId: string): AgentEvidence {
 		return requireAgentRecord(
 			this.#agents,
 			this.#quarantinedAgentIds,
@@ -1014,7 +1001,7 @@ export class RequestEvidence {
 			}));
 	}
 
-	#wrongParticipant(caller: AgentRecord, messageId: string): Error {
+	#wrongParticipant(caller: AgentEvidence, messageId: string): Error {
 		return new Error(
 			`wrong_participant: Agent ${caller.identity.agentId} did not author Message ${messageId}`,
 		);
@@ -1028,11 +1015,11 @@ type RelationshipCursor = {
 	physicalCount: number;
 };
 type RelationshipGraph = {
-	cursors: Map<AgentRecord, RelationshipCursor>;
-	roster: AgentRecord[];
+	cursors: Map<AgentEvidence, RelationshipCursor>;
+	roster: AgentEvidence[];
 	awaiting: Set<string>;
 	owed: Set<string>;
 	result: ResidualRequestRelationships;
 	pending?: Generator<void>;
-	pendingSources?: Map<AgentRecord, RelationshipCursor>;
+	pendingSources?: Map<AgentEvidence, RelationshipCursor>;
 };

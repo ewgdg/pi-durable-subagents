@@ -11,6 +11,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import piAgentCoordination from "../src/index.ts";
+import { ownerRetirementFor } from "../src/bootstrap/owner-bootstrap.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import {
@@ -54,6 +55,63 @@ test("Owner bootstrap leaves native Runtime disposal under Pi ownership", async 
 
 	assert.equal(host.runtime.dispose, nativeDispose);
 	await host.runtime.dispose();
+});
+
+test("repair retirement retains actual cleanup rejection across resource reload", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	await bindTestOwnerHost(host, "tui");
+	const retirement = ownerRetirementFor(host.session.sessionManager);
+	const nativeAbort = host.session.abort.bind(host.session);
+	host.session.abort = async () => { throw new Error("native abort failed"); };
+	try {
+		await assert.rejects(retirement.prepare(), /retirement failed/);
+		await host.session.reload();
+		assert.equal(ownerRetirementFor(host.session.sessionManager), retirement);
+		await assert.rejects(retirement.prepare(), /retirement failed/);
+		assertOwnerToolsRegisteredButInactive(host);
+	} finally {
+		host.session.abort = nativeAbort;
+	}
+});
+
+test("reload cannot invent no-coordinator cleanup when an earlier bootstrap lacks repair evidence", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	await bindTestOwnerHost(host, "tui");
+	const nativeAbort = host.session.abort.bind(host.session);
+	// The ordinary Workflow registry survives extension upgrades independently of
+	// repair's later-added evidence registry. Exercise that stable reload boundary.
+	const registry = (globalThis as typeof globalThis & {
+		__piAgentCoordinationOwnerRetirements: WeakMap<object, unknown>;
+	}).__piAgentCoordinationOwnerRetirements;
+	registry.delete(host.session.sessionManager);
+	host.session.abort = async () => { throw new Error("prior bootstrap cleanup failed"); };
+	await host.session.reload();
+	host.session.abort = nativeAbort;
+	await assert.rejects(ownerRetirementFor(host.session.sessionManager).prepare(), /Workflow shutdown failed/);
+});
+
+test("initial pre-coordinator failure can retire native session without invented cleanup", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
+	await writeFile(join(host.services.agentDir, "config", "pi-agent-coordination.json"), '{"maxConcurrentAgentRuns":0}');
+	await bindTestOwnerHost(host, "tui");
+	const retirement = ownerRetirementFor(host.session.sessionManager);
+	await retirement.prepare();
+	assert.throws(() => retirement.assertRetired(), /replacement/);
+	retirement.replacementCompleted();
+	retirement.assertRetired();
+});
+
+test("repair command is available after initial admission failure but absent persisted identity refuses", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
+	await writeFile(join(host.services.agentDir, "config", "pi-agent-coordination.json"), '{"maxConcurrentAgentRuns":0}');
+	await bindTestOwnerHost(host, "tui");
+	const command = host.session.extensionRunner.getCommand("agents");
+	assert.ok(command);
+	await command.handler("repair", host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1]);
+	assert.ok(host.ui.notifications.some(({ message }) => message.startsWith("Repair unavailable:")));
+	assert.equal(host.session.sessionManager.getEntries().some((entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity"), false);
 });
 
 test("a fresh Owner Identity records its role description", async (t) => {
@@ -597,7 +655,10 @@ test("a valid child Identity is not reclassified as Workflow Owner", async (t) =
 		true,
 	);
 	assertOwnerToolsRegisteredButInactive(host);
-	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
+	const diagnostics = host.session.extensionRunner.getCommand("agents");
+	assert.ok(diagnostics);
+	await diagnostics.handler("", host.session.extensionRunner.createContext() as Parameters<typeof diagnostics.handler>[1]);
+	assert.ok(host.ui.notifications.some(({ message }) => message.includes("Subagent coordination is unavailable")));
 	host.model.setResponses([fauxAssistantMessage("Child prompt completed.")]);
 	await host.session.prompt("Continue as the existing child Agent.");
 	assert.equal(
@@ -635,7 +696,7 @@ test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async (t)
 		true,
 	);
 	assertOwnerToolsRegisteredButInactive(host);
-	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
+	assert.ok(host.session.extensionRunner.getCommand("agents"), "failed identity retains host-only diagnostics, not invented membership");
 	await host.runtime.dispose();
 });
 
@@ -754,7 +815,7 @@ test("conflicting valid Owner Deliveries retain admission-failure diagnostics af
 		assert.match(summary, /Problem/);
 		assert.match(summary, /duplicate Deliveries/);
 		assert.match(summary, /Recovery/);
-		assert.match(summary, /unavailable/);
+		assert.match(summary, /\/agents repair authorizes/);
 		assert.doesNotMatch(summary, /at authoredFacts/);
 		assert.doesNotMatch(summary, /cleanup also failed/);
 		panel.handleInput?.("t");
@@ -766,6 +827,26 @@ test("conflicting valid Owner Deliveries retain admission-failure diagnostics af
 	}
 	await host.runtime.dispose();
 });
+
+for (const rejectedHistory of [false, true]) {
+	test(`repair refuses admitted Owner without disturbing ${rejectedHistory ? "rejected history" : "healthy history"}`, async (t) => {
+		const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+		host.session.sessionManager.appendMessage(fauxAssistantMessage("Existing work is complete."));
+		if (rejectedHistory) host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "request", targetAgent: "old-target", question: "Obsolete work must stay rejected",
+		}, { id: "old-rejected-request" })));
+		await bindTestOwnerHost(host, "tui");
+		const manager = host.session.sessionManager;
+		const before = await readFile(manager.getSessionFile()!, "utf8");
+		const command = host.session.extensionRunner.getCommand("agents")!;
+		await command.handler("repair", host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1]);
+		assert.ok(host.ui.notifications.some(({ message }) => message.includes("No repair needed")));
+		assert.equal(host.session.sessionManager, manager);
+		assert.equal(await readFile(manager.getSessionFile()!, "utf8"), before);
+		assert.ok(host.session.getActiveToolNames().includes("agent_message"));
+		await host.runtime.dispose();
+	});
+}
 
 function appendConflictingOwnerDelivery(sessionManager: SessionManager) {
 	const agentId = sessionManager.getSessionId();

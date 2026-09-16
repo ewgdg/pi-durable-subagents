@@ -2,7 +2,7 @@ import { indexedState, coordinationEntries } from "../transcript/retained-transc
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { deliveriesBySource } from "../protocol/message-delivery.ts";
-import { EvidenceUnavailableError, type AgentRecord } from "./agent-record.ts";
+import { EvidenceUnavailableError, type AgentEvidence } from "./agent-record.ts";
 
 export type AgentMessageTargetCandidate = Readonly<{
 	agentId: string;
@@ -53,7 +53,7 @@ type CommittedAgentMessageTargetInspection =
 	| Readonly<{ state: "indeterminate" }>;
 
 type CommittedAgentMessageTargetOptions = Readonly<{
-	agents: ReadonlyMap<string, AgentRecord>;
+	agents: ReadonlyMap<string, AgentEvidence>;
 	quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	authorAgentId: string;
 	authorTranscript: TranscriptInspection;
@@ -197,7 +197,7 @@ function resolveCurrentAgentMessageTargetId(
 }
 
 function labelCandidateAgentIds(
-	agents: ReadonlyMap<string, AgentRecord>,
+	agents: ReadonlyMap<string, AgentEvidence>,
 	authorAgentId: string,
 ): ReadonlySet<string> {
 	const author = agents.get(authorAgentId);
@@ -211,7 +211,7 @@ function labelCandidateAgentIds(
 }
 
 function validateTargetMatchesSelector(
-	target: AgentRecord,
+	target: AgentEvidence,
 	targetAgent: string,
 ): void {
 	const selector = targetAgent.trim();

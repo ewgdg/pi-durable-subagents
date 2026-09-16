@@ -29,13 +29,17 @@ The panel does not append diagnostics to model conversation history. Terminal co
 
 Native `/fork` preserves selected conversation in a fresh independent Workflow, and `/clone` copies the active branch, even after coordination admission fails—provided bootstrap successfully established the source as an Owner before the failure. Diagnostics explains this condition; failed or incomplete role identification explicitly refuses fork. Child Agents and Moderators still cannot fork. Native `/new` remains available for a clean Owner session.
 
-The fork appends a fresh Owner Identity cutoff only in the new session. Copied Messages, Requests, deliveries, and child relationships remain conversation context but grant no authority, pending obligations, or automatic continuation. The original transcript is unchanged and remains available for inspection. See [Owner fork and clone](owner-workflow.md#owner-fork-and-clone). Transcript repair is still unavailable; this feature does not edit historical Messages or accept obsolete protocol shapes.
+The fork appends a fresh Owner Identity cutoff only in the new session. Copied Messages, Requests, deliveries, and child relationships remain conversation context but grant no authority, pending obligations, or automatic continuation. The original transcript is unchanged and remains available for inspection. See [Owner fork and clone](owner-workflow.md#owner-fork-and-clone). Fork does not edit historical Messages or accept obsolete protocol shapes.
 
 Startup, in-process session resume, and repeated failed-admission `/reload` use the same blockage surface. Unlike a chat-only notification, the widget remains outside restored conversation history. Its border and heading use the theme’s warning foreground; the explanation uses regular text. Available commands share a compact dim hint row without descriptions; action explanations stay in diagnostics. The widget does not replace the editor. Previously healthy Workflows also revalidate on Owner resource reload, using fresh projections under the newly loaded code. See [reload revalidation](cold-host-recovery.md#owner-resource-reload). Resource reload is not transcript repair.
 
 Partial-recovery quarantined-Agent warnings remain separate from whole-Owner blockage. Their availability claim is emitted only after Owner initialization succeeds.
 
-The [Workflow-owned transcript repair proposal](workflow-transcript-repair-design.md)
-describes the separate repair-only bootstrap, writer exclusion, validated copies,
-approval, rollback, and native reopening under discussion in #129. It is not
-implemented and does not change the recovery availability described here.
+`/agents repair` is a separate recovery path for supported actual transcript
+admission failures, initially redundant exact duplicate Delivery envelopes.
+Healthy admitted Workflows and rejected-record-only histories need no repair.
+Persisted Owner identity and clean writer retirement must be verified; invoking
+the command authorizes the attempt without another prompt. Rejected history
+stays unchanged. It cannot override failed cleanup or repair policy/model configuration. See
+[repair operations](workflow-repair-operations.md) and the
+[validation and recovery contract](workflow-transcript-repair-design.md).
