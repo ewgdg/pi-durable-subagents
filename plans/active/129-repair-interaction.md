@@ -71,3 +71,16 @@ completion and no hidden coordination membership. Capture failures before fixes.
   Direct gate/startup/selector/lifecycle tests and typecheck pass. Actual packed
   node_modules smoke passes idle-human, live-navigation and command-cancel.
   No real model calls or changes to the user's live repair artifacts were made.
+
+## Final acceptance
+
+- Parent independently reran typecheck, all 15 real CLI cases (22.836 seconds),
+  and the deterministic repaired-Owner human-input test on integrated `3b1b20c`;
+  all passed. Whole-branch whitespace check passed; no full suite was run.
+- A separate repeatable real-model launcher creates a fresh blocked input on
+  each run and prints its Owner path. It uses the current feature extension,
+  normal user auth/model settings and an isolated working directory; no scripted
+  repair or model calls were used in preparation. The old user run is untouched.
+- Current operations and architecture documents describe responsive navigation,
+  presentation-only Moderator history, exact switch permission, and explicit
+  human resumption. PR publication update remains the final handoff step.

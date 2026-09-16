@@ -51,6 +51,18 @@ Owner-managed shutdown; no Python, pidfd, extra terminal, permanent launcher, or
 upstream Pi edit is needed. The temporary repair host is not an unrelated Owner
 Workflow and grants no ordinary coordination authority.
 
+Native replacement awaits only the short verified handoff, not the full model
+turn. The editor returns while independent repair work continues. Live model and
+tool updates and completed transcript entries are visible through `/agents` and
+read-only inspection. The Owner row shows an immutable snapshot during repair;
+the Repair Moderator row is presentation-only, not ordinary routing or membership.
+It remains inspectable after completion, including archived attempts.
+
+Responsive navigation does not authorize arbitrary native reopening. Switch
+permission names the exact controlled transition, not the whole running attempt.
+Open repair views are closed and joined before Owner reopening, with unsubmitted
+editor text preserved. Expected refusal does not escape the native callback.
+
 Pi opens a switch destination before old-session teardown. Switching first to an
 unrelated repair-host transcript lets final Owner writes complete without opening
 a stale Owner manager. The later return opens the committed Owner bytes while
@@ -158,6 +170,13 @@ certificate does: rejected history cannot be corrected, removed, or converted
 into executable evidence. Recovered participants still remain dormant, and
 repair does not assert an interrupted external action never happened.
 
+The restored Owner is also held until a **new interactive human message**.
+This hold is established before coordinator integration: native setting changes
+must not trigger reconciliation, an Obligation Stall reminder, and an empty
+extension prompt. Existing duties remain pending, but startup/delivery/reminder
+work cannot start a model turn or append fabricated user input. Navigation,
+inspection and commands do not release the hold; the user's new message does.
+
 The audit is inspection evidence, **not another approval gate**. Full reports
 remain on disk even when terminal previews are bounded. Editing a candidate or
 changing source membership/bytes invalidates the sealed validation generation.
@@ -206,6 +225,10 @@ inactive tools before duplicate correction, followed by fresh admitted Owner in
 the same terminal. They also cover healthy/rejected-only/configuration no-ops,
 unchanged stale rejected history and dormant children, native bash, cleanup
 refusal, postcommit admission failure, cancellation and killed-helper recovery.
+Reasoning-enabled CLI cases exercise setting-triggered reconciliation and verify
+zero Owner calls until explicit human input. Held-model cases verify live
+navigation, completed tool-result refresh, draft preservation, and refusal of
+uncommitted native reopening. Packed-package checks cover these paths too.
 Focused core tests exercise the permitted-edit certificate, sealing, freshness,
 unknown hashes, interrupted apply/rollback, and post-commit native writes.
 They are not a power-loss proof or exhaustive terminal resize/signal coverage.
