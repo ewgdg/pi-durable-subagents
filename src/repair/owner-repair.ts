@@ -23,6 +23,7 @@ type Attempt = {
 	ui: ExtensionUIContext; running: boolean; outcome?: RepairOutcome;
 	switchTarget?: string;
 	liveText: string; liveStatus: string; listeners: Set<() => void>;
+	transcriptListeners: Set<() => void>;
 	view?: { controller: AbortController; closed: Promise<void> };
 };
 const REGISTRY_KEY = "__piAgentCoordinationRepairAttempts";
@@ -94,12 +95,16 @@ async function inRepairView(attempt: Attempt | undefined, view: (signal: AbortSi
 	finally { if (attempt?.view?.controller === controller) attempt.view = undefined; resolveClosed(); }
 }
 
-async function inspectAttempt(ctx: ExtensionContext, launch: RepairLaunch | Awaited<ReturnType<typeof readRepairArchiveLaunch>>, directory: string, attempt: Attempt | undefined, page = 2): Promise<void> {
-	await inRepairView(attempt, (signal) => openRepairDiagnostics(ctx.ui, launch, directory, { page, signal,
-		...(attempt ? { liveText: () => `${attempt.liveText}\n${attempt.liveStatus}`, subscribe: (refresh: () => void) => {
+async function inspectAttempt(ctx: ExtensionContext, launch: RepairLaunch | Awaited<ReturnType<typeof readRepairArchiveLaunch>>, directory: string, attempt: Attempt | undefined, page = 2, signal?: AbortSignal): Promise<void> {
+	const inspect = (signal: AbortSignal) => openRepairDiagnostics(ctx.ui, launch, directory, { page, signal,
+		...(attempt ? { liveText: () => `${attempt.liveText}\n${attempt.liveStatus}`, subscribeLive: (refresh: () => void) => {
 			attempt.listeners.add(refresh); return () => { attempt.listeners.delete(refresh); };
+		}, subscribe: (refresh: () => void) => {
+			attempt.transcriptListeners.add(refresh); return () => { attempt.transcriptListeners.delete(refresh); };
 		} } : {}),
-	}));
+	});
+	if (signal) await inspect(signal);
+	else await inRepairView(attempt, inspect);
 }
 
 /** Presentation-only identities never enter ordinary Agent routing or scheduling. */
@@ -107,14 +112,17 @@ export const repairNavigation = {
 	async host(ctx: ExtensionCommandContext, owner: boolean): Promise<boolean> {
 		const host = readRepairHost(ctx.sessionManager);
 		if (!host) return false;
-		const launch = await readRepairArchiveLaunch(host.bootstrapPath);
 		const attempt = findAttempt(host.ownerPath, host.attemptId);
-		let page: number | undefined = owner ? 1 : undefined;
-		if (!owner) await inRepairView(attempt, async (signal) => {
-			const selected = await ctx.ui.select("Workflow repair · read-only navigation", ["Repair Moderator · live transcript", "Owner · immutable snapshot"], { signal });
-			if (selected) page = selected.startsWith("Owner") ? 1 : 2;
+		await inRepairView(attempt, async (signal) => {
+			const launch = await readRepairArchiveLaunch(host.bootstrapPath);
+			if (signal.aborted) return;
+			let page: number | undefined = owner ? 1 : undefined;
+			if (!owner) {
+				const selected = await ctx.ui.select("Workflow repair · read-only navigation", ["Repair Moderator · live transcript", "Owner · immutable snapshot"], { signal });
+				if (selected) page = selected.startsWith("Owner") ? 1 : 2;
+			}
+			if (page !== undefined && !signal.aborted) await inspectAttempt(ctx, launch, dirname(host.bootstrapPath), attempt, page, signal);
 		});
-		if (page !== undefined) await inspectAttempt(ctx, launch, dirname(host.bootstrapPath), attempt, page);
 		return true;
 	},
 	async entries(ctx: ExtensionCommandContext) {
@@ -279,8 +287,9 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 					launched.ui.setWidget("workflow-repair-live", ["Repair Moderator · streaming (read-only)", sanitizeReportTerminalText(launched.liveStatus || launched.liveText.slice(-240))]);
 					for (const refresh of launched.listeners) refresh();
 				},
+				onTranscript: () => { for (const refresh of launched?.transcriptListeners ?? []) refresh(); },
 			});
-			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true, switchTarget: hostPath, liveText: "", liveStatus: "", listeners: new Set() };
+			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true, switchTarget: hostPath, liveText: "", liveStatus: "", listeners: new Set(), transcriptListeners: new Set() };
 			presentation = launched;
 			attempts.set(attemptId, launched);
 			closeRepairInput(runtime.session);
@@ -290,7 +299,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 					humanWait.add(ownerPath);
 					if (launched) launched.switchTarget = ownerPath;
 				},
-				admission: (fresh) => isOwnerAdmitted(fresh.sessionManager), helper: {
+				admission: (fresh) => { if (launched) launched.ui = fresh.ui; return isOwnerAdmitted(fresh.sessionManager); }, helper: {
 					async repair() {
 						const result = await helper.request("retired") as { status?: string };
 						if (result?.status !== "committed") throw new Error("Helper did not acknowledge a durable commit");

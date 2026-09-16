@@ -19,7 +19,7 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 	while (!await predicate()) { if (Date.now() > end) throw new Error(`Timed out: ${label}`); await delay(25); }
 }
 
-for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "cancel", "helper-kill", "idle-human", "live-navigation"] as const) {
+for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "cancel", "command-cancel", "helper-kill", "idle-human", "live-navigation"] as const) {
 test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip: process.platform === "win32" }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "repair-cli-"));
 	const agentDir = join(root, "agent");
@@ -33,7 +33,10 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		if (!request.tools.some((tool) => JSON.stringify(tool).includes("repair_snapshot"))) { ordinaryRequests++; return "Ordinary conversation remains usable."; }
 		repairRequests++;
 		assert.deepEqual(request.tools.map((tool) => (tool as { function: { name: string } }).function.name).sort(), ["repair_candidate", "repair_report", "repair_snapshot"]);
-		if (scenario === "cancel" || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
+		if (scenario === "cancel" || scenario === "command-cancel" || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
+		if (scenario === "live-navigation" && repairRequests === 1) return new Promise((resolve) => {
+			releaseModel = () => resolve({ name: "repair_snapshot", arguments: { id: "file-0" } });
+		});
 		if (scenario === "live-navigation" && repairRequests === 3) return new Promise((resolve) => {
 			releaseModel = () => resolve({ name: "repair_report", arguments: { kind: "complete", text: "Only exact redundant Delivery removed." } });
 		});
@@ -151,9 +154,9 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			assert.equal(JSON.parse(await readFile(join(root,"ping.json"),"utf8")).nativeManagerReplaced, false);
 			return;
 		}
-		if (scenario === "cancel") { await until(() => repairRequests > 0, "model started"); terminal.write("\u001b"); }
+		if (scenario === "cancel" || scenario === "command-cancel") { await until(() => repairRequests > 0, "model started"); terminal.write(scenario === "cancel" ? "\u001b" : "/agents repair cancel\r"); }
 		if (scenario === "live-navigation") {
-			await until(() => repairRequests === 3, "held helper after actual streamed tool output");
+			await until(() => repairRequests === 1, "held helper before completed tool output");
 			terminal.write("/repair-test-ping\r");
 			await delay(500);
 			assert.ok(existsSync(join(root, "ping.json")), "repair must leave native slash commands responsive while helper is held");
@@ -165,7 +168,11 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("Repair Moderator"), "repair-only Moderator must be navigable during repair");
 			terminal.write("\r");
 			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("Persisted Moderator transcript"), "actual repair Moderator view");
-			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("[Tool: repair_candidate]"), "actual helper tool stream is visible before completion");
+			releaseModel?.();
+			await until(() => repairRequests === 3, "later candidate tool completed while viewer stays open");
+			await delay(100);
+			terminal.write("\u001b[F");
+			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("Candidate copy written"), "already-open view refreshes actual completed tool result");
 			terminal.write("2");
 			await delay(100);
 			assert.equal(ordinaryRequests, 0, "Owner snapshot navigation starts no turn");
@@ -185,7 +192,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			return !!id && existsSync(join(repairRoot,"hosts",id,"outcome.json"));
 		}, `repair outcome (${root})`);
 		const directory = join(repairRoot,"hosts",id);
-		const refused = ["cleanup-reject","parking-cancel","cancel","helper-kill"].includes(scenario);
+		const refused = ["cleanup-reject","parking-cancel","cancel","command-cancel","helper-kill"].includes(scenario);
 		const outcome = JSON.parse(await readFile(join(directory,"outcome.json"),"utf8"));
 		if (refused) {
 			assert.equal(outcome.outcome,"refused");
@@ -201,8 +208,8 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 				await until(async () => (await readFile(join(root,"terminal.log"),"utf8")).includes("no verified retirement handoff"),"missing ACK refusal");
 				assert.equal(existsSync(join(directory,"admission.jsonl")),false);
 			}
-			if (scenario === "cancel" || scenario === "helper-kill" || scenario === "cleanup-reject") {
-				terminal.write(scenario === "cancel" ? "/agents repair recover\r" : "/agents repair recover-stopped\r");
+			if (scenario === "cancel" || scenario === "command-cancel" || scenario === "helper-kill" || scenario === "cleanup-reject") {
+				terminal.write(scenario === "cancel" || scenario === "command-cancel" ? "/agents repair recover\r" : "/agents repair recover-stopped\r");
 				await until(() => existsSync(join(directory,"admission.jsonl")),"recovery attempts real admission");
 				// Restoring original blocked evidence is safe disk recovery, not successful admission.
 				assert.equal(JSON.parse((await readFile(join(directory,"admission.jsonl"),"utf8")).trim()).admitted,false);
@@ -243,6 +250,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.equal(ordinaryRequests,0,"repair must not automatically resume participants");
 		assert.equal(repairRequests,4);
 		if (scenario === "live-navigation") {
+			assert.equal((await readFile(join(root, "terminal.log"), "utf8")).includes("startup_admission_cancelled"), false, "successful repair handoff is command completion, not cancelled model preflight");
 			const previousOutput = (await readFile(join(root, "terminal.log"), "utf8")).length;
 			terminal.write("/agents\r");
 			await delay(200);

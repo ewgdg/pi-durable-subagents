@@ -47,6 +47,11 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		});
 		pi.on("tool_execution_start", (event) => emit({ type: "activity", text: `\n[Tool: ${event.toolName}]\n` }));
 		pi.on("tool_execution_end", (event) => emit({ type: "activity", text: `\n[${event.toolName}: ${event.isError ? "error" : "complete"}]\n` }));
+		pi.on("message_end", () => {
+			// Pi emits extension message_end before appending the native record.
+			// Notify on the next event-loop boundary, after that dispatch persists it.
+			setImmediate(() => emit({ type: "transcript" }));
+		});
 		const progress = async (message: string) => {
 			await writeRepairRecord(join(directory, "events.jsonl"), { time: new Date().toISOString(), phase, message }, true);
 			emit({ type: "progress", message });

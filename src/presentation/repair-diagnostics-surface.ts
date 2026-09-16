@@ -9,7 +9,8 @@ const MAX_VISIBLE_EVIDENCE_CHARACTERS = 200_000;
 
 /** Inspection never resumes a participant or grants write/application authority. */
 export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: RepairArchiveLaunch, directory: string, options: {
-	page?: number; liveText?(): string; subscribe?(refresh: () => void): () => void; signal?: AbortSignal;
+	page?: number; liveText?(): string; subscribe?(refresh: () => void): () => void;
+	subscribeLive?(refresh: () => void): () => void; signal?: AbortSignal;
 } = {}): Promise<void> {
 	const storageDirectory = join(launch.storageRoot, launch.attemptId);
 	const seals = await readdir(join(storageDirectory, "seals")).catch((error: NodeJS.ErrnoException) => {
@@ -21,16 +22,19 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 		{ label: "Repair Moderator", path: join(directory, "moderator.jsonl") },
 		...(seals.at(-1) ? [{ label: "Validation audit", path: join(storageDirectory, "seals", seals.at(-1)!, "report.txt") }] : []),
 	];
-	const pages = await Promise.all(sources.map(async (source) => {
+	const readPage = async (source: { label: string; path: string }) => {
 		const contents = await readFile(source.path, "utf8").catch((error: NodeJS.ErrnoException) => {
 			if (error.code === "ENOENT") return "Not recorded. No snapshot or proposal is implied."; throw error;
 		});
 		const bounded = contents.length > MAX_VISIBLE_EVIDENCE_CHARACTERS
 			? `[Showing last ${MAX_VISIBLE_EVIDENCE_CHARACTERS} characters. Full evidence remains at the path above.]\n${contents.slice(-MAX_VISIBLE_EVIDENCE_CHARACTERS)}` : contents;
 		return { ...source, contents: sanitizeReportTerminalText(bounded) };
-	}));
+	};
+	const pages = await Promise.all(sources.map(readPage));
 	let unsubscribe = () => {};
+	let unsubscribeLive = () => {};
 	let removeAbort = () => {};
+	let closed = false;
 	if (options.signal?.aborted) return;
 	try { await ui.custom<void>((tui, theme, _keys, done) => {
 		let page = Math.min(options.page ?? 0, pages.length - 1);
@@ -39,7 +43,25 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 		const contents = () => page === 2 && options.liveText
 			? `${sanitizeReportTerminalText(options.liveText())}\n\nPersisted Moderator transcript:\n${pages[page].contents}` : pages[page].contents;
 		const body = new Text(contents(), 0, 0);
-		unsubscribe = options.subscribe?.(() => { body.setText(contents()); tui.requestRender(); }) ?? (() => {});
+		const redraw = () => { if (!closed) { body.setText(contents()); tui.requestRender(); } };
+		let reading = false;
+		let dirty = false;
+		unsubscribe = options.subscribe?.(() => {
+			dirty = true;
+			if (reading) return;
+			reading = true;
+			void (async () => {
+				while (dirty && !closed) {
+					dirty = false;
+					const updated = await Promise.all([readPage(sources[0]), readPage(sources[2])]);
+					if (closed) return;
+					[pages[0], pages[2]] = updated;
+					redraw();
+				}
+			})().catch((error: unknown) => { if (!closed) ui.notify(`Repair transcript refresh failed: ${String(error)}`, "error"); })
+				.finally(() => { reading = false; });
+		}) ?? (() => {});
+		unsubscribeLive = options.subscribeLive?.(redraw) ?? (() => {});
 		const close = () => done();
 		options.signal?.addEventListener("abort", close, { once: true });
 		if (options.signal?.aborted) close();
@@ -71,6 +93,7 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 				else if (matchesKey(data, Key.down)) top++;
 				else if (matchesKey(data, Key.pageUp)) top -= Math.max(1, tui.terminal.rows - 5);
 				else if (matchesKey(data, Key.pageDown)) top += Math.max(1, tui.terminal.rows - 5);
+				else if (matchesKey(data, Key.end)) top = maximumTop;
 				else return;
 				top = Math.max(0, Math.min(top, maximumTop));
 				tui.requestRender();
@@ -78,5 +101,5 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 			invalidate() { body.invalidate(); },
 		};
 	}, { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } });
-	} finally { unsubscribe(); removeAbort(); }
+	} finally { closed = true; unsubscribe(); unsubscribeLive(); removeAbort(); }
 }

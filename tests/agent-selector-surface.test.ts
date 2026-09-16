@@ -18,6 +18,24 @@ import type {
 } from "../src/coordination/workflow-coordinator.ts";
 import { type AgentSelectorOptions, openAgentSelectorSurface } from "../src/presentation/agent-selector-surface.ts";
 
+test("repair presentation row selects read-only UI without any Agent routing action", async () => {
+	const harness = surfaceHarness(24);
+	let selected = false;
+	let routed = false;
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
+		presentations: [{ id: "repair:attempt", label: "Repair Moderator", description: "Read-only archive", select() { selected = true; } }],
+		prepareSelection() { routed = true; },
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+	assert.match(renderPanel(harness.component, 100).join("\n"), /Repair Moderator/);
+	harness.component.handleInput?.("\r");
+	assert.equal(await selection, undefined);
+	assert.equal(selected, true);
+	assert.equal(routed, false);
+});
+
 test("a long Live roster stays bounded and scrolls from the selected Agent", async () => {
 	const live = [
 		agentStatus("owner", "Owner", null),

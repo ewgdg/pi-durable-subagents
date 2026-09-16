@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { startSameTerminalRepair } from "../src/repair/same-terminal-repair.ts";
 
-function fixture(options: { cleanupFailure?: boolean; cancelParking?: boolean; admission?: boolean } = {}) {
+function fixture(options: { cleanupFailure?: boolean; cancelParking?: boolean; admission?: boolean; draft?: string } = {}) {
 	const events: string[] = [];
-	const ui = { getEditorText: () => "", setEditorText() {}, notify: (message: string) => { events.push(message); } };
+	const ui = { getEditorText: () => options.draft ?? "", setEditorText(text: string) { events.push(`draft: ${text}`); }, notify: (message: string) => { events.push(message); } };
 	const fresh = {
 		ui,
 		async switchSession(path: string, { withSession }: { withSession(ctx: unknown): Promise<void> }) {
@@ -55,6 +55,19 @@ test("failed cleanup and cancelled parking cannot start snapshot", async () => {
 		assert.equal(await (await startSameTerminalRepair(options)).completion, "refused");
 		assert.equal(events.includes("snapshot and commit"), false);
 	}
+});
+
+test("handoff returns before helper completion and preserves the repair-host editor draft", async () => {
+	const { options, events } = fixture({ draft: "Human draft not yet submitted" });
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => { release = resolve; });
+	options.helper.repair = async () => { await held; events.push("snapshot and commit"); };
+	const task = await startSameTerminalRepair(options);
+	assert.equal(events.includes("snapshot and commit"), false);
+	assert.equal(events.includes("open owner.jsonl"), false);
+	release();
+	assert.equal(await task.completion, "admitted");
+	assert.ok(events.includes("draft: Human draft not yet submitted"));
 });
 
 test("failed fresh admission records committed data outcome without throwing from replacement", async () => {
