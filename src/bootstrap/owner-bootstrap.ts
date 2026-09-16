@@ -55,6 +55,16 @@ const retirementRegistry = globalThis as typeof globalThis & {
 // Never replace a rejected cleanup result on reload with a no-coordinator claim.
 const ownerRetirements = (retirementRegistry[RETIREMENT_REGISTRY_KEY] ??= new WeakMap());
 
+const ADMISSION_REGISTRY_KEY = "__piAgentCoordinationOwnerAdmissions";
+const admissionRegistry = globalThis as typeof globalThis & {
+	[ADMISSION_REGISTRY_KEY]?: WeakSet<object>;
+};
+const admittedOwners = (admissionRegistry[ADMISSION_REGISTRY_KEY] ??= new WeakSet());
+
+export function isOwnerAdmitted(sessionManager: object): boolean {
+	return admittedOwners.has(sessionManager);
+}
+
 export function ownerRetirementFor(sessionManager: object): OwnerRetirement {
 	const retirement = ownerRetirements.get(sessionManager);
 	if (!retirement) throw new Error("Owner managed-writer cleanup is unknown");
@@ -76,6 +86,7 @@ export async function initializeOwnerWorkflow(options: {
 		ctx.ui,
 	);
 	const nativeSession = runtime.session;
+	admittedOwners.delete(nativeSession.sessionManager);
 	const previousRetirement = ownerRetirements.get(nativeSession.sessionManager);
 	if (previousRetirement) await previousRetirement.cleanupCoordinator();
 	const retirement = new OwnerRetirement(nativeSession);
@@ -179,5 +190,6 @@ export async function initializeOwnerWorkflow(options: {
 			"warning",
 		);
 	}
+	admittedOwners.add(nativeSession.sessionManager);
 	return resolveView;
 }

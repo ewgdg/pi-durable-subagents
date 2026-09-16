@@ -9,10 +9,10 @@ export class ManagedWriterInventory {
 		if (this.#closed) throw new Error("managed_writers_retiring: new launches are closed");
 		const launch = start((exit) => {
 			this.#exits.add(exit);
-			void exit.catch(() => undefined);
+			void exit.then(() => this.#exits.delete(exit), () => undefined);
 		});
 		this.#launches.add(launch);
-		void launch.catch(() => undefined);
+		void launch.finally(() => this.#launches.delete(launch)).catch(() => undefined);
 		return launch;
 	}
 
