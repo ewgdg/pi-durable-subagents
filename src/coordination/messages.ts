@@ -1,7 +1,6 @@
+import { WorkflowRecoveryEvidence } from "./workflow-recovery-evidence.ts";
 import { scheduleDeliveryFailureNotice } from "./delivery-failure-notifications.ts";
-import { findAuthoredSupervisoryResumeMessages } from "../protocol/run-control.ts";
-import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
-import { compareCommittedToolCallOrder, deriveMessageIdentity } from "../protocol/identities.ts";
+import { answerSourceResultRequestId } from "../protocol/request-resolution.ts";
 import type { WorkflowResumeDelivery } from "./workflow-recovery-outcomes.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { resolveAgentMessageReferences } from "../protocol/message-reference.ts";
@@ -115,6 +114,7 @@ export class MessageCoordinator {
 	readonly #boundaryHooks: MessageBoundaryHooks;
 	readonly #deliveryScheduler: MessageDeliveryScheduler;
 	readonly #requestEvidence: RequestEvidence;
+	readonly #recoveryEvidence: WorkflowRecoveryEvidence;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 
@@ -141,6 +141,7 @@ export class MessageCoordinator {
 			this.#quarantinedAgentIds,
 			this.#quarantinedWorkflowAgentIds,
 		);
+		this.#recoveryEvidence = new WorkflowRecoveryEvidence(this.#agents, this.#requestEvidence, this.#quarantinedAgentIds);
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			scheduleDeliveryDispatch: this.#boundaryHooks.scheduleDeliveryDispatch,
@@ -159,68 +160,20 @@ export class MessageCoordinator {
 	}
 
 
-	/** Fixed candidate membership is captured before recovery admits any work. */
 	recoveryMessageCandidates(record: AgentRecord): readonly { messageId: string; authorAgentId: string }[] {
-		const sources = findAuthoredAgentMessageSources({
-			authorAgentId: record.identity.agentId,
-			transcript: record.transcript.inspect(),
-		});
-		const transcript = record.transcript.inspect();
-		return [
-			...sources.map(({ source }) => source),
-			...findAuthoredSupervisoryResumeMessages({ workflowId: record.identity.workflowId, authorAgentId: record.identity.agentId, transcript }).map(message => message.source),
-			...[...this.#agents.values()].flatMap(child =>
-				"spawnSource" in child.identity && child.identity.directSpawnerAgentId === record.identity.agentId
-					? [child.identity.spawnSource]
-					: []),
-		].sort((a, b) => compareCommittedToolCallOrder(transcript, a, b))
-			.map(source => ({ messageId: deriveMessageIdentity(source), authorAgentId: record.identity.agentId }));
+		return this.#recoveryEvidence.messageCandidates(record);
 	}
 
 	recoveryMessage(authorAgentId: string, messageId: string): Message | undefined {
-		const author = this.#requireAgent(authorAgentId);
-		return findAuthoredSupervisoryResumeMessages({
-			workflowId: author.identity.workflowId, authorAgentId, transcript: author.transcript.inspect(),
-		}).find(message => message.messageId === messageId) ??
-			this.#requestEvidence.resolveRecoveryMessage(author, messageId);
+		return this.#recoveryEvidence.message(authorAgentId, messageId);
 	}
 
 	recoveryRequestIds(record: AgentRecord): readonly string[] {
-		return this.#requestEvidence.obligationFrames(record).flatMap(frame => {
-			const request = this.#requestEvidence.findRequest(frame.requestId);
-			// Recovery may continue a retained duty; this is not Request redelivery.
-			if (!request) return [frame.requestId];
-			const resolution = this.#recoveryResolution(request);
-			return resolution.cancellation || resolution.answer ? [] : [frame.requestId];
-		});
+		return this.#recoveryEvidence.requestIds(record);
 	}
 
 	inspectRecoveryMessage(message: Message): WorkflowResumeDelivery | undefined {
-		const recipient = this.#requireAgent(message.targetAgentId);
-		const identity = { messageId: message.messageId, targetAgentId: message.targetAgentId, kind: message.kind };
-		const delivery = message.kind === "answer"
-			? inspectAnswerDelivery({ requesterAgentId: message.targetAgentId, transcript: recipient.transcript.inspect(), answer: message })
-			: inspectMessageDelivery({ recipientAgentId: message.targetAgentId, transcript: recipient.transcript.inspect(), message });
-		const canonical = inspectCanonicalMessage({
-			message, authorTranscript: this.#requireAgent(message.fromAgentId).transcript.inspect(), deliveryEvidence: delivery.deliveryEvidence,
-		});
-		if (canonical.state === "not_created") return { ...identity, disposition: "skipped", reason: "not_created" };
-		if (canonical.state === "indeterminate") return { ...identity, disposition: "indeterminate", reason: "inspection_incomplete" };
-		const resolution = message.kind === "request" ? this.#recoveryResolution(message) : undefined;
-		if (resolution?.cancellation || resolution?.answer) {
-			return { ...identity, disposition: "skipped", reason: "request_resolved" };
-		}
-		if (delivery.deliveryEvidence) return { ...identity, disposition: "skipped", reason: "delivered" };
-		return undefined;
-	}
-
-	#recoveryResolution(request: Extract<Message, { kind: "request" }>) {
-		// Recovery candidates require durable commitment, not the live admission bridge.
-		return inspectCanonicalRequestResolution({
-			request,
-			requesterTranscript: this.#requireAgent(request.fromAgentId).transcript.inspect(),
-			responderTranscript: this.#requireAgent(request.targetAgentId).transcript.inspect(),
-		});
+		return this.#recoveryEvidence.inspectMessage(message);
 	}
 
 	async resumeMessage(message: Message): Promise<WorkflowResumeDelivery> {
@@ -1370,8 +1323,11 @@ export class MessageCoordinator {
 							"awaiting_answer",
 							message.requestId,
 						);
-						if (!this.#requestEvidence.isAnswerAwaitingAuthorResult(message)) {
-							const responder = this.#requireAgent(message.fromAgentId);
+						const responder = this.#requireAgent(message.fromAgentId);
+						const awaitingAuthorResult = answerSourceResultRequestId({
+							transcript: responder.transcript.inspect(), source: message.source,
+						}) === undefined && responder.host.currentHandle() !== undefined && !responder.host.currentRunFailed();
+						if (!awaitingAuthorResult) {
 							void responder.host.lane.run(async () => {
 								responder.host.removeRetentionReason(
 									"answer_owed",

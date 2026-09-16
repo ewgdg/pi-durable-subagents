@@ -29,6 +29,10 @@ export type AgentRecord = {
 	children: string[];
 };
 
+/** Durable evidence readers do not require a running or simulated Agent host. */
+export type AgentEvidence = Pick<AgentRecord,
+	"identity" | "creationInput" | "creationRequest" | "transcript" | "children">;
+
 export type AgentStatus = Readonly<{
 	agentId: string;
 	workflowId: string;
@@ -83,11 +87,11 @@ export function statusOf(
 	};
 }
 
-export function requireAgentRecord(
-	agents: ReadonlyMap<string, AgentRecord>,
+export function requireAgentRecord<Record extends AgentEvidence>(
+	agents: ReadonlyMap<string, Record>,
 	quarantinedAgentIds: ReadonlySet<string>,
 	agentId: string,
-): AgentRecord {
+): Record {
 	const record = agents.get(agentId);
 	if (record) return record;
 	if (quarantinedAgentIds.has(agentId)) {
@@ -102,7 +106,7 @@ export async function refreshAgentTranscripts(records: Iterable<AgentRecord>): P
 }
 
 /** No await may cross this observation: the next event-loop turn must read again. */
-export function withAgentTranscriptObservations<T>(records: Iterable<AgentRecord>, work: () => T, inspections?: ReadonlyMap<AgentRecord, TranscriptInspection>): T {
+export function withAgentTranscriptObservations<T, Record extends AgentEvidence>(records: Iterable<Record>, work: () => T, inspections?: ReadonlyMap<Record, TranscriptInspection>): T {
 	return AgentTranscript.withObservations(
 		Array.from(records, record => [record.transcript, inspections?.get(record)] as const),
 		work,
