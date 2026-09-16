@@ -121,14 +121,21 @@ export class SessionStartupAdmission {
 				if (this.whenAvailable) return Promise.reject(new StartupPreparationBusyError(this.whenAvailable));
 				return originalPrompt.call(session, text, options);
 			}
+			// Pi reports successful registered-command completion as preflight(true),
+			// even when that command retired this session. It will not start a model.
+			// Capture the exact stock lookup before the command can replace its runner;
+			// native agent.prompt still checks cancellation if the command starts work.
+			const spaceIndex = text.indexOf(" ");
+			const completesCommand = (options?.expandPromptTemplates ?? true) && text.startsWith("/") &&
+				session.extensionRunner.getCommand(spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex)) !== undefined;
 			return this.#prompt(() => originalPrompt.call(session, text, {
 				...options,
 				preflightResult: success => {
 					const invocation = this.#invocations.getStore()!;
 					try {
-						if (success) this.#checkpoint(invocation);
+						if (success && !completesCommand) this.#checkpoint(invocation);
 						options?.preflightResult?.(success);
-						if (success) this.#checkpoint(invocation);
+						if (success && !completesCommand) this.#checkpoint(invocation);
 					} finally { this.#release(invocation); }
 				},
 			}));
