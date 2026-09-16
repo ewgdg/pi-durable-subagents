@@ -54,8 +54,27 @@ model report, synthetic diagnostic, or a repaired record that never blocked.
   input retirement or mutation. Configuration failures refuse separately.
 - Added red/green admitted-Owner command tests and real CLI no-op cases. Rebuilt
   positive CLI fixture from strict duplicate-Delivery admission failure; its
-  expected successful repair currently fails against the old validator, as
-  intended pending the isolated certificate implementation.
+  expected successful repair failed against the old validator, then passed
+  after integration of the independently reviewed certificate at `9eda9cb`.
+- Helper now certifies the sealed full generation before any model call. It
+  passes correction constraints, never prewrites the deterministic reference
+  into candidate files. Actual Moderator tool calls propose the correction;
+  final validation independently recomputes the certificate.
+- All 12 actual CLI scenarios pass: healthy/rejected-only/configuration no-op,
+  actual blocked admission and correction, preservation of older rejected work
+  and dormant child evidence, repeat no-op, bash/cleanup/parking cancellation,
+  postcommit admission failure, acknowledged cancellation recovery and killed
+  helper recovery. Restoring blocked originals correctly remains unadmitted.
+- Strict new helper startup refuses old pre-gate launch records. The separately
+  approved archive reader permits only inspection/existing-journal recovery.
+- Focused checks pass: 41 validator/native, 30 bootstrap (known capacity baseline
+  excluded), 3 helper-process, 8 retirement/lifecycle, 7 diagnostic-surface,
+  22 storage, 9 process-factory (known Moderator timeout excluded), 7 package
+  contract tests, plus typecheck. No full suite was run.
+- Actual npm-packed `node_modules` smoke passed 3 cases: blocked duplicate
+  correction, older rejected-history preservation, and rejected-only no-op.
+  Independent lifecycle retarget review is requested against `0c3c14b`; final
+  closure remains pending. Parent owns final current-document/PR consolidation.
 
 ## Decisions
 
