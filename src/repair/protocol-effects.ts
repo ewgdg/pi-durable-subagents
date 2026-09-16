@@ -8,7 +8,7 @@ import { inspectCoordinationRejections, isCoordinationEvidenceTool, type Coordin
 import { findAuthoredAgentMessageSources } from "../protocol/request-resolution.ts";
 import { indexedState } from "../transcript/retained-transcript.ts";
 
-export type ProtocolEffectCategory = "record" | "authored_message" | "answer_commitment" | "delivery" | "answer_duty" | "awaiting_answer" | "pending_delivery" | "continuation";
+export type ProtocolEffectCategory = "record" | "accepted_source_order" | "authored_message" | "answer_commitment" | "delivery" | "answer_duty" | "awaiting_answer" | "pending_delivery" | "pending_delivery_order" | "continuation";
 export type ProtocolEffect = Readonly<{ category: ProtocolEffectCategory; key: string; value: Readonly<Record<string, unknown>> }>;
 export type ProtocolEffectChange = Readonly<{
 	category: ProtocolEffectCategory; key: string;
@@ -44,10 +44,13 @@ export function inspectProtocolEffects(agents: ReadonlyMap<string, AgentEvidence
 			const rejected = inspectCoordinationRejections(transcript, agentId);
 			rejections.push(...rejected);
 			const rejectedBySource = new Map(rejected.map(item => [`${item.source.entryId}:${item.source.toolCallId ?? ""}`, item]));
+			const acceptedSourceKeys: string[] = [];
 			const record = (entryId: string, value: unknown, toolCallId?: string) => {
 				const source = { agentId, entryId, ...(toolCallId === undefined ? {} : { toolCallId }) };
 				const rejection = rejectedBySource.get(`${entryId}:${toolCallId ?? ""}`);
-				put("record", `${agentId}:${entryId}:${toolCallId ?? ""}`, {
+				const sourceKey = `${agentId}:${entryId}:${toolCallId ?? ""}`;
+				if (!rejection) acceptedSourceKeys.push(sourceKey);
+				put("record", sourceKey, {
 					source, path: transcript.transcriptPath, status: rejection ? "rejected" : "accepted", value,
 					...(rejection ? { diagnostic: rejection.diagnostic } : {}),
 				});
@@ -63,6 +66,8 @@ export function inspectProtocolEffects(agents: ReadonlyMap<string, AgentEvidence
 					record(entry.id, entry);
 				}
 			}
+			// Physical entry order and same-entry call order are authority; unrelated content positions are not.
+			put("accepted_source_order", agentId, { agentId, path: transcript.transcriptPath, sourceKeys: acceptedSourceKeys });
 		});
 		inspect(() => {
 			const relationships = recovery.requests.residualRelationshipsFor(agent);
@@ -71,6 +76,7 @@ export function inspectProtocolEffects(agents: ReadonlyMap<string, AgentEvidence
 			for (const requestId of recovery.requestIds(agent)) put("continuation", `${agentId}:${requestId}`, { agentId, requestId });
 		});
 		inspect(() => {
+			const pendingMessageIds: string[] = [];
 			for (const candidate of recovery.messageCandidates(agent)) {
 				const message = recovery.message(candidate.authorAgentId, candidate.messageId);
 				if (!message) continue;
@@ -80,8 +86,13 @@ export function inspectProtocolEffects(agents: ReadonlyMap<string, AgentEvidence
 				}
 				if (outcome?.reason === "not_created") continue;
 				put("authored_message", message.messageId, { ...message });
-				if (!outcome) put("pending_delivery", message.messageId, { ...message });
+				if (!outcome) {
+					put("pending_delivery", message.messageId, { ...message });
+					pendingMessageIds.push(message.messageId);
+				}
 			}
+			// Keep the shared recovery selector's per-author order, not the audit map's presentation sort.
+			put("pending_delivery_order", agentId, { agentId, messageIds: pendingMessageIds });
 		});
 		inspect(() => {
 			// Recovery deliberately omits orphan Answers. Local commitment still matters and is audited separately.

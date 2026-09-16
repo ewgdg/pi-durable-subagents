@@ -21,7 +21,7 @@ function fixture() {
 		agentId: "child", workflowId: "owner", directSpawnerAgentId: "owner", creationPreset: null,
 		spawnSource: { agentId: "owner", entryId: spawnEntry, toolCallId: "spawn" }, metadata: { label: "Child" },
 	});
-	return { owner, child, files: () => [file(ownerPath, owner), file(childPath, child)] };
+	return { owner, child, spawnEntry, files: () => [file(ownerPath, owner), file(childPath, child)] };
 }
 function file(path: string, manager: SessionManager) {
 	return { path, contents: [manager.getHeader(), ...manager.getEntries()].map(value => JSON.stringify(value)).join("\n") + "\n" };
@@ -48,6 +48,11 @@ test("correcting a rejected Request exposes newly deliverable external work", as
 	f.owner.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: "publish",
 		content: [], isError: false, timestamp: 1,
 		details: { requestMessageId: requestId, targetAgentId: "child", messageStatus: "sent" } });
+	const followEntry = f.owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message",
+		{ operation: "send", targetAgent: "child", content: "Follow up after release" }, { id: "follow" })));
+	const followId = deriveMessageIdentity({ agentId: "owner", entryId: followEntry, toolCallId: "follow" });
+	f.owner.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: "follow", content: [], isError: false,
+		timestamp: 1, details: { messageId: followId, targetAgentId: "child", messageStatus: "sent" } });
 	const before = f.files();
 	const after = before.map(value => ({ ...value, contents: value.contents.replace('"question":"Publish the release"',
 		'"question":"Publish the release","title":"Publish release"') }));
@@ -56,6 +61,10 @@ test("correcting a rejected Request exposes newly deliverable external work", as
 	assert.equal(report.protocolEffects.beforeStatus, "known");
 	assert.ok(report.protocolEffects.changes.some(change => change.category === "pending_delivery" && change.after?.messageId === requestId));
 	assert.ok(report.protocolEffects.changes.some(change => change.category === "record" && change.before?.status === "rejected" && change.after?.status === "accepted"));
+	const order = report.protocolEffects.changes.find(change => change.category === "pending_delivery_order" && change.key === "owner");
+	const creationRequestId = deriveMessageIdentity({ agentId: "owner", entryId: f.spawnEntry, toolCallId: "spawn" });
+	assert.deepEqual(order?.before?.messageIds, [creationRequestId, followId]);
+	assert.deepEqual(order?.after?.messageIds, [creationRequestId, requestId, followId]);
 });
 
 test("certification rejects rejected records, omitted candidates and unknown native structure", async () => {
@@ -66,6 +75,81 @@ test("certification rejects rejected records, omitted candidates and unknown nat
 	assert.equal((await validate(before, f.files())).valid, false);
 	const broken = before.map(value => ({ ...value, contents: value.contents + '{"type":"message"}\n' }));
 	assert.equal((await validate(before, broken)).valid, false);
+});
+
+test("repair cannot reverse accepted calls within one assistant entry", async () => {
+	const f = fixture();
+	const entryId = f.owner.appendMessage(fauxAssistantMessage([
+		fauxToolCall("agent_message", { operation: "send", targetAgent: "child", content: "First" }, { id: "first" }),
+		fauxToolCall("agent_message", { operation: "send", targetAgent: "child", content: "Second" }, { id: "second" })]));
+	for (const toolCallId of ["first", "second"]) {
+		f.owner.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId, content: [], isError: false,
+			timestamp: 1, details: { messageId: deriveMessageIdentity({ agentId: "owner", entryId, toolCallId }),
+				targetAgentId: "child", messageStatus: "sent" } });
+	}
+	const before = f.files();
+	assert.equal((await validate(before)).valid, true);
+	const after = before.map(value => ({ ...value, contents: value.contents.split("\n").map(line => {
+		if (!line) return line;
+		const entry = JSON.parse(line);
+		if (entry.id === entryId) entry.message.content.reverse();
+		return JSON.stringify(entry);
+	}).join("\n") }));
+	const report = await validate(before, after);
+	assert.equal(report.valid, false);
+	assert.ok(report.errors.some(error => error.code === "accepted_evidence_reordered"));
+	assert.ok(report.protocolEffects.changes.some(change => change.category === "pending_delivery_order"));
+});
+
+test("repair cannot reverse accepted source order across native entries", async () => {
+	const f = fixture();
+	const entryIds = ["first", "second"].map(toolCallId => f.owner.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_message", { operation: "send", targetAgent: "child", content: toolCallId }, { id: toolCallId }))));
+	for (const [index, toolCallId] of ["first", "second"].entries()) {
+		f.owner.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId, content: [], isError: false,
+			timestamp: 1, details: { messageId: deriveMessageIdentity({ agentId: "owner", entryId: entryIds[index]!, toolCallId }),
+				targetAgentId: "child", messageStatus: "sent" } });
+	}
+	const before = f.files();
+	assert.equal((await validate(before)).valid, true);
+	const after = before.map(value => {
+		if (value.path !== ownerPath) return value;
+		const [header, ...entries] = value.contents.trim().split("\n").map(line => JSON.parse(line));
+		const first = entries.findIndex(entry => entry.id === entryIds[0]);
+		const second = entries.findIndex(entry => entry.id === entryIds[1]);
+		[entries[first], entries[second]] = [entries[second], entries[first]];
+		// Preserve a valid native chain so this exercises protocol order, not native reference refusal.
+		entries.forEach((entry, index) => { entry.parentId = entries[index - 1]?.id ?? null; });
+		return { ...value, contents: [header, ...entries].map(entry => JSON.stringify(entry)).join("\n") + "\n" };
+	});
+	const report = await validate(before, after);
+	assert.equal(report.valid, false);
+	assert.deepEqual(report.errors.map(error => error.code), ["accepted_evidence_reordered"]);
+	assert.ok(report.protocolEffects.changes.some(change => change.category === "pending_delivery_order"));
+});
+
+test("moving unrelated content around accepted calls does not change protocol order", async () => {
+	const f = fixture();
+	const entryId = f.owner.appendMessage(fauxAssistantMessage([
+		{ type: "text", text: "Unrelated explanation" },
+		fauxToolCall("agent_message", { operation: "send", targetAgent: "child", content: "First" }, { id: "first" }),
+		fauxToolCall("agent_message", { operation: "send", targetAgent: "child", content: "Second" }, { id: "second" })]));
+	for (const toolCallId of ["first", "second"]) {
+		f.owner.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId, content: [], isError: false,
+			timestamp: 1, details: { messageId: deriveMessageIdentity({ agentId: "owner", entryId, toolCallId }),
+				targetAgentId: "child", messageStatus: "sent" } });
+	}
+	const before = f.files();
+	const after = before.map(value => ({ ...value, contents: value.contents.split("\n").map(line => {
+		if (!line) return line;
+		const entry = JSON.parse(line);
+		if (entry.id === entryId) entry.message.content.push(entry.message.content.shift());
+		return JSON.stringify(entry);
+	}).join("\n") }));
+	const report = await validate(before, after);
+	assert.equal(report.valid, true, JSON.stringify(report.errors));
+	assert.equal(report.changes.length, 1);
+	assert.deepEqual(report.protocolEffects.changes, []);
 });
 
 test("unprojectable original is unknown, not an empty set of effects", async () => {

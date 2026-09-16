@@ -79,6 +79,16 @@ export async function validateRepairProposal(options: {
 	const beforeKnown = before.errors.length === 0;
 	const protocolChanges = diffProtocolEffects(before.effects.facts, after.effects.facts);
 	for (const change of protocolChanges) {
+		if (change.category === "accepted_source_order" && change.before) {
+			const originalKeys = change.before.sourceKeys as readonly string[];
+			const originalSources = new Set(originalKeys);
+			const candidateKeys = (change.after?.sourceKeys ?? []) as readonly string[];
+			// Correcting rejected sources may insert newly accepted evidence, but may not reorder existing authority.
+			if (!isDeepStrictEqual(originalKeys, candidateKeys.filter(key => originalSources.has(key)))) {
+				errors.push({ path: typeof change.before.path === "string" ? change.before.path : undefined,
+					code: "accepted_evidence_reordered", message: `Repair must preserve relative accepted coordination source order: ${change.key}` });
+			}
+		}
 		if (change.category === "record" && change.before?.status === "accepted" &&
 			(!change.after || !isDeepStrictEqual(change.before.value, change.after.value))) {
 			errors.push({ path: typeof change.before.path === "string" ? change.before.path : undefined,
