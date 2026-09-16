@@ -6,7 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { REPAIR_BOOTSTRAP_ENV, REPAIR_TOOL_NAMES } from "./helper-process.ts";
 import { readRepairLaunch, writeRepairRecord } from "./repair-launch.ts";
 import { createRepairSnapshot, recoverRepair, type RepairSnapshot } from "./storage.ts";
-import { validateRepairProposal, readRepairOwnerIdentity } from "./workflow-validation.ts";
+import { validateRepairProposal, readRepairOwnerIdentity, prepareDuplicateDeliveryRepair } from "./workflow-validation.ts";
 
 const REPAIR_PROMPT = `You are a repair-only Moderator belonging to the verified Workflow in your bootstrap.
 The Owner actually failed transcript admission. Inspect the immutable full Workflow snapshots and the retained admission failure.
@@ -92,6 +92,12 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 					retirement: { verified: true, evidence: "Host verified original coordinator cleanup, native bash/abort/idle joins and completed unrelated-session replacement before IPC handoff." } });
 				const identity = readRepairOwnerIdentity(await snapshot.readSnapshot("file-0"), launch.owner.path);
 				if (identity.workflowId !== launch.owner.workflowId || identity.sessionId !== launch.owner.sessionId || identity.identityEntryId !== launch.owner.identityEntryId) throw new Error("Retired snapshot Owner identity differs from the authorized launch");
+				const originalFiles = await Promise.all(snapshot.manifest.files.map(async ({ id, path }) => ({ path, contents: await snapshot!.readSnapshot(id) })));
+				const preparation = await prepareDuplicateDeliveryRepair({ ownerPath: launch.owner.path, workflowId: launch.owner.workflowId, files: originalFiles });
+				await writeRepairRecord(join(directory, "eligibility.json"), { eligible: preparation.eligible, errors: preparation.errors, certificate: preparation.certificate });
+				if (!preparation.eligible) throw new Error(`Unsupported admission repair: ${preparation.errors.map(({ message }) => message).join("; ")}`);
+				// The deterministic reference is validation authority, not a prewritten
+				// model proposal. Candidate files remain untouched until scoped tool use.
 				const manifestDigest = createHash("sha256").update(JSON.stringify(snapshot.manifest)).digest("hex");
 				const bootstrap = { version: 1, kind: "repair_moderator", agentId: launch.moderatorAgentId,
 					workflowId: identity.workflowId, directSpawnerAgentId: null, creationPreset: launch.creationPreset,
@@ -102,7 +108,7 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 				phase = "model";
 				await progress("Writers retired. Verified Workflow-owned repair Moderator inspecting immutable snapshots.");
 				const settled = new Promise<void>((resolve) => { resolveModel = resolve; });
-				pi.sendUserMessage(`Repair attempt ${launch.attemptId}; verified Workflow ${identity.workflowId}; Moderator ${launch.moderatorAgentId}. Actual admission failure: ${JSON.stringify(launch.admissionFailure)}. Inspect the full snapshot set and propose only the supported exact-duplicate Delivery correction or refuse. Existing rejected historical records must remain unchanged.`);
+				pi.sendUserMessage(`Repair attempt ${launch.attemptId}; verified Workflow ${identity.workflowId}; Moderator ${launch.moderatorAgentId}. Actual admission failure: ${JSON.stringify(launch.admissionFailure)}. Supported correction constraints: ${JSON.stringify(preparation.certificate)}. Inspect the full snapshot set and propose only the supported exact-duplicate Delivery correction or refuse. Existing rejected historical records must remain unchanged.`);
 				await settled;
 				resolveModel = undefined;
 				if (cancelled || !completed) throw new Error(cancelled ? "Repair cancelled or refused by Moderator" : "Moderator settled without a complete repair proposal");

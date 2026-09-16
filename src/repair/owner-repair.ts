@@ -10,7 +10,7 @@ import { captureAgentCreationPreset, selectAgentTemplateForCreation } from "../t
 import { defaultAgentTemplateRoots, discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
 import { launchRepairHelper, type IndependentRepairHelper } from "./helper-process.ts";
 import { createRepairHost, readRepairHost, type RepairHost } from "./repair-host.ts";
-import { readRepairArchiveLaunch, writeRepairRecord, type RepairLaunch } from "./repair-launch.ts";
+import { readRepairArchiveLaunch, writeRepairRecord, isSupportedAdmissionFailureReason, type RepairLaunch } from "./repair-launch.ts";
 import { runSameTerminalRepair, type RepairOutcome } from "./same-terminal-repair.ts";
 import { readRepairOwnerIdentity } from "./workflow-validation.ts";
 import { closeRepairInput } from "./input-retirement.ts";
@@ -168,7 +168,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 			const failure = admissionFailure(ctx.sessionManager);
 			if (!failure) throw new Error("Transcript repair is unavailable: no actual transcript admission failure is retained. Configuration, model, and cleanup failures require their own diagnostics.");
 			if (failure.agentId !== ctx.sessionManager.getSessionId() || failure.transcriptPath !== ctx.sessionManager.getSessionFile()) throw new Error("Admission failure does not belong to this exact Owner session");
-			if (failure.protocolError.message !== "invariant_violation: Message has duplicate Deliveries") throw new Error("Unsupported transcript admission failure: only exact duplicate Message Delivery envelopes can currently be repaired");
+			if (!isSupportedAdmissionFailureReason(failure.protocolError.message)) throw new Error("Unsupported transcript admission failure: only exact duplicate Message Delivery envelopes can currently be repaired");
 			if (process.platform === "win32") throw new Error("Workflow repair currently requires POSIX file durability; Windows is not supported");
 			const sessionPath = ctx.sessionManager.getSessionFile();
 			if (!sessionPath) throw new Error("Repair requires a persisted Owner transcript");

@@ -66,7 +66,21 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		rejectedEntry = owner.getEntries().find((entry) => entry.id === id);
 	}
 	owner.appendMessage(fauxAssistantMessage("Later work is complete. Do not resurrect the obsolete request."));
+	let childPath: string | undefined;
+	let childContents: string | undefined;
 	if (!noRepair) {
+		const childId = randomUUID();
+		const spawnEntry = owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Existing reader", request: "Read the synthetic note only.", label: "Reader" }, { id: "existing-spawn" })));
+		const child = SessionManager.inMemory(root, { id: childId });
+		child.appendCustomEntry("agent-coordination.identity", { agentId: childId, workflowId: ownerId, directSpawnerAgentId: ownerId, creationPreset: null,
+			spawnSource: { agentId: ownerId, entryId: spawnEntry, toolCallId: "existing-spawn" }, metadata: { label: "Reader" } });
+		child.appendModelChange(server.provider, server.modelId);
+		child.appendThinkingLevelChange("off");
+		const participants = join(root, "pi-agent-coordination", Buffer.from(ownerId).toString("base64url"));
+		await mkdir(participants, { recursive: true });
+		childPath = join(participants, "reader.jsonl");
+		childContents = [child.getHeader(), ...child.getEntries()].map(entry => JSON.stringify(entry)).join("\n") + "\n";
+		await writeFile(childPath, childContents);
 		const callId = "duplicate-delivery-source";
 		const entryId = owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: ownerId, title: "Read garden note", question: "Summarize the synthetic garden note." }, { id: callId })));
 		const source = { agentId: ownerId, entryId, toolCallId: callId };
@@ -173,6 +187,8 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.equal(snapshot.split('"customType":"agent-coordination.message-delivery"').length-1,2);
 		const repaired = await readFile(ownerPath,"utf8");
 		assert.equal(repaired.split('"customType":"agent-coordination.message-delivery"').length-1,1);
+		assert.equal(await readFile(childPath!, "utf8"), childContents, "dormant child must remain unchanged");
+		assert.equal(await readFile(join(repairRoot, "storage", id, "snapshot", "file-1"), "utf8"), childContents);
 		if (scenario === "bash") assert.match(snapshot,/"cancelled":true/);
 		if (rejectedEntry) {
 			assert.deepEqual(repaired.trim().split("\n").map(line=>JSON.parse(line)).find(entry=>entry.id===(rejectedEntry as {id:string}).id),rejectedEntry);

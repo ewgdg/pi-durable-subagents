@@ -20,6 +20,11 @@ export type RepairLaunch = Readonly<{
 
 export type RepairArchiveLaunch = Omit<RepairLaunch, "admissionFailure"> & Partial<Pick<RepairLaunch, "admissionFailure">>;
 
+export function isSupportedAdmissionFailureReason(reason: string): boolean {
+	// Strict readers expose both a whole-index error and an individual Message ID.
+	return /^invariant_violation: Message(?: .+)? has duplicate Deliveries$/.test(reason);
+}
+
 /** Archive-only reader: old journals must remain recoverable, never restartable. */
 export async function readRepairArchiveLaunch(path: string): Promise<RepairArchiveLaunch> {
 	const value = JSON.parse(await readFile(path, "utf8")) as RepairArchiveLaunch;
@@ -38,7 +43,7 @@ export async function readRepairLaunch(path: string): Promise<RepairLaunch> {
 	const value = await readRepairArchiveLaunch(path);
 	const failure = value.admissionFailure;
 	if (!failure || failure.transcriptPath !== value.owner.path || failure.agentId !== value.owner.workflowId ||
-		failure.reason !== "invariant_violation: Message has duplicate Deliveries" ||
+		typeof failure.reason !== "string" || !isSupportedAdmissionFailureReason(failure.reason) ||
 		typeof failure.stage !== "string" || !failure.stage.trim()) {
 		throw new Error("New repair helper requires a supported actual admission failure binding; archived attempts are recovery-only");
 	}
