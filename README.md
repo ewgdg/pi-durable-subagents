@@ -22,6 +22,7 @@ Select a subagent to enter its complete Pi session and interact with it directly
 - **Run supervision:** Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe`, then interrupt, explicitly resume, or terminate exact Runs with `agent_control`.
 - **Operational incident handling:** one bounded runtime reminder recovers simple forgotten Answers before isolated Moderators handle persistent Obligation Stalls, overdue answer obligations, answer-obligated Run Failures, closed live Dependency Deadlocks, and stalled deliveries blocking upstream obligations. Review renewal, Run control, Owner escalation, and Resolution are policy-bounded and mechanically gated.
 - **Durable recovery:** a fresh host reconstructs verified authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work.
+- **Transcript repair:** `/agents repair` authorizes a Workflow-owned repair Moderator in the same terminal, with validated copies, backups, and commit-before-reopen recovery. No extra confirmation or upstream changes; currently POSIX only. See [repair operations](docs/workflow-repair-operations.md).
 
 Coordination does not override Pi's user-configured compaction, retry, provider-retry, or transport behavior. One failed Moderator may be replaced once; a second failure creates passive, Owner-only Operational Attention.
 
@@ -128,7 +129,8 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 
 - [Owner Workflow](docs/owner-workflow.md) — activation and compatibility behavior
 - [Owner blockage diagnostics](docs/owner-blockage-diagnostics.md) — persistent admission failure status and `/agents diagnostics`
-- [Transcript repair design](docs/workflow-transcript-repair-design.md) — proposed Workflow-owned repair Moderator and validated replacement; not implemented
+- [Workflow repair operations](docs/workflow-repair-operations.md) — `/agents repair`, same-terminal repair Moderator, cancellation, and recovery
+- [Transcript repair contract](docs/workflow-transcript-repair-design.md) — writer retirement, validation/audit, commit-before-reopen, and supported limits
 - [Operational Incident moderation](docs/operational-incident-moderation.md) — trigger detection, bounded handling, Moderator authority, Resolution, and recovery
 - [Cold host recovery](docs/cold-host-recovery.md) — transcript discovery, quarantine, dormant rosters, and residual Requests
 - [Workflow Policy](docs/workflow-policy.md) — reloadable execution, delivery, and review limits

@@ -152,6 +152,24 @@ The accepted lifecycle and twelve bounded proof cases are recorded in
 repair feature: its Python helper, test-only cleanup observer, simulated review,
 and SDK-backed Owner do not satisfy the production acceptance criteria above.
 
-Implementation interfaces and platform support remain to be recorded after the
-production integration review. Do not silently weaken a safety requirement to
-fit the prototype.
+The implemented contract is now recorded in
+`docs/workflow-transcript-repair-design.md`, with operator commands in
+`docs/workflow-repair-operations.md`. Historical process-exit/Python proposals are
+not alternate runtime paths. The shipped implementation is Node-only and
+same-terminal; durable storage currently refuses Windows. Cross-restart recovery
+uses an explicit operator-stopped attestation, distinct from actual observed
+process exit, and never fabricates missing initial handoff evidence.
+
+## Final acceptance
+
+- Parent independently reran `npm run typecheck` and
+  `npm run test:process -- --file=repair-cli.test.ts` against integrated code at
+  `3d653ae`: both passed, including all eleven CLI cases (19.031 seconds for the
+  CLI invocation). No full suite was run.
+- Independent core review closed the recovery-report dependency and accepted
+  evidence ordering findings; lifecycle review closed missing-handoff recovery,
+  repeat/archived attempt binding, and earlier-bootstrap cleanup retention.
+- README and maintained recovery documentation now describe implemented behavior;
+  the superseded full-automatic design has been removed from the current contract.
+- Code, tests, operations docs, and installed-package smoke are complete. PR
+  publication is the remaining handoff step.
