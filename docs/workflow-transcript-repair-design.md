@@ -7,18 +7,25 @@ recovery, see [Workflow repair operations](workflow-repair-operations.md).
 
 ## Scope
 
-Repair corrects rejected coordination evidence in otherwise verifiable native
-Pi transcripts. It is optional: ordinary [skip-and-mark replay](coordination-replay-rejection-design.md)
-already preserves valid responsibilities while ignoring malformed protocol records.
-Repair is not required merely to use a Workflow with rejected coordination history.
+Repair is only for an **actual current Owner transcript-admission failure**.
+Successful admission returns "no repair needed" before helper creation, model
+work, session replacement or transcript edits. Ordinary
+[skip-and-mark replay](coordination-replay-rejection-design.md) already handles
+rejected records: they remain unchanged and inert. Repair must never turn an old
+rejected Request into newly eligible work after the Workflow has moved on.
 
-The first implementation refuses malformed/unverifiable native originals rather
-than trusting a model to reconstruct missing history. It preserves the file set,
-native identities and identity cutoffs, and accepted coordination sources and
-their relative order. New coordination sources cannot be invented, and accepted
-ones cannot be silently rewritten or removed. Ambiguous intent must be refused.
-It does not migrate historical formats, repair policy/model configuration, or
-implement a general autonomous repair engine.
+The first supported blocker is redundant exact copies of accepted Message
+Delivery envelopes in the Owner's current identity scope. Their duplicate
+authority causes normal admission to fail. A correction may retain the first
+envelope, remove later exact copies, and bypass removed native parent links.
+It cannot choose between conflicting payloads or rewrite historical intent.
+
+Eligibility binds the retained OwnerRecoveryError to the active native session,
+path and identity; a generic unadmitted state is insufficient. Configuration,
+model and cleanup failures are not transcript corrections. The immutable full
+snapshot must independently certify the supported duplicate fault before model
+work. Malformed native originals, unverifiable identity, ambiguous references,
+and other unsupported blockers refuse. This is not a general repair engine.
 
 Certification targets the repository's Pi 0.85.1 native grammar. Unknown native
 variants, including unsupported compaction forms, refuse instead of being silently
@@ -28,12 +35,12 @@ individual coordination records.
 ## Same-terminal lifecycle
 
 ```text
-repair invocation authorizes one attempt
+repair invocation + actual supported transcript admission failure
   -> independent Node/Pi helper starts, with no snapshot/write authority yet
   -> close admission and join supported Owner/managed writers
   -> replace Owner session with an unrelated tagged repair-host session
   -> acknowledge actual cleanup and native session retirement
-  -> immutable snapshot and verified repair Moderator bootstrap
+  -> immutable snapshot, certified blocker, verified repair Moderator bootstrap
   -> candidate copies -> whole-Workflow validation and effect audit
   -> backups, journal, replacement, durable disk commit
   -> open a fresh Owner session from disk in the same CLI terminal
@@ -94,8 +101,9 @@ are not inherited. The preset supplies model/guidance, not extra authority.
 Extension-only model providers are consequently not inherited.
 
 A model's completion report only submits a proposal. The host independently
-seals and validates the generation. The command authorizes an in-scope repair;
-it does not waive identity, retirement, validation, or freshness checks.
+seals and validates the generation. The model receives the retained failure and
+correction constraints, not a prewritten candidate. The command authorizes an
+in-scope repair; it does not waive identity, retirement, validation, or freshness.
 
 ## Validation and protocol-effect audit
 
@@ -108,8 +116,25 @@ Validation is read-only and in-memory: no `SessionManager.open`, model turn,
 runtime initialization, scheduling, or `workflow_resume` is used as a validator.
 The native grammar is checked over all physical entries, including off-branch
 evidence. Shared normal readers evaluate membership, cross-Agent evidence and
-actual recovery eligibility. Candidate certification requires zero quarantine
-and zero rejected coordination evidence.
+actual recovery eligibility. Candidate certification requires zero quarantine;
+unchanged historical rejections are allowed and must remain rejected.
+
+The certificate independently derives the only allowed corrected generation:
+
+- Duplicates must be accepted, whole, current-scope envelopes with exactly equal
+  non-native fields, including literal content, display, and ordered sources.
+  Repeated sources inside one rejected envelope and cross-cutoff copies are not
+  this repair class. Partially overlapping batches and conflicting bodies refuse.
+- Keep the first evidence. Bypass each removed native parent through its original
+  surviving ancestor, and preserve the reopened native leaf. Deleting a tail
+  duplicate must not switch the session to an abandoned branch.
+- Refuse any non-parent or ambiguous reference to a removed entry across the full
+  generation, including compaction boundaries, labels, branch origins, wait
+  receipts, and opaque references. Do not guess how to retarget them.
+- The candidate's header and retained records must equal this reference, with
+  unchanged identities, file membership, call/source content and ordering,
+  rejected payloads, and unrelated conversation. A missing-title "fix" alongside
+  otherwise valid duplicate removal is rejected.
 
 Both full textual differences and protocol-effect differences are retained:
 
@@ -118,14 +143,20 @@ Both full textual differences and protocol-effect differences are retained:
 - Answer commitment separately from Delivery evidence.
 - Pending Message, Request, Answer, and Cancellation deliveries, their recovery
   order, and responder continuations eligible on later explicit recovery.
-- An unknown original projection is labeled unknown, never an empty before-state.
+- The original projection is unknown when duplicate authority blocks replay;
+  its actual errors remain visible. The report separately identifies the
+  certified reference, removed-to-retained mappings, and native parent rewrites.
 
-Concrete risk: correcting a rejected Request can make an external action eligible
-for future delivery. The audit exposes that change; preserving accepted source
-order also prevents an apparently harmless edit from silently changing FIFO.
-Recovered participants remain dormant. Only a later explicit recovery action can
-resume eligible work; repair does not assert an interrupted external action
-never happened.
+The comparison basis is explicitly the certified duplicate reference, not an
+invented empty original projection. A valid retained Delivery may carry an
+existing duty even if its authored source was rejected. Certification preserves
+that duty without making the rejected author into pending dispatch. Candidate
+canonical facts and the unchanged rejection set remain inspectable.
+
+An audit alone does not prevent stale-request resurrection. The permitted-edit
+certificate does: rejected history cannot be corrected, removed, or converted
+into executable evidence. Recovered participants still remain dormant, and
+repair does not assert an interrupted external action never happened.
 
 The audit is inspection evidence, **not another approval gate**. Full reports
 remain on disk even when terminal previews are bounded. Editing a candidate or
@@ -158,17 +189,25 @@ new repair work. See the operations guide for the exact commands.
 
 During unfinished repair, reopen only through the recorded repair-host/recovery
 path. Arbitrary bare Pi attachment is not intercepted. After successful admission,
-a new repair invocation authorizes a new attempt; archived hosts remain tied to
-their exact earlier attempt rather than the latest attempt for the Owner path.
+a new repair invocation is a no-op; archived hosts remain tied to their exact
+earlier attempt. Journal recovery can safely restore the original blocked bytes
+without fixing admission, and must report that distinction.
+
+Pre-admission-only repair artifacts have an isolated archive/recovery reader so
+existing journals are not stranded. Their old launch shape cannot start a new
+helper, snapshot or model turn; the normal launch reader requires the bound
+admission failure. This is recovery handling, not an alternate repair mode.
 
 ## Support and verification
 
 Storage currently requires POSIX file/directory durability; Windows refuses.
-Linux real-CLI tests and packed-package tests verify same-terminal operation,
-managed final writes, native bash, actual rejected-record correction, cleanup
-refusal, initial/fresh admission failure, cancellation, repeat attempts, and
-killed-helper recovery. Focused core tests exercise sealing, freshness, unknown
-hashes, interrupted apply/rollback, and preservation of post-commit native writes.
+Linux real-CLI tests and packed-package tests verify a real blockage widget and
+inactive tools before duplicate correction, followed by fresh admitted Owner in
+the same terminal. They also cover healthy/rejected-only/configuration no-ops,
+unchanged stale rejected history and dormant children, native bash, cleanup
+refusal, postcommit admission failure, cancellation and killed-helper recovery.
+Focused core tests exercise the permitted-edit certificate, sealing, freshness,
+unknown hashes, interrupted apply/rollback, and post-commit native writes.
 They are not a power-loss proof or exhaustive terminal resize/signal coverage.
 
 Implementation modules live under `src/repair/`; operations are documented in
@@ -180,5 +219,6 @@ permanent-launcher/process-exit designs were rejected:
 - [Independent process-exit helper proof](research/independent-repairer-feasibility.md).
 - [Same-terminal session-retirement proof](research/same-terminal-repair-feasibility.md).
 
-The historical requirements for per-changeset confirmation, admission-as-commit,
-and universal pre-open interception are superseded, not alternate runtime paths.
+The earlier rejected-to-accepted correction behavior, per-changeset confirmation,
+admission-as-commit, and universal pre-open interception are superseded, not
+alternate runtime paths.

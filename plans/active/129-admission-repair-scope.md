@@ -82,3 +82,19 @@ model report, synthetic diagnostic, or a repaired record that never blocked.
 Repairing an old rejected Request can resurrect obsolete work on later recovery.
 The prior audit/no-automatic-resume safeguards do not prevent this. Remove that
 behavior rather than add another normalization path or confirmation prompt.
+
+## Final acceptance
+
+- Parent independently ran typecheck, all 12 real CLI repair cases, and all 15
+  admission-certificate tests on integrated `8ee172b`; all passed. The CLI run
+  took 15.056 seconds. No full suite was run.
+- Independent core review verified the certificate's current-scope, exact-envelope,
+  reference, native-leaf, and no-resurrection invariants, including a separate
+  triple-duplicate probe. Independent lifecycle review closed with no blockers.
+- A separate real-model manual scenario has been prepared without modifying the
+  user's earlier open scenario. Its native startup was checked in a supervised
+  PTY: the actual blockage widget appears. Read-only parent verification confirms
+  duplicate Deliveries still block and the old rejected Request remains inert.
+  No model repair has been run against that user input.
+- Current README, repair contract, and diagnostics documentation have been
+  aligned with admission-only scope. PR publication update remains the final step.

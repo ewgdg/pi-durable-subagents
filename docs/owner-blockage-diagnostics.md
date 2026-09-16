@@ -35,9 +35,11 @@ Startup, in-process session resume, and repeated failed-admission `/reload` use 
 
 Partial-recovery quarantined-Agent warnings remain separate from whole-Owner blockage. Their availability claim is emitted only after Owner initialization succeeds.
 
-`/agents repair` is a separate recovery path, available independently of ordinary
-coordination admission when persisted Owner identity and clean writer retirement
-can be verified. Its invocation authorizes the attempt without another prompt.
-It does not override failed cleanup or repair policy/model configuration. See
+`/agents repair` is a separate recovery path for supported actual transcript
+admission failures, initially redundant exact duplicate Delivery envelopes.
+Healthy admitted Workflows and rejected-record-only histories need no repair.
+Persisted Owner identity and clean writer retirement must be verified; invoking
+the command authorizes the attempt without another prompt. Rejected history
+stays unchanged. It cannot override failed cleanup or repair policy/model configuration. See
 [repair operations](workflow-repair-operations.md) and the
 [validation and recovery contract](workflow-transcript-repair-design.md).

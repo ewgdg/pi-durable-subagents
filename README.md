@@ -22,7 +22,7 @@ Select a subagent to enter its complete Pi session and interact with it directly
 - **Run supervision:** Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe`, then interrupt, explicitly resume, or terminate exact Runs with `agent_control`.
 - **Operational incident handling:** one bounded runtime reminder recovers simple forgotten Answers before isolated Moderators handle persistent Obligation Stalls, overdue answer obligations, answer-obligated Run Failures, closed live Dependency Deadlocks, and stalled deliveries blocking upstream obligations. Review renewal, Run control, Owner escalation, and Resolution are policy-bounded and mechanically gated.
 - **Durable recovery:** a fresh host reconstructs verified authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work.
-- **Transcript repair:** `/agents repair` authorizes a Workflow-owned repair Moderator in the same terminal, with validated copies, backups, and commit-before-reopen recovery. No extra confirmation or upstream changes; currently POSIX only. See [repair operations](docs/workflow-repair-operations.md).
+- **Admission repair:** `/agents repair` handles supported transcript-admission failures in the same terminal, initially exact duplicate Delivery evidence. Healthy Workflows are unchanged; rejected history stays inert. No extra confirmation or upstream changes; currently POSIX only. See [repair operations](docs/workflow-repair-operations.md).
 
 Coordination does not override Pi's user-configured compaction, retry, provider-retry, or transport behavior. One failed Moderator may be replaced once; a second failure creates passive, Owner-only Operational Attention.
 
