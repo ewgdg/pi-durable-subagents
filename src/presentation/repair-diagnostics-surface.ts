@@ -2,13 +2,13 @@ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Key, Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { RepairLaunch } from "../repair/repair-launch.ts";
+import type { RepairArchiveLaunch } from "../repair/repair-launch.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 
 const MAX_VISIBLE_EVIDENCE_CHARACTERS = 200_000;
 
 /** Inspection never resumes a participant or grants write/application authority. */
-export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: RepairLaunch, directory: string): Promise<void> {
+export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: RepairArchiveLaunch, directory: string): Promise<void> {
 	const storageDirectory = join(launch.storageRoot, launch.attemptId);
 	const seals = await readdir(join(storageDirectory, "seals")).catch((error: NodeJS.ErrnoException) => {
 		if (error.code === "ENOENT") return []; throw error;

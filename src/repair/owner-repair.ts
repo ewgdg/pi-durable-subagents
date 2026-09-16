@@ -10,7 +10,7 @@ import { captureAgentCreationPreset, selectAgentTemplateForCreation } from "../t
 import { defaultAgentTemplateRoots, discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
 import { launchRepairHelper, type IndependentRepairHelper } from "./helper-process.ts";
 import { createRepairHost, readRepairHost, type RepairHost } from "./repair-host.ts";
-import { readRepairLaunch, writeRepairRecord, type RepairLaunch } from "./repair-launch.ts";
+import { readRepairArchiveLaunch, writeRepairRecord, type RepairLaunch } from "./repair-launch.ts";
 import { runSameTerminalRepair, type RepairOutcome } from "./same-terminal-repair.ts";
 import { readRepairOwnerIdentity } from "./workflow-validation.ts";
 import { closeRepairInput } from "./input-retirement.ts";
@@ -90,7 +90,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 			if (action === "recover-stopped") {
 				if (!host) throw new Error("Recover-stopped is only available in the tagged repair host. Use /agents repair park after a failed attempt.");
 				if (attempt?.running) throw new Error("An attempt is still running in this host; cancel or await it first");
-				const launch = await readRepairLaunch(host.bootstrapPath);
+				const launch = await readRepairArchiveLaunch(host.bootstrapPath);
 				if (launch.attemptId !== host.attemptId || launch.owner.path !== host.ownerPath) throw new Error("Repair host and durable launch disagree");
 				// This explicit exceptional command attests ALL affected writers stopped.
 				// It does not invent a retirement ACK or authorize a new snapshot/model.
@@ -155,7 +155,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 				return;
 			}
 			if (host) {
-				const launch = await readRepairLaunch(host.bootstrapPath);
+				const launch = await readRepairArchiveLaunch(host.bootstrapPath);
 				ctx.ui.notify(`Unfinished or archived repair ${launch.attemptId}.\nEvidence: ${dirname(host.bootstrapPath)}\nNo retained helper exit evidence. Stop the old helper AND all affected transcript writers, then invoke /agents repair recover-stopped. This operator attestation recovers/cancels the existing journal only; it never starts new repair work.`, "warning");
 				await openRepairDiagnostics(ctx.ui, launch, dirname(host.bootstrapPath));
 				return;

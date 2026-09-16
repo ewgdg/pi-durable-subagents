@@ -1,9 +1,24 @@
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { launchRepairHelper } from "../src/repair/helper-process.ts";
+import { readRepairArchiveLaunch } from "../src/repair/repair-launch.ts";
+
+test("pre-admission-gate archive can be inspected but cannot bootstrap a new production helper", async () => {
+	const root = await mkdtemp(join(tmpdir(), "repair-old-archive-"));
+	const bootstrapPath = join(root, "launch.json");
+	const archive = { version: 1, attemptId: "old-attempt", moderatorAgentId: "moderator",
+		owner: { path: join(root, "owner.jsonl"), workflowId: "owner", sessionId: "owner", identityEntryId: "identity" },
+		storageRoot: join(root, "storage"), participantDirectory: join(root, "participants"), cwd: root, agentDir: root,
+		model: { provider: "anthropic", modelId: "claude-sonnet-4-5" }, thinking: "off", creationPreset: null };
+	await writeFile(bootstrapPath, JSON.stringify(archive));
+	assert.deepEqual(await readRepairArchiveLaunch(bootstrapPath), archive);
+	await assert.rejects(launchRepairHelper({ cwd: root, agentDir: root, bootstrapPath,
+		extensionPath: resolve("src/repair/helper-entry.ts"), sessionPath: join(root, "moderator.jsonl"), logDirectory: root,
+		model: "anthropic/claude-sonnet-4-5", thinking: "off" }), /actual admission failure binding/);
+});
 
 test("independent installed-Pi helper admits only explicit repair tools and correlated host commands", async () => {
 	const root = await mkdtemp(join(tmpdir(), "repair-helper-process-"));

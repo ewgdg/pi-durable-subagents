@@ -1,7 +1,19 @@
 # Workflow repair operations
 
-`/agents repair` authorizes one repair attempt. There is no later handoff or
-changeset confirmation. The existing Pi CLI and terminal stay open:
+`/agents repair` authorizes one attempt only when the current Owner actually
+failed transcript admission. Successful admission means no repair: no helper,
+model work, session switch or transcript edits. Rejected historical records are
+not admission blockers and remain unchanged. Configuration/model failures are
+not transcript repair eligibility.
+
+The initial supported correction is removing redundant exact copies of valid
+Message Delivery envelopes, keeping the first copy and all unrelated evidence.
+Conflicting duplicates, ambiguous native references and other failure classes
+refuse. The real Moderator proposes independently; a deterministic certificate
+and exhaustive validator constrain its candidate, not its claimed intent.
+
+There is no later handoff or changeset confirmation. The existing Pi CLI and
+terminal stay open:
 
 ```text
 Owner session → unrelated repair-host session → freshly reopened Owner
@@ -36,7 +48,7 @@ supplies model selection and guidance, not additional tool authority.
 After refusal, `/agents repair` opens read-only progress, Owner snapshot,
 Moderator transcript, and validation-audit pages. `/agents repair inspect`
 always inspects the current/most recent attempt. After successful admission,
-a new bare `/agents repair` authorizes a new attempt without restarting Pi.
+a new bare `/agents repair` reports that no repair is needed.
 Archived repair-host sessions remain bound to their exact original attempt.
 Inspection grants no new authority and never resumes work. Evidence paths are
 shown in the terminal. Repair state lives alongside the Workflow participant
@@ -76,6 +88,12 @@ This exceptional command may recover/cancel only the already-authorized journal;
 it cannot manufacture a missing retirement acknowledgment, start a new snapshot,
 or start a Moderator. Unknown destination hashes still refuse recovery. A
 committed generation is never rolled back over subsequent Owner writes.
+
+Recovery can restore the original admission-blocking evidence. Safe disk
+recovery is not proof that fresh Owner admission will succeed. Old repair
+artifacts from before admission-only eligibility remain inspectable and their
+existing journals recoverable, but cannot bootstrap another helper/model or
+restart the superseded rejected-record repair behavior.
 
 ## Supported writer and platform boundary
 

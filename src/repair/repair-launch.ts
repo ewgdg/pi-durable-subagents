@@ -18,11 +18,12 @@ export type RepairLaunch = Readonly<{
 	creationPreset: AgentCreationPreset;
 }>;
 
-export async function readRepairLaunch(path: string): Promise<RepairLaunch> {
-	const value = JSON.parse(await readFile(path, "utf8")) as RepairLaunch;
-	if (!value || value.version !== 1 || !value.owner || !value.model || !value.admissionFailure ||
-		value.admissionFailure.transcriptPath !== value.owner.path || value.admissionFailure.agentId !== value.owner.workflowId ||
-		![value.admissionFailure.stage, value.admissionFailure.reason].every((field) => typeof field === "string" && field.length > 0) ||
+export type RepairArchiveLaunch = Omit<RepairLaunch, "admissionFailure"> & Partial<Pick<RepairLaunch, "admissionFailure">>;
+
+/** Archive-only reader: old journals must remain recoverable, never restartable. */
+export async function readRepairArchiveLaunch(path: string): Promise<RepairArchiveLaunch> {
+	const value = JSON.parse(await readFile(path, "utf8")) as RepairArchiveLaunch;
+	if (!value || value.version !== 1 || !value.owner || !value.model ||
 		![value.attemptId, value.moderatorAgentId, value.owner.workflowId, value.owner.identityEntryId,
 			value.model.provider, value.model.modelId, value.thinking].every((field) => typeof field === "string" && field.length > 0 && !field.includes("\0")) ||
 		value.owner.workflowId !== value.owner.sessionId || value.moderatorAgentId === value.owner.workflowId ||
@@ -31,6 +32,17 @@ export async function readRepairLaunch(path: string): Promise<RepairLaunch> {
 		throw new Error("Invalid independent repair launch");
 	}
 	return value;
+}
+
+export async function readRepairLaunch(path: string): Promise<RepairLaunch> {
+	const value = await readRepairArchiveLaunch(path);
+	const failure = value.admissionFailure;
+	if (!failure || failure.transcriptPath !== value.owner.path || failure.agentId !== value.owner.workflowId ||
+		failure.reason !== "invariant_violation: Message has duplicate Deliveries" ||
+		typeof failure.stage !== "string" || !failure.stage.trim()) {
+		throw new Error("New repair helper requires a supported actual admission failure binding; archived attempts are recovery-only");
+	}
+	return value as RepairLaunch;
 }
 
 /** Lifecycle metadata is separate from storage's sealed replacement journal. */
