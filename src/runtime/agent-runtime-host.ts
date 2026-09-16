@@ -184,6 +184,8 @@ export interface AgentRuntimeHost {
 	currentRunFailed(): boolean;
 	isCurrent(handle: AgentRunHandle): boolean;
 	blocksOrdinaryDelivery(): boolean;
+	waitsForHumanInput(): boolean;
+	releaseForHumanInput(): void;
 	isInterrupting(): boolean;
 	currentInterruptionHold(): RunResumptionHandle | undefined;
 	currentResumptionHold(): RunResumptionHandle | undefined;

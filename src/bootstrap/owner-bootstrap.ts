@@ -78,6 +78,7 @@ export async function initializeOwnerWorkflow(options: {
 	entryModulePath: string;
 	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 	event: SessionStartEvent;
+	waitForHumanInput?: boolean;
 	onOwnerIdentified(): void;
 }): Promise<() => OrdinaryAgentCoordinatorView> {
 	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event } = options;
@@ -127,6 +128,7 @@ export async function initializeOwnerWorkflow(options: {
 	});
 	const coordinator = new WorkflowCoordinator(runtime, identity, {
 		entryModulePath,
+		waitForHumanInput: options.waitForHumanInput,
 		operationalIncidentPresentation: new OperationalIncidentSurface(),
 		postMortemAgentPresenter: new OwnerPostMortemAgentPresenter(ctx.ui),
 		workflowPolicy: policy,

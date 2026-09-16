@@ -195,7 +195,7 @@ type AgentViewTarget = Readonly<{
 }>;
 
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
-	humanInputMode(): "agent" | "answer" | "quota_suspended";
+	humanInputMode(): "agent" | "answer" | "quota_suspended" | "awaiting_human";
 	answerTargetAgent(toolCallId: string): string | undefined;
 	children(agentId?: string): readonly AgentStatus[];
 	search(input: AgentSearchInput): AgentSearchResult;
@@ -280,6 +280,7 @@ export class WorkflowCoordinator {
 		identity: OwnerIdentity,
 		options: {
 			entryModulePath: string;
+			waitForHumanInput?: boolean;
 			packageRoot?: string;
 			templateRoots?(
 				parentCwd: string,
@@ -312,7 +313,7 @@ export class WorkflowCoordinator {
 		this.#ownerIdentity = identity;
 		this.#agents.set(identity.agentId, {
 			identity,
-			host: AgentRuntimeSupervisor.bindOwner(runtime),
+			host: AgentRuntimeSupervisor.bindOwner(runtime, options.waitForHumanInput),
 			transcript: transcriptFromSessionManager(runtime.session.sessionManager),
 			children: [],
 		});
@@ -640,6 +641,7 @@ export class WorkflowCoordinator {
 			agentActivity: () => this.#agentActivity(agentId),
 			humanInputMode: () => this.#requireAgent(agentId).host.quotaSuspensionBlocksExecution()
 				? "quota_suspended"
+				: this.#requireAgent(agentId).host.waitsForHumanInput() ? "awaiting_human"
 				: this.#agentActivity(agentId).answerMode ? "answer" : "agent",
 			addAgentActivityChangeHandler: (handler) => {
 				this.#agentActivityChangeHandlers.add(handler);
@@ -1572,6 +1574,9 @@ export class WorkflowCoordinator {
 		return this.#agentViewLane.run(async () => {
 			const active = this.#activeAgentView;
 			if (!active || active.record.identity.agentId !== agentId) {
+				// Only new interactive input reaches this boundary, never navigation
+				// or transcript restoration. Keep rejected view submissions held.
+				record.host.releaseForHumanInput();
 				return await this.#runSupervisor.resumeFromHuman(agentId, text, images, submissionSequence)
 					? "submitted"
 					: "continue";
@@ -1582,6 +1587,7 @@ export class WorkflowCoordinator {
 					inputSubmission !== undefined &&
 					active.record.host.projectionInputSubmissionIsFenced(inputSubmission)
 				) return "discarded";
+				active.record.host.releaseForHumanInput();
 				const currentHandle = active.record.host.currentHandle();
 				if (
 					currentHandle &&

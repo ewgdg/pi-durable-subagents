@@ -1012,6 +1012,7 @@ export class OperationalIncidentCoordinator {
 	#isSettledWithoutProgress(record: AgentRecord): boolean {
 		const run = record.host.observe();
 		if (
+			record.host.waitsForHumanInput() ||
 			run.phase !== "live" ||
 			run.work !== "settled" ||
 			record.host.currentRunFailed() ||
@@ -1159,7 +1160,7 @@ export class OperationalIncidentCoordinator {
 
 	#deliveryPathExcluded(record: AgentRecord): boolean {
 		const run = record.host.observe();
-		return run.suspension !== undefined ||
+		return record.host.waitsForHumanInput() || run.suspension !== undefined ||
 			(run.phase !== "dormant" && run.attention === "input_required") ||
 			record.host.hasRetentionReason("interactive_selection") ||
 			record.host.hasRetentionReason("interruption_hold");
@@ -1168,7 +1169,7 @@ export class OperationalIncidentCoordinator {
 	#observeOperationReviews(): readonly OperationReviewConditionSnapshot[] {
 		return this.#operationReviews.expiredReviews().flatMap((review) => {
 			const record = this.#agents.get(review.toolCall.agentId);
-			if (!record || record.host.observe().suspension) return [];
+			if (!record || record.host.waitsForHumanInput() || record.host.observe().suspension) return [];
 			const requestIds = [...this.#messages.answerObligationRequestIds(record)].sort();
 			if (requestIds.length === 0) return [];
 			return [{
@@ -1218,7 +1219,7 @@ export class OperationalIncidentCoordinator {
 
 	#isDeadlockEligible(record: AgentRecord): boolean {
 		const run = record.host.observe();
-		return !run.suspension && run.phase === "live" &&
+		return !record.host.waitsForHumanInput() && !run.suspension && run.phase === "live" &&
 			run.work === "settled" &&
 			(run.attention === "none" || run.attention === "agent_wait") &&
 			!record.host.currentRunFailed() &&

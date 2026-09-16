@@ -747,7 +747,7 @@ export const agentControlMethods = {
 	},
 	"runtime.humanInputMode": {
 		request: EmptySchema,
-		response: closed({ mode: Type.Union([Type.Literal("agent"), Type.Literal("answer"), Type.Literal("quota_suspended")]) }),
+		response: closed({ mode: Type.Union([Type.Literal("agent"), Type.Literal("answer"), Type.Literal("quota_suspended"), Type.Literal("awaiting_human")]) }),
 	},
 	"runtime.guardToolResult": {
 		request: closed({ message: AgentMessageSchema }),

@@ -131,6 +131,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	#inputRequired: { handle: AgentRunHandle; requestId: string } | undefined;
 	#agentWait: { handle: AgentRunHandle; toolCallId: string } | undefined;
 	#interruptionHold: RunResumptionHandle | undefined;
+	#waitingForHumanInput = false;
 	#quotaSuspension: AgentQuotaSuspension | undefined;
 	#quotaHold: RunResumptionHandle | undefined;
 	#restoredQuotaRun: AgentRunHandle | undefined;
@@ -160,8 +161,8 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		}
 	}
 
-	static bindOwner(runtime: AgentSessionRuntime): AgentRuntimeSupervisor {
-		return new AgentRuntimeSupervisor({
+	static bindOwner(runtime: AgentSessionRuntime, waitForHumanInput = false): AgentRuntimeSupervisor {
+		const supervisor = new AgentRuntimeSupervisor({
 			agentId: runtime.session.sessionId,
 			initialRuntime: InProcessHostedRuntime.fromSession({
 				session: runtime.session,
@@ -171,6 +172,9 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			initialRetentionReasons: ["owner_host_binding"],
 			runtimeOwnership: "native-host",
 		});
+		// Repair re-admission restores evidence, not permission to continue it.
+		supervisor.#waitingForHumanInput = waitForHumanInput;
+		return supervisor;
 	}
 
 	static createChild(options: {
@@ -413,7 +417,17 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	blocksOrdinaryDelivery(): boolean {
-		return this.#quotaSuspension !== undefined || this.#interruptionHold !== undefined || this.#isolatedResumption !== undefined;
+		return this.#waitingForHumanInput || this.#quotaSuspension !== undefined || this.#interruptionHold !== undefined || this.#isolatedResumption !== undefined;
+	}
+
+	waitsForHumanInput(): boolean {
+		return this.#waitingForHumanInput;
+	}
+
+	releaseForHumanInput(): void {
+		// The accepted human prompt owns the next native start. Do not wake
+		// schedulers in the input-hook gap before that prompt reaches the Runtime.
+		this.#waitingForHumanInput = false;
 	}
 
 	isInterrupting(): boolean {
