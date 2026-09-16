@@ -24,7 +24,7 @@ permanent Owner launcher is permitted.
   authorize unrelated edits, or authorize inventing ambiguous historical intent.
 - Back up and journal replacement. Interrupted, uncommitted application restores
   the whole preimage only when destination hashes are known. Unknown state refuses.
-- Commit validated disk repair before launching a fresh Owner. Failed fresh
+- Commit validated disk repair before opening a fresh Owner session. Failed fresh
   admission retains committed repair and later native writes for diagnosis.
 - The operator uses the helper/recovery path before reopening affected sessions
   while repair is unfinished. No interception of arbitrary bare Pi launches,
@@ -57,8 +57,8 @@ Public behavior, not prototype monkeypatches, is the acceptance surface:
 - Interrupted multi-file application restores all preimages or refuses unknown
   hashes without partial recovery. A committed repair is never rolled back over
   fresh Owner writes.
-- Repair helper survives old Owner exit and fresh admission failure. Actual
-  terminal handoff is exercised; no upstream/private Pi patch or test-only cleanup
+- Repair helper survives old Owner session retirement and fresh admission failure.
+  Same-terminal operation is exercised; no upstream/private Pi patch or test-only cleanup
   observer substitutes for a production interface.
 
 Use targeted repository-supervised test entrypoints and typecheck; avoid the full
@@ -81,11 +81,17 @@ integration suite. Record exact commands and outcomes at completion.
 - A read-only source review identified a candidate: retain the original CLI/TUI,
   replace the Owner session with an unrelated temporary repair-host session,
   then reopen Owner from disk only after an independent Node helper commits.
-  A real CLI proof is underway separately from production code. In particular,
+  A real CLI proof completed separately from production code. In particular,
   native user bash must be aborted and joined explicitly: native session abort
   and disposal alone do not establish its final transcript write has completed.
   Noncooperative stale raw SessionManager references remain outside the
   trust-based writer contract; no claim of filesystem write revocation is made.
+- Same-terminal prototype `cd7a4fa` passed six bounded cases, independently rerun
+  in 7.902 seconds: clean, native user bash, actual cleanup rejection, parking
+  cancellation, actual fresh admission failure, and an expected unsupported raw
+  writer counterexample. No Python, pidfds, or second terminal. Full portability,
+  production writer inventory/bootstrap, and transaction/recovery remain unproved.
+  See `docs/research/same-terminal-repair-feasibility.md` for evidence and limits.
 
 ## Decisions and evidence
 

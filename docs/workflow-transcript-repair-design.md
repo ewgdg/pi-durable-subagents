@@ -9,7 +9,7 @@ authorize an autonomous repair engine or implement a missing-title migration.
 
 Let a verified Owner with damaged coordination evidence ask a Moderator belonging
 to its own Workflow to prepare repaired transcript copies. The host, not the Moderator, proves that the
-copies validate, obtains approval, replaces the originals, and reopens the Owner
+copies validate, replaces the originals under repair-command authorization, and reopens the Owner
 from disk. During the exclusive repair transaction, ordinary transcript writers
 are paused; outside it, availability is determined per operation rather than by
 the mere presence of invalid historical evidence.
@@ -47,17 +47,24 @@ The [independent-repairer proof](research/independent-repairer-feasibility.md)
 passed twelve bounded cases using real coordinator and managed-Agent cleanup;
 the Owner used an SDK test host, so actual CLI/terminal handoff remains unproved.
 
-**Current recommendation:** pursue that bounded helper, not a permanent launcher.
-Its two explicit scope changes are operator-mediated reopening during unfinished
-repair and no automatic rollback of a committed repair after failed relaunch.
-Unknown cleanup still means refusal, not automatic orphan takeover. Production
-writer accounting, repair membership, review/validation, and terminal integration
-remain to be designed; the user authorized the experiment, not implementation.
+The user then authorized implementation but rejected a proposed Linux/Python and
+second-terminal requirement. A [real CLI follow-up](research/same-terminal-repair-feasibility.md)
+passed six bounded checks using Owner session retirement, an unrelated temporary
+repair-host session, and an independent Node helper, all in the existing terminal.
+It needs no Owner process exit; no cross-platform guarantee follows from its Linux
+run. Retained raw SessionManagers remain an explicit unsupported-writer limitation.
 
-The full-automatic flow below is the **earlier proposal**, retained pending scope
-selection. In particular, its admission-as-commit and universal pre-open recovery
-requirements are not claims made by the narrower proof. Use the linked follow-up
-for that candidate contract; consolidate this proposal after scope acceptance
+**Current recommendation:** use this same-terminal session-retirement route,
+not a permanent launcher. Retain operator-mediated recovery during unfinished
+repair and no rollback after committed-repair admission failure. Unknown cleanup
+still means refusal. The user explicitly made the repair command the attempt's
+authorization: **no subsequent handoff or changeset confirmation**. Validation,
+freshness, and protocol-effect audit remain mandatory.
+
+The full-automatic flow below is the **historical proposal**, not the implementation
+contract. Its per-changeset confirmation, admission-as-commit, and universal
+pre-open recovery requirements are superseded by the decisions above. Production
+interfaces remain unfinished; consolidate this history as implementation proceeds
 rather than implement both paths.
 
 ### Earlier full-automatic repair scope
