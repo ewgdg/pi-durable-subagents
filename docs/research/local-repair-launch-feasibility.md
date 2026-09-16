@@ -8,6 +8,13 @@ before deciding whether its complexity is worthwhile. The earlier weighted
 matrix is a hypothesis, not evidence that a launcher already provides safe
 writer retirement or crash recovery.
 
+**Follow-up:** the user proposed keeping a repairer independent while the Owner
+is stopped. The [clean-handoff experiment](independent-repairer-feasibility.md)
+proves a narrower viable lifecycle by committing repair before relaunch and
+requiring operator-mediated recovery. It does not reverse the counterexamples
+below or make a permanent launcher necessary. This document records the earlier,
+stronger contract's evaluation.
+
 ## Conclusion
 
 **The small launcher works for clean restart, but fails the complete repair

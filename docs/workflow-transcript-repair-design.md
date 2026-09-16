@@ -31,7 +31,7 @@ remain proposed repair mechanics; they are not prerequisites for ordinary
 navigation. A future repair writer fence is a temporary consistency requirement,
 not a consequence of rejecting a historical coordination record.
 
-### Local-launch feasibility result
+### Feasibility results and current recommendation
 
 **Upstream changes are excluded by the user.** A disposable proof against stock
 Pi demonstrated clean stop/reopen and a limited preflight journal, but falsified
@@ -40,13 +40,27 @@ retain its inherited lease, and Pi wrote native startup metadata before the
 admission acknowledgement. See the
 [executable evidence and complexity evaluation](research/local-repair-launch-feasibility.md).
 
-The recommendation is to defer a production launcher for repair alone, not to
-weaken the safety conditions below. Complete local integration would require
-explicit writer ownership and a startup/write contract in addition to restart.
-Neither that larger design nor a reduced manual-offline scope has been selected.
-The following flow remains a proposed target, not a proven implementation path.
+The user's narrower alternative has now been exercised: an independent repairer
+survives a verified clean Owner/Agent shutdown, commits disk repair **before**
+relaunch, and retains the repair plus diagnostics if fresh admission fails.
+The [independent-repairer proof](research/independent-repairer-feasibility.md)
+passed twelve bounded cases using real coordinator and managed-Agent cleanup;
+the Owner used an SDK test host, so actual CLI/terminal handoff remains unproved.
 
-### Proposed repair scope
+**Current recommendation:** pursue that bounded helper, not a permanent launcher.
+Its two explicit scope changes are operator-mediated reopening during unfinished
+repair and no automatic rollback of a committed repair after failed relaunch.
+Unknown cleanup still means refusal, not automatic orphan takeover. Production
+writer accounting, repair membership, review/validation, and terminal integration
+remain to be designed; the user authorized the experiment, not implementation.
+
+The full-automatic flow below is the **earlier proposal**, retained pending scope
+selection. In particular, its admission-as-commit and universal pre-open recovery
+requirements are not claims made by the narrower proof. Use the linked follow-up
+for that candidate contract; consolidate this proposal after scope acceptance
+rather than implement both paths.
+
+### Earlier full-automatic repair scope
 
 - One repair transaction per Workflow; one fresh repair-only Moderator per attempt.
 - Explicit human approval of the entire validated multi-file changeset. No
@@ -445,6 +459,12 @@ ticket. The design deliverable is documentation and source-backed feasibility
 research; no runtime or migration is changed.
 
 ## Decisions needed before implementation tickets
+
+First choose the scope: adopt the tested independent-repairer contract (verified
+clean handoff, operator-mediated recovery, disk commit before relaunch), or retain
+the larger full-automatic requirements below. The former is recommended; the
+experiment does not authorize implementing either. Its source-backed remaining
+work is listed in the [follow-up evaluation](research/independent-repairer-feasibility.md#complexity-and-remaining-work).
 
 1. **Approval:** accept whole-changeset explicit human confirmation, with no
    deterministic preauthorization in the first scope?
