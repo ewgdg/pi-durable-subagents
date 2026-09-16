@@ -78,6 +78,14 @@ integration suite. Record exact commands and outcomes at completion.
   whether full Owner process exit is necessary, without assuming native session
   disposal proves all final writes and callbacks are retired. The prior proof
   establishes only its tested process-exit topology, not the required UX.
+- A read-only source review identified a candidate: retain the original CLI/TUI,
+  replace the Owner session with an unrelated temporary repair-host session,
+  then reopen Owner from disk only after an independent Node helper commits.
+  A real CLI proof is underway separately from production code. In particular,
+  native user bash must be aborted and joined explicitly: native session abort
+  and disposal alone do not establish its final transcript write has completed.
+  Noncooperative stale raw SessionManager references remain outside the
+  trust-based writer contract; no claim of filesystem write revocation is made.
 
 ## Decisions and evidence
 
