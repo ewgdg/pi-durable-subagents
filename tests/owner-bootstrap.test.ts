@@ -815,7 +815,7 @@ test("conflicting valid Owner Deliveries retain admission-failure diagnostics af
 		assert.match(summary, /Problem/);
 		assert.match(summary, /duplicate Deliveries/);
 		assert.match(summary, /Recovery/);
-		assert.match(summary, /unavailable/);
+		assert.match(summary, /\/agents repair authorizes/);
 		assert.doesNotMatch(summary, /at authoredFacts/);
 		assert.doesNotMatch(summary, /cleanup also failed/);
 		panel.handleInput?.("t");

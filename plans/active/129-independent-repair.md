@@ -124,6 +124,13 @@ integration suite. Record exact commands and outcomes at completion.
   repair authorization after successful admission. Independent targeted closure
   review approved both fixes and reran the three selected real-CLI regressions;
   no remaining required findings in that bounded review.
+- Final bootstrap check reproduced another false-success edge after extension
+  upgrade: an ordinary cleanup registry could exist without the later-added
+  repair-evidence registry. `4fefc02` retains the existing real cleanup callback
+  before any no-coordinator declaration. The focused regression went red then
+  green; independent bounded closure review approved it and reran all three
+  selected retirement/bootstrap cases. Final Owner-bootstrap verification now
+  passes 28 cases with only the independently reproduced capacity case skipped.
 - Existing `Owner reload publishes one prospective policy or preserves the
   prior snapshot` fails its capacity assertion on the unchanged baseline too
   (verified with pre-change source). It is not silently repaired by this task.
