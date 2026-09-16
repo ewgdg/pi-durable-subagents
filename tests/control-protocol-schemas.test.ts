@@ -19,6 +19,30 @@ import {
 
 const identity = { protocolVersion: 8, workflowId: "workflow", agentId: "agent" } as const;
 
+test("Control observe and presentation rosters preserve provider quota suspension", () => {
+	const suspension = { reason: "provider_quota", evidence: {
+		diagnostic: "Codex error: usage_limit_reached", provider: "openai-codex", model: "model", resetAt: "2030-01-01T00:00:00.000Z",
+	} };
+	const status = { agentId: "child", workflowId: "workflow", label: "Child", directSpawnerAgentId: "workflow",
+		primaryEvidence: { transcriptPath: null, inspectedThrough: { agentId: "child", entryId: "entry" } },
+		run: { phase: "live", work: "settled", attention: "none", retentionReasons: [], suspension },
+	};
+	const roster = { ...status, model: { provider: "openai-codex", modelId: "model" }, thinking: "off", compacting: false, queuedInputCount: 0 };
+	const snapshot = { live: [roster], dormant: [], selectedAgentId: "child", humanAttention: [], operationalAttention: [], reports: [] };
+	assert.ok(Check(agentControlMethods["coordination.observe"].response, status));
+	assert.ok(Check(agentControlMethods["coordination.observe"].response, { matches: [status], hasMore: false }));
+	assert.ok(Check(agentControlMethods["presentation.agents.snapshot"].response, snapshot));
+	assert.ok(Check(agentControlEvents["presentation.agents.changed"].payload, snapshot));
+	for (const run of [
+		{ ...status.run, suspension: { reason: "unknown", evidence: suspension.evidence } },
+		{ ...status.run, suspension: { reason: "provider_quota", evidence: { provider: "openai-codex" } } },
+		{ phase: "dormant", retentionReasons: [], suspension },
+	]) {
+		assert.equal(Check(agentControlMethods["coordination.observe"].response, { ...status, run }), false);
+		assert.equal(Check(agentControlMethods["presentation.agents.snapshot"].response, { ...snapshot, live: [{ ...roster, run }] }), false);
+	}
+});
+
 test("control transports local Answer commitment without fabricating Delivery proof", () => {
 	const schema = agentControlMethods["coordination.message"].response;
 	const receipt = { disposition: "committed", delivery: "omitted", reason: "request_source_unavailable",

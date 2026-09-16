@@ -178,6 +178,12 @@ const RetentionReasonSchema = Type.Union([
 	Type.Literal("interactive_selection"),
 ]);
 const RetentionSchema = closed({ reason: RetentionReasonSchema, count: Type.Integer({ minimum: 1 }) });
+const QuotaEvidenceSchema = closed({
+	diagnostic: Type.String(),
+	provider: Type.Optional(Type.String()),
+	model: Type.Optional(Type.String()),
+	resetAt: Type.Optional(Type.String()),
+});
 const AgentRunStateSchema = Type.Union([
 	closed({ phase: Type.Literal("dormant"), retentionReasons: Type.Tuple([]) }),
 	closed({
@@ -189,6 +195,10 @@ const AgentRunStateSchema = Type.Union([
 			Type.Literal("agent_wait"),
 		]),
 		retentionReasons: Type.Array(RetentionSchema),
+		suspension: Type.Optional(closed({
+			reason: Type.Literal("provider_quota"),
+			evidence: QuotaEvidenceSchema,
+		})),
 	}),
 ]);
 const AgentStatusProperties = {
@@ -877,12 +887,7 @@ export const agentControlEvents = {
 			willRetry: Type.Boolean(),
 			queuedInputCount: QueuedInputCountSchema,
 			error: Type.Optional(Type.String()),
-			quota: Type.Optional(closed({
-				diagnostic: Type.String(),
-				provider: Type.Optional(Type.String()),
-				model: Type.Optional(Type.String()),
-				resetAt: Type.Optional(Type.String()),
-			})),
+			quota: Type.Optional(QuotaEvidenceSchema),
 		}),
 	},
 	"agent.settled": {
