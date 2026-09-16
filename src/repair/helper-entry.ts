@@ -34,6 +34,19 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		let resolveModel: (() => void) | undefined;
 		let active: Promise<unknown> | undefined;
 		const emit = (value: unknown) => { if (process.connected) process.send?.(value); };
+		let toolArgumentCharacters = 0;
+		pi.on("message_update", ({ assistantMessageEvent: event }) => {
+			if (event.type === "toolcall_start") toolArgumentCharacters = 0;
+			if (event.type === "toolcall_delta") {
+				toolArgumentCharacters += event.delta.length;
+				emit({ type: "activity", text: `Preparing tool arguments: ${toolArgumentCharacters} characters streamed`, status: true });
+			}
+			if (event.type === "text_delta" || event.type === "thinking_delta") {
+				emit({ type: "activity", text: event.delta });
+			}
+		});
+		pi.on("tool_execution_start", (event) => emit({ type: "activity", text: `\n[Tool: ${event.toolName}]\n` }));
+		pi.on("tool_execution_end", (event) => emit({ type: "activity", text: `\n[${event.toolName}: ${event.isError ? "error" : "complete"}]\n` }));
 		const progress = async (message: string) => {
 			await writeRepairRecord(join(directory, "events.jsonl"), { time: new Date().toISOString(), phase, message }, true);
 			emit({ type: "progress", message });

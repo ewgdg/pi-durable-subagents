@@ -24,6 +24,7 @@ export async function launchRepairHelper(options: {
 	model: string;
 	thinking: string;
 	onProgress?(message: string): void;
+	onActivity?(text: string, status: boolean): void;
 }): Promise<IndependentRepairHelper> {
 	await mkdir(options.logDirectory, { recursive: true, mode: 0o700 });
 	const stdout = await open(join(options.logDirectory, "helper.rpc.jsonl"), "a", 0o600);
@@ -73,6 +74,7 @@ export async function launchRepairHelper(options: {
 		if (message.type === "ready") resolveReady();
 		else if (message.type === "ready_error" && typeof message.error === "string") rejectReady(new Error(message.error));
 		else if (message.type === "progress" && typeof message.message === "string") options.onProgress?.(message.message);
+		else if (message.type === "activity" && typeof message.text === "string") options.onActivity?.(message.text, message.status === true);
 		else if (message.type === "result" && typeof message.id === "string") {
 			const request = pending.get(message.id);
 			pending.delete(message.id);

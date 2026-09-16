@@ -62,6 +62,10 @@ export function registerAgentsCommand(
 	resolveView: () => HumanPresentationCoordinatorView,
 	ownerAdmission?: Error | "admitted",
 	repair?: (args: string, ctx: ExtensionCommandContext) => Promise<void>,
+	repairNavigation?: {
+		host(ctx: ExtensionCommandContext, owner: boolean): Promise<boolean>;
+		entries(ctx: ExtensionCommandContext): Promise<readonly { id: string; label: string; description: string; open(): Promise<void> }[]>;
+	},
 ): void {
 	const admissionFailure = ownerAdmission === "admitted" ? undefined : ownerAdmission;
 	pi.registerCommand("agents", {
@@ -79,6 +83,7 @@ export function registerAgentsCommand(
 				await repair(args.trim().slice("repair".length).trim(), ctx);
 				return;
 			}
+			if ((!args.trim() || args.trim() === "owner") && await repairNavigation?.host(ctx, args.trim() === "owner")) return;
 			if (ownerAdmission && args.trim() === "diagnostics") {
 				if (ctx.mode !== "tui") return;
 				if (admissionFailure && !(admissionFailure instanceof OwnerRecoveryError)) ctx.ui.notify(admissionFailure.message, "error");
@@ -111,6 +116,8 @@ export function registerAgentsCommand(
 			let reopenSelector = true;
 			while (reopenSelector) {
 				reopenSelector = false;
+				let repairView: { open(): Promise<void> } | undefined;
+				const repairEntries = await repairNavigation?.entries(ctx) ?? [];
 				const selection = createAgentSelectionSession(view, selectedAgentId);
 				let physicalSurface: PhysicalAgentViewSurface | undefined;
 				let selectorTui: TUI | undefined;
@@ -131,6 +138,7 @@ export function registerAgentsCommand(
 					await physicalSurface?.ready;
 				};
 				let action = await openAgentSelectorSurface(ctx.ui, {
+					presentations: repairEntries.map((item) => ({ ...item, select() { repairView = item; } })),
 					...createAgentSelectorSnapshot(view, selectedAgentId),
 					addChangeHandler: (handler) => view.addAgentActivityChangeHandler(() =>
 						handler(createAgentSelectorSnapshot(view, selectedAgentId))),
@@ -146,6 +154,7 @@ export function registerAgentsCommand(
 						);
 					},
 				});
+				if (repairView) { await repairView.open(); reopenSelector = true; continue; }
 				if (action?.kind === "open_report") {
 					const reportId = action.reportId;
 					const item = view.reportHistory().find(({ report }) => report.reportId === reportId);

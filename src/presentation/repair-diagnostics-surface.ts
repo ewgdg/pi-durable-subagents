@@ -8,7 +8,9 @@ import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 const MAX_VISIBLE_EVIDENCE_CHARACTERS = 200_000;
 
 /** Inspection never resumes a participant or grants write/application authority. */
-export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: RepairArchiveLaunch, directory: string): Promise<void> {
+export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: RepairArchiveLaunch, directory: string, options: {
+	page?: number; liveText?(): string; subscribe?(refresh: () => void): () => void; signal?: AbortSignal;
+} = {}): Promise<void> {
 	const storageDirectory = join(launch.storageRoot, launch.attemptId);
 	const seals = await readdir(join(storageDirectory, "seals")).catch((error: NodeJS.ErrnoException) => {
 		if (error.code === "ENOENT") return []; throw error;
@@ -27,11 +29,21 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 			? `[Showing last ${MAX_VISIBLE_EVIDENCE_CHARACTERS} characters. Full evidence remains at the path above.]\n${contents.slice(-MAX_VISIBLE_EVIDENCE_CHARACTERS)}` : contents;
 		return { ...source, contents: sanitizeReportTerminalText(bounded) };
 	}));
-	await ui.custom<void>((tui, theme, _keys, done) => {
-		let page = 0;
+	let unsubscribe = () => {};
+	let removeAbort = () => {};
+	if (options.signal?.aborted) return;
+	try { await ui.custom<void>((tui, theme, _keys, done) => {
+		let page = Math.min(options.page ?? 0, pages.length - 1);
 		let top = 0;
 		let maximumTop = 0;
-		const body = new Text(pages[page].contents, 0, 0);
+		const contents = () => page === 2 && options.liveText
+			? `${sanitizeReportTerminalText(options.liveText())}\n\nPersisted Moderator transcript:\n${pages[page].contents}` : pages[page].contents;
+		const body = new Text(contents(), 0, 0);
+		unsubscribe = options.subscribe?.(() => { body.setText(contents()); tui.requestRender(); }) ?? (() => {});
+		const close = () => done();
+		options.signal?.addEventListener("abort", close, { once: true });
+		if (options.signal?.aborted) close();
+		removeAbort = () => options.signal?.removeEventListener("abort", close);
 		return {
 			render(width) {
 				const height = Math.max(1, tui.terminal.rows);
@@ -54,7 +66,7 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 			handleInput(data) {
 				if (matchesKey(data, Key.escape) || matchesKey(data, "q")) { done(); return; }
 				const selected = Number(data) - 1;
-				if (Number.isInteger(selected) && selected >= 0 && selected < pages.length) { page = selected; top = 0; body.setText(pages[page].contents); }
+				if (Number.isInteger(selected) && selected >= 0 && selected < pages.length) { page = selected; top = 0; body.setText(contents()); }
 				else if (matchesKey(data, Key.up)) top--;
 				else if (matchesKey(data, Key.down)) top++;
 				else if (matchesKey(data, Key.pageUp)) top -= Math.max(1, tui.terminal.rows - 5);
@@ -66,4 +78,5 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 			invalidate() { body.invalidate(); },
 		};
 	}, { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } });
+	} finally { unsubscribe(); removeAbort(); }
 }

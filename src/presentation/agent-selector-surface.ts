@@ -78,6 +78,7 @@ export type AgentSelectorAction =
 	}>;
 
 export type AgentSelectorOptions = Readonly<{
+	presentations?: readonly { id: string; label: string; description: string; select(): void }[];
 	live: readonly AgentRosterStatus[];
 	dormant: readonly AgentRosterStatus[];
 	selectedAgentId: string;
@@ -427,6 +428,8 @@ class AgentSelectorSurface implements Component {
 			: this.#activeTab === "reports"
 				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), this.#ownerItem()]
 				: [...this.#dormantRoster.map((status) => this.#agentItem(status)), this.#ownerItem()];
+		if (this.#activeTab !== "reports") this.#items.splice(this.#items.length - 1, 0,
+			...(this.#options.presentations ?? []).map((item) => ({ value: item.id, label: item.label, description: item.description, kind: "agent" as const })));
 		this.#hitRegions = [];
 		this.#rosterRows.clear();
 		this.#visibleRows = this.#maximumVisibleRows();
@@ -472,6 +475,8 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#selectItem(value: string): void {
+		const presentation = this.#options.presentations?.find((item) => item.id === value);
+		if (presentation) { presentation.select(); this.#done(undefined); return; }
 		const selected = this.#items.find((item) => item.value === value);
 		if (!selected) return;
 		const action = selected.action ?? (selected.status

@@ -2,23 +2,22 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { OwnerRetirement } from "./owner-retirement.ts";
 
 export type RepairHelper = {
-	/** Called only with positively verified retirement; resolves after durable commit. */
 	repair(): Promise<void>;
 	recordAdmission(admitted: boolean, diagnostic?: string): Promise<void>;
 	refuse(reason: string): Promise<void>;
 };
-
 export type RepairOutcome = "refused" | "admitted" | "committed_admission_failed";
 
-/** The CLI remains the presenter; only its native session is replaced. */
-export async function runSameTerminalRepair(options: {
+/** Complete the short native handoff before starting independent repair work. */
+export async function startSameTerminalRepair(options: {
 	context: ExtensionCommandContext;
 	ownerPath: string;
 	repairHostPath: string;
 	retirement: Pick<OwnerRetirement, "prepare" | "replacementCompleted" | "assertRetired">;
 	helper: RepairHelper;
 	admission(context: ExtensionCommandContext): boolean;
-}): Promise<RepairOutcome> {
+	beforeReopen?(): Promise<void>;
+}): Promise<{ completion: Promise<RepairOutcome> }> {
 	const { retirement, helper } = options;
 	let outcome: RepairOutcome = "refused";
 	let committed = false;
@@ -34,34 +33,46 @@ export async function runSameTerminalRepair(options: {
 		}
 		presenter.notify(`${committed ? "Repair committed; Owner admission failed" : "Repair refused"}: ${diagnostic}. Use /agents repair for diagnostics and explicit recovery.`, "error");
 	};
+	let parked: ExtensionCommandContext | undefined;
 	try {
 		await retirement.prepare();
 		const transition = await options.context.switchSession(options.repairHostPath, {
-			withSession: async (parked) => {
-				presenter = parked.ui;
-				// Expected refusals MUST NOT escape withSession: Pi can treat callback
-				// rejection as fatal, losing the same-terminal diagnostic presenter.
+			withSession: async (fresh) => {
+				presenter = fresh.ui;
+				// Pi treats a callback throw as fatal. Keep this callback short and
+				// contain expected failures before returning editor ownership.
 				try {
 					retirement.replacementCompleted();
 					retirement.assertRetired();
-					await helper.repair();
-					committed = true;
-					const reopened = await parked.switchSession(options.ownerPath, {
-						withSession: async (fresh) => {
-							presenter = fresh.ui;
-							try {
-								if (!options.admission(fresh)) throw new Error("fresh Workflow admission did not succeed");
-								await helper.recordAdmission(true);
-								outcome = "admitted";
-								presenter.notify("Workflow repair committed. Owner reopened; participant Runs remain dormant.", "info");
-							} catch (error) { await fail(error); }
-						},
-					});
-					if (reopened.cancelled) await fail(new Error("Owner reopening was cancelled"));
+					parked = fresh;
 				} catch (error) { await fail(error); }
 			},
 		});
 		if (transition.cancelled) await fail(new Error("repair-host replacement was cancelled"));
 	} catch (error) { await fail(error); }
-	return outcome;
+	if (!parked) return { completion: Promise.resolve(outcome) };
+	const host = parked;
+	const completion = (async () => {
+		try {
+			await helper.repair();
+			committed = true;
+			await options.beforeReopen?.();
+			const draft = host.ui.getEditorText();
+			const reopened = await host.switchSession(options.ownerPath, {
+				withSession: async (fresh) => {
+					presenter = fresh.ui;
+					try {
+						if (draft) fresh.ui.setEditorText(draft);
+						if (!options.admission(fresh)) throw new Error("fresh Workflow admission did not succeed");
+						await helper.recordAdmission(true);
+						outcome = "admitted";
+						presenter.notify("Workflow repair committed. Owner reopened idle; send a new message to continue.", "info");
+					} catch (error) { await fail(error); }
+				},
+			});
+			if (reopened.cancelled) await fail(new Error("Owner reopening was cancelled"));
+		} catch (error) { await fail(error); }
+		return outcome;
+	})();
+	return { completion };
 }

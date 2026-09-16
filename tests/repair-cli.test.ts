@@ -19,7 +19,7 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 	while (!await predicate()) { if (Date.now() > end) throw new Error(`Timed out: ${label}`); await delay(25); }
 }
 
-for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "cancel", "helper-kill"] as const) {
+for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "cancel", "helper-kill", "idle-human", "live-navigation"] as const) {
 test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip: process.platform === "win32" }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "repair-cli-"));
 	const agentDir = join(root, "agent");
@@ -34,6 +34,9 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		repairRequests++;
 		assert.deepEqual(request.tools.map((tool) => (tool as { function: { name: string } }).function.name).sort(), ["repair_candidate", "repair_report", "repair_snapshot"]);
 		if (scenario === "cancel" || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
+		if (scenario === "live-navigation" && repairRequests === 3) return new Promise((resolve) => {
+			releaseModel = () => resolve({ name: "repair_report", arguments: { kind: "complete", text: "Only exact redundant Delivery removed." } });
+		});
 		if (repairRequests === 1) return { name: "repair_snapshot", arguments: { id: "file-0" } };
 		if (repairRequests === 2) {
 			const original = request.messages.findLast((message) => (message as { role: string }).role === "tool") as { content: string };
@@ -50,7 +53,9 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		if (repairRequests === 3) return { name: "repair_report", arguments: { kind: "complete", text: "Removed only the exact redundant Delivery envelope; kept original evidence and rejected history." } };
 		return "Proposal complete.";
 	});
-	await writeFile(join(agentDir, "models.json"), JSON.stringify(server.modelsConfiguration));
+	const modelsConfiguration = structuredClone(server.modelsConfiguration);
+	if (scenario === "idle-human") Object.assign(modelsConfiguration.providers[server.provider].models[0], { reasoning: true });
+	await writeFile(join(agentDir, "models.json"), JSON.stringify(modelsConfiguration));
 	await writeFile(join(agentDir, "settings.json"), JSON.stringify({ enableInstallTelemetry: false, quietStartup: true, compaction: { enabled: false } }));
 	if (scenario === "config-error") await writeFile(join(agentDir, "config", "pi-agent-coordination.json"), '{"maxConcurrentAgentRuns":0}');
 	const ownerPath = join(root, "owner.jsonl");
@@ -70,7 +75,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 	let childContents: string | undefined;
 	if (!noRepair) {
 		const childId = randomUUID();
-		const spawnEntry = owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Existing reader", request: "Read the synthetic note only.", label: "Reader" }, { id: "existing-spawn" })));
+		const spawnEntry = scenario === "idle-human" ? "unused" : owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Existing reader", request: "Read the synthetic note only.", label: "Reader" }, { id: "existing-spawn" })));
 		const child = SessionManager.inMemory(root, { id: childId });
 		child.appendCustomEntry("agent-coordination.identity", { agentId: childId, workflowId: ownerId, directSpawnerAgentId: ownerId, creationPreset: null,
 			spawnSource: { agentId: ownerId, entryId: spawnEntry, toolCallId: "existing-spawn" }, metadata: { label: "Reader" } });
@@ -79,16 +84,18 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		const participants = join(root, "pi-agent-coordination", Buffer.from(ownerId).toString("base64url"));
 		await mkdir(participants, { recursive: true });
 		childPath = join(participants, "reader.jsonl");
-		childContents = [child.getHeader(), ...child.getEntries()].map(entry => JSON.stringify(entry)).join("\n") + "\n";
-		await writeFile(childPath, childContents);
 		const callId = "duplicate-delivery-source";
-		const entryId = owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: ownerId, title: "Read garden note", question: "Summarize the synthetic garden note." }, { id: callId })));
-		const source = { agentId: ownerId, entryId, toolCallId: callId };
+		const author = scenario === "live-navigation" ? child : owner;
+		const entryId = author.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: ownerId, title: "Read garden note", question: "Summarize the synthetic garden note." }, { id: callId })));
+		const source = { agentId: author.getSessionId(), entryId, toolCallId: callId };
 		const requestMessageId = deriveMessageIdentity(source);
-		owner.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: callId, content: [], isError: false, timestamp: Date.now(), details: { requestMessageId, targetAgentId: ownerId, messageStatus: "sent" } });
-		const delivery = createMessageDelivery([{ source, projection: { kind: "request", requestMessageId, fromAgentId: ownerId, title: "Read garden note", question: "Summarize the synthetic garden note." } }]);
+		author.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: callId, content: [], isError: false, timestamp: Date.now(), details: { requestMessageId, targetAgentId: ownerId, messageStatus: "sent" } });
+		const delivery = createMessageDelivery([{ source, projection: { kind: "request", requestMessageId, fromAgentId: source.agentId, title: "Read garden note", question: "Summarize the synthetic garden note." } }]);
 		for (let copy = 0; copy < 2; copy++) owner.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
-		owner.appendMessage(fauxAssistantMessage("The duplicate is earlier than this unchanged native leaf."));
+		if (scenario !== "idle-human") owner.appendMessage(fauxAssistantMessage("The duplicate is earlier than this unchanged native leaf."));
+		else owner.appendMessage({ role: "user", content: [{ type: "text", text: "Saved user marker after the duplicate. Do not start until I send a new message." }], timestamp: Date.now() });
+		childContents = [child.getHeader(), ...child.getEntries()].map(entry => JSON.stringify(entry)).join("\n") + "\n";
+		if (scenario !== "idle-human") await writeFile(childPath, childContents);
 	}
 	await writeFile(ownerPath, [owner.getHeader(), ...owner.getEntries()].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
 	const fixturePath = join(root, "lifecycle-observation.mjs");
@@ -110,9 +117,10 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 				writeFileSync(${JSON.stringify(join(root, "ready.json"))}, JSON.stringify({pid:process.pid,path:ctx.sessionManager.getSessionFile(),tools:pi.getActiveTools()}));
 			});
 			pi.on('session_before_switch', event => ${JSON.stringify(scenario)} === 'parking-cancel' && event.targetSessionFile?.endsWith('repair-host.jsonl') ? {cancel:true} : undefined);
-			pi.on('session_shutdown', () => pi.appendEntry('repair-test-final-write', {pid:process.pid}));
+			pi.on('session_shutdown', () => { if (${JSON.stringify(scenario)} !== 'idle-human') pi.appendEntry('repair-test-final-write', {pid:process.pid}); });
 			pi.registerCommand('repair-test-bash', {handler:async () => { void runtime.session.executeBash('echo BASH_STARTED; sleep 30', chunk => {if(chunk.includes('BASH_STARTED'))writeFileSync(${JSON.stringify(join(root,"bash-started"))},'started');}); }});
 			pi.registerCommand('repair-test-clear-failure', {handler:() => clearFailure?.()});
+			pi.registerCommand('repair-test-native-change', {handler:() => runtime.session.setThinkingLevel('high')});
 			pi.registerCommand('repair-test-ping', {handler:(_args,ctx) => writeFileSync(${JSON.stringify(join(root, "ping.json"))}, JSON.stringify({pid:process.pid,path:ctx.sessionManager.getSessionFile(),nativeManagerReplaced:ctx.sessionManager !== globalThis.__repairOriginalManager,tools:pi.getActiveTools()}))});
 		}`);
 	const terminal = pty.spawn(process.execPath, [resolveInstalledPiCliPath(), "--session", ownerPath,
@@ -143,6 +151,23 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			return;
 		}
 		if (scenario === "cancel") { await until(() => repairRequests > 0, "model started"); terminal.write("\u001b"); }
+		if (scenario === "live-navigation") {
+			await until(() => repairRequests === 3, "held helper after actual streamed tool output");
+			terminal.write("/repair-test-ping\r");
+			await delay(500);
+			assert.ok(existsSync(join(root, "ping.json")), "repair must leave native slash commands responsive while helper is held");
+			terminal.write("/agents\r");
+			await delay(250);
+			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("Repair Moderator"), "repair-only Moderator must be navigable during repair");
+			terminal.write("\r");
+			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("Persisted Moderator transcript"), "actual repair Moderator view");
+			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("[Tool: repair_candidate]"), "actual helper tool stream is visible before completion");
+			terminal.write("2");
+			await delay(100);
+			assert.equal(ordinaryRequests, 0, "Owner snapshot navigation starts no turn");
+			// Complete while the read-only overlay is open: reopening must close it.
+			releaseModel?.();
+		}
 		if (scenario === "helper-kill") {
 			await until(() => repairRequests > 0, "model started");
 			const [attempt] = await readdir(join(repairRoot,"hosts"));
@@ -183,12 +208,14 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.equal(outcome.outcome, scenario === "admission-fail" ? "committed_admission_failed" : "admitted", root);
 		assert.ok(existsSync(join(repairRoot,"storage",id,"committed.json")));
 		const snapshot = await readFile(join(repairRoot,"storage",id,"snapshot","file-0"),"utf8");
-		assert.match(snapshot,/repair-test-final-write/);
+		if (scenario !== "idle-human") assert.match(snapshot,/repair-test-final-write/);
 		assert.equal(snapshot.split('"customType":"agent-coordination.message-delivery"').length-1,2);
 		const repaired = await readFile(ownerPath,"utf8");
 		assert.equal(repaired.split('"customType":"agent-coordination.message-delivery"').length-1,1);
-		assert.equal(await readFile(childPath!, "utf8"), childContents, "dormant child must remain unchanged");
-		assert.equal(await readFile(join(repairRoot, "storage", id, "snapshot", "file-1"), "utf8"), childContents);
+		if (scenario !== "idle-human") {
+			assert.equal(await readFile(childPath!, "utf8"), childContents, "dormant child must remain unchanged");
+			assert.equal(await readFile(join(repairRoot, "storage", id, "snapshot", "file-1"), "utf8"), childContents);
+		}
 		if (scenario === "bash") assert.match(snapshot,/"cancelled":true/);
 		if (rejectedEntry) {
 			assert.deepEqual(repaired.trim().split("\n").map(line=>JSON.parse(line)).find(entry=>entry.id===(rejectedEntry as {id:string}).id),rejectedEntry);
@@ -203,7 +230,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.notEqual(bootstrap.agentId,ownerId);
 		await delay(250);
 		terminal.write("/repair-test-ping\r");
-		await until(()=>existsSync(join(root,"ping.json")),"same terminal after repair");
+		await until(async ()=>existsSync(join(root,"ping.json")) && JSON.parse(await readFile(join(root,"ping.json"), "utf8")).path === ownerPath,"same terminal after repair");
 		const ping = JSON.parse(await readFile(join(root,"ping.json"),"utf8"));
 		assert.equal(ping.pid,terminal.pid);
 		assert.equal(ping.path,ownerPath);
@@ -211,6 +238,19 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.equal(ping.tools.includes("agent_message"),scenario!=="admission-fail");
 		assert.equal(ordinaryRequests,0,"repair must not automatically resume participants");
 		assert.equal(repairRequests,4);
+		if (scenario === "live-navigation") {
+			terminal.write("/agents\r");
+			await delay(200);
+			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("Repair Moderator"), "retained repair Moderator remains in normal /agents navigation");
+			terminal.write("\u001b");
+		}
+		if (scenario === "idle-human") {
+			terminal.write("/repair-test-native-change\r");
+			await delay(2000);
+			assert.equal(ordinaryRequests, 0, "repaired Owner must not auto-continue its unanswered Request");
+			terminal.write("Please continue now.\r");
+			await until(() => ordinaryRequests === 1, "new human prompt starts Owner exactly once");
+		}
 		if (scenario === "repeat") {
 			terminal.write("/agents repair\r");
 			await until(async ()=>(await readFile(join(root,"terminal.log"),"utf8")).includes("No repair needed"),"successful admission no longer authorizes no-op repair");

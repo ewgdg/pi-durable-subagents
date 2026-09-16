@@ -10,7 +10,7 @@ import type {
 
 import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
 import { OwnerRecoveryError } from "./bootstrap/owner-recovery-error.ts";
-import { ownerRepairCommand, isRepairPaused, isRepairSwitchAuthorized, presentRepairHost } from "./repair/owner-repair.ts";
+import { ownerRepairCommand, isRepairPaused, isRepairSwitchAuthorized, presentRepairHost, repairNavigation } from "./repair/owner-repair.ts";
 import { readRepairHost } from "./repair/repair-host.ts";
 import { closeRepairInput } from "./repair/input-retirement.ts";
 import { ProtocolInvariantError } from "./protocol/identities.ts";
@@ -90,7 +90,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				closeRepairInput(runtime.session);
 				ownerAdmissionState = "failed";
 				pi.setActiveTools([]);
-				registerAgentsCommand(pi, resolveAdmittedOwnerView, new Error("This is an unrelated repair host, not an Owner Workflow. Use /agents repair."), repair);
+				registerAgentsCommand(pi, resolveAdmittedOwnerView, new Error("This is an unrelated repair host, not an Owner Workflow. Use /agents repair."), repair, repairNavigation);
 				removeRepairInput = presentRepairHost(ctx, repairHost);
 				return;
 			}
@@ -110,7 +110,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			);
 			activateOwnerAgentTools(pi);
 			ownerAdmissionState = "admitted";
-			registerAgentsCommand(pi, resolveAdmittedOwnerView, "admitted", repair);
+			registerAgentsCommand(pi, resolveAdmittedOwnerView, "admitted", repair, repairNavigation);
 			showOwnerBlockage(ctx.ui, undefined);
 		} catch (error) {
 			ownerAdmissionState = "failed";
@@ -122,13 +122,13 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 					ctx.sessionManager.getSessionFile(), error,
 				) : undefined;
 			if (!failure) {
-				registerAgentsCommand(pi, resolveAdmittedOwnerView, error instanceof Error ? error : new Error(String(error)), repair);
+				registerAgentsCommand(pi, resolveAdmittedOwnerView, error instanceof Error ? error : new Error(String(error)), repair, repairNavigation);
 				throw error;
 			}
 			// A blocked Owner has no coordinator-backed commands. Keep diagnostics
 			// independent of that failed admission and out of restored chat history.
 			admissionFailures.set(ctx.sessionManager, failure);
-			registerAgentsCommand(pi, resolveAdmittedOwnerView, failure, repair);
+			registerAgentsCommand(pi, resolveAdmittedOwnerView, failure, repair, repairNavigation);
 			showOwnerBlockage(ctx.ui, failure);
 		} finally {
 			settleOwnerAdmission();
