@@ -5,7 +5,8 @@ import { inspectColdWorkflowEvidence } from "../bootstrap/cold-host-discovery.ts
 import type { AgentEvidence } from "../coordination/agent-record.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE, MODERATOR_INPUT_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
-import { deriveMessageIdentity, resolveCommittedSpawnSource, sameToolCallPointer } from "../protocol/identities.ts";
+import { deriveMessageIdentity, ProtocolInvariantError, resolveCommittedSpawnSource, sameToolCallPointer, toolCallPointerKey } from "../protocol/identities.ts";
+import { deliveriesAtEntry, inspectMessageDeliveries, MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import { indexedState } from "../transcript/retained-transcript.ts";
 import { AgentTranscript, type TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { parseRepairTranscript } from "./native-transcript.ts";
@@ -36,12 +37,42 @@ export type RepairValidationReport = Readonly<{
 	valid: boolean;
 	errors: readonly EvidenceError[];
 	changes: readonly RepairFileChange[];
+	certificate?: DuplicateDeliveryCertificate;
 	protocolEffects: Readonly<{
 		beforeStatus: "known" | "unknown";
 		beforeErrors: readonly EvidenceError[];
+		comparisonBasis: "original" | "certified_duplicate_reference";
+		certifiedReference?: ProtocolEffectSnapshot;
 		changes: readonly ProtocolEffectChange[];
 	}>;
 }>;
+
+export type DuplicateDeliveryCertificate = Readonly<{
+	kind: "exact_duplicate_message_delivery";
+	blockages: readonly { path: string; message: string }[];
+	removedEntries: readonly { path: string; agentId: string; removedEntryId: string; retainedEntryId: string }[];
+	parentRewrites: readonly { path: string; entryId: string; before: string; after: string | null }[];
+}>;
+
+/** Offline, lossless reference construction only; never changes live files or infers rejected intent. */
+export async function prepareDuplicateDeliveryRepair(options: {
+	ownerPath: string; workflowId: string; files: readonly RepairTranscriptFile[];
+}): Promise<Readonly<{
+	eligible: boolean; errors: readonly EvidenceError[]; files: readonly RepairTranscriptFile[];
+	certificate?: DuplicateDeliveryCertificate;
+}>> {
+	const errors: EvidenceError[] = [];
+	const files = manifest(options.files, "original", errors);
+	if (errors.length) return { eligible: false, errors, files: options.files };
+	try {
+		const reference = duplicateDeliveryReference(files, options.ownerPath, options.workflowId);
+		const inspected = await inspectGeneration(new Map(reference.files.map(file => [file.path, file])), options.ownerPath, options.workflowId);
+		if (inspected.errors.length) return { eligible: false, errors: inspected.errors, files: options.files };
+		return { eligible: true, errors: [], ...reference };
+	} catch (error) {
+		return { eligible: false, errors: [{ code: "unsupported_admission_repair", message: describeError(error) }], files: options.files };
+	}
+}
 
 /** Certifies one exhaustive, immutable generation. It cannot enumerate directories or authorize/apply bytes. */
 export async function validateRepairProposal(options: {
@@ -60,59 +91,124 @@ export async function validateRepairProposal(options: {
 	const before = await inspectGeneration(beforeFiles, options.ownerPath, options.workflowId);
 	const after = await inspectGeneration(afterFiles, options.ownerPath, options.workflowId);
 	errors.push(...after.errors);
-	for (const rejection of after.effects.rejections) errors.push({
-		path: after.byId.get(rejection.source.agentId)?.transcriptPath ?? undefined,
-		code: "coordination_rejected", message: `${rejection.source.entryId}: ${rejection.diagnostic}`,
-	});
-	for (const [path, original] of before.inspections) {
-		const candidate = after.inspections.get(path);
-		if (!candidate) continue;
-		if (!isDeepStrictEqual(original.header, candidate.header) ||
-			!isDeepStrictEqual(identityEntries(original.entries), identityEntries(candidate.entries))) {
-			errors.push({ path, code: "identity_changed", message: "Native header and all Workflow bootstrap/cutoff records must be preserved" });
-		}
-	}
-	// If original bytes cannot even be parsed, authority to preserve their valid evidence is unknown.
-	// A model's reconstructed transcript is not sufficient proof of the lost historical intent.
-	if (before.inspections.size !== beforeFiles.size) errors.push({ code: "original_unverifiable",
-		message: "Original native evidence cannot be parsed completely; automatic certification cannot establish preservation" });
-	const beforeKnown = before.errors.length === 0;
-	const protocolChanges = diffProtocolEffects(before.effects.facts, after.effects.facts);
-	for (const change of protocolChanges) {
-		if (change.category === "accepted_source_order" && change.before) {
-			const originalKeys = change.before.sourceKeys as readonly string[];
-			const originalSources = new Set(originalKeys);
-			const candidateKeys = (change.after?.sourceKeys ?? []) as readonly string[];
-			// Correcting rejected sources may insert newly accepted evidence, but may not reorder existing authority.
-			if (!isDeepStrictEqual(originalKeys, candidateKeys.filter(key => originalSources.has(key)))) {
-				errors.push({ path: typeof change.before.path === "string" ? change.before.path : undefined,
-					code: "accepted_evidence_reordered", message: `Repair must preserve relative accepted coordination source order: ${change.key}` });
+	const preparation = await prepareDuplicateDeliveryRepair({ ownerPath: options.ownerPath, workflowId: options.workflowId, files: options.before });
+	errors.push(...preparation.errors);
+	let comparison = before;
+	if (preparation.eligible) {
+		comparison = await inspectGeneration(new Map(preparation.files.map(file => [file.path, file])), options.ownerPath, options.workflowId);
+		for (const [path, reference] of comparison.inspections) {
+			const candidate = after.inspections.get(path);
+			// Parent splicing is fixed by the reference. Every other native record, including rejected history,
+			// conversation and physical order, must remain exactly as observed, not merely project to similar effects.
+			if (!candidate || !isDeepStrictEqual(reference.header, candidate.header) || !isDeepStrictEqual(reference.entries, candidate.entries)) {
+				errors.push({ path, code: "not_lossless_duplicate_repair", message: "Candidate differs from the exact evidence-preserving duplicate Delivery correction" });
 			}
-		}
-		if (change.category === "record" && change.before?.status === "accepted" &&
-			(!change.after || !isDeepStrictEqual(change.before.value, change.after.value))) {
-			errors.push({ path: typeof change.before.path === "string" ? change.before.path : undefined,
-				code: "accepted_evidence_changed", message: `Repair must not rewrite or discard accepted coordination evidence: ${change.key}` });
-		}
-		if (change.category === "record" && !change.before && change.after) errors.push({
-			code: "invented_evidence", message: `Repair cannot invent a new coordination source: ${change.key}`,
-		});
-		if (change.category === "answer_duty" && change.before && !change.after) {
-			// Correction of an existing rejected resolution may discharge a duty; deleting its Delivery may not.
-			const requestId = change.before.requestId;
-			const hasResolution = after.effects.facts.some(fact =>
-				fact.category === "answer_commitment" && fact.value.requestId === requestId ||
-				fact.category === "delivery" && isRecord(fact.value.projection) &&
-				fact.value.projection.kind === "request_cancellation" && fact.value.projection.requestMessageId === requestId);
-			if (!hasResolution) errors.push({ code: "duty_removed", message: `Delivered Answer duty disappeared without accepted resolution: ${change.key}` });
 		}
 	}
 	return {
 		valid: errors.length === 0, errors, changes: fileChanges(beforeFiles, afterFiles),
-		protocolEffects: { beforeStatus: beforeKnown ? "known" : "unknown", beforeErrors: before.errors,
-			// Partial projections remain useful evidence, but never pretend missing before facts were absent.
-			changes: protocolChanges },
+		...(preparation.certificate ? { certificate: preparation.certificate } : {}),
+		protocolEffects: { beforeStatus: before.errors.length === 0 ? "known" : "unknown", beforeErrors: before.errors,
+			comparisonBasis: preparation.eligible ? "certified_duplicate_reference" : "original",
+			...(preparation.eligible ? { certifiedReference: comparison.effects } : {}),
+			// The original remains unknown. The explicitly certified reference is not invented historical replay.
+			changes: diffProtocolEffects(comparison.effects.facts, after.effects.facts) },
 	};
+}
+
+function duplicateDeliveryReference(files: ReadonlyMap<string, RepairTranscriptFile>, ownerPath: string, workflowId: string): {
+	files: readonly RepairTranscriptFile[]; certificate: DuplicateDeliveryCertificate;
+} {
+	const inspections = new Map([...files].map(([path, file]) => [path,
+		parseRepairTranscript(file.contents, path, { projectCoordination: false })]));
+	const owner = inspections.get(ownerPath);
+	if (!owner) throw new Error("Original generation must contain the exact Owner path");
+	verifyOwnerIdentity(owner, workflowId);
+	const removedEntries: DuplicateDeliveryCertificate["removedEntries"][number][] = [];
+	const parentRewrites: DuplicateDeliveryCertificate["parentRewrites"][number][] = [];
+	const blockages: DuplicateDeliveryCertificate["blockages"][number][] = [];
+	const removals = new Map<string, Map<string, SessionEntry>>();
+	for (const [path, transcript] of inspections) {
+		try {
+			inspectMessageDeliveries({ recipientAgentId: transcript.sessionId, transcript });
+			continue;
+		} catch (error) {
+			// Only this real normal-reader invariant admits a correction; no generic fallback projection.
+			if (!(error instanceof ProtocolInvariantError) || !/^invariant_violation: Message .+ has duplicate Deliveries$/.test(error.message)) throw error;
+			blockages.push({ path, message: error.message });
+		}
+		const sources = new Map<string, SessionEntry>();
+		const removed = new Map<string, SessionEntry>();
+		for (const entry of indexedState(transcript).scope(transcript.sessionId)) {
+			if (entry.type !== "custom_message" || entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE) continue;
+			const deliveries = deliveriesAtEntry(transcript, transcript.sessionId, entry.id);
+			if (!deliveries.length) continue; // Rejected envelopes stay byte-for-byte inert.
+			const sourceKeys = deliveries.map(delivery => toolCallPointerKey(delivery.source));
+			const prior = sourceKeys.map(key => sources.get(key)).filter((value): value is SessionEntry => !!value);
+			if (!prior.length) {
+				for (const key of sourceKeys) sources.set(key, entry);
+				continue;
+			}
+			const retained = prior[0]!;
+			if (prior.length !== sourceKeys.length || prior.some(value => value !== retained) ||
+				!isDeepStrictEqual(deliveryEnvelope(retained), deliveryEnvelope(entry))) {
+				throw new Error(`${path}: conflicting or overlapping Delivery envelopes cannot be repaired`);
+			}
+			let ancestor = entry.parentId;
+			while (ancestor !== null && ancestor !== retained.id) ancestor = indexedState(transcript).byId.get(ancestor)!.parentId;
+			if (ancestor === null) throw new Error(`${path}: duplicate Delivery is not on the retained Delivery's native branch`);
+			removed.set(entry.id, entry);
+			removedEntries.push({ path, agentId: transcript.sessionId, removedEntryId: entry.id, retainedEntryId: retained.id });
+		}
+		if (!removed.size) throw new Error(`${path}: duplicate Delivery blockage has no exact redundant envelope`);
+		removals.set(path, removed);
+	}
+	if (!removedEntries.length) throw new Error("No supported duplicate Delivery admission failure; healthy and rejected-only history is not repair eligible");
+	if (!blockages.some(blockage => blockage.path === ownerPath)) {
+		throw new Error("Owner has no supported duplicate Delivery admission failure; child-only quarantine does not authorize repair");
+	}
+	const removedIds = new Set(removedEntries.map(entry => entry.removedEntryId));
+	const repaired = [...files].map(([path, file]) => {
+		const transcript = inspections.get(path)!;
+		const removed = removals.get(path) ?? new Map<string, SessionEntry>();
+		const replacements = new Map<string, SessionEntry>();
+		if (containsRemovedReference(transcript.header, removedIds)) throw new Error(`${path}: native header depends on a removed Delivery`);
+		let survivingLeaf = transcript.entries.at(-1)?.id ?? null;
+		while (survivingLeaf !== null && removed.has(survivingLeaf)) survivingLeaf = removed.get(survivingLeaf)!.parentId;
+		// Pi reopens the last physical entry. Removing a branched tail must not select an abandoned conversation.
+		if ((transcript.entries.filter(entry => !removed.has(entry.id)).at(-1)?.id ?? null) !== survivingLeaf) {
+			throw new Error(`${path}: removing duplicate Delivery would change the reopened native leaf`);
+		}
+		for (const entry of transcript.entries) {
+			if (removed.has(entry.id)) continue;
+			const { parentId, ...otherFields } = entry;
+			// Unknown extension payloads can contain entry references too. Refuse rather than guess how to migrate them.
+			if (containsRemovedReference(otherFields, removedIds)) throw new Error(`${path}: entry ${entry.id} depends on a removed Delivery`);
+			let parent = parentId;
+			while (parent !== null && removed.has(parent)) parent = removed.get(parent)!.parentId;
+			if (parent !== parentId) {
+				parentRewrites.push({ path, entryId: entry.id, before: parentId!, after: parent });
+				replacements.set(entry.id, { ...entry, parentId: parent });
+			}
+		}
+		if (!removed.size) return file;
+		return { path, contents: file.contents.split("\n").flatMap(line => {
+			if (!line) return [line];
+			const entry = JSON.parse(line) as { id: string };
+			return removed.has(entry.id) ? [] : [replacements.has(entry.id) ? JSON.stringify(replacements.get(entry.id)) : line];
+		}).join("\n") };
+	});
+	return { files: repaired, certificate: { kind: "exact_duplicate_message_delivery", blockages, removedEntries, parentRewrites } };
+}
+
+function deliveryEnvelope(entry: SessionEntry) {
+	const { id: _id, parentId: _parentId, timestamp: _timestamp, ...envelope } = entry;
+	return envelope;
+}
+function containsRemovedReference(value: unknown, removedIds: ReadonlySet<string>): boolean {
+	if (typeof value === "string") return [...removedIds].some(id => value.includes(id));
+	if (Array.isArray(value)) return value.some(item => containsRemovedReference(item, removedIds));
+	return isRecord(value) && Object.entries(value).some(([key, item]) => containsRemovedReference(key, removedIds) || containsRemovedReference(item, removedIds));
 }
 
 function manifest(files: readonly RepairTranscriptFile[], name: string, errors: EvidenceError[]) {
@@ -207,11 +303,6 @@ function verifyOwnerIdentity(transcript: TranscriptInspection, workflowId: strin
 		throw new Error("Persisted canonical Owner identity cannot be verified without adoption or rewriting");
 	}
 	return { identity, identityEntryId: current.id };
-}
-
-function identityEntries(entries: readonly SessionEntry[]) {
-	return entries.filter(entry => (entry.type === "custom" && entry.customType === AGENT_IDENTITY_CUSTOM_TYPE) ||
-		(entry.type === "custom_message" && entry.customType === MODERATOR_INPUT_CUSTOM_TYPE));
 }
 
 function fileChanges(before: ReadonlyMap<string, RepairTranscriptFile>, after: ReadonlyMap<string, RepairTranscriptFile>): RepairFileChange[] {

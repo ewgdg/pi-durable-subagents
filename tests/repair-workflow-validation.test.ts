@@ -29,18 +29,19 @@ function file(path: string, manager: SessionManager) {
 const validate = (before: ReturnType<ReturnType<typeof fixture>["files"]>, after = before) =>
 	validateRepairProposal({ ownerPath, workflowId: "owner", before, after });
 
-test("unchanged complete Workflow validates without opening native sessions", async () => {
+test("unchanged complete Workflow is inspectable but not repair eligible", async () => {
 	const f = fixture();
 	const files = f.files();
 	const report = await validate(files);
-	assert.equal(report.valid, true, JSON.stringify(report.errors));
+	assert.equal(report.valid, false);
+	assert.deepEqual(report.errors.map(error => error.code), ["unsupported_admission_repair"]);
 	assert.deepEqual(report.changes, []);
 	assert.equal(report.protocolEffects.beforeStatus, "known");
 	assert.deepEqual(report.protocolEffects.changes, []);
 	assert.deepEqual(f.files(), files);
 });
 
-test("correcting a rejected Request exposes newly deliverable external work", async () => {
+test("resurrecting a rejected Request is refused while its newly deliverable work remains auditable", async () => {
 	const f = fixture();
 	const entryId = f.owner.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message",
 		{ operation: "request", targetAgent: "child", question: "Publish the release" }, { id: "publish" })));
@@ -57,7 +58,8 @@ test("correcting a rejected Request exposes newly deliverable external work", as
 	const after = before.map(value => ({ ...value, contents: value.contents.replace('"question":"Publish the release"',
 		'"question":"Publish the release","title":"Publish release"') }));
 	const report = await validate(before, after);
-	assert.equal(report.valid, true, JSON.stringify(report.errors));
+	assert.equal(report.valid, false);
+	assert.ok(report.errors.some(error => error.code === "unsupported_admission_repair"));
 	assert.equal(report.protocolEffects.beforeStatus, "known");
 	assert.ok(report.protocolEffects.changes.some(change => change.category === "pending_delivery" && change.after?.messageId === requestId));
 	assert.ok(report.protocolEffects.changes.some(change => change.category === "record" && change.before?.status === "rejected" && change.after?.status === "accepted"));
@@ -88,7 +90,7 @@ test("repair cannot reverse accepted calls within one assistant entry", async ()
 				targetAgentId: "child", messageStatus: "sent" } });
 	}
 	const before = f.files();
-	assert.equal((await validate(before)).valid, true);
+	assert.equal((await validate(before)).protocolEffects.beforeStatus, "known");
 	const after = before.map(value => ({ ...value, contents: value.contents.split("\n").map(line => {
 		if (!line) return line;
 		const entry = JSON.parse(line);
@@ -97,7 +99,7 @@ test("repair cannot reverse accepted calls within one assistant entry", async ()
 	}).join("\n") }));
 	const report = await validate(before, after);
 	assert.equal(report.valid, false);
-	assert.ok(report.errors.some(error => error.code === "accepted_evidence_reordered"));
+	assert.ok(report.errors.some(error => error.code === "unsupported_admission_repair"));
 	assert.ok(report.protocolEffects.changes.some(change => change.category === "pending_delivery_order"));
 });
 
@@ -111,7 +113,7 @@ test("repair cannot reverse accepted source order across native entries", async 
 				targetAgentId: "child", messageStatus: "sent" } });
 	}
 	const before = f.files();
-	assert.equal((await validate(before)).valid, true);
+	assert.equal((await validate(before)).protocolEffects.beforeStatus, "known");
 	const after = before.map(value => {
 		if (value.path !== ownerPath) return value;
 		const [header, ...entries] = value.contents.trim().split("\n").map(line => JSON.parse(line));
@@ -124,11 +126,11 @@ test("repair cannot reverse accepted source order across native entries", async 
 	});
 	const report = await validate(before, after);
 	assert.equal(report.valid, false);
-	assert.deepEqual(report.errors.map(error => error.code), ["accepted_evidence_reordered"]);
+	assert.deepEqual(report.errors.map(error => error.code), ["unsupported_admission_repair"]);
 	assert.ok(report.protocolEffects.changes.some(change => change.category === "pending_delivery_order"));
 });
 
-test("moving unrelated content around accepted calls does not change protocol order", async () => {
+test("unchanged protocol order does not authorize unrelated content movement", async () => {
 	const f = fixture();
 	const entryId = f.owner.appendMessage(fauxAssistantMessage([
 		{ type: "text", text: "Unrelated explanation" },
@@ -147,7 +149,7 @@ test("moving unrelated content around accepted calls does not change protocol or
 		return JSON.stringify(entry);
 	}).join("\n") }));
 	const report = await validate(before, after);
-	assert.equal(report.valid, true, JSON.stringify(report.errors));
+	assert.equal(report.valid, false);
 	assert.equal(report.changes.length, 1);
 	assert.deepEqual(report.protocolEffects.changes, []);
 });
@@ -175,7 +177,8 @@ test("candidate cannot discard a valid delivered duty", async () => {
 	f.child.appendCustomMessageEntry(delivery.customType, delivery.content, true, delivery.details);
 	const report = await validate(f.files(), withoutDelivery);
 	assert.equal(report.valid, false);
-	assert.ok(report.errors.some(error => error.code === "duty_removed" || error.code === "accepted_evidence_changed"));
+	assert.ok(report.errors.some(error => error.code === "unsupported_admission_repair"));
+	assert.ok(report.protocolEffects.changes.some(change => change.category === "answer_duty" && change.before && !change.after));
 });
 
 test("local orphan Answer commitment is distinct from absent Answer Delivery", async () => {
@@ -194,7 +197,8 @@ test("local orphan Answer commitment is distinct from absent Answer Delivery", a
 			requestTitle: "Retained request", disposition: "committed", delivery: "omitted", reason: "request_source_unavailable" } });
 	const after = f.files();
 	const unchanged = await validate(after);
-	assert.equal(unchanged.valid, true, JSON.stringify(unchanged.errors));
+	assert.equal(unchanged.valid, false);
+	assert.deepEqual(unchanged.errors.map(error => error.code), ["unsupported_admission_repair"]);
 	// An audit can describe newly supplied evidence while certification refuses inventing its history.
 	const report = await validate(before, after);
 	assert.equal(report.valid, false);
@@ -303,7 +307,8 @@ test("Answer retrieval is audited as Delivery and suppresses later pending Answe
 		content: [{ type: "text", text: JSON.stringify(result) }], details: result });
 	const files = f.files();
 	const unchanged = await validate(files);
-	assert.equal(unchanged.valid, true, JSON.stringify(unchanged.errors));
+	assert.equal(unchanged.valid, false);
+	assert.deepEqual(unchanged.errors.map(error => error.code), ["unsupported_admission_repair"]);
 	const report = await validate(before, files);
 	assert.ok(report.protocolEffects.changes.some(change => change.category === "delivery" && change.after?.messageId === answerId && change.after?.method === "retrieval"));
 	assert.ok(!report.protocolEffects.changes.some(change => change.category === "pending_delivery" && change.after?.messageId === answerId));
