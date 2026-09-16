@@ -155,7 +155,7 @@ export async function initializeOwnerWorkflow(options: {
 	});
 	if (recoveredWorkflow.quarantinedCandidateCount > 0) {
 		ctx.ui.notify(
-			`${recoveredWorkflow.quarantinedCandidateCount} Agent transcript candidate${recoveredWorkflow.quarantinedCandidateCount === 1 ? " was" : "s were"} quarantined; independently verified Agents remain available.`,
+			`${recoveredWorkflow.quarantinedCandidateCount} Agent transcript candidate${recoveredWorkflow.quarantinedCandidateCount === 1 ? " was" : "s were"} quarantined.`,
 			"warning",
 		);
 	}

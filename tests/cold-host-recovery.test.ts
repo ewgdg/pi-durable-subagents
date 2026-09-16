@@ -488,7 +488,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 			{
 				type: "warning",
 				message:
-					"7 Agent transcript candidates were quarantined; independently verified Agents remain available.",
+					"7 Agent transcript candidates were quarantined.",
 			},
 		],
 	);
@@ -1156,7 +1156,7 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 	assert.equal(
 		reopened.ui.notifications.some(
 			({ message, type }) => type === "warning" &&
-				message.includes("1 Agent transcript candidate was quarantined"),
+				message === "1 Agent transcript candidate was quarantined.",
 		),
 		true,
 		JSON.stringify(reopened.ui.notifications),
