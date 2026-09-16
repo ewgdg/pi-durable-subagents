@@ -699,6 +699,37 @@ async function executeOwnerTool(
 	return result.details;
 }
 
+test("rejected Request and Answer history leaves navigation and diagnostics usable without continuing work", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	for (const operation of ["request", "answer"]) {
+		host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation,
+		}, { id: `rejected-${operation}` }), { stopReason: "toolUse" }));
+	}
+	await bindTestOwnerHost(host, "tui");
+	try {
+		assert.equal(host.ui.widgets.has("agent-coordination.blockage"), false);
+		const command = host.session.extensionRunner.getCommand("agents")!;
+		const ctx = host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1];
+		await command.handler("owner", ctx);
+		for (const argument of ["", "diagnostics"]) {
+			const count = host.ui.customSurfaces.length;
+			const opened = command.handler(argument, ctx);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.equal(host.ui.customSurfaces.length, count + 1);
+			const panel = host.ui.customSurfaces.at(-1)!;
+			const rendered = panel.render(120).join("\n");
+			assert.match(rendered, argument ? /diagnostics/i : /Owner/);
+			panel.handleInput?.(argument ? "q" : "\u001b");
+			await opened;
+		}
+		assert.equal(host.session.isStreaming, false);
+		assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
+	} finally {
+		await host.runtime.dispose();
+	}
+});
+
 test("conflicting valid Owner Deliveries retain admission-failure diagnostics after startup and reload", { timeout: 5_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	appendConflictingOwnerDelivery(host.session.sessionManager);

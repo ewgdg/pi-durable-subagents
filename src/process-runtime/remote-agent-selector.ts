@@ -137,7 +137,8 @@ export function createOwnerAgentPresentationHandlers(
 		setReportRead: async (reportId, read) => resolveView().setReportRead(reportId, read),
 		snapshot: async () => {
 			const view = resolveView();
-			await view.refreshTranscriptFacts();
+			// Child navigation uses the same admitted projection as Owner navigation,
+			// not a transcript refresh that could block the route back to Owner.
 			return createAgentSelectorSnapshot(view, selectedAgentId);
 		},
 		addChangeHandler(handler) {

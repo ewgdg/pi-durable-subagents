@@ -61,6 +61,7 @@ const childStatus = {
 } as const;
 
 function presentationView(options: {
+	refreshTranscriptFacts?: HumanPresentationCoordinatorView["refreshTranscriptFacts"];
 	status?: HumanPresentationCoordinatorView["status"];
 	humanAttention?: () => readonly Readonly<{
 		requestId: string;
@@ -73,7 +74,7 @@ function presentationView(options: {
 	focusHumanAnswer?: (agentId: string, requestId: string) => Promise<void>;
 } = {}): HumanPresentationCoordinatorView {
 	return {
-		refreshTranscriptFacts: async () => undefined,
+		refreshTranscriptFacts: options.refreshTranscriptFacts ?? (async () => undefined),
 		status: options.status ?? (() => childStatus),
 		selectionRoster: () => ({ live: [ownerStatus, childStatus], dormant: [] }),
 		humanAttention: options.humanAttention ?? (() => []),
@@ -110,9 +111,10 @@ test("selector snapshot is one exact scoped presentation boundary value", () => 
 	});
 });
 
-test("local registered /agents owner returns through the authoritative selection path", async () => {
+test("local registered /agents owner returns through the authoritative selection path without transcript refresh", async () => {
 	const opened: string[] = [];
 	const view = presentationView({
+		refreshTranscriptFacts: async () => { throw new Error("transcript refresh unavailable"); },
 		openAgentPresentation: async (agentId) => {
 			opened.push(agentId);
 			return { kind: "selected" };
@@ -141,6 +143,26 @@ test("local registered /agents owner returns through the authoritative selection
 	await ownerCommand.handler("owner", { ui } as unknown as ExtensionCommandContext);
 
 	assert.deepEqual(opened, ["owner"]);
+});
+
+test("remote presentation navigates existing Owner and Moderator identities without transcript refresh", async () => {
+	const opened: string[] = [];
+	const moderatorStatus = { ...childStatus, agentId: "moderator", label: "Moderator" };
+	const view = { ...presentationView({
+		refreshTranscriptFacts: async () => { throw new Error("transcript refresh unavailable"); },
+		openAgentPresentation: async (agentId) => {
+			opened.push(agentId);
+			return { kind: "selected" };
+		},
+	}), selectionRoster: () => ({ live: [ownerStatus, moderatorStatus], dormant: [] }) };
+	const presentation = createOwnerAgentPresentationHandlers(() => view, "moderator");
+	const snapshot = await presentation.snapshot();
+	assert.deepEqual(snapshot.live.map(({ agentId }) => agentId), ["owner", "moderator"]);
+	assert.deepEqual(opened, []);
+	await presentation.select({ kind: "select_agent", agentId: "owner" }, new AbortController().signal);
+	const ownerPresentation = createOwnerAgentPresentationHandlers(() => view, "owner");
+	await ownerPresentation.select({ kind: "select_agent", agentId: "moderator" }, new AbortController().signal);
+	assert.deepEqual(opened, ["owner", "moderator"]);
 });
 
 test("remote registered /agents owner selects Owner without opening the selector", async () => {
@@ -534,6 +556,7 @@ test("local and child /agents open immutable reports before explicitly selecting
 		const command = mode === "local"
 			? captureCommand((pi) => registerAgentsCommand(pi, () => ({
 				...presentationView(),
+				refreshTranscriptFacts: async () => { throw new Error("transcript refresh unavailable"); },
 				reportHistory: () => [{ report }],
 				setReportRead: () => { acknowledged = true; },
 				addAgentActivityChangeHandler: () => () => {},

@@ -87,7 +87,8 @@ export function registerAgentsCommand(
 			}
 			const commandMode = parseAgentsCommandArgument(args);
 			const view = resolveView();
-			await view.refreshTranscriptFacts();
+			// Navigation uses the admitted projection; transcript refresh must not
+			// prevent opening the selector or returning to Owner.
 			const status = view.status();
 			if (commandMode === "owner") {
 				const selection = createAgentSelectionSession(view, status.agentId);
