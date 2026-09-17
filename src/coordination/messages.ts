@@ -210,10 +210,10 @@ export class MessageCoordinator {
 		if (resolution?.cancellation || resolution?.answer) {
 			return { ...identity, disposition: "skipped", reason: "request_resolved" };
 		}
-		// A Cancellation only exists to stop work on a Request this responder saw.
+		// A Cancellation only exists to stop work on a Request this responder may hold.
 		if (
 			message.kind === "request_cancellation" &&
-			!this.#requestReachedResponder(message.requestId, recipient)
+			this.#requestCanNeverReachResponder(message.requestId, recipient)
 		) {
 			return { ...identity, disposition: "skipped", reason: "request_not_delivered" };
 		}
@@ -1353,7 +1353,7 @@ export class MessageCoordinator {
 				? () => this.#isRequestWithdrawn(message.messageId, recipient)
 				: message.kind === "request_cancellation"
 					? () => this.#isCancellationNotified(message.requestId, recipient) ||
-						!this.#requestReachedResponder(message.requestId, recipient)
+						this.#requestCanNeverReachResponder(message.requestId, recipient)
 					: undefined,
 			preemptsAgentWait: message.kind === "request_cancellation" ||
 				(message.kind === "message" && message.deliveryMode === "steer"),
@@ -1475,12 +1475,14 @@ export class MessageCoordinator {
 	}
 
 	/**
-	 * Durable Request-Delivery evidence that the withdrawn Request reached this
-	 * responder. A Cancellation notification is pointless when it is absent: the
-	 * withdrawn Request is itself suppressed, so the responder sees neither message.
+	 * A Cancellation only exists to stop work on a Request this responder may hold.
+	 * It is pointless only when the withdrawn Request can never reach the responder:
+	 * no Delivery proof and a dispatch that was never handed to its Runtime. An
+	 * in-flight dispatch may still commit proof, so its Cancellation is announced.
 	 */
-	#requestReachedResponder(requestId: string, responder: AgentRecord): boolean {
-		return this.#requestEvidence.findDeliveredRequest(responder, requestId) !== undefined;
+	#requestCanNeverReachResponder(requestId: string, responder: AgentRecord): boolean {
+		return this.#requestEvidence.findDeliveredRequest(responder, requestId) === undefined &&
+			!this.#deliveryScheduler.hasDispatchedDelivery(responder.identity.agentId, requestId);
 	}
 
 	#requireAgent(agentId: string): AgentRecord {

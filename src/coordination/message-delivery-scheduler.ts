@@ -536,6 +536,20 @@ export class MessageDeliveryScheduler {
 			this.#activeResumeByAgent.get(recipientAgentId)?.delivery.messageId === messageId;
 	}
 
+	/**
+	 * True once this exact Delivery was handed to its Runtime and until its batch
+	 * settles. A frozen Steer batch that has not dispatched yet does not count: the
+	 * Request's own suppression can still stop it before hand-off.
+	 */
+	hasDispatchedDelivery(recipientAgentId: string, messageId: string): boolean {
+		const frozen = this.#frozenSteerByAgent.get(recipientAgentId);
+		return this.#activeDeferredByAgent.get(recipientAgentId)?.deliveries.some(delivery => delivery.messageId === messageId) === true ||
+			this.#activeWaitPreemptionByAgent.get(recipientAgentId)?.deliveries.some(delivery => delivery.messageId === messageId) === true ||
+			this.#activeResumeByAgent.get(recipientAgentId)?.delivery.messageId === messageId ||
+			(frozen?.dispatched === true &&
+				frozen.deliveries.some(delivery => delivery.messageId === messageId));
+	}
+
 	prepareInterruptionInLane(record: AgentRecord): void {
 		this.#frozenSteerByAgent.delete(record.identity.agentId);
 	}

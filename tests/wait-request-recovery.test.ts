@@ -906,21 +906,31 @@ test("a Cancellation whose Request never reached the responder starts no Run", {
 	assert.equal(h.deliveries(h.responder).filter(delivery => delivery.projection.kind === "request_cancellation").length, 0);
 });
 
-test("a Request Delivery committing after its Cancellation does not re-add answer_owed", { timeout: 5_000 }, async (t) => {
+test("an in-flight Request Delivery announces its Cancellation without re-adding answer_owed", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	h.responder.deferProof = true;
 	const request = await h.message(h.requester, "deferred", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Proof pending" });
 	assert.ok("requestMessageId" in request);
-	// The Request dispatch is in flight; hold the responder so the Cancellation
-	// cannot be delivered before the Request proof commits.
+	await flush();
+	assert.equal(h.responder.dispatches.length, 1, "the Request was handed to the responder Runtime");
+	// Hold the responder so the Cancellation is scheduled but not handed over until
+	// the in-flight Request proof commits.
 	h.responder.blocked = true;
 	await h.message(h.requester, "cancel", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdrawn" });
+	h.responder.blocked = false;
 	h.responder.commitPending();
+	// Only the withdrawn Request proof was deferred; the Cancellation commits normally.
+	h.responder.deferProof = false;
 	h.responder.settle(); await flush();
 	assert.equal(
 		h.responder.retentionReasons.has(`answer_owed:${request.requestMessageId}`),
 		false,
 		"the requester's committed Cancellation prevents re-adding the responder duty",
+	);
+	assert.deepEqual(
+		h.deliveries(h.responder).map(delivery => delivery.projection.kind),
+		["request", "request_cancellation"],
+		"a Request whose Delivery is already in flight still announces its Cancellation",
 	);
 });
 
