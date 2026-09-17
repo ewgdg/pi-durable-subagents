@@ -58,6 +58,7 @@ Keep one deny list and enforce it at the single existing model-availability pred
 ## Progress
 
 - [x] Design decisions confirmed with the user.
+- [x] Policy filename renamed to `pi-durable-subagents.json`.
 - [ ] Red tests.
 - [ ] Policy field and atomic writer.
 - [ ] Predicate enforcement and error text.
@@ -73,6 +74,7 @@ Keep one deny list and enforce it at the single existing model-availability pred
 - Pi's native model menu is an internal component. Only its primitives, themes, and `DynamicBorder` are exported.
 - The catalogue is cached twice: `ProcessChildSessionFactory.#templateLoads` per Agent and `AgentRecord.agentTemplateSnapshot` per record.
 - Every child Runtime preparation happens in the Owner process, including grandchildren, because `agent_spawn` is a `coordination.spawn` control request.
+- Baseline failure, unrelated to this change: `execution-scheduler.test.ts` — "an input-required child Run releases capacity until work can resume" fails with `Expected execution scheduler condition was not reached` on an unmodified tree as well. It was reproduced with the working changes stashed.
 
 ## Decisions
 

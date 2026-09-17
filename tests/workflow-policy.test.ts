@@ -71,7 +71,7 @@ test("Workflow Policy loads only the exact optional user file", async (t) => {
 	const expectedPolicyPath = join(
 		host.services.agentDir,
 		"config",
-		"pi-agent-coordination.json",
+		"pi-durable-subagents.json",
 	);
 	const missing = await readWorkflowPolicy(host.services.agentDir);
 	assert.equal(missing.ok, true);

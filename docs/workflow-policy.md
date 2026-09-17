@@ -3,7 +3,7 @@
 The Workflow Owner loads one optional user policy from Pi's agent configuration area:
 
 ```text
-<getAgentDir()>/config/pi-agent-coordination.json
+<getAgentDir()>/config/pi-durable-subagents.json
 ```
 
 The file is a strict UTF-8 JSON object. Its complete optional surface is:

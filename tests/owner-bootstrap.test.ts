@@ -451,7 +451,7 @@ test("an invalid initial Workflow Policy prevents coordination runtime creation"
 	const policyPath = join(
 		host.services.agentDir,
 		"config",
-		"pi-agent-coordination.json",
+		"pi-durable-subagents.json",
 	);
 	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
 	await writeFile(policyPath, '{"maxConcurrentAgentRuns": 0}', "utf8");
@@ -519,7 +519,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 		processVisibleModel: true,
 	});
 	const policyDirectory = join(host.services.agentDir, "config");
-	const policyPath = join(policyDirectory, "pi-agent-coordination.json");
+	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
 	await mkdir(policyDirectory, { recursive: true });
 	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 1}', "utf8");
 	await bindTestOwnerHost(host, "tui");

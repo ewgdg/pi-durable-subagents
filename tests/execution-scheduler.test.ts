@@ -233,7 +233,7 @@ test("the coordinator derives Owner and child roles from canonical Workflow iden
 	const policyDirectory = join(host.services.agentDir, "config");
 	await mkdir(policyDirectory, { recursive: true });
 	await writeFile(
-		join(policyDirectory, "pi-agent-coordination.json"),
+		join(policyDirectory, "pi-durable-subagents.json"),
 		'{"maxConcurrentAgentRuns": 7}',
 		"utf8",
 	);

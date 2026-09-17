@@ -26,7 +26,7 @@ const POLICY_FIELDS = new Set<keyof WorkflowPolicySnapshot>([
 const MINIMUM_INTERVAL_MS = 1_000;
 const MAXIMUM_INTERVAL_MS = 2_147_483_647;
 const POLICY_DIRECTORY = "config";
-const POLICY_FILENAME = "pi-agent-coordination.json";
+const POLICY_FILENAME = "pi-durable-subagents.json";
 
 export type WorkflowPolicyReadResult =
 	| Readonly<{
