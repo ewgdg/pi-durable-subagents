@@ -5,7 +5,6 @@ import { coordinationEntries } from "../transcript/retained-transcript.ts";
 const QUOTA_SUSPENSION_CUSTOM_TYPE = "agent-coordination.quota-suspension";
 
 export type RetainedQuotaSuspension = Readonly<{
-	entryId: string;
 	agentId: string;
 	runSequence: number;
 	suspension: AgentQuotaSuspension;
@@ -15,11 +14,11 @@ export type RetainedQuotaSuspension = Readonly<{
 /** Owner-transcript journal: unrelated coordination entries never clear execution suspension. */
 export class QuotaSuspensionStore {
 	readonly #transcript: AgentTranscript;
-	readonly #append: (customType: string, data: unknown) => string;
+	readonly #append: (customType: string, data: unknown) => void;
 
 	constructor(options: {
 		transcript: AgentTranscript;
-		appendCustomEntry(customType: string, data: unknown): string;
+		appendCustomEntry(customType: string, data: unknown): void;
 	}) {
 		this.#transcript = options.transcript;
 		this.#append = options.appendCustomEntry;
@@ -60,7 +59,7 @@ export class QuotaSuspensionStore {
 				["provider", "model", "resetAt"].some(key => evidence[key] !== undefined && typeof evidence[key] !== "string")) {
 				throw new Error("evidence_unavailable: invalid quota suspension evidence");
 			}
-			current = { entryId: entry.id, agentId, runSequence: data.runSequence as number, suspension: suspension as AgentQuotaSuspension };
+			current = { agentId, runSequence: data.runSequence as number, suspension: suspension as AgentQuotaSuspension };
 		}
 		return current;
 	}
@@ -72,12 +71,12 @@ export class QuotaSuspensionStore {
 			this.#append(QUOTA_SUSPENSION_CUSTOM_TYPE, { operation: "queue", agentId, runSequence, nativeInput });
 			return { ...existing, nativeInput };
 		}
-		const entryId = this.#append(QUOTA_SUSPENSION_CUSTOM_TYPE, { operation: "suspend", agentId, runSequence, suspension });
+		this.#append(QUOTA_SUSPENSION_CUSTOM_TYPE, { operation: "suspend", agentId, runSequence, suspension });
 		if (nativeInput && (nativeInput.steering.length > 0 || nativeInput.followUp.length > 0)) {
 			this.#append(QUOTA_SUSPENSION_CUSTOM_TYPE, { operation: "queue", agentId, runSequence, nativeInput });
-			return { entryId, agentId, runSequence, suspension, nativeInput };
+			return { agentId, runSequence, suspension, nativeInput };
 		}
-		return { entryId, agentId, runSequence, suspension };
+		return { agentId, runSequence, suspension };
 	}
 
 	clear(agentId: string, runSequence: number): void {
