@@ -425,3 +425,47 @@ function record(
 		children: [],
 	};
 }
+
+test("a committed Cancellation resolves a responder that never received it", () => {
+	const history = requestHistory();
+	const requestId = history.request();
+	const source = {
+		agentId: history.requester.record.identity.agentId,
+		entryId: history.requester.manager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "cancel", requestMessageId: requestId, reason: "Withdrawn" },
+					{ id: "cancel-withdrawn" },
+				),
+				{ stopReason: "toolUse" },
+			),
+		),
+		toolCallId: "cancel-withdrawn",
+	};
+	// The Cancellation Message is admitted but never delivered to the responder.
+	history.requester.manager.appendMessage({
+		role: "toolResult",
+		toolCallId: source.toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Committed." }],
+		details: {
+			messageId: deriveMessageIdentity(source),
+			targetAgentId: history.responder.record.identity.agentId,
+			messageStatus: "sent",
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	const evidence = new RequestEvidence(history.agents);
+	assert.deepEqual(
+		evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+		[],
+		"the requester's withdrawal ends the responder's duty without Delivery",
+	);
+	assert.deepEqual(
+		evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+		[],
+	);
+});
