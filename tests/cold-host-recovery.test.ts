@@ -580,7 +580,7 @@ test("cold successor retains captured template rules after rename and recovers r
 	await mkdir(templateDirectory, { recursive: true });
 	await writeFile(
 		templatePath,
-		"---\nname: residual-agent\nuseWhen: Use for residual work.\ntools: read\n---\nInitial context",
+		"---\nname: residual-agent\nuseWhen: Use for residual work.\nexcludeTools: read\n---\nInitial context",
 	);
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
@@ -607,7 +607,7 @@ test("cold successor retains captured template rules after rename and recovers r
 	await rename(templatePath, renamedTemplatePath);
 	await writeFile(
 		renamedTemplatePath,
-		"---\nname: replacement-agent\nuseWhen: Use for residual work.\ntools:\n  - read\n  - bash\n---\nCurrent context",
+		"---\nname: replacement-agent\nuseWhen: Use for residual work.\nexcludeTools:\n  - read\n  - bash\n---\nCurrent context",
 	);
 
 	const reopened = await reopenOwner(t, host, ownerSessionFile);
@@ -686,8 +686,10 @@ test("cold successor retains captured template rules after rename and recovers r
 		),
 		1,
 	);
-	assert.equal(successorTools.includes("read"), true);
-	assert.equal(successorTools.includes("bash"), false);
+	// The captured rule withholds read only; the renamed on-disk Template that would
+	// also withhold bash is not the source of this Run's configuration.
+	assert.equal(successorTools.includes("read"), false);
+	assert.equal(successorTools.includes("bash"), true);
 	assert.match(successorPrompt, /Initial context/);
 	assert.doesNotMatch(successorPrompt, /Current context/);
 	await reopened.runtime.dispose();
@@ -846,7 +848,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 	const templateDirectory = join(host.services.agentDir, "agents");
 	const templatePath = join(templateDirectory, "moderator.md");
 	await mkdir(templateDirectory, { recursive: true });
-	await writeFile(templatePath, "---\nname: moderator\ntools: read\n---\nCaptured Moderator rules.");
+	await writeFile(templatePath, "---\nname: moderator\nexcludeTools: read\n---\nCaptured Moderator rules.");
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -870,7 +872,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
 	await ownerPrompt;
-	await writeFile(templatePath, "---\nname: renamed-moderator\ntools: bash\n---\nChanged Moderator rules.");
+	await writeFile(templatePath, "---\nname: renamed-moderator\nexcludeTools: bash\n---\nChanged Moderator rules.");
 
 	const reopened = await reopenOwner(t, host, ownerSessionFile, {
 		implicitModeratorResponses: false,
@@ -964,9 +966,11 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 		"agent_observe",
 		"agent_wait",
 		"ask_user",
+		"bash",
+		"edit",
 		"moderator_control",
-		"read",
 		"report_to_user",
+		"write",
 	]);
 	assert.match(recoveredPrompt, /Captured Moderator rules\./);
 	assert.doesNotMatch(recoveredPrompt, /Changed Moderator rules\./);

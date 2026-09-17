@@ -15,28 +15,31 @@ test("Agent Spawn rejects every removed conversation field", () => {
 });
 
 test("isolated spawning accepts default, Template and explicit configuration", () => {
-	for (const configuration of [{}, { template: "reviewer" }, { config: { tools: ["read"] } }, { template: "reviewer", config: { tools: ["read"] } }]) {
+	for (const configuration of [{}, { template: "reviewer" }, { config: { excludeTools: ["read"] } }, { template: "reviewer", config: { excludeTools: ["read"] } }]) {
 		const input = { title: "Fixture request", request: "Use supplied context.", ...configuration };
 		assert.deepEqual(validateAgentSpawnInput(input), input);
 		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
 	}
 });
 
-test("Agent Spawn accepts tools as the initial selection and rejects obsolete fields", () => {
+test("Agent Spawn accepts the exclusion filter and rejects obsolete fields", () => {
 	assert.deepEqual(validateAgentSpawnInput({
 		title: "Fixture request",
 		request: "Inspect the child Runtime.",
-		config: { tools: ["read", "extension_tool"] },
+		config: { excludeTools: ["read", "extension_tool"], excludeSkills: ["review"] },
 	}), {
 		title: "Fixture request",
 		request: "Inspect the child Runtime.",
-		config: { tools: ["read", "extension_tool"] },
+		config: { excludeTools: ["read", "extension_tool"], excludeSkills: ["review"] },
 	});
 	for (const config of [
 		{ allowedTools: ["read"] },
 		{ allowedTools: undefined },
 		{ tools: [], allowedTools: ["read"] },
 		{ allowed_tools: ["read"] },
+		// The renamed selection fields are deleted, not aliased onto the filter.
+		{ tools: ["read"] },
+		{ skills: ["review"] },
 	]) {
 		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, {
 			title: "Fixture request", request: "Reject obsolete fields.", config,

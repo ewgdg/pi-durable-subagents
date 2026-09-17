@@ -243,7 +243,8 @@ const EffectiveConfigurationSchema = closed({
 	cwd: NonEmptyStringSchema,
 	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
 	thinking: RuntimeThinkingSchema,
-	tools: StringListSchema,
+	excludeTools: StringListSchema,
+	excludeSkills: StringListSchema,
 	skills: StringListSchema,
 	extensions: StringListSchema,
 	systemPrompt: Type.Optional(closed({
@@ -711,7 +712,7 @@ export const RuntimeSnapshotSchema = closed({
 	loadContextFiles: Type.Boolean(),
 });
 
-/** Bridge-proven version-eight method payload/result map. */
+/** Bridge-proven version-nine method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
 	"runtime.executionBegin": {

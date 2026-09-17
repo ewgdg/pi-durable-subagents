@@ -136,7 +136,8 @@ async function startChild(t: TestContext) {
 		sessionPath, agentDir, runtimeDirectory: root,
 		configuration: {
 			cwd, model: { provider: "coordination-test", modelId: "deterministic-owner" },
-			thinking: "off", tools: [STARTUP_TOOL], skills: [], loadContextFiles: false,
+			thinking: "off", excludeTools: [], skills: [], loadContextFiles: false,
+			excludeSkills: [],
 			extensions: [broker.resolvedPath, FIXTURE_PATH],
 		},
 		skillPaths: [], projectTrusted: true,

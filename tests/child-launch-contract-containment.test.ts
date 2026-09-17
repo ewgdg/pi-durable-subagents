@@ -141,10 +141,11 @@ test("incompatible shared pending-delivery admission creates no Runs or Moderato
 	record.host.addEndedHandler(() => { ended++; });
 	for (let attempt = 0; attempt < 3; attempt++) {
 		// Resume Messages and Request Cancellation Delivery use this same pending-delivery admission seam.
-		await assert.rejects(record.host.startInLane(["pending_delivery"]), /protocol_mismatch/);
+		// The empty on-disk schema is rejected as an incompatible preflight either way.
+		await assert.rejects(record.host.startInLane(["pending_delivery"]), /control_bootstrap_(protocol_mismatch|schema_drift)/);
 		assert.equal(record.host.currentHandle(), undefined);
 		assert.equal(record.host.observe().phase, "dormant");
-		await assert.rejects(factory.prepareModeratorRun({ agentId: `moderator-${attempt}` }), /protocol_mismatch/);
+		await assert.rejects(factory.prepareModeratorRun({ agentId: `moderator-${attempt}` }), /control_bootstrap_(protocol_mismatch|schema_drift)/);
 	}
 	assert.equal(started, 0);
 	assert.equal(ended, 0, "preflight failure is not an exact Run failure");
@@ -169,8 +170,8 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 		role: "ordinary", ownerPresentation: true, expectedSessionId: "child",
 	};
 	for (const [content, expected] of [
-		[JSON.stringify(legacy), /protocol_mismatch: expected 8, received 7/],
-		[JSON.stringify({ ...legacy, protocolVersion: 8 }), /schema_drift.*missing fields: tools/],
+		[JSON.stringify(legacy), /protocol_mismatch: expected 9, received 7/],
+		[JSON.stringify({ ...legacy, protocolVersion: 9 }), /schema_drift.*missing fields: excludedTools/],
 		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/],
 	] as const) {
 		await writeFile(path, content, { mode: 0o600 });

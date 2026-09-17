@@ -37,7 +37,8 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 		expectedSessionId: agentId, sessionPath, agentDir: PI_TEST_AGENT_DIR,
 		configuration: {
 			cwd, model: { provider: CONTINUATION_PROVIDER, modelId: CONTINUATION_MODEL },
-			thinking: "off", tools: [CONTEXT_ROLLOVER_TOOL], skills: [],
+			thinking: "off", excludeTools: [CONTEXT_ROLLOVER_TOOL], skills: [],
+			excludeSkills: [],
 			extensions: [fileURLToPath(new URL("./fixtures/settlement-continuation-extension.ts", import.meta.url))],
 			loadContextFiles: true,
 		},

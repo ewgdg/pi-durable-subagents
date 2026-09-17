@@ -57,6 +57,39 @@ import { renderAgentTemplatePromptGuide } from "./agent-template-prompt-guide.ts
 
 export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
 
+/**
+ * Tools this registrar activates for each role. The child bridge merges its own
+ * role list at startup completion, so a Spawn exclusion filter can never leave a
+ * participant unable to answer.
+ */
+export const participantCoordinationToolNames = {
+	owner: [
+		"workflow_resume",
+		"agent_message",
+		"agent_wait",
+		"agent_spawn",
+		"agent_observe",
+		"agent_control",
+	],
+	ordinary: [
+		"agent_message",
+		"agent_wait",
+		"agent_spawn",
+		"agent_observe",
+		"agent_control",
+		"ask_user",
+	],
+	moderator: [
+		"agent_message",
+		"agent_wait",
+		"agent_observe",
+		"agent_control",
+		"ask_user",
+		"report_to_user",
+		"moderator_control",
+	],
+} as const satisfies Record<ParticipantCoordinationRole, readonly string[]>;
+
 const AGENT_MESSAGE_PROMPT_GUIDE = `<agent_message>
 For send and request, targetAgent accepts an exact Agent label, full Agent ID, or unique Agent ID suffix. Full IDs and suffixes resolve Workflow-wide. Labels resolve only among the caller, its Direct Spawner, and its direct children; Owner and Moderator labels resolve Workflow-wide. An ambiguous target is rejected rather than guessed.
 
@@ -316,16 +349,16 @@ const agentSpawnConfigurationParameters = Type.Object(
 			),
 		),
 		cwd: Type.Optional(Type.String({ minLength: 1 })),
-		tools: Type.Optional(
+		excludeTools: Type.Optional(
 			Type.Array(Type.String({ minLength: 1 }), {
 				uniqueItems: true,
-				description: "Initial tool selection. Omit to use Template tools or inherit current active tools; required role tools are added.",
+				description: "Names removed from the child's own default tool surface, after any Template exclusion. Absent names change nothing, and the child keeps its role tools.",
 			}),
 		),
-		skills: Type.Optional(
+		excludeSkills: Type.Optional(
 			Type.Array(Type.String({ minLength: 1 }), {
 				uniqueItems: true,
-				description: "Omit to inherit skills by default.",
+				description: "Names removed from the skills the child discovers for its own working directory and agent directory, after any Template exclusion.",
 			}),
 		),
 		extensions: Type.Optional(

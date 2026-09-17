@@ -23,8 +23,8 @@ export type AgentTemplate = Readonly<{
 	name: string;
 	useWhen?: string;
 	models?: readonly AgentTemplateModelCandidate[];
-	tools?: readonly string[];
-	skills?: readonly string[];
+	excludeTools?: readonly string[];
+	excludeSkills?: readonly string[];
 	extensions?: "inherit" | "none";
 	systemPromptMode: SystemPromptMode;
 	loadContextFiles: boolean;
@@ -37,8 +37,8 @@ export type AgentTemplateCatalogueEntry = Readonly<{
 	name: string;
 	useWhen?: string;
 	models?: readonly AgentTemplateModelCandidate[];
-	tools?: readonly string[];
-	skills?: readonly string[];
+	excludeTools?: readonly string[];
+	excludeSkills?: readonly string[];
 	extensions?: "inherit" | "none";
 	systemPromptMode: SystemPromptMode;
 	loadContextFiles: boolean;
@@ -102,8 +102,8 @@ export function createAgentTemplateCatalogue(
 					? {}
 					: { useWhen: template.useWhen }),
 				...(models === undefined ? {} : { models }),
-				...(template.tools === undefined ? {} : { tools: template.tools }),
-				...(template.skills === undefined ? {} : { skills: template.skills }),
+				...(template.excludeTools === undefined ? {} : { excludeTools: template.excludeTools }),
+				...(template.excludeSkills === undefined ? {} : { excludeSkills: template.excludeSkills }),
 				...(template.extensions === undefined ? {} : { extensions: template.extensions }),
 				systemPromptMode: template.systemPromptMode,
 				loadContextFiles: template.loadContextFiles,

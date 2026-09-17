@@ -15,7 +15,7 @@ import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
-import { assertSelectedTools, PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
+import { assertToolExecutionModes, PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import type { AgentObserveInput } from "../src/tools/participant-coordination-tools.ts";
 import {
@@ -71,7 +71,8 @@ test("real Pi CLI resolves unset Moderator thinking from the shared Pi default",
 					provider: PROCESS_RUNTIME_TEST_PROVIDER,
 					modelId: PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL,
 				},
-				tools: [],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -128,7 +129,8 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				systemPrompt: { mode: "append", body: "Runtime-owned child context" },
@@ -462,7 +464,8 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 					modelId: PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL,
 				},
 				thinking: "high",
-				tools: [],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -771,7 +774,8 @@ test("an idle child defers threshold compaction until later work is admitted", {
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1120,31 +1124,104 @@ test("an idle child defers threshold compaction until later work is admitted", {
 	}
 });
 
-test("startup tool admission compares sets and preserves execution-mode validation", () => {
+test("startup snapshot integrity compares active tools with their execution modes", () => {
 	const snapshot = (tools: string[]) => ({
 		tools,
 		toolExecutionModes: tools.map((name) => ({ name, executionMode: "parallel" as const })),
 	});
-	assert.doesNotThrow(() => assertSelectedTools(snapshot([]), []));
-	assert.doesNotThrow(() => assertSelectedTools(snapshot(["read", "agent_message"]), ["agent_message", "read"]));
-	for (const [selected, active, missing, unexpected] of [
-		[["read"], [], ["read"], []],
-		[[], ["read"], [], ["read"]],
-		[["read"], ["extra"], ["read"], ["extra"]],
-	] as const) {
-		assert.throws(() => assertSelectedTools(snapshot([...active]), selected), {
-			message: `child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`,
-		});
-	}
-	assert.throws(() => assertSelectedTools({ tools: ["read"], toolExecutionModes: [] }, ["read"]), /child_runtime_tool_modes_mismatch/);
+	assert.doesNotThrow(() => assertToolExecutionModes(snapshot([])));
+	assert.doesNotThrow(() => assertToolExecutionModes(snapshot(["read", "agent_message"])));
+	assert.throws(
+		() => assertToolExecutionModes({ tools: ["read"], toolExecutionModes: [] }),
+		/child_runtime_tool_modes_mismatch/,
+	);
+	assert.throws(
+		() => assertToolExecutionModes({
+			tools: ["read", "agent_message"],
+			toolExecutionModes: [
+				{ name: "read", executionMode: "parallel" },
+				{ name: "agent_spawn", executionMode: "parallel" },
+			],
+		}),
+		/child_runtime_tool_modes_mismatch/,
+	);
 });
 
-for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as const) {
-	test(`startup checks exact initial tools: ${selection}`, {
+/**
+ * The inherited fixture extension rewrites the child surface from
+ * PROCESS_RUNTIME_INITIAL_TOOLS inside its own session_start handler, so each
+ * scenario stands for a different child-owned runtime default. The bridge applies
+ * the exclusion filter at startup completion and merges its role tools back
+ * afterwards, which is why no scenario can fail startup admission.
+ */
+const STARTUP_TOOL_FILTER_SCENARIOS = [
+	{
+		name: "a rewriting extension that activates its own tool stays admitted",
+		excludeTools: [],
+		initialTools: ["read", "runtime_sequential_probe"],
+		expectedTools: [
+			"read",
+			"runtime_sequential_probe",
+			"agent_message",
+			"agent_wait",
+			"agent_spawn",
+			"agent_observe",
+			"agent_control",
+			"ask_user",
+		],
+		probeExecution: true,
+	},
+	{
+		name: "a Spawn exclusion is inactive after startup",
+		excludeTools: ["read"],
+		initialTools: ["read", "ask_user"],
+		expectedTools: [
+			"ask_user",
+			"agent_message",
+			"agent_wait",
+			"agent_spawn",
+			"agent_observe",
+			"agent_control",
+		],
+		probeExecution: false,
+	},
+	{
+		name: "role coordination tools stay active when the extension drops them",
+		excludeTools: [],
+		initialTools: [],
+		expectedTools: [
+			"agent_message",
+			"agent_wait",
+			"agent_spawn",
+			"agent_observe",
+			"agent_control",
+			"ask_user",
+		],
+		probeExecution: false,
+	},
+	{
+		name: "an excluded name the child never had is a no-op",
+		excludeTools: ["unavailable_selected_tool"],
+		initialTools: ["read"],
+		expectedTools: [
+			"read",
+			"agent_message",
+			"agent_wait",
+			"agent_spawn",
+			"agent_observe",
+			"agent_control",
+			"ask_user",
+		],
+		probeExecution: false,
+	},
+] as const;
+
+for (const scenario of STARTUP_TOOL_FILTER_SCENARIOS) {
+	test(`startup tool filter: ${scenario.name}`, {
 		timeout: TEST_TIMEOUT_MS,
 		skip: process.platform === "win32",
 	}, async () => {
-		const root = await mkdtemp(join(tmpdir(), "pi-child-selected-tools-test-"));
+		const root = await mkdtemp(join(tmpdir(), "pi-child-tool-filter-test-"));
 		const cwd = join(root, "work");
 		const sessionDirectory = join(root, "sessions");
 		const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000010";
@@ -1158,20 +1235,11 @@ for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as
 			timestamp: new Date().toISOString(),
 			cwd,
 		})}\n`, { mode: 0o600 });
-		const tools = [
-			"read",
-			"agent_message",
-			"agent_control",
-			"agent_observe",
-			"agent_spawn",
-			"ask_user",
-			...(selection === "unavailable" ? ["unavailable_selected_tool"] : []),
-		] as const;
 		let runtime: PiChildProcessRuntime | undefined;
 		try {
-			const startup = PiChildProcessRuntime.start({
-				workflowId: "process-selected-tools-workflow",
-				agentId: "process-selected-tools-agent",
+			runtime = await PiChildProcessRuntime.start({
+				workflowId: "process-tool-filter-workflow",
+				agentId: "process-tool-filter-agent",
 				role: "ordinary",
 				expectedSessionId,
 				sessionPath,
@@ -1182,7 +1250,8 @@ for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as
 						modelId: PROCESS_RUNTIME_TEST_MODEL,
 					},
 					thinking: "off",
-					tools,
+					excludeTools: [...scenario.excludeTools],
+					excludeSkills: [],
 					skills: [],
 					extensions: [CHILD_EXTENSION],
 					loadContextFiles: true,
@@ -1192,43 +1261,21 @@ for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as
 				ownerEnvironment: {
 					...process.env,
 					PI_SKIP_VERSION_CHECK: "1",
-					PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify([
-						...tools.filter((name) => name !== "read"),
-						...(selection === "missing" ? [] : ["read"]),
-						...(selection === "unexpected" ? ["runtime_sequential_probe"] : []),
-					]),
+					PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify(scenario.initialTools),
 					// Yield in the inherited session_start handler before changing tools.
 					PROCESS_RUNTIME_STARTUP_DELAY_MS: "250",
-					PROCESS_RUNTIME_ACTIVATED_TOOL: "1",
-					PROCESS_RUNTIME_INITIAL_TOOLS_PROBE: join(root, "initial-tools.jsonl"),
+					...(scenario.probeExecution ? { PROCESS_RUNTIME_ACTIVATED_TOOL: "1" } : {}),
 				},
 				runtimeDirectory: root,
 				ownerRequestHandlers: ordinaryOwnerHandlers({
 					selectorSnapshot: processSelectorSnapshot(expectedSessionId),
 				}),
 			});
-			if (selection !== "reordered") {
-				const missing = selection === "missing" ? ["read"]
-					: selection === "unavailable" ? ["unavailable_selected_tool"] : [];
-				const unexpected = selection === "unexpected" ? ["runtime_sequential_probe"] : [];
-				await assert.rejects(startup.then((admitted) => { runtime = admitted; return admitted; }), (error: unknown) => {
-					assert.ok(error instanceof Error);
-					assert.ok(error.message.includes(`child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`), error.message);
-					return true;
-				});
-				return;
-			}
-			runtime = await startup;
-			assert.deepEqual(JSON.parse(await readFile(join(root, "initial-tools.jsonl"), "utf8")), tools);
-			assert.deepEqual(runtime.snapshot.tools, [
-				"agent_message",
-				"agent_control",
-				"agent_observe",
-				"agent_spawn",
-				"ask_user",
-				"read",
-			]);
+			assert.deepEqual(runtime.snapshot.tools, scenario.expectedTools);
+			if (!scenario.probeExecution) return;
 			await attachNativeChildDisplay(runtime);
+			// The filter is a startup rule, not a live restriction: what the child
+			// activates after startup stays active.
 			runtime.writeInput("/runtime-state\r");
 			await waitForFrame(runtime, "PROCESS_RUNTIME_STATE_CHANGED");
 			assert.deepEqual((await runtime.channel.request("runtime.snapshot", {})).tools, []);
@@ -1236,7 +1283,9 @@ for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as
 			await waitForFrame(runtime, "PROCESS_RUNTIME_TOOL_ACTIVATED");
 			const activatedSnapshot = await runtime.channel.request("runtime.snapshot", {});
 			assert.deepEqual(activatedSnapshot.tools, ["runtime_sequential_probe"]);
-			assert.deepEqual(activatedSnapshot.toolExecutionModes, [{ name: "runtime_sequential_probe", executionMode: "sequential" }]);
+			assert.deepEqual(activatedSnapshot.toolExecutionModes, [
+				{ name: "runtime_sequential_probe", executionMode: "sequential" },
+			]);
 			await runtime.channel.request("message.deliver", {
 				deliveryId: "activate-new-tool",
 				delivery: { kind: "user", content: "Call the newly activated probe." },
@@ -1282,7 +1331,8 @@ test("a pre-ready child fault rejects launch readiness without escaping startup 
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			excludeTools: [],
+			excludeSkills: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			loadContextFiles: true,
@@ -1344,7 +1394,8 @@ test("inherited child input preflights run before coordination consumes transfor
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1417,7 +1468,8 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: ["review"],
 				extensions: [CHILD_EXTENSION],
 				systemPrompt: { mode: "append", body: systemPromptBody },
@@ -1429,18 +1481,34 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			runtimeDirectory: root,
 		});
 		const systemPromptPath = join(dirname(runtime.bootstrapPath), "system-prompt.md");
-		assert.deepEqual(runtime.snapshot, {
+		// The child owns its runtime default surface: Pi's own default tools, the
+		// fixture extension's registered tool, and the role coordination tools the
+		// bridge always keeps active. Nothing here comes from a parent selection.
+		const expectedTools = [
+			"read",
+			"bash",
+			"edit",
+			"write",
+			"agent_message",
+			"agent_wait",
+			"agent_spawn",
+			"agent_observe",
+			"agent_control",
+			"ask_user",
+			"runtime_sequential_probe",
+		];
+		const { toolExecutionModes, ...snapshot } = runtime.snapshot;
+		assert.deepEqual(snapshot, {
 			cwd,
 			model: {
 				provider: PROCESS_RUNTIME_TEST_PROVIDER,
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			tools: expectedTools,
 			skills: ["review"],
 			skillSources: [{ name: "review", filePath: skillPath }],
 			extensions: [CHILD_EXTENSION],
-			toolExecutionModes: [],
 			projectTrusted: false,
 			sessionId: expectedSessionId,
 			sessionPath,
@@ -1451,6 +1519,13 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			},
 			loadContextFiles: true,
 		});
+		// Execution modes stay a snapshot-integrity contract: one mode per active
+		// tool, and the fixture's own tool keeps its sequential classification.
+		assert.deepEqual(toolExecutionModes.map(({ name }) => name), expectedTools);
+		assert.equal(
+			toolExecutionModes.find(({ name }) => name === "runtime_sequential_probe")?.executionMode,
+			"sequential",
+		);
 	} finally {
 		await runtime?.dispose();
 	}
@@ -1507,7 +1582,8 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: ["agent_observe", "agent_message"],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1600,7 +1676,8 @@ test("process Runtime Host force-kills a child whose session shutdown never comp
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1661,7 +1738,8 @@ test("process Runtime shutdown grace bounds an unresponsive Control request", {
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				excludeTools: [],
+				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 				loadContextFiles: true,
@@ -1848,7 +1926,8 @@ test("hidden real child persists work without rendering and repeated attachment 
 		expectedSessionId: sessionId, sessionPath,
 		configuration: {
 			cwd, model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
-			thinking: "off", tools: [], skills: [], extensions: [CHILD_EXTENSION],
+			thinking: "off", excludeTools: [], skills: [], extensions: [CHILD_EXTENSION],
+			excludeSkills: [],
 			loadContextFiles: true,
 		},
 		skillPaths: [], projectTrusted: true, runtimeDirectory: root,

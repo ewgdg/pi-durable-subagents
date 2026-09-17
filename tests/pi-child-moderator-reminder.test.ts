@@ -35,7 +35,8 @@ test("real child reminder admission defers active work and serializes clear vers
 		agentDir: PROCESS_RUNTIME_TEST_AGENT_DIR,
 		configuration: {
 			cwd, model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
-			thinking: "off", tools: [], skills: [], loadContextFiles: false,
+			thinking: "off", excludeTools: [], skills: [], loadContextFiles: false,
+			excludeSkills: [],
 			extensions: ["process-runtime-child-extension.ts", "moderator-reminder-child-extension.ts"]
 				.map((name) => fileURLToPath(new URL("./fixtures/" + name, import.meta.url))),
 		},

@@ -10,6 +10,7 @@ import type {
 	AgentSession,
 	AgentSessionEvent,
 	AgentSessionRuntime,
+	ExtensionAPI,
 	ExtensionContext,
 	ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
@@ -51,7 +52,10 @@ import {
 	registerParticipantLifecycle,
 } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
-import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
+import {
+	participantCoordinationToolNames,
+	registerParticipantCoordinationTools,
+} from "../tools/participant-coordination-tools.ts";
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
@@ -434,6 +438,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			input: handleInput,
 			async completeStartup() {
 				try {
+					applyStartupToolFilter(pi, bootstrap.role, bootstrap.excludedTools, retained !== undefined);
 					await binding.publishRuntimeSnapshot();
 					// Reload reports current state but does not re-enforce the initial selection.
 					if (!retained) {
@@ -457,9 +462,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			if (bootstrap.ownerPresentation) {
 				await refreshOrdinaryAgentTools?.(event.reason === "reload");
 			}
-			// Set only the initial active selection, not Pi's registry allow-list.
-			// Inherited startup handlers run next; reload preserves native runtime changes.
-			if (!retained) pi.setActiveTools(bootstrap.tools);
 			if (bootstrap.ownerPresentation) {
 				binding.activity.update(
 					await participantRequest("presentation.agents.snapshot", {}),
@@ -821,6 +823,30 @@ async function handleOwnerRequest(
 		default:
 			return assertUnreachable(request);
 	}
+}
+
+/**
+ * Applies the Spawn and Template exclusion filter to the child surface after
+ * inherited startup handlers ran, and keeps the role coordination tools active so
+ * a filtered or rewired child can still answer. Reload preserves native changes
+ * and only re-asserts participation. Absent names are ignored.
+ */
+function applyStartupToolFilter(
+	pi: ExtensionAPI,
+	role: ChildProcessBootstrap["role"],
+	excludedTools: readonly string[],
+	retained: boolean,
+): void {
+	const roleTools = participantCoordinationToolNames[role];
+	if (retained) {
+		pi.setActiveTools([...new Set([...pi.getActiveTools(), ...roleTools])]);
+		return;
+	}
+	const excludedNames = new Set(excludedTools);
+	pi.setActiveTools([...new Set([
+		...pi.getActiveTools().filter((name) => !excludedNames.has(name)),
+		...roleTools,
+	])]);
 }
 
 async function runtimeSnapshot(

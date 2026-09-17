@@ -372,18 +372,13 @@ export class ProcessChildSessionFactory {
 					cwd: snapshot.cwd,
 					model: snapshot.model,
 					thinking: snapshot.thinking,
-					// Native activation changes also apply to descendant inheritance.
-					tools: [...snapshot.tools],
-					skills: [...snapshot.skills],
+					// A descendant keeps its own default tool surface and skill
+					// discovery; only the runtime identity is inherited.
 					extensions: snapshot.fileExtensionPaths.filter(
 						(path) => !this.#isCoordinationExtension(path),
 					),
 				},
 				projectTrusted: snapshot.projectTrusted,
-				skillSources: snapshot.skillSources.map(({ name, filePath }) => ({
-					name,
-					filePath,
-				})),
 			};
 		}
 		if (record.identity.agentId === this.#ownerIdentity.agentId) {
@@ -413,10 +408,6 @@ export class ProcessChildSessionFactory {
 			return {
 				configuration: prepared.configuration,
 				projectTrusted: prepared.projectTrusted,
-				skillSources: prepared.skillSources.map(({ name, path }) => ({
-					name,
-					filePath: path,
-				})),
 			};
 		} finally {
 			resolving.delete(record.identity.agentId);
@@ -427,21 +418,17 @@ export class ProcessChildSessionFactory {
 		const session = this.#ownerRuntime.session;
 		const model = session.model;
 		if (!model) throw new Error("Parent Owner Runtime model is unavailable");
-		const skills = this.#ownerRuntime.services.resourceLoader.getSkills().skills;
 		return {
 			configuration: {
 				cwd: this.#ownerRuntime.services.cwd,
 				model: { provider: model.provider, modelId: model.id },
 				thinking: session.thinkingLevel,
-				tools: [...session.getActiveToolNames()],
-				skills: skills.map(({ name }) => name),
 				extensions: this.#ownerRuntime.services.resourceLoader
 					.getExtensions()
 					.extensions.map(({ resolvedPath }) => resolvedPath)
 					.filter((path) => !this.#isCoordinationExtension(path)),
 			},
 			projectTrusted: this.#ownerRuntime.services.settingsManager.isProjectTrusted(),
-			skillSources: skills.map(({ name, filePath }) => ({ name, filePath })),
 		};
 	}
 

@@ -27,8 +27,8 @@ test("parses the complete strict Agent Template surface", () => {
 			"models:",
 			"  - id: coordination-test/deterministic-child",
 			"    thinking: high",
-			"tools: read, grep",
-			"skills:",
+			"excludeTools: read, grep",
+			"excludeSkills:",
 			"  - research",
 			"extensions: none",
 			"systemPromptMode: replace",
@@ -46,8 +46,8 @@ test("parses the complete strict Agent Template surface", () => {
 			model: { provider: "coordination-test", modelId: "deterministic-child" },
 			thinking: "high",
 		}],
-		tools: ["read", "grep"],
-		skills: ["research"],
+		excludeTools: ["read", "grep"],
+		excludeSkills: ["research"],
 		extensions: "none",
 		systemPromptMode: "replace",
 		loadContextFiles: false,
@@ -56,12 +56,14 @@ test("parses the complete strict Agent Template surface", () => {
 	});
 });
 
-test("rejects removed Template tool fields", () => {
+test("rejects removed Template capability fields, including the replaced selection", () => {
 	for (const field of [
 		"use-when: Use for research.",
 		"allowed-tools: read",
 		"allowedTools: read",
 		"tools: []\nallowedTools: read",
+		"tools: read, grep",
+		"skills:\n  - research",
 	]) {
 		assert.throws(
 			() => parseAgentTemplate(
@@ -73,10 +75,17 @@ test("rejects removed Template tool fields", () => {
 	}
 });
 
-test("captured creation presets accept tools and reject the obsolete ceiling", () => {
-	const preset = { tools: [], systemPromptMode: "append", loadContextFiles: true, systemPrompt: "" };
+test("captured creation presets carry exclusion rules and reject the replaced selection", () => {
+	const preset = {
+		excludeTools: ["bash"],
+		excludeSkills: ["research"],
+		systemPromptMode: "append",
+		loadContextFiles: true,
+		systemPrompt: "",
+	};
 	assert.deepEqual(validateAgentCreationPreset(preset), preset);
 	assert.throws(() => validateAgentCreationPreset({ ...preset, allowedTools: ["read"] }), /invalid shape/);
+	assert.throws(() => validateAgentCreationPreset({ ...preset, tools: ["read"] }), /invalid shape/);
 });
 
 test("rejects the removed aggregate Project Context field and invalid context-file values", () => {
@@ -165,10 +174,10 @@ test("rejects top-level Template model and thinking fields", () => {
 test("rejects YAML capabilities, coercion, and fields outside the Agent Template contract", () => {
 	const invalidTemplates = [
 		"---\nname: research-agent\ndescription: forbidden\n---\n",
-		"---\nname: research-agent\ntools: read\ntools: grep\n---\n",
-		"---\nname: research-agent\ntools: &tools [read]\nskills: *tools\n---\n",
-		"---\nname: research-agent\ntools: !selected read\n---\n",
-		"---\nname: research-agent\ntools: true\n---\n",
+		"---\nname: research-agent\nexcludeTools: read\nexcludeTools: grep\n---\n",
+		"---\nname: research-agent\nexcludeTools: &tools [read]\nexcludeSkills: *tools\n---\n",
+		"---\nname: research-agent\nexcludeTools: !selected read\n---\n",
+		"---\nname: research-agent\nexcludeTools: true\n---\n",
 		"name: research-agent\n",
 	];
 	for (const [index, source] of invalidTemplates.entries()) {
@@ -187,7 +196,7 @@ test("discovers whole templates by strict precedence while safely following syml
 	await mkdir(projectRoot, { recursive: true });
 	await writeFile(
 		join(packageRoot, "nested", "research.md"),
-		"---\nname: research-agent\nuseWhen: Use for research.\ntools: read, grep\n---\nPackage context",
+		"---\nname: research-agent\nuseWhen: Use for research.\nexcludeTools: read, grep\n---\nPackage context",
 	);
 	await writeFile(
 		join(packageRoot, "blocked.md"),
@@ -259,14 +268,12 @@ test("discovers whole templates by strict precedence while safely following syml
 	);
 });
 
-test("resolves current inherited Runtime values, preset rules, explicit spawn overrides, and fixed role tools in order", () => {
+test("resolves current inherited Runtime values, preset rules, and accumulated Spawn exclusions in order", () => {
 	const configuration = resolveAgentRunConfiguration({
 		inherited: {
 			cwd: "/baseline/project",
 			model: { provider: "base", modelId: "model" },
 			thinking: "low",
-			tools: ["bash"],
-			skills: ["base-skill"],
 			extensions: ["/extensions/base.ts"],
 		},
 		template: {
@@ -274,19 +281,20 @@ test("resolves current inherited Runtime values, preset rules, explicit spawn ov
 				{ model: { provider: "missing", modelId: "model" }, thinking: "low" },
 				{ model: { provider: "template", modelId: "model" }, thinking: "medium" },
 			],
-			tools: ["read"],
+			excludeTools: ["bash"],
+			excludeSkills: ["research"],
 			systemPromptMode: "replace",
 			loadContextFiles: false,
 			systemPrompt: "Template context",
 		},
 		overrides: {
 			cwd: "subproject",
-			tools: [],
+			excludeTools: ["bash", "read"],
+			excludeSkills: ["testing"],
 			extensions: "inherit",
 			systemPrompt: "Spawn context",
 			systemPromptMode: "append",
 		},
-		requiredTools: ["agent_message", "agent_spawn"],
 		isModelAvailable: ({ provider }) => provider === "template",
 	});
 
@@ -294,8 +302,10 @@ test("resolves current inherited Runtime values, preset rules, explicit spawn ov
 		cwd: "/baseline/project/subproject",
 		model: { provider: "template", modelId: "model" },
 		thinking: "medium",
-		tools: ["agent_message", "agent_spawn"],
-		skills: ["base-skill"],
+		// Spawn exclusions add to the Template rule rather than replacing it, and the
+		// inherited parent surface contributes nothing to either list.
+		excludeTools: ["bash", "read"],
+		excludeSkills: ["research", "testing"],
 		extensions: ["/extensions/base.ts"],
 		systemPrompt: {
 			mode: "replace",
@@ -312,8 +322,6 @@ test("fails when no configured Template model is available", () => {
 				cwd: "/project",
 				model: { provider: "base", modelId: "model" },
 				thinking: "low",
-				tools: [],
-				skills: [],
 				extensions: [],
 			},
 			template: {
@@ -325,7 +333,6 @@ test("fails when no configured Template model is available", () => {
 				loadContextFiles: true,
 				systemPrompt: "",
 			},
-			requiredTools: [],
 			isModelAvailable: () => false,
 		}),
 		/No configured Agent Template model is available: missing-a\/model, missing-b\/model/,
@@ -337,8 +344,6 @@ test("fully specified spawn model override bypasses unavailable Template candida
 		cwd: "/project",
 		model: { provider: "parent", modelId: "model" },
 		thinking: "low" as const,
-		tools: [],
-		skills: [],
 		extensions: [],
 	};
 	const template = {
@@ -354,7 +359,6 @@ test("fully specified spawn model override bypasses unavailable Template candida
 	const base = {
 		inherited,
 		template,
-		requiredTools: [],
 		isModelAvailable: ({ provider }: { provider: string }) => provider === "explicit",
 	};
 
@@ -368,6 +372,8 @@ test("fully specified spawn model override bypasses unavailable Template candida
 		},
 	}), {
 		...inherited,
+		excludeTools: [],
+		excludeSkills: [],
 		model: { provider: "explicit", modelId: "model" },
 		systemPrompt: { mode: "append", body: "" },
 		loadContextFiles: true,
@@ -377,6 +383,8 @@ test("fully specified spawn model override bypasses unavailable Template candida
 		overrides: { model: { id: "inherit", thinking: "max" } },
 	}), {
 		...inherited,
+		excludeTools: [],
+		excludeSkills: [],
 		thinking: "max",
 		systemPrompt: { mode: "append", body: "" },
 		loadContextFiles: true,
@@ -536,7 +544,7 @@ test("model fields independently use Template defaults or explicit parent inheri
 		cwd: "/project",
 		model: { provider: "parent", modelId: "model" },
 		thinking: "low" as const,
-		tools: [], skills: [], extensions: [],
+		extensions: [],
 	};
 	const template = {
 		models: [
@@ -558,7 +566,6 @@ test("model fields independently use Template defaults or explicit parent inheri
 		for (const selectedTemplate of [template, undefined]) {
 			const actual = resolveAgentRunConfiguration({
 				inherited, template: selectedTemplate, overrides: { model },
-				requiredTools: [],
 				isModelAvailable: ({ provider }) => provider !== "missing",
 			});
 			assert.deepEqual(actual.model, {
@@ -574,13 +581,12 @@ test("Template candidates are resolved only when a model field needs defaults", 
 	const base = {
 		inherited: {
 			cwd: "/project", model: { provider: "parent", modelId: "model" },
-			thinking: "low" as const, tools: [], skills: [], extensions: [],
+			thinking: "low" as const, extensions: [],
 		},
 		template: {
 			models: [{ model: { provider: "missing", modelId: "model" }, thinking: "high" as const }],
 			systemPromptMode: "append" as const, loadContextFiles: true, systemPrompt: "",
 		},
-		requiredTools: [],
 	};
 	for (const model of [
 		{ id: "explicit/model", thinking: "max" },

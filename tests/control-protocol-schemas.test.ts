@@ -17,7 +17,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 8, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 9, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control observe and presentation rosters preserve provider quota suspension", () => {
 	const suspension = { reason: "provider_quota", evidence: {
@@ -75,14 +75,14 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 8,
+		protocolVersion: 9,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
 		agentId: "agent",
 		role: "ordinary",
 		ownerPresentation: true,
-		tools: [],
+		excludedTools: [],
 		expectedSessionId: "session",
 	} as const;
 	assert.equal(Check(ControlEndpointSchema, endpoint), true);
@@ -137,7 +137,7 @@ test("Control frame schema is a closed hello/request/response/event/cancel union
 	}), false);
 });
 
-test("every version-eight method and event has TypeBox payload/result schemas", () => {
+test("every version-nine method and event has TypeBox payload/result schemas", () => {
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"runtime.executionBegin",
@@ -406,7 +406,8 @@ test("every version-eight method and event has TypeBox payload/result schemas", 
 			cwd: "/project",
 			model: { provider: "provider", modelId: "model" },
 			thinking: "high",
-			tools: ["read"],
+			excludeTools: ["read"],
+			excludeSkills: [],
 			skills: [],
 			extensions: [],
 			loadContextFiles: true,
@@ -679,16 +680,16 @@ test("Control snapshots carry runtime diagnostic reports but reject invented too
 
 test("bootstrap incompatibility diagnostics distinguish versions and safe field failures", () => {
 	const descriptor = {
-		protocolVersion: 8,
+		protocolVersion: 9,
 		endpoint: { transport: "unix", address: "/tmp/control.sock" },
 		connectionToken: "SECRET-TOKEN", workflowId: "workflow", agentId: "agent",
-		role: "ordinary", ownerPresentation: true, tools: [], expectedSessionId: "session",
+		role: "ordinary", ownerPresentation: true, excludedTools: [], expectedSessionId: "session",
 	};
 	assert.doesNotThrow(() => validateChildProcessBootstrap(descriptor));
 	for (const [value, pattern] of [
-		[{ ...descriptor, protocolVersion: 7, tools: undefined }, /protocol_mismatch: expected 8, received 7; missing fields: tools/],
-		[{ ...descriptor, tools: undefined }, /schema_drift: expected 8, received 8; missing fields: tools/],
-		[{ ...descriptor, tools: 42 }, /schema_drift.*invalid fields: tools/],
+		[{ ...descriptor, protocolVersion: 8, excludedTools: undefined }, /protocol_mismatch: expected 9, received 8; missing fields: excludedTools/],
+		[{ ...descriptor, excludedTools: undefined }, /schema_drift: expected 9, received 9; missing fields: excludedTools/],
+		[{ ...descriptor, excludedTools: 42 }, /schema_drift.*invalid fields: excludedTools/],
 		[{ ...descriptor, protocolVersion: "SECRET-TOKEN" }, /invalid fields: protocolVersion/],
 	] as const) {
 		assert.throws(() => validateChildProcessBootstrap(value), (error: Error) => {

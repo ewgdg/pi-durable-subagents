@@ -87,7 +87,7 @@ test("coordinator admits a skipped spawn as an observable dormant Agent without 
 	}
 });
 
-test("Owner tool inheritance uses active tools, including without an admitted snapshot", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+test("a descendant inherits neither the Owner's active tools nor its skills", { timeout: TEST_TIMEOUT_MS }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
@@ -117,24 +117,31 @@ test("Owner tool inheritance uses active tools, including without an admitted sn
 				host.session.setActiveToolsByName(active);
 				const prepared = await factory.prepareOrdinaryRun({
 					agentId: "descendant", parent: owner,
-					spawnInput: { title: "Inherit active tools", request: "Use the current active tools." },
+					spawnInput: { title: "Keep the runtime default", request: "Keep your own runtime default surface." },
 				});
-				assert.deepEqual(prepared.configuration.tools, [
-					...active, "agent_message", "agent_wait", "agent_control", "agent_observe", "agent_spawn", "ask_user",
-				]);
+				// The Owner's active surface is not a source of child configuration.
+				assert.deepEqual(prepared.configuration.excludeTools, []);
+				assert.deepEqual(prepared.configuration.excludeSkills, []);
 			}
-			for (const tools of [["bash"], []]) {
+			for (const excludeTools of [["bash"], []]) {
 				const explicit = await factory.prepareOrdinaryRun({
 					agentId: "explicit", parent: owner,
-					spawnInput: { title: "Explicit tools", request: "Use explicitly selected tools.", config: { tools } },
+					spawnInput: { title: "Withhold one tool", request: "Withhold one tool.", config: { excludeTools } },
 				});
-				assert.equal(explicit.configuration.tools.includes("bash"), tools.includes("bash"));
+				assert.deepEqual(explicit.configuration.excludeTools, excludeTools);
 				const preset = await factory.prepareOrdinaryRun({
 					agentId: "preset", parent: owner,
-					spawnInput: { title: "Template tools", request: "Use captured Template tools." },
-					creationPreset: { tools, systemPromptMode: "append", loadContextFiles: false, systemPrompt: "" },
+					spawnInput: { title: "Withhold Template tools", request: "Withhold Template tools.", config: { excludeTools } },
+					creationPreset: {
+						excludeTools: ["read"],
+						systemPromptMode: "append", loadContextFiles: false, systemPrompt: "",
+					},
 				});
-				assert.equal(preset.configuration.tools.includes("bash"), tools.includes("bash"));
+				// A Template rule accumulates with the Spawn rule instead of being replaced.
+				assert.deepEqual(
+					preset.configuration.excludeTools,
+					["read", ...excludeTools.filter((name) => name !== "read")],
+				);
 			}
 		}
 	} finally {
@@ -149,7 +156,7 @@ for (const skippedSpawn of [false, true]) test(`a dormant parent retains creatio
 	const templatePath = join(templateRoot, "parent.md");
 	await writeFile(
 		templatePath,
-		"---\nname: dynamic-parent\nuseWhen: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\ntools:\n  - read\n  - bash\n---\n",
+		"---\nname: dynamic-parent\nuseWhen: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nexcludeTools:\n  - read\n  - bash\n---\n",
 	);
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
@@ -178,7 +185,6 @@ for (const skippedSpawn of [false, true]) test(`a dormant parent retains creatio
 			metadata: { label: "dynamic-parent" },
 			creationPreset: {
 				models: [{ model: { provider: "coordination-test", modelId: "deterministic-owner" }, thinking: "high" }],
-				tools: ["read", "bash"],
 				systemPromptMode: "append", loadContextFiles: true, systemPrompt: "",
 			},
 		},
@@ -218,8 +224,10 @@ for (const skippedSpawn of [false, true]) test(`a dormant parent retains creatio
 			},
 			creationPreset: null,
 		});
-		assert.equal(first.configuration.tools.includes("read"), true);
-		assert.equal(first.configuration.tools.includes("bash"), true);
+		// Neither a Template rule nor a Spawn exclusion applies here, and nothing is
+		// inherited from the Owner's surface.
+		assert.deepEqual(first.configuration.excludeTools, []);
+		assert.deepEqual(first.configuration.excludeSkills, []);
 		assert.deepEqual(first.configuration.model, {
 			provider: "coordination-test",
 			modelId: "deterministic-owner",
@@ -227,24 +235,25 @@ for (const skippedSpawn of [false, true]) test(`a dormant parent retains creatio
 		assert.equal(first.configuration.thinking, "high");
 		assert.deepEqual(
 			first.agentTemplateSnapshot?.templates.find(({ name }) => name === "dynamic-parent")
-				?.tools,
+				?.excludeTools,
 			["read", "bash"],
 		);
 
 		await writeFile(
 			templatePath,
-			"---\nname: dynamic-parent\nuseWhen: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\ntools: read\n---\n",
+			"---\nname: dynamic-parent\nuseWhen: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nexcludeTools: read\n---\n",
 		);
 		const second = await factory.prepareOrdinaryRun({
 			agentId: "descendant",
 			parent: parentRecord,
 			spawnInput: { title: "Fixture request", request: "Inherit the current parent configuration." },
 		});
-		assert.equal(second.configuration.tools.includes("read"), true);
-		assert.equal(second.configuration.tools.includes("bash"), true);
+		// The reloaded Template only updates the descendant catalogue; this Spawn
+		// names no Template and no exclusions, so it withholds nothing.
+		assert.deepEqual(second.configuration.excludeTools, []);
 		assert.deepEqual(
 			second.agentTemplateSnapshot?.templates.find(({ name }) => name === "dynamic-parent")
-				?.tools,
+				?.excludeTools,
 			["read"],
 		);
 	} finally {
@@ -328,9 +337,9 @@ test("a live parent contributes its current synchronized Runtime state", async (
 			spawnInput: { title: "Fixture request", request: "Inherit current live state." },
 		});
 		assert.equal(synchronizations, 1);
-		assert.equal(prepared.configuration.tools.includes("bash"), true);
-		assert.equal(prepared.configuration.tools.includes("read"), false);
-		assert.equal(prepared.configuration.tools.includes("powershell"), false);
+		// The live parent contributes identity, not a tool surface.
+		assert.deepEqual(prepared.configuration.excludeTools, []);
+		assert.deepEqual(prepared.configuration.excludeSkills, []);
 
 		const omitted = await factory.prepareOrdinaryRun({
 			agentId: "omitted", parent: parentRecord, spawnInput: { title: "Fixture request", request: "Inherit" },
@@ -339,7 +348,10 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		const explicit = await factory.prepareOrdinaryRun({
 			agentId: "explicit", parent: parentRecord,
 			spawnInput: { title: "Fixture request", request: "Inherit", config: { model: { id: "inherit", thinking: "inherit" }, extensions: "inherit" } },
-			creationPreset: { tools: ["read"], extensions: "none", systemPromptMode: "replace", loadContextFiles: false, systemPrompt: "Fixed rules." },
+			creationPreset: {
+				excludeTools: ["read"], extensions: "none",
+				systemPromptMode: "replace", loadContextFiles: false, systemPrompt: "Fixed rules.",
+			},
 		});
 
 		const inheritedExtension = join(root, "inherited.mjs");
@@ -355,9 +367,9 @@ test("a live parent contributes its current synchronized Runtime state", async (
 			skills: ["inherited-skill"], skillSources: [{ name: "inherited-skill", filePath: inheritedSkill }],
 			fileExtensionPaths: [inheritedExtension],
 		};
-		for (const [prepared, config] of [
-			[omitted, undefined],
-			[explicit, { model: { id: "inherit", thinking: "inherit" }, extensions: "inherit" }],
+		for (const [prepared, config, expectedExcludeTools] of [
+			[omitted, undefined, []],
+			[explicit, { model: { id: "inherit", thinking: "inherit" }, extensions: "inherit" }, ["read"]],
 		] as const) {
 			const restarted = await factory.prepareOrdinaryRun({
 				agentId: prepared.agentId, parent: parentRecord,
@@ -367,9 +379,12 @@ test("a live parent contributes its current synchronized Runtime state", async (
 			assert.deepEqual(restarted.configuration.model, { provider: "current-parent", modelId: "current-model" });
 			assert.equal(restarted.configuration.thinking, "high");
 			assert.equal(restarted.configuration.cwd, currentCwd);
-			assert.deepEqual(restarted.configuration.skills, ["inherited-skill"]);
+			// The child resolves its own skills; the parent's selection is not inherited.
+			assert.deepEqual(restarted.configuration.skills, []);
 			assert.deepEqual(restarted.configuration.extensions, [inheritedExtension]);
-			assert.equal(restarted.configuration.tools.includes(config ? "read" : "grep"), true);
+			// Neither the earlier nor the current parent surface becomes a child rule;
+			// only the captured preset carries an exclusion.
+			assert.deepEqual(restarted.configuration.excludeTools, expectedExcludeTools);
 			assert.equal(restarted.configuration.systemPrompt?.body, "Fixed rules.");
 			assert.equal(restarted.configuration.loadContextFiles, false);
 		}
@@ -443,7 +458,6 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			config: {
 				cwd: effectiveCwd,
 				model: { id: `${broker.providerId}/${broker.modelId}`, thinking: "inherit" as const },
-				tools: ["bash"],
 			},
 		};
 		host.session.sessionManager.appendMessage(
@@ -804,7 +818,7 @@ function hasCode(code: string): (error: unknown) => boolean {
 test("prefetched selections stay fixed until reload; captured presets outlive that load", { timeout: 5_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-template-load-"));
 	const templatePath = join(root, "implementator.md");
-	await writeFile(templatePath, "---\nname: implementator\nmodels:\n  - id: unavailable/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\ntools: read\n---\nOriginal rules.");
+	await writeFile(templatePath, "---\nname: implementator\nmodels:\n  - id: unavailable/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nexcludeTools: read\n---\nOriginal rules.");
 	const host = await createUnboundTestOwnerHost(t, () => undefined, { persistent: true, processVisibleModel: true });
 	await bindTestOwnerHost(host, "tui");
 	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -821,7 +835,7 @@ test("prefetched selections stay fixed until reload; captured presets outlive th
 		const snapshot = await factory.captureTemplateSnapshotFor(owner);
 		assert.deepEqual(snapshot.templates.map(({ name }) => name), ["implementator"]);
 		await rename(templatePath, join(root, "implementor.md"));
-		await writeFile(join(root, "implementor.md"), "---\nname: implementor\ntools: bash\n---\nNew rules.");
+		await writeFile(join(root, "implementor.md"), "---\nname: implementor\nexcludeTools: bash\n---\nNew rules.");
 		const input = { title: "Fixture request", request: "Implement", template: "implementator" };
 		const first = await factory.prepareOrdinaryRun({ agentId: "first", parent: owner, spawnInput: input });
 		assert.equal(first.configuration.systemPrompt?.body, "Original rules.");
@@ -829,7 +843,7 @@ test("prefetched selections stay fixed until reload; captured presets outlive th
 			{ model: { provider: "unavailable", modelId: "model" }, thinking: "low" },
 			{ model: { provider: "coordination-test", modelId: "deterministic-owner" }, thinking: "high" },
 		]);
-		assert.equal(first.configuration.tools.includes("read"), true);
+		assert.deepEqual(first.configuration.excludeTools, ["read"]);
 		await assert.rejects(factory.prepareOrdinaryRun({
 			agentId: "too-early", parent: owner, spawnInput: { title: "Fixture request", request: "Implement", template: "implementor" },
 		}), /implementor is missing/);
@@ -843,7 +857,7 @@ test("prefetched selections stay fixed until reload; captured presets outlive th
 			agentId: "first", parent: owner, spawnInput: input, creationPreset: first.creationPreset,
 		});
 		assert.equal(restarted.configuration.systemPrompt?.body, "Original rules.");
-		assert.equal(restarted.configuration.tools.includes("read"), true);
+		assert.deepEqual(restarted.configuration.excludeTools, ["read"]);
 		await assert.rejects(factory.prepareOrdinaryRun({
 			agentId: "missing", parent: owner, spawnInput: input,
 		}), /implementator is missing/);

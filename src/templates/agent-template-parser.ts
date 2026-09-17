@@ -15,8 +15,8 @@ const TEMPLATE_FIELDS = new Set([
 	"name",
 	"useWhen",
 	"models",
-	"tools",
-	"skills",
+	"excludeTools",
+	"excludeSkills",
 	"extensions",
 	"systemPromptMode",
 	"loadContextFiles",
@@ -92,12 +92,12 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 	const models = mapping.models === undefined
 		? undefined
 		: parseModelCandidates(mapping.models, sourcePath, name);
-	const tools = mapping.tools === undefined
+	const excludeTools = mapping.excludeTools === undefined
 		? undefined
-		: parseStringSelection(mapping.tools, "tools", sourcePath, name);
-	const skills = mapping.skills === undefined
+		: parseStringSelection(mapping.excludeTools, "excludeTools", sourcePath, name);
+	const excludeSkills = mapping.excludeSkills === undefined
 		? undefined
-		: parseStringSelection(mapping.skills, "skills", sourcePath, name);
+		: parseStringSelection(mapping.excludeSkills, "excludeSkills", sourcePath, name);
 	const extensions = mapping.extensions === undefined
 		? undefined
 		: parseExtensions(mapping.extensions, sourcePath, name);
@@ -112,8 +112,8 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 		name,
 		...(useWhen === undefined ? {} : { useWhen }),
 		...(models === undefined ? {} : { models }),
-		...(tools === undefined ? {} : { tools }),
-		...(skills === undefined ? {} : { skills }),
+		...(excludeTools === undefined ? {} : { excludeTools }),
+		...(excludeSkills === undefined ? {} : { excludeSkills }),
 		...(extensions === undefined ? {} : { extensions }),
 		systemPromptMode,
 		loadContextFiles,
@@ -245,7 +245,7 @@ function parseThinking(
 
 function parseStringSelection(
 	value: unknown,
-	field: "tools" | "skills" | "extensions",
+	field: "excludeTools" | "excludeSkills" | "extensions",
 	sourcePath: string,
 	templateName: string,
 ): readonly string[] {

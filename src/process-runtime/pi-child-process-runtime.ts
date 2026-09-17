@@ -201,7 +201,8 @@ export class PiChildProcessRuntime {
 				agentId: requireIdentity("agentId", options.agentId),
 				role: options.role,
 				ownerPresentation: options.ownerRequestHandlers !== undefined,
-				tools: [...options.configuration.tools],
+				// The child removes these names from its own runtime default surface.
+				excludedTools: [...options.configuration.excludeTools],
 				expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),
 			};
 			validateChildProcessBootstrap(bootstrap);
@@ -771,7 +772,7 @@ async function assertRuntimeSnapshot(
 	systemPromptArtifactPath: string | undefined,
 ): Promise<void> {
 	// This is a startup contract, not a restriction on later native activation.
-	assertSelectedTools(actual, expected.tools);
+	assertToolExecutionModes(actual);
 	if ((systemPromptArtifactPath === undefined) !== (expected.systemPrompt === undefined)) {
 		throw new Error("child_runtime_system_prompt_mismatch: artifact and configuration disagree");
 	}
@@ -807,23 +808,18 @@ async function assertRuntimeSnapshot(
 	}
 }
 
-export function assertSelectedTools(
+/**
+ * Snapshot integrity only: active tools and their execution modes must agree. A
+ * child owns its own surface now, so startup admission makes no claim about which
+ * tools are active or available beyond applying the exclusion filter itself.
+ */
+export function assertToolExecutionModes(
 	actual: Pick<PiChildRuntimeSnapshot, "tools" | "toolExecutionModes">,
-	selectedTools: readonly string[],
 ): void {
 	const modeNames = actual.toolExecutionModes.map(({ name }) => name);
 	if (JSON.stringify(modeNames) !== JSON.stringify(actual.tools)) {
 		throw new Error(
 			`child_runtime_tool_modes_mismatch: tools ${JSON.stringify(actual.tools)}, modes ${JSON.stringify(modeNames)}`,
-		);
-	}
-	const selectedToolNames = new Set(selectedTools);
-	const activeToolNames = new Set(actual.tools);
-	const missing = [...selectedToolNames].filter((name) => !activeToolNames.has(name));
-	const unexpected = [...activeToolNames].filter((name) => !selectedToolNames.has(name));
-	if (missing.length > 0 || unexpected.length > 0) {
-		throw new Error(
-			`child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`,
 		);
 	}
 }

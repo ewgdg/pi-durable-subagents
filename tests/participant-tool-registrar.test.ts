@@ -307,12 +307,12 @@ test("Agent Spawn schema accepts isolated children and rejects extension path ar
 	assert.equal("conversation" in schema.properties, false);
 	assert.equal(Reflect.get(schema.properties.description, "description"),
 		"Brief scope summary for display and Agent search; not task instructions.");
-	// Isolated children support independent Template/configuration selection.
+	// Isolated children carry Template rules plus Spawn exclusions.
 	for (const configuration of [
 		{},
 		{ template: "reviewer" },
-		{ config: { tools: ["read"] } },
-		{ template: "reviewer", config: { tools: ["read"] } },
+		{ config: { excludeTools: ["read"] } },
+		{ template: "reviewer", config: { excludeTools: ["read"] } },
 	]) {
 		assert.equal(Value.Check(schema, {
 			title: "Fixture request",
@@ -353,8 +353,6 @@ test("Template catalogue shows available Template configuration without Runtime 
 					thinking: "medium",
 				},
 			],
-			tools: ["read", "bash"],
-			skills: ["research"],
 			extensions: "none",
 			systemPromptMode: "replace",
 			loadContextFiles: false,

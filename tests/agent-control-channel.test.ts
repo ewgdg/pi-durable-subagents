@@ -7,6 +7,7 @@ import {
 	type AgentControlIdentity,
 	type AgentControlProtocol,
 } from "../src/control/agent-control-channel.ts";
+import { AGENT_CONTROL_PROTOCOL_VERSION } from "../src/control/child-bootstrap-contract.ts";
 import type { ControlTransport } from "../src/control/control-transport.ts";
 import { createInMemoryControlTransportPair } from "../src/control/in-memory-control-transport.ts";
 
@@ -29,7 +30,7 @@ const protocol = {
 } as const satisfies AgentControlProtocol;
 
 const identity: AgentControlIdentity = {
-	protocolVersion: 8,
+	protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
 	workflowId: "workflow-control-channel",
 	agentId: "agent-control-channel",
 };

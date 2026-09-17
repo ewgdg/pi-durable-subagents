@@ -18,10 +18,12 @@ export function renderAgentTemplatePromptGuide(
 					`  model: ${template.models[0].model.provider}/${template.models[0].model.modelId}`,
 					`  thinking: ${template.models[0].thinking}`,
 				]),
-			...(template.tools === undefined
+			...(template.excludeTools === undefined
 				? []
-				: [`  tools: ${JSON.stringify(template.tools)}`]),
-			...(template.skills === undefined ? [] : [`  skills: ${JSON.stringify(template.skills)}`]),
+				: [`  excludeTools: ${JSON.stringify(template.excludeTools)}`]),
+			...(template.excludeSkills === undefined
+				? []
+				: [`  excludeSkills: ${JSON.stringify(template.excludeSkills)}`]),
 			...(template.extensions === undefined
 				? []
 				: [`  extensions: ${template.extensions}`]),

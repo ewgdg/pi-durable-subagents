@@ -16,6 +16,7 @@ import {
 	type AgentRunLaunchConfiguration,
 	type AgentSpawnConfigurationInput,
 	type EffectiveAgentRunConfiguration,
+	type ResolvedAgentRunConfiguration,
 } from "../templates/agent-configuration.ts";
 import type {
 	AgentTemplate,
@@ -23,36 +24,11 @@ import type {
 	AgentTemplateCatalogueSnapshot,
 } from "../templates/agent-templates.ts";
 
-const COORDINATION_TOOLS_BY_ROLE = {
-	ordinary: [
-		"agent_message",
-		"agent_wait",
-		"agent_control",
-		"agent_observe",
-		"agent_spawn",
-		"ask_user",
-	],
-	moderator: [
-		"agent_message",
-		"agent_wait",
-		"agent_control",
-		"agent_observe",
-		"ask_user",
-		"moderator_control",
-		"report_to_user",
-	],
-} as const;
-const COORDINATION_TOOL_NAMES = new Set<string>(
-	// Owner-only recovery is never part of a child role's startup selection.
-	["workflow_resume", ...Object.values(COORDINATION_TOOLS_BY_ROLE).flat()],
-);
-
 export type AgentRuntimeRole = "ordinary" | "moderator";
 
 export type ResolvedParentRuntime = Readonly<{
 	configuration: InheritableRuntimeConfiguration;
 	projectTrusted: boolean;
-	skillSources: readonly Readonly<Pick<Skill, "name" | "filePath">>[];
 }>;
 
 type PreparedRuntimeFields = Readonly<{
@@ -94,7 +70,6 @@ export function prepareChildRuntime(
 export async function prepareChildRuntime(
 	options: PrepareChildRuntimeOptions,
 ): Promise<PreparedChildRuntime> {
-	validateParentSkillSources(options.parentRuntime);
 	const inheritedExtensions = inheritsParentExtensions(
 		options.template?.extensions,
 		options.overrides?.extensions,
@@ -108,7 +83,6 @@ export async function prepareChildRuntime(
 		},
 		template: options.template,
 		overrides: options.overrides,
-		requiredTools: [],
 		isModelAvailable: options.isModelAvailable ?? (() => true),
 	});
 	// Pi owns its shared default and model-capability clamp. Keep an absent
@@ -116,35 +90,24 @@ export async function prepareChildRuntime(
 	const launchConfiguration = usesPiDefaultThinking(options)
 		? withoutThinking(resolvedConfiguration)
 		: resolvedConfiguration;
-	const configuration = {
-		...launchConfiguration,
-		tools: [
-			...launchConfiguration.tools.filter(
-				(name) => !COORDINATION_TOOL_NAMES.has(name),
-			),
-			...COORDINATION_TOOLS_BY_ROLE[options.role],
-		],
-	};
-	await requireDirectory(configuration.cwd);
+	const effectiveCwd = launchConfiguration.cwd;
+	await requireDirectory(effectiveCwd);
 
 	const projectTrusted = await resolveProjectTrust({
 		parentCwd: options.parentRuntime.configuration.cwd,
-		effectiveCwd: configuration.cwd,
+		effectiveCwd,
 		parentProjectTrusted: options.parentRuntime.projectTrusted,
 		agentDir: options.agentDir,
 	});
 	const settingsManager = SettingsManager.create(
-		configuration.cwd,
+		effectiveCwd,
 		options.agentDir,
 		{ projectTrusted },
 	);
 	const resourceLoader = new DefaultResourceLoader({
-		cwd: configuration.cwd,
+		cwd: effectiveCwd,
 		agentDir: options.agentDir,
 		settingsManager,
-		additionalSkillPaths: options.parentRuntime.skillSources.map(
-			({ filePath }) => filePath,
-		),
 		noContextFiles: true,
 		// Extension modules belong to the fresh child process. Runtime preparation
 		// resolves paths but never imports or invokes child extension factories.
@@ -154,10 +117,17 @@ export async function prepareChildRuntime(
 	});
 	await resourceLoader.reload();
 
-	const selectedSkills = resolveSelectedSkills(
-		configuration.skills,
-		resourceLoader.getSkills(),
+	// A child loads the skills discovered for its own working directory and agent
+	// directory; the filter only removes names from that discovery, so a name that
+	// is absent changes nothing.
+	const selectedSkills = resolveLoadedSkills(
+		resourceLoader.getSkills().skills,
+		new Set(launchConfiguration.excludeSkills),
 	);
+	const configuration: AgentRunLaunchConfiguration = {
+		...launchConfiguration,
+		skills: selectedSkills.map(({ name }) => name),
+	};
 	const preparedFields: PreparedRuntimeFields = {
 		agentId: options.agentId,
 		creationPreset: options.template === undefined ? null : structuredClone(options.template),
@@ -192,8 +162,8 @@ function usesPiDefaultThinking(options: Readonly<{
 }
 
 function withoutThinking(
-	configuration: EffectiveAgentRunConfiguration,
-): AgentRunLaunchConfiguration {
+	configuration: ResolvedAgentRunConfiguration,
+): Omit<ResolvedAgentRunConfiguration, "thinking"> {
 	const { thinking: _, ...remaining } = configuration;
 	return remaining;
 }
@@ -213,22 +183,6 @@ function inheritsParentExtensions(
 ): boolean {
 	if (overrides !== undefined) return overrides === "inherit";
 	return template !== "none";
-}
-
-function validateParentSkillSources(parentRuntime: ResolvedParentRuntime): void {
-	if (
-		parentRuntime.skillSources.length !== parentRuntime.configuration.skills.length ||
-		parentRuntime.skillSources.some(
-			(source, index) => source.name !== parentRuntime.configuration.skills[index],
-		)
-	) {
-		throw new Error("Parent Runtime skill sources do not match its selected skills");
-	}
-	for (const source of parentRuntime.skillSources) {
-		if (!isAbsolute(source.filePath)) {
-			throw new Error(`Parent Runtime skill source is not absolute: ${source.name}`);
-		}
-	}
 }
 
 async function canonicalFileExtensions(paths: readonly string[]): Promise<string[]> {
@@ -274,28 +228,16 @@ async function resolveProjectTrust(options: {
 	return globalSettings.getDefaultProjectTrust() === "always";
 }
 
-function resolveSelectedSkills(
-	selectedNames: readonly string[],
-	loaded: ReturnType<DefaultResourceLoader["getSkills"]>,
-): Skill[] {
-	for (const diagnostic of loaded.diagnostics) {
-		if (
-			diagnostic.type === "collision" &&
-			diagnostic.collision?.resourceType === "skill" &&
-			selectedNames.includes(diagnostic.collision.name)
-		) {
-			throw new Error(`Agent skill resource is ambiguous: ${diagnostic.collision.name}`);
+function resolveLoadedSkills(
+	loaded: readonly Skill[],
+	excludedNames: ReadonlySet<string>,
+): readonly Skill[] {
+	const selected = loaded.filter(({ name }) => !excludedNames.has(name));
+	for (const skill of selected) {
+		// The launch pins exact paths, so Pi would silently drop a relative one.
+		if (!isAbsolute(skill.filePath)) {
+			throw new Error(`Agent skill source is not absolute: ${skill.name}`);
 		}
 	}
-	return selectedNames.map((name) => {
-		const matching = loaded.skills.filter((skill) => skill.name === name);
-		if (matching.length !== 1) {
-			throw new Error(`Agent skill resource is unavailable: ${name}`);
-		}
-		const skill = matching[0]!;
-		if (!isAbsolute(skill.filePath)) {
-			throw new Error(`Agent skill source is not absolute: ${name}`);
-		}
-		return skill;
-	});
+	return selected;
 }

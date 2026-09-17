@@ -64,8 +64,8 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	requireExactKeys(value, [
 		...(value.model === undefined ? [] : ["model"]),
 		...(value.cwd === undefined ? [] : ["cwd"]),
-		...(value.tools === undefined ? [] : ["tools"]),
-		...(value.skills === undefined ? [] : ["skills"]),
+		...(value.excludeTools === undefined ? [] : ["excludeTools"]),
+		...(value.excludeSkills === undefined ? [] : ["excludeSkills"]),
 		...(value.extensions === undefined ? [] : ["extensions"]),
 		...(value.systemPrompt === undefined ? [] : ["systemPrompt"]),
 		...(value.systemPromptMode === undefined ? [] : ["systemPromptMode"]),
@@ -73,10 +73,12 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	]);
 	const model = value.model === undefined ? undefined : validateModel(value.model);
 	const cwd = value.cwd === undefined ? undefined : requireNonEmptyString(value.cwd, "cwd");
-	const tools = value.tools === undefined
+	const excludeTools = value.excludeTools === undefined
 		? undefined
-		: validateStringList(value.tools, "tools");
-	const skills = value.skills === undefined ? undefined : validateStringList(value.skills, "skills");
+		: validateStringList(value.excludeTools, "excludeTools");
+	const excludeSkills = value.excludeSkills === undefined
+		? undefined
+		: validateStringList(value.excludeSkills, "excludeSkills");
 	const extensions = value.extensions === undefined
 		? undefined
 		: validateExtensions(value.extensions);
@@ -106,8 +108,8 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	return {
 		...(model === undefined ? {} : { model }),
 		...(cwd === undefined ? {} : { cwd }),
-		...(tools === undefined ? {} : { tools }),
-		...(skills === undefined ? {} : { skills }),
+		...(excludeTools === undefined ? {} : { excludeTools }),
+		...(excludeSkills === undefined ? {} : { excludeSkills }),
 		...(extensions === undefined ? {} : { extensions }),
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		...(systemPromptMode === undefined ? {} : { systemPromptMode }),

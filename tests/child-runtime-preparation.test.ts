@@ -68,20 +68,17 @@ test("resolves one process-safe ordinary child creation preparation without eval
 				cwd: parentCwd,
 				model: { provider: "parent", modelId: "parent-model" },
 				thinking: "low",
-				tools: ["bash"],
-				skills: ["review"],
 				extensions: ["<inline:parent-factory>", extensionAliasPath, extensionPath],
 			},
 			projectTrusted: false,
-			skillSources: [{ name: "review", filePath: inheritedSkillPath }],
 		},
 		template: {
 			models: [{
 				model: { provider: "template", modelId: "template-model" },
 				thinking: "medium",
 			}],
-			tools: ["grep"],
-			skills: ["review", "project-audit"],
+			excludeTools: ["grep"],
+			excludeSkills: ["review"],
 			extensions: "inherit",
 			systemPromptMode: "append",
 			loadContextFiles: true,
@@ -90,17 +87,23 @@ test("resolves one process-safe ordinary child creation preparation without eval
 		overrides: {
 			cwd: "subproject",
 			model: { id: "template/template-model", thinking: "high" },
-			tools: ["read", "extension_tool"],
+			excludeTools: ["read", "extension_tool"],
 			extensions: "inherit",
 			systemPrompt: "Spawn instructions",
 			systemPromptMode: "append",
 		},
 	});
 
-	assert.deepEqual(preparation, {
+	// The child discovers skills for its own cwd and agent directory, so this
+	// environment's global skills are legitimately part of its surface. The stable
+	// claims are that the locally written project skill is discovered and that the
+	// parent's selected `review` skill is not inherited.
+	const { skills: discoveredSkills, ...configuration } = preparation.configuration;
+	const { skillSources: discoveredSkillSources, ...rest } = preparation;
+	assert.deepEqual({ ...rest, configuration }, {
 		creationPreset: {
 			models: [{ model: { provider: "template", modelId: "template-model" }, thinking: "medium" }],
-			tools: ["grep"], skills: ["review", "project-audit"], extensions: "inherit",
+			excludeTools: ["grep"], excludeSkills: ["review"], extensions: "inherit",
 			systemPromptMode: "append", loadContextFiles: true, systemPrompt: "Template instructions",
 		},
 		agentId: "ordinary-child",
@@ -109,17 +112,10 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			cwd: effectiveCwd,
 			model: { provider: "template", modelId: "template-model" },
 			thinking: "high",
-			tools: [
-				"read",
-				"extension_tool",
-				"agent_message",
-				"agent_wait",
-				"agent_control",
-				"agent_observe",
-				"agent_spawn",
-				"ask_user",
-			],
-			skills: ["review", "project-audit"],
+			// Template rules plus Spawn exclusions accumulate; nothing is inherited
+			// from the parent surface.
+			excludeTools: ["grep", "read", "extension_tool"],
+			excludeSkills: ["review"],
 			extensions: [extensionPath],
 			systemPrompt: {
 				mode: "append",
@@ -128,11 +124,14 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			loadContextFiles: true,
 		},
 		projectTrusted: true,
-		skillSources: [
-			{ name: "review", path: inheritedSkillPath },
-			{ name: "project-audit", path: projectSkillPath },
-		],
 	});
+	assert.ok(discoveredSkills.includes("project-audit"));
+	assert.equal(discoveredSkills.includes("review"), false);
+	assert.equal(discoveredSkillSources.some(({ name }) => name === "review"), false);
+	assert.deepEqual(
+		discoveredSkillSources.find(({ name }) => name === "project-audit"),
+		{ name: "project-audit", path: projectSkillPath },
+	);
 	await assert.rejects(access(moduleSentinelPath), { code: "ENOENT" });
 	await assert.rejects(access(factorySentinelPath), { code: "ENOENT" });
 });
@@ -155,12 +154,9 @@ test("extensions none does not inspect or carry inherited extension paths", asyn
 				cwd,
 				model: { provider: "test", modelId: "model" },
 				thinking: "off",
-				tools: [],
-				skills: [],
 				extensions: [join(fixture, "missing-parent-extension.ts")],
 			},
 			projectTrusted: true,
-			skillSources: [],
 		},
 		overrides: { extensions: "none" },
 	});
@@ -198,12 +194,9 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 			cwd: parentCwd,
 			model: { provider: "parent", modelId: "model" },
 			thinking: "minimal" as const,
-			tools: ["read"],
-			skills: [],
 			extensions: [],
 		},
 		projectTrusted: false,
-		skillSources: [],
 	};
 
 	const sameCwd = await prepareChildRuntime({
@@ -219,24 +212,19 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		},
 	});
 	assert.equal(sameCwd.projectTrusted, false);
-	assert.deepEqual(sameCwd.configuration, {
+	// The child owns its skill discovery, so this comparison ignores the discovered
+	// names and pins the exclusion rules plus the trust-derived identity.
+	const { skills: sameCwdSkills, ...sameCwdConfiguration } = sameCwd.configuration;
+	assert.deepEqual(sameCwdConfiguration, {
 		cwd: parentCwd,
 		model: { provider: "parent", modelId: "model" },
-		tools: [
-			"read",
-			"agent_message",
-			"agent_wait",
-			"agent_control",
-			"agent_observe",
-			"ask_user",
-			"moderator_control",
-			"report_to_user",
-		],
-		skills: [],
+		excludeTools: [],
+		excludeSkills: [],
 		extensions: [],
 		systemPrompt: { mode: "replace", body: "Moderator-only context" },
 		loadContextFiles: false,
 	});
+	assert.ok(sameCwdSkills.every((name) => typeof name === "string" && name.length > 0));
 
 	const explicitlyConfiguredModerator = await prepareChildRuntime({
 		agentId: "configured-moderator-child",
@@ -285,70 +273,33 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 	assert.equal(newCwdPreparation.projectTrusted, true);
 });
 
-test("each role normalizes Owner coordination tools and preserves empty optional selections", async () => {
-	const cwd = await mkdtemp(join(tmpdir(), "child-run-empty-tools-"));
+test("accumulates Template and Spawn exclusions without inheriting the parent surface", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "child-run-exclusions-"));
 	for (const role of ["ordinary", "moderator"] as const) {
-		for (const overrides of [undefined, { tools: [] }]) {
-			const options = {
-				agentId: `${role}-empty-tools`, agentDir: cwd,
-				parentRuntime: {
-					configuration: {
-						cwd, model: { provider: "test", modelId: "model" }, thinking: "off" as const,
-						tools: ["read", "workflow_resume"], skills: [], extensions: [],
-					},
-					projectTrusted: true, skillSources: [],
+		const options = {
+			agentId: `${role}-exclusions`, agentDir: cwd,
+			parentRuntime: {
+				configuration: {
+					cwd, model: { provider: "test", modelId: "model" }, thinking: "off" as const,
+					extensions: [],
 				},
-				overrides,
-			};
-			const preparation = await (role === "ordinary"
-				? prepareChildRuntime({ ...options, role })
-				: prepareChildRuntime({ ...options, role }));
-			assert.deepEqual(preparation.configuration.tools, [
-				...(overrides === undefined ? ["read"] : []),
-				...(role === "ordinary"
-					? ["agent_message", "agent_wait", "agent_control", "agent_observe", "agent_spawn", "ask_user"]
-					: ["agent_message", "agent_wait", "agent_control", "agent_observe", "ask_user", "moderator_control", "report_to_user"]),
-			]);
-		}
-	}
-});
-
-test("replaces inherited or configured coordination tools with the exact child role set", async () => {
-	const fixture = await mkdtemp(join(tmpdir(), "child-run-role-tools-"));
-	const agentDir = join(fixture, "agent");
-	const cwd = join(fixture, "workspace");
-	await Promise.all([
-		mkdir(agentDir, { recursive: true }),
-		mkdir(cwd, { recursive: true }),
-	]);
-	const preparation = await prepareChildRuntime({
-		agentId: "ordinary-role-tools",
-		role: "ordinary",
-		agentDir,
-		parentRuntime: {
-			configuration: {
-				cwd,
-				model: { provider: "test", modelId: "model" },
-				thinking: "off",
-				tools: ["bash", "agent_spawn", "moderator_control", "report_to_user"],
-				skills: [],
-				extensions: [],
+				projectTrusted: true,
 			},
-			projectTrusted: true,
-			skillSources: [],
-		},
-		overrides: {
-			tools: ["read", "moderator_control", "agent_message"],
-		},
-	});
-
-	assert.deepEqual(preparation.configuration.tools, [
-		"read",
-		"agent_message",
-		"agent_wait",
-		"agent_control",
-		"agent_observe",
-		"agent_spawn",
-		"ask_user",
-	]);
+			template: {
+				excludeTools: ["bash"],
+				excludeSkills: ["research"],
+				systemPromptMode: "append" as const,
+				loadContextFiles: true,
+				systemPrompt: "",
+			},
+			overrides: { excludeTools: ["read", "bash"] },
+		};
+		const preparation = await (role === "ordinary"
+			? prepareChildRuntime({ ...options, role })
+			: prepareChildRuntime({ ...options, role }));
+		// A Spawn restriction adds to the Template rule instead of replacing it, and
+		// the parent surface contributes nothing.
+		assert.deepEqual(preparation.configuration.excludeTools, ["bash", "read"]);
+		assert.deepEqual(preparation.configuration.excludeSkills, ["research"]);
+	}
 });

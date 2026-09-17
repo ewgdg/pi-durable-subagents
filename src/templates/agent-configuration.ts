@@ -17,8 +17,8 @@ export type AgentSpawnConfigurationInput = Readonly<{
 		thinking?: RuntimeThinkingLevel | "inherit";
 	}>;
 	cwd?: string;
-	tools?: readonly string[];
-	skills?: readonly string[];
+	excludeTools?: readonly string[];
+	excludeSkills?: readonly string[];
 	extensions?: "inherit" | "none";
 	systemPrompt?: string;
 	systemPromptMode?: SystemPromptMode;
@@ -29,7 +29,8 @@ export type EffectiveAgentRunConfiguration = Readonly<{
 	cwd: string;
 	model: ModelReference;
 	thinking: RuntimeThinkingLevel;
-	tools: readonly string[];
+	excludeTools: readonly string[];
+	excludeSkills: readonly string[];
 	skills: readonly string[];
 	extensions: readonly string[];
 	systemPrompt?: Readonly<{
@@ -46,18 +47,26 @@ export type AgentRunLaunchConfiguration = Readonly<
 	}
 >;
 
+/** Prepared rules before the child-owned skill discovery contributes the loaded set. */
+export type ResolvedAgentRunConfiguration = Omit<EffectiveAgentRunConfiguration, "skills">;
+
 export function resolveAgentRunConfiguration(options: {
 	inherited: InheritableRuntimeConfiguration;
 	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
-	requiredTools: readonly string[];
 	isModelAvailable(model: ModelReference): boolean;
-}): EffectiveAgentRunConfiguration {
+}): ResolvedAgentRunConfiguration {
 	const { inherited, template, overrides } = options;
-	const selectedTools = overrides?.tools
-		?? template?.tools
-		?? inherited.tools;
-	const configuredSkills = overrides?.skills ?? template?.skills ?? inherited.skills;
+	// Exclusions accumulate: a Spawn config restricts further, it does not lift a
+	// Template rule. Nothing about the parent's surface is inherited.
+	const excludeTools = unique([
+		...(template?.excludeTools ?? []),
+		...(overrides?.excludeTools ?? []),
+	]);
+	const excludeSkills = unique([
+		...(template?.excludeSkills ?? []),
+		...(overrides?.excludeSkills ?? []),
+	]);
 	const templateExtensions = resolveExtensions(template?.extensions, inherited.extensions);
 	const configuredExtensions = resolveExtensions(
 		overrides?.extensions,
@@ -93,8 +102,8 @@ export function resolveAgentRunConfiguration(options: {
 		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),
 		model: { ...modelConfiguration.model },
 		thinking: modelConfiguration.thinking,
-		tools: unique([...selectedTools, ...options.requiredTools]),
-		skills: [...configuredSkills],
+		excludeTools,
+		excludeSkills,
 		extensions: [...configuredExtensions],
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		loadContextFiles,

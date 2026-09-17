@@ -46,7 +46,7 @@ export function buildPiChildCliLaunch(options: {
 	for (const skillPath of skillPaths) requireAbsolutePath("skill", skillPath);
 	if (skillPaths.length !== configuration.skills.length) {
 		throw new Error(
-			`invalid_child_launch: skill path count ${skillPaths.length} does not match selected skill count ${configuration.skills.length}`,
+			`invalid_child_launch: skill path count ${skillPaths.length} does not match resolved skill count ${configuration.skills.length}`,
 		);
 	}
 	if (new Set(skillPaths).size !== skillPaths.length) {
@@ -67,14 +67,6 @@ export function buildPiChildCliLaunch(options: {
 	}
 	if (inputExtensionPath === bridgeExtensionPath) {
 		throw new Error("invalid_child_launch: bridge and input extensions must be distinct");
-	}
-	if (new Set(configuration.tools).size !== configuration.tools.length) {
-		throw new Error("invalid_child_launch: selected tools contain duplicates");
-	}
-	for (const toolName of configuration.tools) {
-		if (toolName.includes(",")) {
-			throw new Error(`invalid_child_launch: tool name cannot contain a comma: ${toolName}`);
-		}
 	}
 	if ((systemPromptArtifactPath === undefined) !== (configuration.systemPrompt === undefined)) {
 		throw new Error(

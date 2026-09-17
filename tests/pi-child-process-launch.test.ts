@@ -52,8 +52,28 @@ test("launch projects the real startup PTY through runtime admission", {
 		await readiness;
 		const runtime = await launch.ready();
 		assert.equal(runtime.pid, launch.pid);
-		assert.deepEqual(runtime.snapshot.tools, []);
-		assert.deepEqual(JSON.parse(await readFile(options.ownerEnvironment!.PROCESS_RUNTIME_INITIAL_TOOLS_PROBE!, "utf8")), []);
+		// No exclusion filter: the child keeps its own runtime default surface, and
+		// startup completion re-merges the ordinary role's coordination tools.
+		assert.deepEqual(runtime.snapshot.tools, [
+			"read",
+			"bash",
+			"edit",
+			"write",
+			"agent_message",
+			"agent_wait",
+			"agent_spawn",
+			"agent_observe",
+			"agent_control",
+			"ask_user",
+			"runtime_sequential_probe",
+		]);
+		// The probe runs in the child's own session_start handler, which is before the
+		// bridge applies the exclusion filter at startup completion. With no exclusions
+		// configured, the child-owned startup surface and the completed surface agree.
+		assert.deepEqual(
+			JSON.parse(await readFile(options.ownerEnvironment!.PROCESS_RUNTIME_INITIAL_TOOLS_PROBE!, "utf8")),
+			runtime.snapshot.tools,
+		);
 		assert.deepEqual(runtime.ready, {
 			sessionId: options.expectedSessionId,
 			mode: "tui",
@@ -73,19 +93,24 @@ test("launch projects the real startup PTY through runtime admission", {
 	}
 });
 
-for (const outcome of ["admitted", "mismatch", "cancelled", "exited"] as const) {
-	test(`startup dialogs remain usable before initial tool admission: ${outcome}`, {
+for (const outcome of ["admitted", "excluded", "cancelled", "exited"] as const) {
+	test(`startup dialogs remain usable before startup completion: ${outcome}`, {
 		timeout: TEST_TIMEOUT_MS,
 		skip: process.platform === "win32",
 	}, async () => {
 		const options = await createLaunchOptions(`startup-dialog-${outcome}`, 0);
 		const launch = await PiChildProcessRuntime.launch({
 			...options,
-			configuration: { ...options.configuration, tools: ["read"] },
+			configuration: {
+				...options.configuration,
+				// The child activates "read" for itself below; the filter has to remove
+				// it at startup completion instead of rejecting the launch.
+				excludeTools: outcome === "excluded" ? ["read"] : [],
+			},
 			ownerEnvironment: {
 				...options.ownerEnvironment,
 				PROCESS_RUNTIME_STARTUP_DIALOG: "1",
-				PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify(outcome === "mismatch" ? [] : ["read"]),
+				PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify(["read"]),
 			},
 		});
 		let settled = false;
@@ -101,10 +126,10 @@ for (const outcome of ["admitted", "mismatch", "cancelled", "exited"] as const) 
 		try {
 			await attachNativeChildDisplay(launch);
 			await waitForDisplay("PROCESS_RUNTIME_STARTUP_INPUT");
-			assert.equal(settled, false, "startup input must not admit the initial tool selection");
+			assert.equal(settled, false, "startup input must not settle the child surface");
 			launch.writeInput("startup answer\r");
 			await waitForDisplay("PROCESS_RUNTIME_STARTUP_OVERLAY startup answer");
-			assert.equal(settled, false, "startup overlay must not admit the initial tool selection");
+			assert.equal(settled, false, "startup overlay must not settle the child surface");
 			if (outcome === "exited") {
 				process.kill(launch.pid, "SIGKILL");
 				await assert.rejects(readiness);
@@ -116,17 +141,31 @@ for (const outcome of ["admitted", "mismatch", "cancelled", "exited"] as const) 
 				await cleanup;
 			} else {
 				launch.writeInput("\r");
-				if (outcome === "mismatch") {
-					await assert.rejects(readiness, /child_runtime_tools_mismatch: missing \["read"\], unexpected \[\]/);
-				} else {
-					const runtime = await readiness;
-					assert.deepEqual(runtime.snapshot.tools, ["read"]);
-					// Admission must not hide an already attached startup presentation.
-					launch.writeInput("/runtime-probe POST_STARTUP_INPUT_OK\r");
-					await waitForDisplay("INPUT=POST_STARTUP_INPUT_OK");
-				}
+				const runtime = await readiness;
+				const expectedTools = outcome === "excluded"
+					? [
+						"agent_message",
+						"agent_wait",
+						"agent_spawn",
+						"agent_observe",
+						"agent_control",
+						"ask_user",
+					]
+					: [
+						"read",
+						"agent_message",
+						"agent_wait",
+						"agent_spawn",
+						"agent_observe",
+						"agent_control",
+						"ask_user",
+					];
+				assert.deepEqual(runtime.snapshot.tools, expectedTools);
+				// Startup completion must not hide an already attached presentation.
+				launch.writeInput("/runtime-probe POST_STARTUP_INPUT_OK\r");
+				await waitForDisplay("INPUT=POST_STARTUP_INPUT_OK");
 			}
-			if (outcome !== "admitted") {
+			if (outcome === "cancelled" || outcome === "exited") {
 				assert.equal(launch.disposed, true);
 				assert.throws(() => process.kill(launch.pid, 0), hasCode("ESRCH"));
 				await assert.rejects(lstat(dirname(launch.bootstrapPath)), hasCode("ENOENT"));
@@ -221,7 +260,8 @@ async function createLaunchOptions(
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			excludeTools: [],
+			excludeSkills: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			systemPrompt: { mode: "append", body: `Launch context for ${name}` },

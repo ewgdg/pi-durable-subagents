@@ -8,6 +8,7 @@ import {
 	FramedAgentControlChannel,
 	type AgentControlProtocol,
 } from "../src/control/agent-control-channel.ts";
+import { AGENT_CONTROL_PROTOCOL_VERSION } from "../src/control/child-bootstrap-contract.ts";
 import {
 	admitControlTransportPlatform,
 	connectControlTransport,
@@ -36,7 +37,7 @@ const protocol = {
 	},
 } as const satisfies AgentControlProtocol;
 const identity = {
-	protocolVersion: 8 as const,
+	protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
 	workflowId: "named-pipe-workflow",
 	agentId: "named-pipe-agent",
 };

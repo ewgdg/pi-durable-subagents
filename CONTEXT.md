@@ -89,7 +89,7 @@ The in-memory selection summary paired with the full discovery result loaded for
 _Avoid_: Template cache, Template configuration
 
 **Agent Spawn Configuration**:
-The optional caller-authored `config` object in a context-isolated canonical Agent Spawn tool call. It remains in that canonical parent tool call and, on every fresh Runtime, overlays the child's captured creation rules. It may override model, thinking, working directory, initial tool and skill selections, extension inheritance, and Project Context. The resolved tool selection, including required role tools, is the exact initial active set rather than a capability ceiling; later activation changes remain native Runtime behavior. It is never expanded into a durable effective configuration. A Conversation Fork rejects Agent Spawn Configuration.
+The optional caller-authored `config` object in a context-isolated canonical Agent Spawn tool call. It remains in that canonical parent tool call and, on every fresh Runtime, overlays the child's captured creation rules. It may override model, thinking, working directory, withheld tools and skills, extension inheritance, and Project Context. The excluded tools and skills are a withhold filter over the child's own default surface and skill discovery, applied once when startup completes, after inherited extensions rewired it and before any input is admitted; the child bridge keeps its own role coordination tools active, and later activation changes remain native Runtime behavior. It is never expanded into a durable effective configuration. A Conversation Fork rejects Agent Spawn Configuration.
 _Avoid_: Agent settings, runtime state, inheritance snapshot
 
 **Agent Creation Preset**:

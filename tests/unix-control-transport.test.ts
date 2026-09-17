@@ -12,6 +12,7 @@ import {
 	type AgentControlProtocol,
 } from "../src/control/agent-control-channel.ts";
 import { AgentControlAdmissionBroker } from "../src/control/agent-control-admission.ts";
+import { AGENT_CONTROL_PROTOCOL_VERSION } from "../src/control/child-bootstrap-contract.ts";
 import {
 	admitControlTransportPlatform,
 	connectControlTransport,
@@ -39,7 +40,7 @@ const protocol = {
 		},
 	},
 } as const satisfies AgentControlProtocol;
-const identity = { protocolVersion: 8 as const, workflowId: "unix-workflow", agentId: "unix-agent" };
+const identity = { protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION, workflowId: "unix-workflow", agentId: "unix-agent" };
 
 unixOnly("Unix listener allocates a short private endpoint and removes it on close", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-control-test-"));

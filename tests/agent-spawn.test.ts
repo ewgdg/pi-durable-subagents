@@ -211,7 +211,10 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			cwd: host.cwd,
 			model: { provider: "coordination-test", modelId: "deterministic-owner" },
 			thinking: "off",
-			tools: ["agent_message", "agent_wait", "agent_control", "agent_observe", "agent_spawn", "ask_user"],
+			// Nothing is inherited from the parent surface: the child owns its own
+			// runtime default and only carries the exclusion filter.
+			excludeTools: [],
+			excludeSkills: [],
 			skills: [],
 			extensions: processExtensions,
 			loadContextFiles: true,
@@ -365,7 +368,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\ntools: read\n---\nTemplate context",
+		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nexcludeTools: read\n---\nTemplate context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
 	await writeFile(
@@ -406,7 +409,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 		description: "  Research specialist  ",
 		config: {
 			cwd: "subproject",
-			tools: ["grep"],
+			excludeTools: ["grep"],
 			systemPrompt: "Spawn context",
 			systemPromptMode: "append" as const,
 		},
@@ -431,15 +434,10 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 		cwd: effectiveCwd,
 		model: { provider: "coordination-test", modelId: "deterministic-owner" },
 		thinking: "off",
-		tools: [
-			"grep",
-			"agent_message",
-			"agent_wait",
-			"agent_control",
-			"agent_observe",
-			"agent_spawn",
-			"ask_user",
-		],
+		// Template rules plus Spawn exclusions accumulate; the child still owns the
+		// baseline it filters.
+		excludeTools: ["read", "grep"],
+		excludeSkills: [],
 		skills: [],
 		extensions: processExtensions,
 		systemPrompt: {
@@ -457,9 +455,19 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	assert.match(observedSystemPrompt, /Template context/);
 	assert.match(observedSystemPrompt, /Spawn context/);
 	assert.doesNotMatch(observedSystemPrompt, /Wrong discovery root/);
-	assert.equal(observedTools.includes("read"), false);
-	for (const toolName of receipt.effectiveConfiguration.tools) {
-		assert.ok(observedTools.includes(toolName), `missing model-visible tool ${toolName}`);
+	for (const toolName of receipt.effectiveConfiguration.excludeTools) {
+		assert.equal(observedTools.includes(toolName), false, `excluded tool stayed model-visible: ${toolName}`);
+	}
+	// Participation never depends on the filter: the role tools stay active.
+	for (const toolName of [
+		"agent_message",
+		"agent_wait",
+		"agent_spawn",
+		"agent_observe",
+		"agent_control",
+		"ask_user",
+	]) {
+		assert.ok(observedTools.includes(toolName), `missing role coordination tool ${toolName}`);
 	}
 
 	const workflowDirectory = join(
@@ -514,7 +522,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	assert.equal(termination.disposition, "terminated");
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\ntools: read\n---\nChanged Template context",
+		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nexcludeTools: read\n---\nChanged Template context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
 	let successorSystemPrompt = "";
@@ -616,10 +624,10 @@ test("invalid default-child metadata fails before Agent Identity", async (t) => 
 	await host.runtime.dispose();
 });
 
-test("ambiguous selected skills fail before Agent Identity", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
-	const piSkillDirectory = join(host.cwd, ".pi", "skills", "pi-copy");
-	const agentsSkillDirectory = join(host.cwd, ".agents", "skills", "agents-copy");
+test("a skill name colliding across the child's own roots is discovered once and admitted", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
+	const piSkillDirectory = join(harness.host.cwd, ".pi", "skills", "pi-copy");
+	const agentsSkillDirectory = join(harness.host.cwd, ".agents", "skills", "agents-copy");
 	await mkdir(piSkillDirectory, { recursive: true });
 	await mkdir(agentsSkillDirectory, { recursive: true });
 	const skill = [
@@ -627,39 +635,29 @@ test("ambiguous selected skills fail before Agent Identity", async (t) => {
 		"name: colliding-skill",
 		"description: Deliberate collision fixture",
 		"---",
-		"Exercise the selected resource collision boundary.",
+		"Exercise the child-owned resource discovery boundary.",
 	].join("\n");
 	await writeFile(join(piSkillDirectory, "SKILL.md"), skill);
 	await writeFile(join(agentsSkillDirectory, "SKILL.md"), skill);
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall(
-				"agent_spawn",
-				{
-					title: "Fixture request",
-					request: "This request must never acquire a child.",
-					config: { skills: ["colliding-skill"] },
-				},
-				{ id: "spawn-ambiguous-skill" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The child was not created."),
-	]);
-
-	await host.session.prompt("Try an ambiguous child skill selection.");
-	await host.session.waitForIdle();
-
-	assert.deepEqual(findSpawnReceipt(host.session.sessionManager), {
-		spawnStatus: "not_created",
-		failedStage: "configuration",
-		reason: "Agent skill resource is ambiguous: colliding-skill",
+	const receipt = await harness.spawn("spawn-colliding-skill", {
+		title: "Fixture request",
+		request: "Discover the colliding skill name from the child's own roots.",
 	});
+	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
+		throw new Error(`Colliding-skill child was not admitted: ${JSON.stringify(receipt)}`);
+	}
+	// The parent no longer resolves a skill selection, so a name available from two
+	// of the child's own roots is not a configuration failure: the child's discovery
+	// yields one entry and the Run is admitted.
+	assert.equal(
+		receipt.effectiveConfiguration.skills.filter((name) => name === "colliding-skill").length,
+		1,
+	);
 
-	await host.runtime.dispose();
+	await harness.shutdown();
 });
 
-test("an untrusted effective cwd cannot contribute selected project resources", async (t) => {
+test("an untrusted effective cwd cannot contribute its project skills", async (t) => {
 	const harness = await createCoordinatorHarness(t, {});
 	const effectiveCwd = join(harness.host.cwd, "untrusted-project");
 	const skillDirectory = join(effectiveCwd, ".agents", "skills", "untrusted-skill");
@@ -678,19 +676,18 @@ test("an untrusted effective cwd cannot contribute selected project resources", 
 
 	const receipt = await harness.spawn("spawn-untrusted-project-resource", {
 		title: "Fixture request",
-		request: "This request must never acquire a child.",
+		request: "Discover skills in the cwd this Workflow does not trust.",
 		config: {
 			cwd: "untrusted-project",
-			skills: ["untrusted-skill"],
 		},
 	});
 
-	assert.deepEqual(receipt, {
-		spawnStatus: "not_created",
-		failedStage: "configuration",
-		reason: "Agent skill resource is unavailable: untrusted-skill",
-	});
-	assert.deepEqual(harness.view.children(), []);
+	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
+		throw new Error(`Untrusted-cwd child was not created: ${JSON.stringify(receipt)}`);
+	}
+	// The child discovers skills for its own cwd and Pi withholds untrusted project
+	// resources, so a name discovery never returns is simply absent from the filter's input.
+	assert.equal(receipt.effectiveConfiguration.skills.includes("untrusted-skill"), false);
 
 	await harness.shutdown();
 });
@@ -721,7 +718,6 @@ test("effective cwd honors Pi's default project-trust policy", async (t) => {
 		request: "Use the policy-trusted skill.",
 		config: {
 			cwd: "default-trusted-project",
-			skills: ["trusted-skill"],
 		},
 	});
 
@@ -734,12 +730,12 @@ test("effective cwd honors Pi's default project-trust policy", async (t) => {
 	await harness.shutdown();
 });
 
-test("selected tools unavailable in the child reject startup without losing its Identity", async (t) => {
+test("an excluded tool name the child never had is a no-op whose Run is admitted", async (t) => {
 	const ownerOnlyTool: ExtensionFactory = (pi) => {
 		pi.registerTool({
 			name: "owner_only_probe",
 			label: "Owner-only probe",
-			description: "A test resource unavailable to child sessions.",
+			description: "A test resource available only on the parent surface.",
 			parameters: Type.Object({}, { additionalProperties: false }),
 			async execute() {
 				return { content: [{ type: "text", text: "probe" }], details: undefined };
@@ -747,14 +743,19 @@ test("selected tools unavailable in the child reject startup without losing its 
 		});
 	};
 	const harness = await createCoordinatorHarness(t, {}, ownerOnlyTool);
-	const receipt = await harness.spawn("spawn-missing-inherited-resource");
+	const receipt = await harness.spawn("spawn-excluded-absent-tool", {
+		title: "Fixture request",
+		request: "Filter a tool name the child never had.",
+		config: { excludeTools: ["owner_only_probe"] },
+	});
 
-	assert.equal(receipt.spawnStatus, "created");
-	assert.ok("failedStage" in receipt);
-	assert.equal(receipt.failedStage, "run_start");
-	assert.equal(receipt.messageStatus, "not_sent");
-	assert.match(receipt.reason, /child_runtime_tools_mismatch: missing .*owner_only_probe/);
-	assert.equal(harness.view.children()[0]?.run.phase, "dormant");
+	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
+		throw new Error(`Excluded-name child was not admitted: ${JSON.stringify(receipt)}`);
+	}
+	// A name the child never had changes nothing, because the parent's surface is not
+	// inherited and the filter ignores names it cannot find.
+	assert.deepEqual(receipt.effectiveConfiguration.excludeTools, ["owner_only_probe"]);
+	assert.equal(harness.view.children()[0]?.run.phase, "live");
 
 	await harness.shutdown();
 });
