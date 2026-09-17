@@ -66,7 +66,7 @@ An unresolved Answer Obligation still determines eligibility for ordinary Run Fa
 
 ## Quota suspension
 
-A terminal, evidence-backed quota error displays **Suspended · Usage limit reached** after Pi's configured native retry/fallback has finished. It retains the exact Run instead of failing it or starting a Moderator. The status and its acknowledgeable Runtime Report retain provider/model and the exact diagnostic; a reset time appears only when the provider supplied it. Each continuous suspension has one notice. Reading it does not resume execution.
+A terminal, evidence-backed quota error displays **Suspended · Usage limit reached** after Pi's configured native retry/fallback has finished. It retains the exact Run instead of failing it or starting a Moderator. Suspension publishes no Runtime Report: the Agent's status and the retained Run evidence already carry provider/model and the exact diagnostic, and a reset time appears only when the provider supplied it. Observing that status does not resume execution.
 
 Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Agent Messages, heartbeat scheduling, and Workflow continuation cannot release it. A new human message in the selected Agent's editor is deliberate resumption, using that message as the resumption instructions. Suspended children relinquish execution capacity so unrelated children can progress. Quota-blocked work and its genuinely blocked dependency path do not generate obligation reminders, stall/deadlock moderation, or Moderator replacements; unrelated incidents remain eligible.
 
@@ -79,9 +79,9 @@ Human intent uses Pi's trusted `interactive` input provenance; queued follow-ups
 
 Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. Explicit termination ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
 
-If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota establishes a new suspension notice, and another terminal error follows ordinary failure handling. An aborted attempt before confirmation retains the original stop and notice rather than inventing a human Interruption Hold.
+If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota establishes a new suspension, and another terminal error follows ordinary failure handling. An aborted attempt before confirmation retains the original stop rather than inventing a human Interruption Hold.
 
-The Owner transcript retains suspension independently of report read state. Cold recovery restores the stop before scheduling work, rather than silently starting a successor. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
+The Owner transcript journal retains suspension state independently of how an Agent status surface presents it. Cold recovery restores the stop before scheduling work, rather than silently starting a successor. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
 
 ### Provider evidence and upstream limitation
 

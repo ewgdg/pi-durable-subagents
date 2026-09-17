@@ -33,8 +33,6 @@ test("cold recovery prepares a suspended editor without generation, then resumes
 	first.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", queued, { id: "queue-cold-quota" }), { stopReason: "toolUse" }));
 	const queuedReceipt = await initialView.message("queue-cold-quota", queued);
 	first.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: "queue-cold-quota", details: queuedReceipt, content: [{ type: "text", text: JSON.stringify(queuedReceipt) }], isError: false, timestamp: Date.now() });
-	const report = initialView.reportHistory()[0]!;
-	initialView.setReportRead(report.report.reportId, true);
 	const sessionFile = first.session.sessionManager.getSessionFile()!;
 	await initial.shutdown(() => first.runtime.dispose());
 	let unexpectedGenerations = 0;
@@ -52,8 +50,7 @@ test("cold recovery prepares a suspended editor without generation, then resumes
 	assert.deepEqual(view.status(agentId).run.suspension, originalStatus.run.suspension);
 	assert.deepEqual(coordinator.forAgent(agentId).obligationFrames(), originalObligations);
 	assert.ok(view.status(agentId).run.retentionReasons.some(reason => reason.reason === "answer_owed"));
-	assert.ok(view.reportHistory().find(item => item.report.reportId === report.report.reportId)?.readAt);
-	assert.equal(view.reportHistory().length, 1);
+	assert.deepEqual(view.reportHistory(), [], "recovery publishes no quota report");
 	const retainedView = await view.openAgentPresentation(agentId);
 	assert.equal(retainedView.kind, "selected");
 	if (retainedView.kind !== "selected" || !retainedView.view) assert.fail("Expected a prepared editor without model generation");

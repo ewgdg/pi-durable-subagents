@@ -83,9 +83,7 @@ for (const diagnostic of [
 		assert.ok(suspension(view.status(agentId).run));
 		assert.equal(JSON.stringify(entries()).includes("QUEUED_BEHIND_QUOTA"), false);
 		assert.equal(reminders(), beforeReminders);
-		assert.ok(view.reportHistory().length > 0, "quota publishes a human report");
-		for (const item of view.reportHistory()) view.setReportRead(item.report.reportId, true);
-		assert.ok(suspension(view.status(agentId).run), "reading reports must not resume");
+		assert.deepEqual(view.reportHistory(), [], "quota suspension is not a reportable incident");
 		host.model.setResponses([fauxAssistantMessage("INDEPENDENT_PROGRESS"), fauxAssistantMessage("Independent reminder acknowledged.")]);
 		const independent = await spawn();
 		await until(() => {
@@ -151,9 +149,7 @@ test("exact Codex diagnostic suspends through the real process Workflow", { time
 	await until(() => Boolean(suspension(view.status(receipt.agentId).run)), "exact Codex error must suspend");
 	assert.equal(suspension(view.status(receipt.agentId).run)?.evidence.diagnostic, "Codex error: The usage limit has been reached");
 	assert.equal(suspension(view.status(receipt.agentId).run)?.evidence.provider, "openai-codex");
-	const originalReports = view.reportHistory();
-	assert.equal(originalReports.length, 1);
-	view.setReportRead(originalReports[0]!.report.reportId, true);
+	assert.deepEqual(view.reportHistory(), [], "quota suspension publishes no report");
 	const queued = { operation: "send" as const, targetAgent: receipt.agentId, content: "WAIT_THROUGH_RENEWED_QUOTA", deliveryMode: "steer" as const };
 	await view.message(call("agent_message", queued), queued);
 	const resume = { operation: "resume" as const, agentId: receipt.agentId, content: "Deliberately retry after reviewing quota." };
@@ -168,9 +164,7 @@ test("exact Codex diagnostic suspends through the real process Workflow", { time
 	const entries = SessionManager.open(view.status(receipt.agentId).primaryEvidence.transcriptPath!).getEntries();
 	assert.equal(JSON.stringify(entries).includes("WAIT_THROUGH_RENEWED_QUOTA"), false);
 	assert.equal(entries.filter(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "error").length, 2, "queued input must not start another model call");
-	const reports = view.reportHistory();
-	assert.equal(reports.length, 2, "each continuous suspension publishes exactly one notice");
-	assert.equal(reports.filter(item => !item.readAt).length, 1, "renewed suspension can be acknowledged independently");
+	assert.deepEqual(view.reportHistory(), [], "a renewed suspension publishes no report either");
 });
 
 test("temporary throttle uses native retry rather than quota suspension", { timeout: 15_000 }, async t => {
@@ -224,7 +218,7 @@ test("quota dependency quiets its blocked parent without hiding an unrelated fai
 		await new Promise(resolve => setTimeout(resolve, 25));
 	}
 	assert.equal(reminderCount(), before, "blocked parent must not enter a reminder loop");
-	assert.equal(view.reportHistory().length, reportCount, "quota alone must not create repeated Moderator reports");
+	assert.equal(view.reportHistory().length, reportCount, "quota alone must not create reports");
 	host.model.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 unrelated failure alongside suspended dependency" })]);
 	await host.session.prompt("Fail the unrelated Owner generation.");
 	await until(() => view.reportHistory().some(item => /unrelated failure alongside/.test(item.report.symptom)), "unrelated terminal incident remains visible");

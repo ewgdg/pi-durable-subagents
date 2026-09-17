@@ -2,8 +2,7 @@ import { resumeWorkflow } from "./workflow-resume.ts";
 import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { isDeepStrictEqual } from "node:util";
 import { ModeratorReportStore } from "./moderator-reports.ts";
-import { QuotaSuspensionStore, type RetainedQuotaSuspension } from "./quota-suspensions.ts";
-import { createQuotaSuspensionReport } from "../presentation/quota-suspension-report.ts";
+import { QuotaSuspensionStore } from "./quota-suspensions.ts";
 import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
@@ -1124,14 +1123,12 @@ export class WorkflowCoordinator {
 		if (retained) record.host.restoreQuotaSuspension(retained.suspension, retained.runSequence, retained.nativeInput);
 		record.host.setQuotaSuspensionHandler((suspension, handle, nativeInput) => {
 			if (suspension) {
-				const retained = this.#quotaSuspensions.suspend(record.identity.agentId, handle.sequence, suspension, nativeInput);
+				this.#quotaSuspensions.suspend(record.identity.agentId, handle.sequence, suspension, nativeInput);
 				this.#releaseExecution(record.identity.agentId, handle);
-				this.#publishQuotaSuspension(record, retained);
 			} else {
 				this.#quotaSuspensions.clear(record.identity.agentId, handle.sequence);
 			}
 		});
-		if (retained) this.#publishQuotaSuspension(record, retained);
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged());
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged());
 		record.host.addEndedHandler((handle) => {
@@ -1153,19 +1150,6 @@ export class WorkflowCoordinator {
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
 		this.#notifyAgentActivityChanged();
-	}
-
-	#publishQuotaSuspension(record: AgentRecord, retained: RetainedQuotaSuspension): void {
-		const transcriptPath = this.#requireAgent(this.#ownerIdentity.agentId).transcript.inspect().transcriptPath;
-		if (!transcriptPath) return;
-		// The journal entry is the stable incident identity; replay cannot re-notify
-		// a read report, and reading the notice cannot mutate execution permission.
-		this.#reports.publishRuntime(createQuotaSuspensionReport({
-			agentId: record.identity.agentId,
-			label: record.identity.metadata.label,
-			runSequence: retained.runSequence,
-			evidence: retained.suspension.evidence,
-		}), { kind: "runtime_diagnostic", agentId: this.#ownerIdentity.agentId, entryId: retained.entryId, transcriptPath });
 	}
 
 	#openAgentPresentation(agentId: string): Promise<AgentPresentationSelection> {
