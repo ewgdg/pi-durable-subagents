@@ -55,7 +55,7 @@ type ScenarioMeasurement = {
 const artifactRoot = process.env.PI_VISIBILITY_BENCHMARK_ARTIFACT
   ?? join(
     process.env.HOME ?? tmpdir(),
-    `.agents/artifacts/outputs/pi-agent-coordination/${new Date().toISOString().slice(0, 10)}/95-visible-native-rendering`,
+    `.agents/artifacts/outputs/pi-durable-subagents/${new Date().toISOString().slice(0, 10)}/95-visible-native-rendering`,
   );
 await mkdir(artifactRoot, { recursive: true });
 

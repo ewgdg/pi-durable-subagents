@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
-const isProcessChild = process.env.PI_AGENT_COORDINATION_BOOTSTRAP !== undefined;
+const isProcessChild = process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP !== undefined;
 
 class AgentViewProbeEditor extends CustomEditor {
 	readonly #identity: string;

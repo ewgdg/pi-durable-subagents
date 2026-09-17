@@ -123,7 +123,7 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 	const sessionFactory = new ProcessChildSessionFactory({
 		ownerRuntime: host.runtime,
 		ownerIdentity: identity,
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		resolveAgent: (agentId) => agents.get(agentId),
 		ownerRequestHandlers() {
 			throw new Error("This active Request graph must not start a Moderator");

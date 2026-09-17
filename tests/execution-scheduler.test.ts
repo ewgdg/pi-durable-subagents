@@ -197,7 +197,7 @@ test("the coordinator derives Owner and child roles from canonical Workflow iden
 	);
 	let coordinator: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		workflowPolicy: policy,
 	});
 	const owner = coordinator.forAgent(identity.agentId);
@@ -267,7 +267,7 @@ test("a child Agent Wait releases and reacquires child execution capacity", { ti
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 		),
@@ -339,7 +339,7 @@ test("an exact Run ending releases capacity without a participant execution-end 
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 	});
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
@@ -396,7 +396,7 @@ test("an input-required child Run releases capacity until work can resume", asyn
 	);
 	let coordinator: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		workflowPolicy: policy,
 	});
 	const owner = coordinator.forAgent(identity.agentId);
@@ -459,7 +459,7 @@ async function waitForChildSessionFile(
 	if (!sessionDirectory) throw new Error("Persistent Owner session directory unavailable");
 	const workflowDirectory = join(
 		sessionDirectory,
-		"pi-agent-coordination",
+		"pi-durable-subagents",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {

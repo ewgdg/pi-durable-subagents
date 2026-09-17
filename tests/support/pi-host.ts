@@ -48,13 +48,13 @@ const PROVIDER_BASE_URL = "http://coordination-test.invalid";
 // Production discovers user Agent Templates under HOME. Give every test-file
 // process an isolated home so developer-installed templates cannot replace its
 // deterministic models or tools.
-process.env.HOME = await mkdtemp(join(tmpdir(), "pi-agent-coordination-test-home-"));
+process.env.HOME = await mkdtemp(join(tmpdir(), "pi-durable-subagents-test-home-"));
 // PTY fixtures are Owner processes. A Pi-hosted test runner may itself carry the
 // child-only bootstrap variable; child launches replace it with their own path.
-delete process.env.PI_AGENT_COORDINATION_BOOTSTRAP;
-delete process.env.PI_AGENT_COORDINATION_SYSTEM_PROMPT_MODE;
-delete process.env.PI_AGENT_COORDINATION_SYSTEM_PROMPT_PATH;
-delete process.env.PI_AGENT_COORDINATION_LOAD_CONTEXT_FILES;
+delete process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP;
+delete process.env.PI_DURABLE_SUBAGENTS_SYSTEM_PROMPT_MODE;
+delete process.env.PI_DURABLE_SUBAGENTS_SYSTEM_PROMPT_PATH;
+delete process.env.PI_DURABLE_SUBAGENTS_LOAD_CONTEXT_FILES;
 
 async function loadPiBuiltInExtensionFactories(): Promise<readonly InlineExtension[]> {
 	const modulePath = join(getPackageDir(), "dist", "extensions", "index.js");
@@ -187,7 +187,7 @@ async function createUnboundTestOwnerHostWithRuntime(
 	piBuiltInExtensionFactories: readonly InlineExtension[],
 	allowModelNetwork: boolean,
 ): Promise<TestOwnerHost> {
-	const cwd = options?.cwd ?? await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
+	const cwd = options?.cwd ?? await mkdtemp(join(tmpdir(), "pi-durable-subagents-"));
 	const agentDir = options?.agentDir ?? join(cwd, ".pi-agent");
 	const additionalExtensionFactories = options?.additionalExtensionFactories ?? [];
 	const sessionManager = options?.sessionFile
@@ -222,7 +222,7 @@ async function createUnboundTestOwnerHostWithRuntime(
 					...piBuiltInExtensionFactories,
 					...additionalExtensionFactories,
 					{
-						name: "pi-agent-coordination",
+						name: "pi-durable-subagents",
 						hidden: false,
 						factory: extension,
 					},

@@ -136,7 +136,7 @@ async function assertPiSettingsRemainUnchanged(
 
 	const environment: NodeJS.ProcessEnv = {
 		...process.env,
-		PI_AGENT_COORDINATION_BOOTSTRAP: join(inheritedAgentDir, "inherited-bootstrap.json"),
+		PI_DURABLE_SUBAGENTS_BOOTSTRAP: join(inheritedAgentDir, "inherited-bootstrap.json"),
 		PI_CODING_AGENT_DIR: inheritedAgentDir,
 		PI_SKIP_VERSION_CHECK: "1",
 	};

@@ -400,7 +400,7 @@ test("an overdue root call starts a Moderator outside full child capacity", asyn
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy(
 				'{"maxConcurrentAgentRuns":1,"operationReviewIntervalMs":1000}',
@@ -743,7 +743,7 @@ test("a live successor tells its Run Failure Moderator to resolve immediately", 
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 	});
 	const owner = coordinator.forAgent(identity.agentId);
 	const routeRecovery = (context: Context) => {
@@ -1700,7 +1700,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectNextCreationDelivery = true;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (!rejectNextCreationDelivery) return;
@@ -1795,7 +1795,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 	let rejectedCreationDeliveries = 0;
 	let coordinator!: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (rejectedCreationDeliveries >= 2) return;
@@ -1971,7 +1971,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectedCreationDeliveries = 0;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (rejectedCreationDeliveries >= 2) return;
@@ -2087,7 +2087,7 @@ test("input, Human attention, selection, and Hold prevent a blocked Request-cycl
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
@@ -2605,7 +2605,7 @@ test("a native retry followed by success does not publish a Run failure report",
 	const host = await createUnboundTestOwnerHost(t, () => undefined, { persistent: true, settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } } });
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-agent-coordination>" });
+	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
 	const owner = coordinator.forAgent(identity.agentId);
 	const retries: boolean[] = [];
 	host.session.subscribe(event => { if (event.type === "agent_end") retries.push(event.willRetry); });
@@ -3089,7 +3089,7 @@ async function createIncidentBoundaryHarness(
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		incidentBoundaryHooks,
 		...options,
 	});
@@ -3100,7 +3100,7 @@ async function findModerators(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
 ): Promise<Array<{ id: string; path: string }>> {
 	const sessionDirectory = host.session.sessionManager.getSessionDir();
-	const workflowDirectory = `${sessionDirectory}/pi-agent-coordination/${Buffer.from(
+	const workflowDirectory = `${sessionDirectory}/pi-durable-subagents/${Buffer.from(
 		host.session.sessionId,
 		"utf8",
 	).toString("base64url")}`;
@@ -3130,7 +3130,7 @@ async function sessionPathFor(
 	agentId: string,
 ): Promise<string> {
 	const sessionDirectory = host.session.sessionManager.getSessionDir();
-	const workflowDirectory = `${sessionDirectory}/pi-agent-coordination/${Buffer.from(
+	const workflowDirectory = `${sessionDirectory}/pi-durable-subagents/${Buffer.from(
 		host.session.sessionId,
 		"utf8",
 	).toString("base64url")}`;

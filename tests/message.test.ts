@@ -530,7 +530,7 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
 		incidentBoundaryHooks: {
@@ -1328,7 +1328,7 @@ test("only the original sender can poll a Message", async (t) => {
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		// This test needs a live unanswered child to exercise poll authorization.
 		// Keep any incidental Moderator attempt dormant so it cannot steal replies.
 		incidentBoundaryHooks: {
@@ -2276,7 +2276,7 @@ async function waitForChildSessionFile(
 ): Promise<string> {
 	const workflowDirectory = join(
 		host.session.sessionManager.getSessionDir(),
-		"pi-agent-coordination",
+		"pi-durable-subagents",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {
@@ -2358,7 +2358,7 @@ async function createDormantChildHarness(
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
 		incidentBoundaryHooks: {

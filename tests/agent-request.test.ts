@@ -4876,7 +4876,7 @@ async function createDormantChildHarness(
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		// This suite parks unanswered work to probe Request semantics. Suppress live
 		// Moderator Runs so incidental stall handling does not consume scripted replies.
 		incidentBoundaryHooks: {
@@ -5098,7 +5098,7 @@ async function waitForChildSessionFile(
 ): Promise<string> {
 	const workflowDirectory = join(
 		host.session.sessionManager.getSessionDir(),
-		"pi-agent-coordination",
+		"pi-durable-subagents",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export const PI_TEST_ENVIRONMENT_MARKER = "PI_AGENT_COORDINATION_TEST_ENVIRONMENT";
+export const PI_TEST_ENVIRONMENT_MARKER = "PI_DURABLE_SUBAGENTS_TEST_ENVIRONMENT";
 
 // A production Agent child also has a bootstrap marker, so only this test-owned
 // marker permits descendants to reuse an inherited Pi configuration directory.

@@ -286,7 +286,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 
 	const workflowDirectory = join(
 		host.session.sessionManager.getSessionDir(),
-		"pi-agent-coordination",
+		"pi-durable-subagents",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
 	const childSessionFile = await waitForChildSessionFile(
@@ -388,7 +388,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	]);
 	let coordinator: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		packageRoot: host.cwd,
 		templateRoots: (parentCwd, projectTrusted) => {
 			assert.equal(projectTrusted, true);
@@ -473,7 +473,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 
 	const workflowDirectory = join(
 		host.session.sessionManager.getSessionDir(),
-		"pi-agent-coordination",
+		"pi-durable-subagents",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
 	const childSessionFile = await waitForChildSessionFile(
@@ -1128,7 +1128,7 @@ test("Agent observation status respects Workflow-scoped quarantine and identity 
 				: scenario === "same-workflow" ? "quarantined-agent"
 				: `other-${identity.agentId}`;
 			const coordinator = await createTestWorkflowCoordinator(host, identity, {
-				entryModulePath: "<inline:pi-agent-coordination>",
+				entryModulePath: "<inline:pi-durable-subagents>",
 				recoveredWorkflow: {
 					agents: [], transcriptPathByAgentId: new Map(), agentIdBySpawnSource: new Map(),
 					quarantinedAgentIds: new Set([quarantinedId]),
@@ -1404,7 +1404,7 @@ async function createCoordinatorHarness(
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		spawnBoundaryHooks: hooks,
 		messageBoundaryHooks,
 	});

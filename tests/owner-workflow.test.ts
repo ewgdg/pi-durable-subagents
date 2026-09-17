@@ -334,7 +334,7 @@ test("child AgentSession patches cannot affect process shutdown or Owner disposa
 async function waitForModeratorAgentId(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
 ): Promise<string> {
-	const workflowDirectory = `${host.session.sessionManager.getSessionDir()}/pi-agent-coordination/${Buffer.from(
+	const workflowDirectory = `${host.session.sessionManager.getSessionDir()}/pi-durable-subagents/${Buffer.from(
 		host.session.sessionId,
 		"utf8",
 	).toString("base64url")}`;

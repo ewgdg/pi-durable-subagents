@@ -52,11 +52,11 @@ import { workflowSessionDirectory } from "./workflow-session-directory.ts";
 import { isModelExcluded } from "../policy/model-exclusion.ts";
 
 const COORDINATION_EXTENSION_PREFIXES = [
-	"<inline:pi-agent-coordination-agent:",
-	"<inline:pi-agent-coordination-moderator:",
-	"<inline:pi-agent-coordination-activity:",
+	"<inline:pi-durable-subagents-agent:",
+	"<inline:pi-durable-subagents-moderator:",
+	"<inline:pi-durable-subagents-activity:",
 ] as const;
-const INLINE_PUBLIC_EXTENSION_PATH = "<inline:pi-agent-coordination>";
+const INLINE_PUBLIC_EXTENSION_PATH = "<inline:pi-durable-subagents>";
 
 type ParticipantHandlers =
 	| OwnerParticipantRequestHandlers<"ordinary">

@@ -22,7 +22,7 @@ test("permanent launch rejection publishes one durable unread report without Own
 	let owner!: ReturnType<WorkflowCoordinator["forAgent"]>;
 	const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true });
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-agent-coordination>" });
+	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
 	owner = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
 	let notifiedWithUnreadReport = false;
@@ -82,7 +82,7 @@ test("an unsaved Owner gets direct launch-block attention without losing the ori
 	let owner!: ReturnType<WorkflowCoordinator["forAgent"]>;
 	const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner));
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-agent-coordination>" });
+	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
 	owner = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
 	assert.equal(host.session.sessionManager.getSessionFile(), undefined);
@@ -159,11 +159,11 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 	const { default: bridge } = await import("../src/process-runtime/child-runtime-bridge.ts");
 	const root = await mkdtemp(join(tmpdir(), "pi-bootstrap-rejection-"));
 	const path = join(root, "bootstrap.json");
-	const previous = process.env.PI_AGENT_COORDINATION_BOOTSTRAP;
-	process.env.PI_AGENT_COORDINATION_BOOTSTRAP = path;
+	const previous = process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP;
+	process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP = path;
 	t.after(() => {
-		if (previous === undefined) delete process.env.PI_AGENT_COORDINATION_BOOTSTRAP;
-		else process.env.PI_AGENT_COORDINATION_BOOTSTRAP = previous;
+		if (previous === undefined) delete process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP;
+		else process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP = previous;
 	});
 	const legacy = {
 		protocolVersion: 7, endpoint: { transport: "unix", address: "/tmp/unused.sock" },

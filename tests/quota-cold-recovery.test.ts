@@ -17,7 +17,7 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	});
 	await bindTestOwnerHost(first, "tui");
 	const identity = adoptOrValidateOwnerIdentity(first.runtime);
-	const initial = await createTestWorkflowCoordinator(first, identity, { entryModulePath: "<inline:pi-agent-coordination>" });
+	const initial = await createTestWorkflowCoordinator(first, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
 	const initialView = initial.forAgent(identity.agentId);
 	const spawn = { title: "Cold quota", request: "Keep this original obligation." };
 	first.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", spawn, { id: "spawn-cold-quota" }), { stopReason: "toolUse" }));
@@ -44,7 +44,7 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	await bindTestOwnerHost(reopened, "tui");
 	const recoveredIdentity = adoptOrValidateOwnerIdentity(reopened.runtime);
 	const recovered = await discoverColdWorkflow({ ownerIdentity: recoveredIdentity, ownerSessionManager: reopened.session.sessionManager });
-	const coordinator = await createTestWorkflowCoordinator(reopened, recoveredIdentity, { entryModulePath: "<inline:pi-agent-coordination>", recoveredWorkflow: recovered });
+	const coordinator = await createTestWorkflowCoordinator(reopened, recoveredIdentity, { entryModulePath: "<inline:pi-durable-subagents>", recoveredWorkflow: recovered });
 	const view = coordinator.forAgent(identity.agentId);
 	// The stop was process-local: recovery leaves ordinary dormant work, not a stop.
 	assert.equal(view.status(agentId).run.phase, "dormant");

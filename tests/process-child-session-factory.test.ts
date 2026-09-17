@@ -74,7 +74,7 @@ test("coordinator admits a skipped spawn as an observable dormant Agent without 
 		ownerSessionManager: manager,
 	});
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		recoveredWorkflow,
 	});
 	try {
@@ -103,7 +103,7 @@ test("a descendant inherits neither the Owner's active tools nor its skills", { 
 	const factory = new ProcessChildSessionFactory({
 		ownerRuntime: host.runtime,
 		ownerIdentity: identity,
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		templateRoots: () => [],
 		resolveAgent: (agentId) => agentId === identity.agentId ? owner : undefined,
 		ownerRequestHandlers() { throw new Error("Preparation must not launch a child process"); },
@@ -206,7 +206,7 @@ for (const skippedSpawn of [false, true]) test(`a dormant parent retains creatio
 	const factory = new ProcessChildSessionFactory({
 		ownerRuntime: host.runtime,
 		ownerIdentity,
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		packageRoot: root,
 		templateRoots: () => [{ scope: "test", path: templateRoot }],
 		resolveAgent: (agentId) => agents.get(agentId),
@@ -322,7 +322,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 	const factory = new ProcessChildSessionFactory({
 		ownerRuntime: host.runtime,
 		ownerIdentity,
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		packageRoot: root,
 		templateRoots: () => [],
 		resolveAgent: (agentId) => agents.get(agentId),
@@ -447,7 +447,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		fauxAssistantMessage("Real process child completed after proxied observation."),
 	]);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 	});
 	try {
 		const owner = coordinator.forAgent(identity.agentId);
@@ -561,7 +561,7 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 	});
 	try {
 		const owner = coordinator.forAgent(identity.agentId);
@@ -619,7 +619,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	await writeFile(moderatorWidgetExtension, [
 		"export default function moderatorProcessWidget(pi) {",
 		"  pi.on('session_start', (_event, ctx) => {",
-		"    if (process.env.PI_AGENT_COORDINATION_BOOTSTRAP) ctx.ui.setTheme('light');",
+		"    if (process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP) ctx.ui.setTheme('light');",
 		"    ctx.ui.setWidget('moderator-process-widget', [",
 		"      'PROCESS_RUNTIME_CHILD_WIDGET',",
 		"      `PID=${process.pid}`,",
@@ -666,7 +666,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		});
 	}));
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 	});
 	let replacementPid: number | undefined;
 	try {
@@ -827,7 +827,7 @@ test("prefetched selections stay fixed until reload; captured presets outlive th
 		transcript: transcriptFromSessionManager(host.session.sessionManager), children: [],
 	};
 	const factory = new ProcessChildSessionFactory({
-		ownerRuntime: host.runtime, ownerIdentity, entryModulePath: "<inline:pi-agent-coordination>",
+		ownerRuntime: host.runtime, ownerIdentity, entryModulePath: "<inline:pi-durable-subagents>",
 		templateRoots: () => [{ scope: "test", path: root }], resolveAgent: () => owner,
 		ownerRequestHandlers() { throw new Error("Preparation only"); },
 	});
@@ -876,7 +876,7 @@ test("Moderator creation captures present and absent presets independently of la
 		transcript: transcriptFromSessionManager(host.session.sessionManager), children: [],
 	};
 	const factory = new ProcessChildSessionFactory({
-		ownerRuntime: host.runtime, ownerIdentity, entryModulePath: "<inline:pi-agent-coordination>",
+		ownerRuntime: host.runtime, ownerIdentity, entryModulePath: "<inline:pi-durable-subagents>",
 		templateRoots: () => [{ scope: "test", path: root }], resolveAgent: () => owner,
 		ownerRequestHandlers() { throw new Error("Preparation only"); },
 	});

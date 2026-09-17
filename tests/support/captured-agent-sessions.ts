@@ -1,6 +1,6 @@
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 
-const REGISTRY_KEY = Symbol.for("pi-agent-coordination.test.captured-agent-sessions");
+const REGISTRY_KEY = Symbol.for("pi-durable-subagents.test.captured-agent-sessions");
 type Registry = {
 	sessions: Map<string, AgentSession>;
 	installed: boolean;

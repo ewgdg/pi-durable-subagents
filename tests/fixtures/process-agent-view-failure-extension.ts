@@ -8,7 +8,7 @@ import {
 
 const failureKind = process.env.PTY_AGENT_VIEW_FAILURE;
 const evidencePath = process.env.PTY_AGENT_VIEW_FAILURE_EVIDENCE;
-const isProcessChild = process.env.PI_AGENT_COORDINATION_BOOTSTRAP !== undefined;
+const isProcessChild = process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP !== undefined;
 
 class FailingChildEditor extends CustomEditor {
 	#renderFailureArmed = false;

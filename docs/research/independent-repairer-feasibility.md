@@ -101,7 +101,7 @@ handler running is not cleanup proof because Pi contains handler exceptions.
 The cleanup fault is an explicitly injected dependency error, not a discovered
 production bug: the original coordinator aggregated it into `Workflow shutdown
 failed`. The fresh-admission fault uses an invalid scratch
-`config/pi-agent-coordination.json` with `maxConcurrentAgentRuns: 0`; the real
+`config/pi-durable-subagents.json` with `maxConcurrentAgentRuns: 0`; the real
 diagnostic is `Workflow Policy maxConcurrentAgentRuns must be a positive safe
 integer`. It does not corrupt the already committed repaired transcript.
 

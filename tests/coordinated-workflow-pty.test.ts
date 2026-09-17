@@ -636,7 +636,7 @@ test("interactive /reload keeps a selected process child alive after inherited e
 		await writeFile(inputPreflightExtension, [
 			"import { appendFileSync } from 'node:fs';",
 			`const evidencePath = ${JSON.stringify(childLifecycleEvidence)};`,
-			"const isChild = process.env.PI_AGENT_COORDINATION_BOOTSTRAP !== undefined;",
+			"const isChild = process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP !== undefined;",
 			"const record = (event) => appendFileSync(evidencePath, `${JSON.stringify({ ...event, pid: process.pid })}\\n`);",
 			"export default function childInputPreflight(pi) {",
 			"  if (isChild) {",
@@ -734,7 +734,7 @@ test("interactive /reload keeps a selected process child alive after inherited e
 test("interactive /resume retains the compact historical agent_spawn renderer", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-agent-coordination-resume-"));
+	const root = await mkdtemp(join(tmpdir(), "pi-durable-subagents-resume-"));
 	const agentDir = join(root, "agent");
 	const sessionDir = join(root, "sessions");
 	const target = SessionManager.create(process.cwd(), sessionDir);
@@ -784,7 +784,7 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 	try {
 		await waitForPiCliReady(agentDir);
 		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("pi-agent-coordination")) &&
+			frame.some((line) => line.includes("pi-durable-subagents")) &&
 			frame.some((line) => line.includes("gpt-4o-mini"))
 		);
 		terminal.write("/resume\r");

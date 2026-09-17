@@ -1,6 +1,6 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-const REGISTRY_KEY = Symbol.for("pi-agent-coordination.test.captured-session-managers");
+const REGISTRY_KEY = Symbol.for("pi-durable-subagents.test.captured-session-managers");
 type Registry = {
 	managers: Map<string, SessionManager>;
 	installed: boolean;

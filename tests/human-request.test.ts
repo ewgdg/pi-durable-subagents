@@ -486,7 +486,7 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		humanRequestBoundaryHooks: {
 			beforeResultCommit: ({ failExactRun }) => {
 				selectedChild?.projection?.projection().dispatchInput("newer draft");
@@ -597,7 +597,7 @@ test("Human Request fails before input_required when no interactive Agent editor
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
 	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
@@ -643,7 +643,7 @@ for (const completion of ["answer", "interrupt", "shutdown"] as const) {
 		});
 		const identity = adoptOrValidateOwnerIdentity(host.runtime);
 		const coordinator = await createTestWorkflowCoordinator(host, identity, {
-			entryModulePath: "<inline:pi-agent-coordination>",
+			entryModulePath: "<inline:pi-durable-subagents>",
 			incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 		});
 		view = coordinator.forAgent(identity.agentId);
@@ -721,7 +721,7 @@ async function createHumanRequestChild(
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
+		entryModulePath: "<inline:pi-durable-subagents>",
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
 	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
@@ -861,7 +861,7 @@ async function waitForChildSessionFile(
 	if (!sessionDirectory) throw new Error("Persistent Owner session directory unavailable");
 	const workflowDirectory = join(
 		sessionDirectory,
-		"pi-agent-coordination",
+		"pi-durable-subagents",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {

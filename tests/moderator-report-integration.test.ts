@@ -17,7 +17,7 @@ test("Moderator reports return without human waiting and survive independent inc
 		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-agent-coordination>" });
+	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
 	owner = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
 	const input = { symptom: "Agent stalled", suspectedDefect: "Completion wake may be lost", uncertainty: "Cause is not confirmed", recoveryActions: "Inspect then interrupt the stalled Run", recoveryOutcome: "Recovery not yet attempted", evidence: ["Committed obligation stall trigger"] };
@@ -45,7 +45,7 @@ test("Moderator reports return without human waiting and survive independent inc
 	t.after(async () => { await host.session.abort(); await prompt; });
 	let moderatorPath = "";
 	let moderatorId = "";
-	const workflowDirectory = `${host.session.sessionManager.getSessionDir()}/pi-agent-coordination/${Buffer.from(host.session.sessionId).toString("base64url")}`;
+	const workflowDirectory = `${host.session.sessionManager.getSessionDir()}/pi-durable-subagents/${Buffer.from(host.session.sessionId).toString("base64url")}`;
 	await waitFor(async () => {
 		for (const session of await SessionManager.list(host.cwd, workflowDirectory)) {
 			if (SessionManager.open(session.path).getEntries().some((entry) => entry.type === "custom_message" && entry.customType === "agent-coordination.moderator-input")) {

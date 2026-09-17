@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-const WORKFLOW_SESSION_DIRECTORY = "pi-agent-coordination";
+const WORKFLOW_SESSION_DIRECTORY = "pi-durable-subagents";
 
 export function workflowSessionDirectory(
 	ownerSessionDirectory: string,

@@ -48,9 +48,9 @@ test("child process bootstrap path must be absolute", () => {
 test("child process carries and replaces explicit system-prompt launch metadata", () => {
 	const childEnvironment = buildChildProcessEnvironment({
 		ownerEnvironment: {
-			PI_AGENT_COORDINATION_BOOTSTRAP: "/stale/bootstrap.json",
-			PI_AGENT_COORDINATION_SYSTEM_PROMPT_MODE: "replace",
-			PI_AGENT_COORDINATION_SYSTEM_PROMPT_PATH: "/stale/prompt.md",
+			PI_DURABLE_SUBAGENTS_BOOTSTRAP: "/stale/bootstrap.json",
+			PI_DURABLE_SUBAGENTS_SYSTEM_PROMPT_MODE: "replace",
+			PI_DURABLE_SUBAGENTS_SYSTEM_PROMPT_PATH: "/stale/prompt.md",
 		},
 		bootstrapPath: "/runtime/new-bootstrap.json",
 		systemPromptMode: "append",
