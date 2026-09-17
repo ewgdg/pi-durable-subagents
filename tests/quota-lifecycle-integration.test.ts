@@ -105,11 +105,6 @@ for (const diagnostic of [
 		assert.equal(view.status(agentId).primaryEvidence.transcriptPath, transcript);
 		assert.ok(view.status(agentId).run.retentionReasons.some(item => item.reason === "answer_owed"));
 		assert.deepEqual(coordinator.forAgent(agentId).obligationFrames(), obligations);
-		const quotaRecords = host.session.sessionManager.getEntries().flatMap(entry =>
-			entry.type === "custom" && entry.customType === "agent-coordination.quota-suspension"
-				? [entry.data as { agentId: string; operation: string; runSequence: number }] : []
-		).filter(record => record.agentId === agentId);
-		assert.deepEqual(quotaRecords.map(record => [record.operation, record.runSequence]), [["suspend", 1], ["clear", 1]], "resume clears the exact retained Run, not a successor");
 	});
 }
 

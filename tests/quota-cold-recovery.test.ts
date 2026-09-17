@@ -8,7 +8,7 @@ import { createProcessModelBroker } from "./support/process-model-broker.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { discoverColdWorkflow } from "../src/bootstrap/cold-host-discovery.ts";
 
-test("cold recovery prepares a suspended editor without generation, then resumes on its human message", { timeout: 30_000 }, async t => {
+test("host loss drops a quota stop: the Agent recovers dormant and resumes as ordinary work", { timeout: 30_000 }, async t => {
 	const broker = await createProcessModelBroker();
 	t.after(() => broker.close());
 	const first = await createUnboundTestOwnerHost(t, () => undefined, {
@@ -46,45 +46,50 @@ test("cold recovery prepares a suspended editor without generation, then resumes
 	const recovered = await discoverColdWorkflow({ ownerIdentity: recoveredIdentity, ownerSessionManager: reopened.session.sessionManager });
 	const coordinator = await createTestWorkflowCoordinator(reopened, recoveredIdentity, { entryModulePath: "<inline:pi-agent-coordination>", recoveredWorkflow: recovered });
 	const view = coordinator.forAgent(identity.agentId);
-	assert.equal(view.status(agentId).run.phase, "live");
-	assert.deepEqual(view.status(agentId).run.suspension, originalStatus.run.suspension);
+	// The stop was process-local: recovery leaves ordinary dormant work, not a stop.
+	assert.equal(view.status(agentId).run.phase, "dormant");
+	assert.equal(view.status(agentId).run.suspension, undefined);
 	assert.deepEqual(coordinator.forAgent(agentId).obligationFrames(), originalObligations);
-	assert.ok(view.status(agentId).run.retentionReasons.some(reason => reason.reason === "answer_owed"));
-	assert.deepEqual(view.reportHistory(), [], "recovery publishes no quota report");
+	// The editor is prepared passively, and nothing the workflow recovers starts a Run.
 	const retainedView = await view.openAgentPresentation(agentId);
 	assert.equal(retainedView.kind, "selected");
 	if (retainedView.kind !== "selected" || !retainedView.view) assert.fail("Expected a prepared editor without model generation");
-	assert.ok(view.status(agentId).run.suspension, "navigation preserves the quota stop");
 	const projection = retainedView.view.projection();
 	const detach = await projection.physicalTerminal.beginAttachment(() => undefined);
 	t.after(async () => { detach(); await projection.physicalTerminal.endAttachment(); });
+	assert.equal(unexpectedGenerations, 0, "cold recovery and passive preparation generate nothing");
+	// The explicit resume re-admits captured undelivered work. The previously stopped
+	// child is ordinary dormant work now, so its queued steer Message starts a successor
+	// Run instead of staying suppressed. Quota is still exhausted, so that attempt stops
+	// again on the same evidence without producing model output.
+	broker.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: '{"error":{"code":"usage_limit_reached"}}' })]);
 	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("workflow_resume", {}, { id: "cold-recovery" }), { stopReason: "toolUse" }));
 	await view.resumeWorkflow("cold-recovery");
 	for (let index = 0; index < 3; index++) {
 		await view.reachSafeBoundary();
 		await new Promise(resolve => setTimeout(resolve, 30));
 	}
-	assert.equal(unexpectedGenerations, 0);
-	assert.ok(view.status(agentId).run.suspension);
-	assert.equal(JSON.stringify(SessionManager.open(originalStatus.primaryEvidence.transcriptPath!).getEntries()).includes("PRESERVED_QUEUE"), false);
-	broker.setResponses([fauxAssistantMessage("EXPLICIT_COLD_RESUME")]);
-	retainedView.view.projection().dispatchInput("Continue the original work after my account change.");
-	retainedView.view.projection().dispatchInput("\r");
-	await until(() => !view.status(agentId).run.suspension);
-	assert.ok(JSON.stringify(SessionManager.open(originalStatus.primaryEvidence.transcriptPath!).getEntries()).includes("Continue the original work after my account change."));
+	const childEntries = () => JSON.stringify(SessionManager.open(originalStatus.primaryEvidence.transcriptPath!).getEntries());
+	assert.equal(childEntries().includes("PRESERVED_QUEUE"), true, "explicit recovery re-admits the captured Message");
+	assert.equal(view.status(agentId).run.suspension?.evidence.diagnostic, '{"error":{"code":"usage_limit_reached"}}', "a re-attempt on exhausted quota stops again");
+	assert.equal(childEntries().includes("UNEXPECTED_AUTOMATIC_WAKE"), false, "recovery itself never generates");
+	// A human message in the resumed Agent's editor is the deliberate retry.
+	broker.setResponses([fauxAssistantMessage("EXPLICIT_RESUME_AFTER_RESTART")]);
+	projection.dispatchInput("Continue the original work after my account change.");
+	projection.dispatchInput("\r");
+	await until(() => Boolean(view.status(agentId).primaryEvidence.transcriptPath) && JSON.stringify(
+		SessionManager.open(view.status(agentId).primaryEvidence.transcriptPath!).getEntries(),
+	).includes("Continue the original work after my account change."));
+	assert.equal(view.status(agentId).run.suspension, undefined);
+	await until(() => view.status(agentId).run.phase === "dormant", "the resumed Run must end before teardown");
 	assert.equal(view.status(agentId).primaryEvidence.transcriptPath, originalStatus.primaryEvidence.transcriptPath);
 	assert.deepEqual(coordinator.forAgent(agentId).obligationFrames(), originalObligations);
-	const checkpoints = reopened.session.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "agent-coordination.quota-suspension");
-	assert.deepEqual(checkpoints.map(entry => {
-		const data = entry.type === "custom" ? entry.data as { operation: string; runSequence: number } : undefined;
-		return [data?.operation, data?.runSequence];
-	}), [["suspend", 1], ["clear", 1]]);
 });
 
-async function until(predicate: () => boolean): Promise<void> {
+async function until(predicate: () => boolean, description = "quota lifecycle condition"): Promise<void> {
 	const deadline = Date.now() + 10_000;
 	while (!predicate()) {
-		assert.ok(Date.now() < deadline, "quota lifecycle condition timed out");
+		assert.ok(Date.now() < deadline, `${description} timed out`);
 		await new Promise(resolve => setTimeout(resolve, 20));
 	}
 }

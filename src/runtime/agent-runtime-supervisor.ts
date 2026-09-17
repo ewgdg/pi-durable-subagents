@@ -133,8 +133,6 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	#interruptionHold: RunResumptionHandle | undefined;
 	#quotaSuspension: AgentQuotaSuspension | undefined;
 	#quotaHold: RunResumptionHandle | undefined;
-	#restoredQuotaRun: AgentRunHandle | undefined;
-	#preparingQuotaResumption = false;
 	#quotaSuspensionHandler: ((suspension: AgentQuotaSuspension | undefined, handle: AgentRunHandle, nativeInput?: QuotaSuspendedNativeInput) => void) | undefined;
 	#quotaQueueCapture: Promise<void> | undefined;
 	#isolatedResumption:
@@ -263,7 +261,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	currentHandle(): AgentRunHandle | undefined {
-		return this.#runtime?.admitted ? this.#runtime.handle : this.#restoredQuotaRun ?? this.#startingHandle;
+		return this.#runtime?.admitted ? this.#runtime.handle : this.#startingHandle;
 	}
 
 	currentProjection(): TerminalProjection | undefined {
@@ -408,8 +406,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	isCurrent(handle: AgentRunHandle): boolean {
-		return this.#restoredQuotaRun === handle ||
-			(this.#runtime?.admitted === true && this.#runtime.handle === handle);
+		return this.#runtime?.admitted === true && this.#runtime.handle === handle;
 	}
 
 	blocksOrdinaryDelivery(): boolean {
@@ -441,33 +438,13 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#quotaSuspensionHandler = handler;
 	}
 
-	restoreQuotaSuspension(suspension: AgentQuotaSuspension, runSequence: number, nativeInput?: QuotaSuspendedNativeInput): void {
-		if (this.#quotaSuspension) throw new Error("invariant_violation: quota suspension already restored");
-		const handle = Object.freeze({ sequence: runSequence });
-		this.#runSequence = Math.max(this.#runSequence, runSequence);
-		if (this.#runtime) this.#runtime.handle = handle;
-		else this.#restoredQuotaRun = handle;
-		this.#quotaSuspension = suspension;
-		this.#quotaHold = { run: handle, sequence: ++this.#holdSequence };
-		if (nativeInput) this.#heldNativeQueue = { handle, steering: [...nativeInput.steering], followUp: [...nativeInput.followUp] };
-		this.#notifyStateChanged();
-	}
-
 	async prepareQuotaResumptionInLane(options?: { humanInputPending: boolean }): Promise<void> {
+		// The terminal quota event drains the native queue asynchronously. A resumption
+		// submission must observe that capture before it can be admitted.
 		await this.#quotaQueueCapture;
-		if (!this.#restoredQuotaRun) {
-			// Interactive input preflight awaits this host decision. Waiting for its
-			// native prompt to become idle here would deadlock that same submission.
-			if (this.#quotaSuspension && !options?.humanInputPending) await this.#runtime?.runtime.waitForIdle();
-			return;
-		}
-		this.#preparingQuotaResumption = true;
-		try {
-			await this.#ensureRuntimeInLane(true, []);
-			this.#restoredQuotaRun = undefined;
-		} finally {
-			this.#preparingQuotaResumption = false;
-		}
+		// Interactive input preflight awaits this host decision. Waiting for the native
+		// prompt to become idle here would deadlock that same submission.
+		if (this.#quotaSuspension && !options?.humanInputPending) await this.#runtime?.runtime.waitForIdle();
 	}
 
 	isCurrentResumptionHold(hold: RunResumptionHandle): boolean {
@@ -691,7 +668,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		admitRun: boolean,
 		initialRetentionReasons: readonly AgentRetentionReason[],
 	): Promise<HostedAgentRuntime> {
-		if (this.#quotaSuspension && !this.#preparingQuotaResumption) {
+		if (this.#quotaSuspension) {
 			throw new Error("quota_suspended: human input or authorized agent_control resume is required");
 		}
 		if (this.#pendingInitializationTermination) {
@@ -734,7 +711,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#starting = true;
 		this.#passivePreparation = !admitRun;
 		// Admission must survive failures before a child Runtime or transcript exists.
-		if (admitRun) this.#startingHandle = this.#restoredQuotaRun ?? Object.freeze({ sequence: ++this.#runSequence });
+		if (admitRun) this.#startingHandle = Object.freeze({ sequence: ++this.#runSequence });
 		for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
 		this.#notifyStateChanged();
 		let startedRun: StartedAgentRuntime | undefined;
@@ -778,22 +755,6 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			return startedRun.runtime;
 		} catch (error) {
 			const cleanupErrors: unknown[] = [error];
-			if (this.#preparingQuotaResumption && this.#quotaHold) {
-				// A failed explicit restart attempt did not resume the suspended Run.
-				// Dispose only the new Runtime; retain the exact logical Run and stop.
-				const run = this.#runtime;
-				if (run) {
-					run.unsubscribe();
-					try {
-						await run.runtime.projection?.dispose();
-						await run.runtime.dispose();
-					} finally {
-						this.#runtime = undefined;
-					}
-				}
-				this.#restoredQuotaRun = this.#quotaHold.run;
-				throw error;
-			}
 			if (startedRun && readiness && !readinessObserved) {
 				const cancellation = requireRuntimeProjection(startedRun.runtime)
 					.cancelInitialization(error);
@@ -885,7 +846,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	addRetentionReason(reason: AgentRetentionReason, requestId?: string): void {
-		if (!this.#runtime && !this.#starting && !this.#restoredQuotaRun) return;
+		if (!this.#runtime && !this.#starting) return;
 		if (isRequestRelationshipReason(reason)) {
 			const exactRequestId = requireRequestRelationshipId(reason, requestId);
 			let relationships = this.#requestRelationships.get(reason);
@@ -1082,10 +1043,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	): Promise<void> {
 		const run = this.#runtime;
 		if (!run) {
-			const restored = this.#restoredQuotaRun;
-			if (restored && cause !== "shutdown") this.#quotaSuspensionHandler?.(undefined, restored);
 			this.#clearRunScopedState();
-			if (restored) this.#notifyEnded(restored, cause);
 			// The Owner's native Runtime owns process-wide infrastructure beyond its
 			// Agent Run. A terminal Run may already be gone when Workflow shutdown
 			// reaches this boundary, but that infrastructure still must be disposed.
@@ -1192,7 +1150,6 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#interruptionHold = undefined;
 		this.#quotaSuspension = undefined;
 		this.#quotaHold = undefined;
-		this.#restoredQuotaRun = undefined;
 		this.#quotaQueueCapture = undefined;
 		this.#isolatedResumption = undefined;
 		this.#interrupting = false;

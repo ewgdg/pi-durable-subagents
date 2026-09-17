@@ -1,6 +1,6 @@
 # Quota-exhausted Run suspension
 
-Historical implementation record: the command-only human resumption, cold read-only quota view, and the suspension notice described below are superseded; suspension now publishes no Runtime Report. Current supported behavior is documented in `docs/run-supervision.md`.
+Historical implementation record: the command-only human resumption, cold read-only quota view, suspension notice, and durable cold-restored suspension described below are superseded; suspension now publishes no Runtime Report and is process-local. Current supported behavior is documented in `docs/run-supervision.md`.
 
 ## Goal and intention
 

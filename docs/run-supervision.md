@@ -81,7 +81,7 @@ Changing the model/account alone is not resumption. No new paid fallback, provid
 
 If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota establishes a new suspension, and another terminal error follows ordinary failure handling. An aborted attempt before confirmation retains the original stop rather than inventing a human Interruption Hold.
 
-The Owner transcript journal retains suspension state independently of how an Agent status surface presents it. Cold recovery restores the stop before scheduling work, rather than silently starting a successor. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
+A stop is process-local. It is not a durable Run state: when the host process ends, the stop ends with it and the Agent recovers as ordinary dormant work. Recovery therefore does not resume work by itself, and a later explicit admission may start a successor Run. While quota remains exhausted, that attempt re-suspends on the same provider evidence without producing model output. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
 
 ### Provider evidence and upstream limitation
 

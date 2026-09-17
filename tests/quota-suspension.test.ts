@@ -5,7 +5,7 @@ import type { HostedAgentRuntime, HostedRuntimeEvent } from "../src/runtime/host
 
 const evidence = { provider: "openai-codex", diagnostic: "Quota exhausted" };
 
-function fixture() {
+function fixture(options: { queued?: { steering: string[]; followUp: string[] } } = {}) {
 	let emit!: (event: HostedRuntimeEvent) => void;
 	let starts = 0;
 	const delivered: unknown[] = [];
@@ -15,7 +15,7 @@ function fixture() {
 		workState: () => "settled",
 		hasPendingActivity: () => false,
 		queuedInputCount: () => 0,
-		clearQueue: async () => ({ steering: [], followUp: [] }),
+		clearQueue: async () => options.queued ?? { steering: [], followUp: [] },
 		abort: async () => undefined,
 		waitForIdle: async () => undefined,
 		dispose: async () => undefined,
@@ -25,6 +25,11 @@ function fixture() {
 		agentId: "quota-test", startSession: async () => { starts++; return { runtime }; },
 	});
 	return { host, delivered, starts: () => starts, emit: (event: HostedRuntimeEvent) => emit(event) };
+}
+
+/** Terminal quota evidence for whatever Run the fixture started last. */
+function suspend(host: AgentRuntimeSupervisor, emit: (event: HostedRuntimeEvent) => void) {
+	emit({ type: "agent_end", outcome: "error", willRetry: false, quota: evidence });
 }
 
 test("configured native retry retains its opportunity before terminal quota suspension", async () => {
@@ -40,7 +45,7 @@ test("quota suspension precedes Run failure, preserves identity and obligations,
 	const handle = await host.startInLane();
 	host.addRetentionReason("answer_owed", "incoming");
 	host.addRetentionReason("awaiting_answer", "outgoing");
-	emit({ type: "agent_end", outcome: "error", willRetry: false, quota: evidence });
+	suspend(host, emit);
 	emit({ type: "agent_settled" });
 	assert.equal(host.currentRunFailed(), false);
 	assert.equal(host.currentHandle(), handle);
@@ -59,52 +64,54 @@ test("quota suspension precedes Run failure, preserves identity and obligations,
 	assert.equal(host.currentHandle(), handle);
 });
 
-test("cold restored suspension does not launch a Runtime; explicit resume retains exact Run", async () => {
-	const { host, starts } = fixture();
-	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 9);
-	const handle = host.currentHandle()!;
-	host.addRetentionReason("answer_owed", "incoming");
-	assert.equal(host.observe().phase, "live");
-	assert.equal(starts(), 0);
-	await assert.rejects(host.startInLane(), /quota_suspended/);
-	await host.prepareQuotaResumptionInLane();
-	assert.equal(starts(), 1);
-	assert.equal(host.currentHandle(), handle);
-	assert.equal(host.latestStartedRunSequence(), 9);
+test("only the exact Run and its resumption hold can clear a quota stop", async () => {
+	const { host, emit } = fixture();
+	const handle = await host.startInLane();
+	suspend(host, emit);
+	emit({ type: "agent_settled" });
+	const hold = host.currentResumptionHold()!;
+	// Clearing is bound to this exact stop: a foreign handle or hold is ignored rather
+	// than treated as its own release, so a successor Run cannot adopt the stop.
+	for (const foreign of [
+		{ run: handle, sequence: hold.sequence + 1 },
+		{ run: Object.freeze({ sequence: handle.sequence + 1 }), sequence: hold.sequence },
+	]) {
+		assert.equal(host.commitIsolatedResumptionInLane(foreign), false);
+		assert.ok(host.currentQuotaSuspension(), "a mismatched hold must not release the stop");
+	}
+	assert.equal(await host.releaseIfEligibleInLane({ sequence: handle.sequence + 1 }), "stale");
+	assert.deepEqual(host.currentQuotaSuspension(), { reason: "provider_quota", evidence });
+	assert.equal(await host.releaseIfEligibleInLane(handle), "retained");
+	assert.ok(host.currentQuotaSuspension());
+	assert.equal(host.beginIsolatedResumptionInLane(hold), true);
+	host.deliverInLane({ kind: "user", content: "explicit resume" });
+	assert.equal(host.commitIsolatedResumptionInLane(hold), true);
+	assert.equal(host.currentQuotaSuspension(), undefined);
 });
 
-test("termination clears a cold suspension, but relationship cancellation alone does not", async () => {
-	const { host, starts } = fixture();
-	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 4);
+test("termination clears the live quota stop, but relationship cancellation alone does not", async () => {
+	const { host, emit, starts } = fixture();
+	await host.startInLane();
 	host.addRetentionReason("answer_owed", "incoming");
-	host.removeRetentionReason("answer_owed", "incoming");
+	suspend(host, emit);
+	host.addRetentionReason("awaiting_answer", "outgoing");
+	host.removeRetentionReason("awaiting_answer", "outgoing");
 	assert.ok(host.currentQuotaSuspension());
 	const ended: unknown[] = [];
 	host.addEndedHandler((...args) => ended.push(args));
 	await host.discardAndEndInLane("termination");
 	assert.equal(host.currentQuotaSuspension(), undefined);
 	assert.equal(host.observe().phase, "dormant");
-	assert.equal(starts(), 0);
+	assert.equal(starts(), 1);
 	assert.equal(ended.length, 1);
 });
 
-test("failed cold resume preparation preserves the durable stop and exact Run", async () => {
-	const host = AgentRuntimeSupervisor.createChild({ agentId: "cold-failure", startSession: async () => { throw new Error("launch unavailable"); } });
-	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 8);
-	const handle = host.currentHandle();
-	let ended = 0;
-	host.addEndedHandler(() => ended++);
-	await assert.rejects(host.prepareQuotaResumptionInLane(), /launch unavailable/);
-	assert.equal(host.currentHandle(), handle);
-	assert.ok(host.currentQuotaSuspension());
-	assert.equal(ended, 0);
-});
-
-test("cold native queued input waits for the isolated explicit resume turn", async () => {
-	const { host, emit, delivered } = fixture();
-	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 12, { steering: ["queued steer"], followUp: ["queued followup"] });
-	assert.equal(host.queuedInputCount(), 2);
+test("native queued input waits for the isolated explicit resume turn", async () => {
+	const { host, emit, delivered } = fixture({ queued: { steering: ["queued steer"], followUp: ["queued followup"] } });
+	await host.startInLane();
+	suspend(host, emit);
 	await host.prepareQuotaResumptionInLane();
+	assert.equal(host.queuedInputCount(), 2);
 	assert.equal(delivered.length, 0);
 	const hold = host.currentResumptionHold()!;
 	assert.equal(host.beginIsolatedResumptionInLane(hold), true);
@@ -119,7 +126,7 @@ test("cold native queued input waits for the isolated explicit resume turn", asy
 test("an immediate renewed quota before resume transcript confirmation cannot clear the new stop", async () => {
 	const { host, emit } = fixture();
 	await host.startInLane();
-	emit({ type: "agent_end", outcome: "error", willRetry: false, quota: evidence });
+	suspend(host, emit);
 	await host.prepareQuotaResumptionInLane();
 	const hold = host.currentResumptionHold()!;
 	assert.equal(host.beginIsolatedResumptionInLane(hold), true);
@@ -135,8 +142,9 @@ test("an immediate renewed quota before resume transcript confirmation cannot cl
 });
 
 test("successful resume before confirmation releases held input once after confirmation", async () => {
-	const { host, emit, delivered } = fixture();
-	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 20, { steering: ["held steer"], followUp: ["held followup"] });
+	const { host, emit, delivered } = fixture({ queued: { steering: ["held steer"], followUp: ["held followup"] } });
+	await host.startInLane();
+	suspend(host, emit);
 	await host.prepareQuotaResumptionInLane();
 	const hold = host.currentResumptionHold()!;
 	assert.equal(host.beginIsolatedResumptionInLane(hold), true);
@@ -154,7 +162,8 @@ test("successful resume before confirmation releases held input once after confi
 
 test("ordinary terminal error before resume confirmation remains a failed settlement", async () => {
 	const { host, emit } = fixture();
-	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 21);
+	await host.startInLane();
+	suspend(host, emit);
 	await host.prepareQuotaResumptionInLane();
 	const hold = host.currentResumptionHold()!;
 	const settlements: string[] = [];
@@ -176,13 +185,14 @@ test("ordinary terminal error before resume confirmation remains a failed settle
 });
 
 test("aborted resume before confirmation retains the original quota stop and queued input", async () => {
-	const { host, emit, delivered } = fixture();
-	host.restoreQuotaSuspension({ reason: "provider_quota", evidence }, 22, { steering: [], followUp: ["still held"] });
+	const { host, emit, delivered } = fixture({ queued: { steering: [], followUp: ["still held"] } });
+	await host.startInLane();
+	suspend(host, emit);
 	await host.prepareQuotaResumptionInLane();
 	const hold = host.currentResumptionHold()!;
 	const suspension = host.currentQuotaSuspension();
-	let persistedTransitions = 0;
-	host.setQuotaSuspensionHandler(() => persistedTransitions++);
+	let suspensionTransitions = 0;
+	host.setQuotaSuspensionHandler(() => suspensionTransitions++);
 	assert.equal(host.beginIsolatedResumptionInLane(hold), true);
 	host.deliverInLane({ kind: "user", content: "resume" });
 	emit({ type: "agent_end", outcome: "aborted", willRetry: false });
@@ -195,6 +205,6 @@ test("aborted resume before confirmation retains the original quota stop and que
 	assert.equal(host.currentRunFailed(), false);
 	assert.equal(host.queuedInputCount(), 1);
 	assert.equal(delivered.length, 1);
-	assert.equal(persistedTransitions, 0, "same continuous suspension does not create a new notice");
+	assert.equal(suspensionTransitions, 0, "an aborted attempt emits no new suspension transition");
 	assert.equal(host.beginIsolatedResumptionInLane(hold), true, "a later explicit retry remains possible");
 });

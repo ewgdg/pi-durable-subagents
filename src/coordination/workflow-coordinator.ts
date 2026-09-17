@@ -2,7 +2,6 @@ import { resumeWorkflow } from "./workflow-resume.ts";
 import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { isDeepStrictEqual } from "node:util";
 import { ModeratorReportStore } from "./moderator-reports.ts";
-import { QuotaSuspensionStore } from "./quota-suspensions.ts";
 import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
@@ -253,7 +252,6 @@ export class WorkflowCoordinator {
 	readonly #agentWaits: AgentWaitCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
 	readonly #reports: ModeratorReportStore;
-	readonly #quotaSuspensions: QuotaSuspensionStore;
 	readonly #runSupervisor: RunSupervisor;
 	readonly #operationalIncidents: OperationalIncidentCoordinator;
 	readonly #agentActivityChangeHandlers = new Set<() => void>();
@@ -317,10 +315,6 @@ export class WorkflowCoordinator {
 			children: [],
 		});
 		this.#reports = new ModeratorReportStore({
-			transcript: this.#requireAgent(identity.agentId).transcript,
-			appendCustomEntry: (customType, data) => runtime.session.sessionManager.appendCustomEntry(customType, data),
-		});
-		this.#quotaSuspensions = new QuotaSuspensionStore({
 			transcript: this.#requireAgent(identity.agentId).transcript,
 			appendCustomEntry: (customType, data) => runtime.session.sessionManager.appendCustomEntry(customType, data),
 		});
@@ -532,11 +526,6 @@ export class WorkflowCoordinator {
 		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
 		await this.#messages.refreshTranscriptFacts();
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
-		for (const record of this.#agents.values()) {
-			if (record.identity.agentId !== this.#ownerIdentity.agentId && record.host.currentQuotaSuspension()) {
-				await record.host.initializeCurrentRunRelationships();
-			}
-		}
 	}
 
 	async refreshAgentTemplateSnapshot(agentId: string): Promise<AgentTemplateCatalogueSnapshot> {
@@ -1119,15 +1108,10 @@ export class WorkflowCoordinator {
 	}
 
 	#integrateAgent(record: AgentRecord): void {
-		const retained = this.#quotaSuspensions.current(record.identity.agentId);
-		if (retained) record.host.restoreQuotaSuspension(retained.suspension, retained.runSequence, retained.nativeInput);
-		record.host.setQuotaSuspensionHandler((suspension, handle, nativeInput) => {
-			if (suspension) {
-				this.#quotaSuspensions.suspend(record.identity.agentId, handle.sequence, suspension, nativeInput);
-				this.#releaseExecution(record.identity.agentId, handle);
-			} else {
-				this.#quotaSuspensions.clear(record.identity.agentId, handle.sequence);
-			}
+		record.host.setQuotaSuspensionHandler((suspension, handle) => {
+			// Quota suspension is process-local: it stops this exact Run and releases its
+			// execution permit. Nothing durable has to be recorded or restored.
+			if (suspension) this.#releaseExecution(record.identity.agentId, handle);
 		});
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged());
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged());
@@ -1241,13 +1225,6 @@ export class WorkflowCoordinator {
 	async #prepareAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
 		const preparation = record.host.lane.run(async () => {
 			if (record.host.currentProjection()) {
-				record.host.addRetentionReason("interactive_selection");
-				return;
-			}
-			if (record.host.currentQuotaSuspension()) {
-				// Selecting a cold suspended Agent prepares its editor and exact retained
-				// Run, but supplies no model input and leaves the quota stop in place.
-				await record.host.prepareQuotaResumptionInLane();
 				record.host.addRetentionReason("interactive_selection");
 				return;
 			}
