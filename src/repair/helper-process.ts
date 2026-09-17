@@ -24,6 +24,7 @@ export type IndependentRepairHelper = {
 	hidePresentation(): Promise<void>;
 	request(action: string, payload?: unknown): Promise<unknown>;
 	stop(): Promise<void>;
+	shutdown(): Promise<void>;
 };
 
 /** Stock Pi owns the editor and conversation; control carries lifecycle only. */
@@ -170,6 +171,15 @@ export async function launchRepairHelper(options: {
 		beginPhysicalTerminalAttachment, hidePresentation,
 		async stop() {
 			if (!ended) await request("stop");
+			await actualExit;
+		},
+		async shutdown() {
+			if (!ended && !closed) {
+				try { await request("shutdown"); }
+				catch (error) { if (!ended && !closed) throw error; }
+			}
+			// Disconnect is not exit evidence. The helper fences itself on control
+			// loss, and the CLI still joins the actual PTY exit before completing quit.
 			await actualExit;
 		},
 	};

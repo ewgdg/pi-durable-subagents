@@ -19,7 +19,7 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 	while (!await predicate()) { if (Date.now() > end) throw new Error(`Timed out: ${label}`); await delay(25); }
 }
 
-for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "native-chat", "native-esc", "followup-complete", "validation-correction", "command-cancel", "helper-kill", "idle-human", "live-navigation"] as const) {
+for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "native-chat", "native-esc", "followup-complete", "validation-correction", "command-cancel", "helper-kill", "idle-human", "live-navigation", "quit-joined", "quit-active"] as const) {
 test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip: process.platform === "win32" }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "repair-cli-"));
 	const agentDir = join(root, "agent");
@@ -44,7 +44,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		if (scenario === "native-chat" && repairRequests === 1) return "We can discuss the duplicate before preparing a proposal.";
 		const proposalStep = repairRequests - (scenario === "native-chat" ? 1 : 0);
 		assert.deepEqual(request.tools.map((tool) => (tool as { function: { name: string } }).function.name).sort(), ["repair_candidate", "repair_report", "repair_snapshot"]);
-		if (scenario === "command-cancel" || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
+		if (scenario === "command-cancel" || scenario === "helper-kill" || scenario === "quit-active") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
 		if ((scenario === "native-esc" || scenario === "followup-complete") && repairRequests === 4) return new Promise<string>((resolve) => { releaseModel = () => resolve("Stale completion must not apply."); });
 		if ((scenario === "native-esc" || scenario === "followup-complete") && repairRequests === 5) return { name: "repair_report", arguments: { kind: "complete", text: "Fresh completion after explicit human continuation." } };
 		if (scenario === "validation-correction" && repairRequests === 5) return { name: "repair_candidate", arguments: { id: "file-0", contents: validCandidate } };
@@ -119,7 +119,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 	}
 	await writeFile(ownerPath, [owner.getHeader(), ...owner.getEntries()].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
 	const fixturePath = join(root, "lifecycle-observation.mjs");
-	await writeFile(fixturePath, `import {writeFileSync} from 'node:fs';
+	await writeFile(fixturePath, `import {writeFileSync,existsSync,readdirSync} from 'node:fs';
 		import * as hostPi from '@earendil-works/pi-coding-agent';
 		import {installInteractiveHostBridge} from ${JSON.stringify(resolve("src/pi-integration/interactive-host-bridge.ts"))};
 		export default function(pi) {
@@ -137,7 +137,14 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 				writeFileSync(${JSON.stringify(join(root, "ready.json"))}, JSON.stringify({pid:process.pid,path:ctx.sessionManager.getSessionFile(),tools:pi.getActiveTools()}));
 			});
 			pi.on('session_before_switch', event => ${JSON.stringify(scenario)} === 'parking-cancel' && event.targetSessionFile?.endsWith('repair-host.jsonl') ? {cancel:true} : undefined);
-			pi.on('session_shutdown', () => { if (${JSON.stringify(scenario)} !== 'idle-human') pi.appendEntry('repair-test-final-write', {pid:process.pid}); });
+			pi.on('session_shutdown', event => {
+				if (${JSON.stringify(scenario)} !== 'idle-human') pi.appendEntry('repair-test-final-write', {pid:process.pid});
+				if (${JSON.stringify(scenario === "quit-joined" || scenario === "quit-active")} && event.reason === 'quit') {
+					const hosts = ${JSON.stringify(join(root,"pi-agent-coordination-repair",Buffer.from(ownerId).toString("base64url"),"hosts"))};
+					const helperExits = readdirSync(hosts).map(id => existsSync(hosts+'/'+id+'/helper-exit.json'));
+					writeFileSync(${JSON.stringify(join(root,"quit-observed.json"))},JSON.stringify({helperExits}));
+				}
+			});
 			pi.registerCommand('repair-test-bash', {handler:async () => { void runtime.session.executeBash('echo BASH_STARTED; sleep 30', chunk => {if(chunk.includes('BASH_STARTED'))writeFileSync(${JSON.stringify(join(root,"bash-started"))},'started');}); }});
 			pi.registerCommand('repair-test-clear-failure', {handler:() => clearFailure?.()});
 			pi.registerCommand('repair-test-native-change', {handler:() => runtime.session.setThinkingLevel('high')});
@@ -172,6 +179,13 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			return;
 		}
 		if (scenario === "command-cancel") { await until(() => repairRequests > 0, "model started"); terminal.write("/agents repair cancel\r"); }
+		if (scenario === "quit-active") {
+			await until(() => repairRequests === 1, "native repair model held while original CLI is parked");
+			terminal.kill("SIGTERM");
+			await exited;
+			assert.deepEqual(JSON.parse(await readFile(join(root, "quit-observed.json"), "utf8")).helperExits, [true], "parked CLI quit joins active helper cancellation and actual exit");
+			return;
+		}
 		if (scenario === "native-chat") {
 			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("discuss the duplicate"), "native Moderator first response without a proposal");
 			const [attemptId] = await readdir(join(repairRoot, "hosts"));
@@ -342,6 +356,12 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			terminal.write("/agents repair inspect\r");
 			await until(async ()=>(await readFile(join(root,"terminal.log"),"utf8")).includes("Validation audit"),"historical diagnostics remain available");
 			terminal.write("q");
+		}
+		if (scenario === "quit-joined") {
+			terminal.write("/quit\r");
+			await exited;
+			assert.deepEqual(JSON.parse(await readFile(join(root, "quit-observed.json"), "utf8")).helperExits, [true], "original CLI shutdown must join actual independent helper exit before later shutdown observers");
+			assert.equal(JSON.parse(await readFile(join(directory, "helper-exit.json"), "utf8")).kind, "observed-exit");
 		}
 	} finally { releaseModel?.(); terminal.kill(); await exited; await server.close(); }
 });

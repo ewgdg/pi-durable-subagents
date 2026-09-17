@@ -53,6 +53,13 @@ supplies model selection and guidance, not additional tool authority.
   report; automatic application requires a current proposal at successful idle
   settlement, with no queued input. Invalid proposals remain editable before
   application; mutation authority closes permanently once application begins.
+- Compaction is unavailable before commit because native compaction has a
+  separate deferred-input queue. Manual or automatic compaction is visibly
+  cancelled and invalidates the pending proposal; a fresh complete report is
+  required. Context exhaustion refuses without changing live transcripts.
+  Normal compaction becomes available for postcommit read-only conversation.
+  Input or Esc during validation also revokes the proposal. A submitted message
+  is returned to the editor to resend after validation, not silently discarded.
 - Disk commit does not change the selected conversation. The Moderator remains
   available to discuss the result with read-only evidence. Only explicit Owner
   selection attempts fresh admission. Failed fresh admission retains the committed
@@ -69,6 +76,10 @@ processes are archived read-only rows; inspection cannot resurrect a transaction
 No ordinary Agent Run, Request, membership record or delivery route is created.
 An invalidated presenter context refuses navigation rather than granting a stale
 context authority to reopen original transcripts.
+Closing a view only detaches it. Quitting the original CLI joins helper startup,
+cleanup and actual process exit; replacing or reloading the Owner does not stop
+the live Moderator. Reloading the restricted Moderator itself is unsupported
+and shuts it down with its shell/session-replacement restrictions intact.
 
 After refusal, `/agents repair` opens read-only progress, Owner snapshot,
 Moderator transcript, and validation-audit pages. `/agents repair inspect`

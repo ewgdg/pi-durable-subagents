@@ -10,7 +10,7 @@ import type {
 
 import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
 import { OwnerRecoveryError } from "./bootstrap/owner-recovery-error.ts";
-import { ownerRepairCommand, isRepairPaused, isRepairSwitchAuthorized, presentRepairHost, repairNavigation, repairOwnerRequiresHumanInput, repairOwnerTurnStarted } from "./repair/owner-repair.ts";
+import { ownerRepairCommand, isRepairPaused, isRepairSwitchAuthorized, presentRepairHost, repairNavigation, repairOwnerRequiresHumanInput, repairOwnerTurnStarted, shutdownRepairHelpers } from "./repair/owner-repair.ts";
 import { readRepairHost } from "./repair/repair-host.ts";
 import { closeRepairInput } from "./repair/input-retirement.ts";
 import { ProtocolInvariantError } from "./protocol/identities.ts";
@@ -54,7 +54,10 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	const repair = ownerRepairCommand(bridge, (manager) => admissionFailures.get(manager));
 	pi.on("agent_start", (_event, ctx) => repairOwnerTurnStarted(ctx));
 	let removeRepairInput: (() => void) | undefined;
-	pi.on("session_shutdown", () => { removeRepairInput?.(); });
+	pi.on("session_shutdown", async event => {
+		removeRepairInput?.();
+		if (event.reason === "quit") await shutdownRepairHelpers();
+	});
 	pi.on("input", (_event, ctx) => isRepairPaused(ctx) ? { action: "handled" } : undefined);
 	pi.on("session_before_compact", (_event, ctx) => isRepairPaused(ctx) ? { cancel: true } : undefined);
 	pi.on("session_before_tree", (_event, ctx) => isRepairPaused(ctx) ? { cancel: true } : undefined);

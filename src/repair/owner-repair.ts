@@ -32,10 +32,36 @@ type Attempt = {
 const REGISTRY_KEY = "__piAgentCoordinationRepairAttempts";
 const registry = globalThis as typeof globalThis & { [REGISTRY_KEY]?: Map<string, Attempt>;
 	__piAgentCoordinationRepairRecoverySwitches?: WeakMap<object, string>;
-	__piAgentCoordinationRepairHumanWait?: Set<string> };
+	__piAgentCoordinationRepairHumanWait?: Set<string>;
+	__piAgentCoordinationRepairLifetime?: { closing: boolean; shutdown?: Promise<void>;
+		launches: Set<Promise<IndependentRepairHelper>>;
+		helpers: Map<IndependentRepairHelper, string> } };
 const attempts = registry[REGISTRY_KEY] ??= new Map();
 const recoverySwitches = registry.__piAgentCoordinationRepairRecoverySwitches ??= new WeakMap();
 const humanWait = registry.__piAgentCoordinationRepairHumanWait ??= new Set();
+const lifetime: NonNullable<typeof registry.__piAgentCoordinationRepairLifetime> = registry.__piAgentCoordinationRepairLifetime ??= { closing: false, launches: new Set(), helpers: new Map() };
+
+/** Original CLI lifetime owns helpers; replacing/reloading an Owner does not. */
+export function shutdownRepairHelpers(): Promise<void> {
+	return lifetime.shutdown ??= (async () => {
+		lifetime.closing = true;
+		// A launch has a bounded admission path and joins its own failed process.
+		// Its continuation registers a successful helper before this join resumes.
+		await Promise.allSettled([...lifetime.launches]);
+		const results = await Promise.allSettled([...lifetime.helpers].map(async ([helper, directory]) => {
+			try {
+				await helper.shutdown();
+				const exit = await helper.exited;
+				await writeRepairRecord(join(directory, "helper-exit.json"), { kind: "observed-exit", ...exit });
+			} catch (error) {
+				await writeRepairRecord(join(directory, "helper-shutdown-error.jsonl"), { error: String(error) }, true);
+				throw error;
+			}
+		}));
+		const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+		if (errors.length) throw new AggregateError(errors, "Independent repair helper shutdown failed");
+	})();
+}
 
 export function repairOwnerRequiresHumanInput(ctx: ExtensionContext): boolean {
 	return humanWait.has(ctx.sessionManager.getSessionFile() ?? "");
@@ -219,6 +245,7 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 	return async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 		let presentation: Attempt | undefined;
 		try {
+			if (lifetime.closing) throw new Error("Original CLI is shutting down");
 			if (ctx.mode !== "tui" || !ctx.hasUI) throw new Error("Workflow repair requires the original interactive CLI terminal");
 			const action = args.trim();
 			let attempt = currentAttempt(ctx);
@@ -344,12 +371,17 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 			await writeFile(moderatorPath, JSON.stringify({ type: "session", version: 3, id: launch.moderatorAgentId, timestamp: new Date().toISOString(), cwd: ctx.cwd }) + "\n", { flag: "wx", mode: 0o600 });
 			const hostPath = await createRepairHost({ directory, cwd: ctx.cwd, ownerPath, attemptId, bootstrapPath });
 			let launched: Attempt | undefined;
-			const helper = await launchRepairHelper({ cwd: ctx.cwd, agentDir: launch.agentDir,
+			const launching = launchRepairHelper({ cwd: ctx.cwd, agentDir: launch.agentDir,
 				extensionPath: join(import.meta.dirname, "helper-entry.ts"), bootstrapPath, sessionPath: moderatorPath,
 				logDirectory: directory, model: `${model.provider}/${model.modelId}`, thinking: launch.thinking,
 				onProgress: (message) => launched?.ui.setWidget("workflow-repair-progress", [sanitizeReportTerminalText(message), `Evidence: ${directory}`]),
 				onNavigate: async target => { if (!launched) throw new Error("Repair is not attached"); await navigateFromModerator(launched, target); },
 			});
+			lifetime.launches.add(launching);
+			let helper: IndependentRepairHelper;
+			try { helper = await launching; lifetime.helpers.set(helper, directory); }
+			finally { lifetime.launches.delete(launching); }
+			if (lifetime.closing) throw new Error("Original CLI shut down during repair helper startup");
 			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true, switchTarget: hostPath };
 			presentation = launched;
 			attempts.set(attemptId, launched);

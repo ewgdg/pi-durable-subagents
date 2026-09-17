@@ -64,6 +64,28 @@ test("pre-admission-gate archive can be inspected but cannot bootstrap a new pro
 		model: "anthropic/claude-sonnet-4-5", thinking: "off" }), /actual admission failure binding/);
 });
 
+for (const corruptBootstrap of [false, true]) test(`native repair reload exits with fences intact: corrupt bootstrap=${corruptBootstrap}`, { timeout: 15_000 }, async () => {
+	const { root, bootstrapPath, sessionPath } = await nativeFixture();
+	const helper = await launchRepairHelper({ cwd: root, agentDir: join(root, "agent"), bootstrapPath, sessionPath,
+		extensionPath: resolve("src/repair/helper-entry.ts"), logDirectory: root, model: "anthropic/claude-sonnet-4-5", thinking: "off" });
+	let exited = false;
+	void helper.exited.then(() => { exited = true; }, () => { exited = true; });
+	try {
+		await attachNativeChildDisplay(helper);
+		if (corruptBootstrap) await writeFile(bootstrapPath, "{}");
+		helper.writeInput("/reload\r");
+		await new Promise(resolve => setTimeout(resolve, 200));
+		if (!exited) helper.writeInput("!touch forbidden-reload-shell\r/new\r");
+		const deadline = Date.now() + 3000;
+		while (!exited && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+		assert.equal(exited, true, "reload must retire the helper rather than leave an unguarded or stranded TUI");
+		await assert.rejects(readFile(join(root, "forbidden-reload-shell")), { code: "ENOENT" });
+	} finally {
+		if (!exited) process.kill(helper.pid, "SIGKILL");
+		await helper.exited;
+	}
+});
+
 test("helper exit before bootstrap readiness refuses rather than authorizing repair", async () => {
 	const { root, bootstrapPath, sessionPath } = await nativeFixture();
 	const extensionPath = join(root, "fixture.mjs");

@@ -16,6 +16,8 @@ Concrete failure case: a Moderator emits `repair_report(complete)` and then the 
 - Commit automatically after independent validation; stay in Moderator. Only explicit Owner navigation performs fresh admission, without an approval prompt.
 - Native Esc aborts a turn, not the attempt. Explicit repair cancellation remains separate.
 - After commit the current live Moderator remains conversational with read-only evidence. Its process cannot reapply. Archived processes are inspect-only.
+- Precommit compaction is explicitly unsupported: cancel it with visible guidance and invalidate any pending proposal. After commit native compaction is available normally. This closes Pi's separate compaction-deferred input queue without pretending the public pending-message list observes that queue.
+- The original CLI lifetime owns helper shutdown, independently of native session replacement or resource reload. Actual quit joins pending launches and helper process exit; disconnect alone is never retirement evidence.
 
 ## Work plan
 
@@ -37,6 +39,9 @@ Use supervised targeted fast/process runner only. Reasoning-enabled local script
 - First native conversation checkpoint passed: real CLI `native-chat` persists a human message after a no-proposal assistant response, then independently validates/commits and waits for explicit Owner navigation.
 - Real CLI `native-esc`, `followup-complete`, `idle-human`, and `live-navigation` pass: abort after completion report, queued human input, retained Owner hold, native steering, precommit snapshot inspection, postcommit reattachment/discussion. Live-navigation test initially incorrectly expected a deliberately Ctrl-U-cleared draft to survive; corrected to distinguish explicit editor deletion from attachment retention.
 - No-op CLI3, lifecycle5, proposal gate7, archive inspection1 and launcher refusal2 pass. Typecheck passes. Full targeted safety/installed-package checks and independent review remain pending.
+- Full repair CLI17 passed, followed by added validation-correction/postcommit tool-denial coverage. Actual packed node_modules native-chat, live-navigation, native-esc, followup-complete and idle-human passed.
+- Independent milestone review identified required fixes: revoke a proposal on new human input/Esc DURING asynchronous validation, account native compaction-deferred input, and join independent helpers on actual original CLI quit. Reload factory failure also needs fail-closed hooks, not merely a thrown error contained by Pi. Core fixes delegated to helper author; CLI-lifetime join and native regressions owned by main writer.
+- New native `/quit` regression failed (helper exit not joined before subsequent shutdown observer). Both normal and corrupt-bootstrap native reload tests failed (helper remained alive). These are open checkpoints, not completion claims.
 
 ## Surprises and discoveries
 
