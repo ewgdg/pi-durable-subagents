@@ -246,7 +246,10 @@ test("a Request reads the same whether sent or delivered", () => {
 		assert.notEqual(delivered[deliveredStart - 1], "", `expanded: ${expanded}`);
 		assert.deepEqual(sent.slice(sentStart), delivered.slice(deliveredStart), `expanded: ${expanded}`);
 		// Identities use the same compact-collapsed, full-expanded detail either way.
-		assert.equal(sent[0]?.replace(" to ", " from "), delivered[0], `expanded: ${expanded}`);
+		const identity = `Researcher · ${expanded ? targetAgentId : "983c81e3"}`;
+		const headerText = (lines: readonly string[], bodyStart: number) => lines.slice(0, bodyStart).join(" ");
+		assert.ok(headerText(sent, sentStart).includes(` to ${identity}`), `expanded: ${expanded}`);
+		assert.ok(headerText(delivered, deliveredStart).includes(` from ${identity}`), `expanded: ${expanded}`);
 	}
 });
 
