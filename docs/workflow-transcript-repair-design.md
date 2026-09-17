@@ -43,7 +43,8 @@ repair invocation + actual supported transcript admission failure
   -> immutable snapshot, certified blocker, verified repair Moderator bootstrap
   -> candidate copies -> whole-Workflow validation and effect audit
   -> backups, journal, replacement, durable disk commit
-  -> open a fresh Owner session from disk in the same CLI terminal
+  -> remain in the native interactive Moderator with mutation authority closed
+  -> explicit Owner selection opens a fresh idle Owner in the same CLI terminal
 ```
 
 The CLI process remains the terminal presenter. The helper is outside ordinary
@@ -52,16 +53,20 @@ upstream Pi edit is needed. The temporary repair host is not an unrelated Owner
 Workflow and grants no ordinary coordination authority.
 
 Native replacement awaits only the short verified handoff, not the full model
-turn. The editor returns while independent repair work continues. Live model and
-tool updates and completed transcript entries are visible through `/agents` and
-read-only inspection. The Owner row shows an immutable snapshot during repair;
-the Repair Moderator row is presentation-only, not ordinary routing or membership.
-It remains inspectable after completion, including archived attempts.
+turn. The helper's stock Pi TUI attaches through the existing physical-terminal
+mechanism: native editor, model/tool streaming, steering, follow-up and Esc.
+`/agents` reattaches that same live process; it does not reconstruct a chat view.
+The Owner row shows an immutable snapshot before commit. The Repair Moderator
+row grants presentation access, not ordinary routing or membership. After commit
+the live Moderator remains conversational with read-only evidence; stopped prior
+processes are archived inspection only.
 
 Responsive navigation does not authorize arbitrary native reopening. Switch
 permission names the exact controlled transition, not the whole running attempt.
-Open repair views are closed and joined before Owner reopening, with unsubmitted
-editor text preserved. Expected refusal does not escape the native callback.
+Explicit Owner selection detaches the Moderator without killing it. Drafts stay
+in their respective native editors. Actual original CLI quit joins pending helper
+launches and process exit; native session replacement does not end its lifetime.
+Expected refusal does not escape the native callback.
 
 Pi opens a switch destination before old-session teardown. Switching first to an
 unrelated repair-host transcript lets final Owner writes complete without opening
@@ -105,17 +110,31 @@ digest, and captured Moderator preset. It precedes the first model turn. Repair
 artifacts and the Moderator transcript live outside ordinary participant discovery.
 No child Creation Request or invented Operational Incident is needed.
 
-The independent helper runs the installed stock Pi CLI in RPC mode with only its
+The independent helper runs the installed stock Pi CLI in interactive TUI mode with only its
 dedicated extension. It exposes `repair_snapshot`, `repair_candidate`, and
 `repair_report`; no shell, live-file write, spawn, ordinary messaging, approval,
 or apply tool. Normal extensions, skills, prompt templates, and context files
 are not inherited. The preset supplies model/guidance, not extra authority.
 Extension-only model providers are consequently not inherited.
 
+Native session replacement and `!`/`!!` shell paths are also fenced; the tool
+allowlist alone does not restrict those paths. Helper reload terminates rather
+than reauthorizing an attempt. A separate control transport carries lifecycle
+and navigation, never human chat or reconstructed model output.
+
 A model's completion report only submits a proposal. The host independently
 seals and validates the generation. The model receives the retained failure and
 correction constraints, not a prewritten candidate. The command authorizes an
 in-scope repair; it does not waive identity, retirement, validation, or freshness.
+
+Completion is bound to a successful, uninterrupted turn and current proposal
+revision. New submissions, candidate changes or Esc revoke pending validation,
+including across asynchronous sealing. Application closes mutation authority
+synchronously at its final decision. Precommit compaction is visibly refused and
+invalidates completion because native compaction queues are not fully reflected
+in public pending-message checks. Context exhaustion changes no live transcripts.
+Normal compaction resumes for postcommit read-only discussion. Native Esc aborts
+a response, not the attempt; cancellation remains an explicit repair command.
 
 ## Validation and protocol-effect audit
 
@@ -198,6 +217,9 @@ bindings and backups remain valid; they still prevent new application.
 **Disk commit precedes native reopening.** Once committed, failed admission never
 restores originals over the repaired generation or later native startup writes.
 Uncertain commit durability refuses reopening until journal recovery resolves it.
+Commit does not switch conversations or claim admission: the state remains
+committed, awaiting Owner admission until explicit Owner navigation. That is
+navigation, not another repair approval.
 
 Ordinary helper recovery needs the positively acknowledged retirement handoff
 as well as a safe disk generation. An absent intent says no replacement needs
@@ -226,9 +248,13 @@ the same terminal. They also cover healthy/rejected-only/configuration no-ops,
 unchanged stale rejected history and dormant children, native bash, cleanup
 refusal, postcommit admission failure, cancellation and killed-helper recovery.
 Reasoning-enabled CLI cases exercise setting-triggered reconciliation and verify
-zero Owner calls until explicit human input. Held-model cases verify live
-navigation, completed tool-result refresh, draft preservation, and refusal of
-uncommitted native reopening. Packed-package checks cover these paths too.
+zero Owner calls until explicit human input. Real native conversation cases cover
+human prompts, steering, follow-up, abort after a completion report, postcommit
+discussion with mutation denied, draft preservation, and refusal of uncommitted
+native reopening. Native compaction queue and deterministic validation-revocation
+tests cover their respective seams; they are not one combined full-helper storage
+race test. Quit tests verify actual helper exit joins and prevent late helper
+birth after shutdown. Packed-package checks cover native interaction and quit.
 Focused core tests exercise the permitted-edit certificate, sealing, freshness,
 unknown hashes, interrupted apply/rollback, and post-commit native writes.
 They are not a power-loss proof or exhaustive terminal resize/signal coverage.
