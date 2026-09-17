@@ -13,6 +13,7 @@ import {
 	renderAgentMessageCall,
 	renderAgentMessageResult,
 } from "../src/tools/message-renderer.ts";
+import { renderAgentSpawnCall } from "../src/tools/spawn-renderer.ts";
 
 const plainTheme = {
 	fg: (_color: string, text: string) => text,
@@ -158,6 +159,38 @@ test("answer and cancel calls show their own badges with payload and correlation
 	assert.match(cancel, /\[Cancel\]/);
 	assert.match(cancel, /est-nine/);
 	assert.match(cancel, /No longer needed/);
+});
+
+test("every coordination badge separates header and body with exactly one blank line", () => {
+	initTheme("dark");
+	const spawn = renderAgentSpawnCall(
+		{ title: "Fixture request", request: "Spawn body.", label: "Fixture" },
+		plainTheme,
+	).render(60).join("\n");
+	const cases: ReadonlyArray<readonly [string, string, string]> = [
+		["[Send]", "Send body.", renderCall({ operation: "send", targetAgent, content: "Send body." })],
+		["[Request]", "Request body.", renderCall({
+			operation: "request", targetAgent, title: "Fixture request", question: "Request body.",
+		})],
+		["[Answer]", "Answer body.", renderAgentMessageCall(
+			{ operation: "answer", requestId: "request-one", answer: "Answer body." },
+			plainTheme,
+			resolveLabel,
+		).render(60).join("\n")],
+		["[Cancel]", "Cancel body.", renderCall({
+			operation: "cancel", requestMessageId: "request-one", reason: "Cancel body.",
+		})],
+		// A spawned agent's Creation Request renders the same [Request] block as
+		// agent_message, so it must obey the same header/body spacing.
+		["[Request]", "Spawn body.", spawn],
+	];
+	for (const [badge, body, rendered] of cases) {
+		const lines = rendered.split("\n");
+		const header = lines.findIndex((line) => line.includes(badge));
+		assert.notEqual(header, -1, `${badge} header must render`);
+		assert.equal((lines[header + 1] ?? "").trim(), "", `${badge} header must be followed by a blank line`);
+		assert.ok(lines[header + 2]?.includes(body), `${badge} body must follow the blank line: ${rendered}`);
+	}
 });
 
 test("poll and retry calls show their badges and message id without a body preview", () => {

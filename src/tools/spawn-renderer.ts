@@ -12,7 +12,7 @@ import type {
 } from "../coordination/workflow-coordinator.ts";
 import { formatKnownAgentIdentity } from "../presentation/agent-identity.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
-import { renderAgentMessageBody } from "./message-renderer.ts";
+import { renderCoordinationBlock } from "./message-renderer.ts";
 
 export function renderAgentSpawnCall(
 	args: AgentSpawnInput,
@@ -28,17 +28,15 @@ export function renderAgentSpawnCall(
 	const container = new Container();
 	container.addChild(new Text(header, 0, 0));
 	container.addChild(new Spacer(1));
-	container.addChild(new Text(
+	container.addChild(renderCoordinationBlock(
 		theme.fg("customMessageLabel", theme.bold("[Request]")) +
 			(typeof args.title === "string" ? theme.fg("customMessageLabel", ` ${boundedToolPreview(args.title)}`) : ""),
-		0,
-		0,
+		// Pi renders tool calls while their JSON arguments are still streaming.
+		// Add the body only after the required request string has arrived.
+		typeof args.request === "string" ? args.request : undefined,
+		theme,
+		expanded,
 	));
-	// Pi renders tool calls while their JSON arguments are still streaming.
-	// Add the body only after the required request string has arrived.
-	if (typeof args.request === "string") {
-		container.addChild(renderAgentMessageBody(args.request, theme, expanded));
-	}
 	return container;
 }
 

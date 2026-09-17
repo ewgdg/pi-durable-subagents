@@ -26,8 +26,7 @@ export function renderAgentMessageCall(
 	expanded = false,
 	answerTargetAgentId?: string,
 ): Component {
-	const container = new Container();
-	container.addChild(new Text(
+	return renderCoordinationBlock(
 		renderMessageCallHeader(
 			args,
 			theme,
@@ -35,10 +34,25 @@ export function renderAgentMessageCall(
 			answerTargetAgentId,
 			expanded,
 		),
-		0,
-		0,
-	));
-	const body = messageCallBody(args);
+		messageCallBody(args),
+		theme,
+		expanded,
+	);
+}
+
+/**
+ * Compose a coordination header with its optional body under one spacing policy:
+ * every badge ([Send], [Request], [Answer], [Cancel], and a spawned Agent's
+ * Creation Request block) starts its body after exactly one blank line.
+ */
+export function renderCoordinationBlock(
+	header: string,
+	body: string | undefined,
+	theme: Theme,
+	expanded = false,
+): Component {
+	const container = new Container();
+	container.addChild(new Text(header, 0, 0));
 	if (body) {
 		container.addChild(new Spacer(1));
 		container.addChild(renderAgentMessageBody(body, theme, expanded));
@@ -47,7 +61,7 @@ export function renderAgentMessageCall(
 }
 
 /** Render tool-call coordination text with one collapsed/expanded body policy. */
-export function renderAgentMessageBody(
+function renderAgentMessageBody(
 	body: string,
 	theme: Theme,
 	expanded = false,
