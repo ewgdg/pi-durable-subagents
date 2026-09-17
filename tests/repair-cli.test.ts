@@ -19,7 +19,7 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 	while (!await predicate()) { if (Date.now() > end) throw new Error(`Timed out: ${label}`); await delay(25); }
 }
 
-for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "native-chat", "native-esc", "followup-complete", "command-cancel", "helper-kill", "idle-human", "live-navigation"] as const) {
+for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "native-chat", "native-esc", "followup-complete", "validation-correction", "command-cancel", "helper-kill", "idle-human", "live-navigation"] as const) {
 test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip: process.platform === "win32" }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "repair-cli-"));
 	const agentDir = join(root, "agent");
@@ -30,8 +30,15 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 	let ordinaryRequests = 0;
 	let releaseModel: (() => void) | undefined;
 	let moderatorConversation = 0;
+	let postCommitMutationRequests = 0;
+	let validCandidate = "";
 	server.setResponses((request) => {
 		if (!request.tools.some((tool) => JSON.stringify(tool).includes("repair_snapshot"))) { ordinaryRequests++; return "Ordinary conversation remains usable."; }
+		if (request.messages.some(message => JSON.stringify(message).includes("Try to change the committed candidate."))) {
+			postCommitMutationRequests++;
+			assert.deepEqual(request.tools.map(tool => (tool as { function: { name: string } }).function.name).sort(), ["repair_report", "repair_snapshot"]);
+			return postCommitMutationRequests === 1 ? { name: "repair_candidate", arguments: { id: "file-0", contents: "not an authorized second application" } } : "Committed mutation was denied.";
+		}
 		if (request.messages.some(message => JSON.stringify(message).includes("Explain the committed repair without editing"))) { moderatorConversation++; return "The exact duplicate Delivery was removed. This conversation cannot apply again."; }
 		repairRequests++;
 		if (scenario === "native-chat" && repairRequests === 1) return "We can discuss the duplicate before preparing a proposal.";
@@ -40,6 +47,8 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		if (scenario === "command-cancel" || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
 		if ((scenario === "native-esc" || scenario === "followup-complete") && repairRequests === 4) return new Promise<string>((resolve) => { releaseModel = () => resolve("Stale completion must not apply."); });
 		if ((scenario === "native-esc" || scenario === "followup-complete") && repairRequests === 5) return { name: "repair_report", arguments: { kind: "complete", text: "Fresh completion after explicit human continuation." } };
+		if (scenario === "validation-correction" && repairRequests === 5) return { name: "repair_candidate", arguments: { id: "file-0", contents: validCandidate } };
+		if (scenario === "validation-correction" && repairRequests === 6) return { name: "repair_report", arguments: { kind: "complete", text: "Corrected candidate, fresh complete report." } };
 		if (scenario === "live-navigation" && repairRequests === 1) return new Promise((resolve) => {
 			releaseModel = () => resolve({ name: "repair_snapshot", arguments: { id: "file-0" } });
 		});
@@ -57,6 +66,8 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			// It is independent of the production certificate/validator.
 			const candidate = entries.filter((entry) => entry.id !== duplicate.id).map((entry) =>
 				entry.parentId === duplicate.id ? { ...entry, parentId: duplicate.parentId } : entry);
+			validCandidate = candidate.map(entry => JSON.stringify(entry)).join("\n") + "\n";
+			if (scenario === "validation-correction") candidate[0] = { ...candidate[0], unauthorizedHeaderEdit: true };
 			return { name: "repair_candidate", arguments: { id: "file-0", contents: candidate.map((entry) => JSON.stringify(entry)).join("\n") + "\n" } };
 		}
 		if (proposalStep === 3) return { name: "repair_report", arguments: { kind: "complete", text: "Removed only the exact redundant Delivery envelope; kept original evidence and rejected history." } };
@@ -185,6 +196,13 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			assert.equal(existsSync(join(repairRoot, "storage", attemptId, "committed.json")), false);
 			releaseModel?.();
 		}
+		if (scenario === "validation-correction") {
+			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("Proposal was not applied"), "invalid proposal rejected without ending native conversation");
+			const [attemptId] = await readdir(join(repairRoot, "hosts"));
+			assert.equal(existsSync(join(repairRoot, "storage", attemptId, "committed.json")), false);
+			assert.equal(existsSync(join(repairRoot, "hosts", attemptId, "outcome.json")), false);
+			terminal.write("Correct the proposal without unrelated changes.\r");
+		}
 		if (scenario === "live-navigation") {
 			await until(() => repairRequests === 1, "held helper before completed tool output");
 			terminal.write("Keep all rejected historical work unchanged.\r");
@@ -280,7 +298,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.equal(ping.nativeManagerReplaced,true);
 		assert.equal(ping.tools.includes("agent_message"),scenario!=="admission-fail");
 		assert.equal(ordinaryRequests,0,"repair must not automatically resume participants");
-		assert.equal(repairRequests,scenario === "native-esc" || scenario === "followup-complete" ? 6 : scenario === "native-chat" ? 5 : 4);
+		assert.equal(repairRequests,scenario === "native-esc" || scenario === "followup-complete" ? 6 : scenario === "native-chat" ? 5 : scenario === "validation-correction" ? 7 : 4);
 		if (scenario === "followup-complete") assert.ok(server.requests.some(request => JSON.stringify(request.messages).includes("Address this queued follow-up before finalizing.")), "native queued follow-up reaches the Moderator before commit");
 		if (scenario === "live-navigation") {
 			assert.equal((await readFile(join(root, "terminal.log"), "utf8")).includes("startup_admission_cancelled"), false, "successful repair handoff is command completion, not cancelled model preflight");
@@ -292,6 +310,13 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).slice(previousOutput).includes("Proposal complete."), "reattached native Moderator displays its actual persisted conversation");
 			terminal.write("\u0015Explain the committed repair without editing.\r");
 			await until(() => moderatorConversation === 1, "native postcommit conversation remains available");
+			await until(async () => (await readFile(join(directory, "moderator.jsonl"), "utf8")).includes("This conversation cannot apply again."), "native response persisted");
+			const committedBytes = await readFile(join(repairRoot, "storage", id, "committed.json"), "utf8");
+			const candidateBytes = await readFile(join(repairRoot, "storage", id, "candidate", "file-0"), "utf8");
+			terminal.write("Try to change the committed candidate.\r");
+			await until(() => postCommitMutationRequests === 2, "postcommit unavailable mutation tool rejected by real native runtime");
+			assert.equal(await readFile(join(repairRoot, "storage", id, "committed.json"), "utf8"), committedBytes);
+			assert.equal(await readFile(join(repairRoot, "storage", id, "candidate", "file-0"), "utf8"), candidateBytes);
 			terminal.write("/agents owner\r");
 			assert.equal(ordinaryRequests, 0, "selecting Moderator and back cannot start Owner work");
 		}
