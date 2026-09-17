@@ -42,6 +42,10 @@ Use supervised targeted fast/process runner only. Reasoning-enabled local script
 - Full repair CLI17 passed, followed by added validation-correction/postcommit tool-denial coverage. Actual packed node_modules native-chat, live-navigation, native-esc, followup-complete and idle-human passed.
 - Independent milestone review identified required fixes: revoke a proposal on new human input/Esc DURING asynchronous validation, account native compaction-deferred input, and join independent helpers on actual original CLI quit. Reload factory failure also needs fail-closed hooks, not merely a thrown error contained by Pi. Core fixes delegated to helper author; CLI-lifetime join and native regressions owned by main writer.
 - New native `/quit` regression failed (helper exit not joined before subsequent shutdown observer). Both normal and corrupt-bootstrap native reload tests failed (helper remained alive). These are open checkpoints, not completion claims.
+- Those regressions are now green: actual original CLI quit joins helper exit both during a held model turn and after explicit Owner admission. Normal and corrupt-bootstrap native reload both terminate with restrictions retained. The original CLI lifetime registry survives Owner replacement/reload; a final prelaunch gate prevents helper birth after shutdown completes.
+- Validation now retains a revocable input epoch through asynchronous sealing, checked synchronously at the irreversible apply boundary. Configured submit/followup/Esc, manual/automatic compaction and abort require fresh completion. Gate barrier tests, real native compaction-deferred steering/followup, manual/threshold/overflow cancellation, and native conversation regressions pass. The validation-barrier coverage is compositional, not a single end-to-end filesystem-apply race test.
+- Independent lifecycle reviewer closed input/compaction/reload/quit findings at `3b7d21a`, except a newly identified prelaunch birth race. That last finding was reproduced with a deterministic preparation barrier and closed at `f008faf`; no remaining scoped finding.
+- Final production code `f008faf`: full targeted repair CLI20 passed (prior `3b7d21a`), then narrow lifetime1/CLI quit2 and typecheck passed after the last fix. Final packed node_modules native-chat, live-navigation, native-esc, followup-complete, idle-human, quit-joined and quit-active all passed7. Focused helper5, native compaction queue1, shutdown1, gate/revocation/compaction/input seams and existing human-hold/startup seams passed. No full repository suite, real-model usage or user-artifact writes.
 
 ## Surprises and discoveries
 
@@ -49,4 +53,6 @@ Stock native session replacement retains original CLI resource-discovery flags; 
 
 ## Outcomes
 
-Pending implementation and verification.
+Implemented genuine interactive native repair Moderator, not a chat dashboard. Durable commit leaves that conversation selected; explicit Owner navigation preserves its draft and opens an idle Owner. Mutation authority cannot reopen after application. Current-CLI conversation and read-only archived evidence remain separate.
+
+Supported restrictions: POSIX storage durability, precommit compaction refused visibly, helper reload terminates rather than restarts, unavailable extension-only providers remain unavailable in restricted helper resources. Original authorization/certificate/retirement/storage rules unchanged. Parent owns final acceptance and PR publication.
