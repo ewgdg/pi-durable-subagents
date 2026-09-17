@@ -883,9 +883,6 @@ async function runtimeSnapshot(
 	const sessionPath = context.sessionManager.getSessionFile();
 	if (!sessionPath) throw new Error("child_runtime_session_path_unavailable");
 	const tools = session.getActiveToolNames();
-	// The registry is availability evidence for startup admission. It is not the
-	// selection: descendants inherit the active tools, never this catalogue.
-	const registeredTools = session.getAllTools().map((tool) => tool.name);
 	const toolExecutionModes = tools.map((name) => {
 		const definition = session.getToolDefinition(name);
 		if (!definition) {
@@ -904,7 +901,6 @@ async function runtimeSnapshot(
 		model: requireModel(session.model),
 		thinking: session.thinkingLevel,
 		tools,
-		registeredTools,
 		skills: skillSources.map(({ name }) => name),
 		skillSources,
 		extensions: extensions.filter((path) => path !== bridgePath && path !== inputPath),

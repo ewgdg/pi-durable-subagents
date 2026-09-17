@@ -73,7 +73,7 @@ test("launch projects the real startup PTY through runtime admission", {
 	}
 });
 
-for (const outcome of ["admitted", "inactive", "unavailable", "cancelled", "exited"] as const) {
+for (const outcome of ["admitted", "mismatch", "cancelled", "exited"] as const) {
 	test(`startup dialogs remain usable before initial tool admission: ${outcome}`, {
 		timeout: TEST_TIMEOUT_MS,
 		skip: process.platform === "win32",
@@ -81,15 +81,11 @@ for (const outcome of ["admitted", "inactive", "unavailable", "cancelled", "exit
 		const options = await createLaunchOptions(`startup-dialog-${outcome}`, 0);
 		const launch = await PiChildProcessRuntime.launch({
 			...options,
-			configuration: {
-				...options.configuration,
-				// Availability, not activation, decides admission below.
-				tools: outcome === "unavailable" ? ["read", "unregistered_probe_tool"] : ["read"],
-			},
+			configuration: { ...options.configuration, tools: ["read"] },
 			ownerEnvironment: {
 				...options.ownerEnvironment,
 				PROCESS_RUNTIME_STARTUP_DIALOG: "1",
-				PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify(outcome === "inactive" ? [] : ["read"]),
+				PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify(outcome === "mismatch" ? [] : ["read"]),
 			},
 		});
 		let settled = false;
@@ -120,17 +116,17 @@ for (const outcome of ["admitted", "inactive", "unavailable", "cancelled", "exit
 				await cleanup;
 			} else {
 				launch.writeInput("\r");
-				if (outcome === "unavailable") {
-					await assert.rejects(readiness, /child_runtime_tools_mismatch: unavailable \["unregistered_probe_tool"\], inactive \[\], active \["read"\]/);
+				if (outcome === "mismatch") {
+					await assert.rejects(readiness, /child_runtime_tools_mismatch: missing \["read"\], unexpected \[\]/);
 				} else {
 					const runtime = await readiness;
-					assert.deepEqual(runtime.snapshot.tools, outcome === "inactive" ? [] : ["read"]);
+					assert.deepEqual(runtime.snapshot.tools, ["read"]);
 					// Admission must not hide an already attached startup presentation.
 					launch.writeInput("/runtime-probe POST_STARTUP_INPUT_OK\r");
 					await waitForDisplay("INPUT=POST_STARTUP_INPUT_OK");
 				}
 			}
-			if (outcome !== "admitted" && outcome !== "inactive") {
+			if (outcome !== "admitted") {
 				assert.equal(launch.disposed, true);
 				assert.throws(() => process.kill(launch.pid, 0), hasCode("ESRCH"));
 				await assert.rejects(lstat(dirname(launch.bootstrapPath)), hasCode("ENOENT"));

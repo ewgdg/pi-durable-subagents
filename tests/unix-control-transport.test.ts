@@ -9,7 +9,6 @@ import { Type } from "typebox";
 
 import {
 	FramedAgentControlChannel,
-	AGENT_CONTROL_PROTOCOL_VERSION,
 	type AgentControlProtocol,
 } from "../src/control/agent-control-channel.ts";
 import { AgentControlAdmissionBroker } from "../src/control/agent-control-admission.ts";
@@ -40,7 +39,7 @@ const protocol = {
 		},
 	},
 } as const satisfies AgentControlProtocol;
-const identity = { protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION, workflowId: "unix-workflow", agentId: "unix-agent" };
+const identity = { protocolVersion: 8 as const, workflowId: "unix-workflow", agentId: "unix-agent" };
 
 unixOnly("Unix listener allocates a short private endpoint and removes it on close", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-control-test-"));

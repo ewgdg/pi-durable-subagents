@@ -254,7 +254,6 @@ function createFakeRuntime(options: Readonly<{
 			model: { provider: "test", modelId: "model" },
 			thinking: "off",
 			tools: [],
-			registeredTools: [],
 			skills: [],
 			skillSources: [],
 			extensions: [],

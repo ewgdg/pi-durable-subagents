@@ -10,7 +10,6 @@ import {
 	RuntimeSnapshotSchema,
 } from "../src/control/agent-control-protocol.ts";
 import {
-	AGENT_CONTROL_PROTOCOL_VERSION,
 	AgentTemplateCatalogueSnapshotSchema,
 	ChildProcessBootstrapSchema,
 	ControlEndpointSchema,
@@ -18,7 +17,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 8, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control observe and presentation rosters preserve provider quota suspension", () => {
 	const suspension = { reason: "provider_quota", evidence: {
@@ -76,7 +75,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
+		protocolVersion: 8,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -303,7 +302,6 @@ test("every version-eight method and event has TypeBox payload/result schemas", 
 		model: { provider: "provider", modelId: "model" },
 		thinking: "high",
 		tools: ["read"],
-		registeredTools: ["read"],
 		skills: ["review"],
 		skillSources: [{ name: "review", filePath: "/skills/review/SKILL.md" }],
 		extensions: ["/extensions/review.ts"],
@@ -681,15 +679,15 @@ test("Control snapshots carry runtime diagnostic reports but reject invented too
 
 test("bootstrap incompatibility diagnostics distinguish versions and safe field failures", () => {
 	const descriptor = {
-		protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
+		protocolVersion: 8,
 		endpoint: { transport: "unix", address: "/tmp/control.sock" },
 		connectionToken: "SECRET-TOKEN", workflowId: "workflow", agentId: "agent",
 		role: "ordinary", ownerPresentation: true, tools: [], expectedSessionId: "session",
 	};
 	assert.doesNotThrow(() => validateChildProcessBootstrap(descriptor));
 	for (const [value, pattern] of [
-		[{ ...descriptor, protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION - 1, tools: undefined }, new RegExp(String.raw`protocol_mismatch: expected ${AGENT_CONTROL_PROTOCOL_VERSION}, received ${AGENT_CONTROL_PROTOCOL_VERSION - 1}; missing fields: tools`)],
-		[{ ...descriptor, tools: undefined }, new RegExp(String.raw`schema_drift: expected ${AGENT_CONTROL_PROTOCOL_VERSION}, received ${AGENT_CONTROL_PROTOCOL_VERSION}; missing fields: tools`)],
+		[{ ...descriptor, protocolVersion: 7, tools: undefined }, /protocol_mismatch: expected 8, received 7; missing fields: tools/],
+		[{ ...descriptor, tools: undefined }, /schema_drift: expected 8, received 8; missing fields: tools/],
 		[{ ...descriptor, tools: 42 }, /schema_drift.*invalid fields: tools/],
 		[{ ...descriptor, protocolVersion: "SECRET-TOKEN" }, /invalid fields: protocolVersion/],
 	] as const) {

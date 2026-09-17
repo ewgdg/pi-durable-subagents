@@ -4,7 +4,6 @@ import { Type } from "typebox";
 
 import {
 	FramedAgentControlChannel,
-	AGENT_CONTROL_PROTOCOL_VERSION,
 	type AgentControlIdentity,
 	type AgentControlProtocol,
 } from "../src/control/agent-control-channel.ts";
@@ -30,7 +29,7 @@ const protocol = {
 } as const satisfies AgentControlProtocol;
 
 const identity: AgentControlIdentity = {
-	protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
+	protocolVersion: 8,
 	workflowId: "workflow-control-channel",
 	agentId: "agent-control-channel",
 };

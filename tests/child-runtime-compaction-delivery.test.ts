@@ -160,7 +160,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 			ready: async () => ({
 				snapshot: {
 					cwd: context.cwd, model: { provider: "test", modelId: "test" }, thinking: "off",
-					tools: [], registeredTools: [], skills: [], skillSources: [], extensions: [], toolExecutionModes: [],
+					tools: [], skills: [], skillSources: [], extensions: [], toolExecutionModes: [],
 					projectTrusted: true, sessionId: session.sessionId, sessionPath: null,
 					systemPrompt: null, loadContextFiles: true,
 				},

@@ -753,7 +753,7 @@ test("selected tools unavailable in the child reject startup without losing its 
 	assert.ok("failedStage" in receipt);
 	assert.equal(receipt.failedStage, "run_start");
 	assert.equal(receipt.messageStatus, "not_sent");
-	assert.match(receipt.reason, /child_runtime_tools_mismatch: unavailable .*owner_only_probe/);
+	assert.match(receipt.reason, /child_runtime_tools_mismatch: missing .*owner_only_probe/);
 	assert.equal(harness.view.children()[0]?.run.phase, "dormant");
 
 	await harness.shutdown();

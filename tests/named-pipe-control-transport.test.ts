@@ -6,7 +6,6 @@ import { Type } from "typebox";
 import { AgentControlAdmissionBroker } from "../src/control/agent-control-admission.ts";
 import {
 	FramedAgentControlChannel,
-	AGENT_CONTROL_PROTOCOL_VERSION,
 	type AgentControlProtocol,
 } from "../src/control/agent-control-channel.ts";
 import {
@@ -37,7 +36,7 @@ const protocol = {
 	},
 } as const satisfies AgentControlProtocol;
 const identity = {
-	protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
+	protocolVersion: 8 as const,
 	workflowId: "named-pipe-workflow",
 	agentId: "named-pipe-agent",
 };
