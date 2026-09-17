@@ -49,6 +49,7 @@ import {
 	type ResolvedParentRuntime,
 } from "./child-runtime-preparation.ts";
 import { workflowSessionDirectory } from "./workflow-session-directory.ts";
+import { isModelExcluded } from "../policy/model-exclusion.ts";
 
 const COORDINATION_EXTENSION_PREFIXES = [
 	"<inline:pi-agent-coordination-agent:",
@@ -77,6 +78,7 @@ export class ProcessChildSessionFactory {
 		| ((parentCwd: string, projectTrusted: boolean) => readonly AgentTemplateRoot[])
 		| undefined;
 	readonly #resolveAgent: (agentId: string) => AgentRecord | undefined;
+	readonly #modelExclusions: (() => readonly string[]) | undefined;
 	readonly #ownerRequestHandlers: (
 		role: AgentRuntimeRole,
 		agentId: string,
@@ -94,6 +96,8 @@ export class ProcessChildSessionFactory {
 			projectTrusted: boolean,
 		): readonly AgentTemplateRoot[];
 		resolveAgent(agentId: string): AgentRecord | undefined;
+		/** Current user policy exclusions; read per preparation so a reload applies prospectively. */
+		modelExclusions?(): readonly string[];
 		ownerRequestHandlers(
 			role: AgentRuntimeRole,
 			agentId: string,
@@ -107,6 +111,7 @@ export class ProcessChildSessionFactory {
 		this.#packageRoot = options.packageRoot ?? resolve(dirname(options.entryModulePath), "..");
 		this.#templateRoots = options.templateRoots;
 		this.#resolveAgent = options.resolveAgent;
+		this.#modelExclusions = options.modelExclusions;
 		this.#ownerRequestHandlers = options.ownerRequestHandlers;
 	}
 
@@ -146,6 +151,7 @@ export class ProcessChildSessionFactory {
 			agentDir: this.#ownerRuntime.services.agentDir,
 			parentRuntime,
 			isModelAvailable: (model) => this.#isModelAvailable(model),
+			isModelExcluded: (model) => this.#modelExcluded(model),
 			...(template === undefined ? {} : { template }),
 		});
 	}
@@ -337,6 +343,7 @@ export class ProcessChildSessionFactory {
 			agentDir: this.#ownerRuntime.services.agentDir,
 			parentRuntime,
 			isModelAvailable: (model) => this.#isModelAvailable(model),
+			isModelExcluded: (model) => this.#modelExcluded(model),
 			...(template === undefined ? {} : { template }),
 			// Rejected spawn arguments provide no runtime overrides; the Identity retains its preset.
 			...(options.spawnInput?.config === undefined
@@ -498,9 +505,14 @@ export class ProcessChildSessionFactory {
 	}
 
 	#isModelAvailable(model: Readonly<{ provider: string; modelId: string }>): boolean {
-		return this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().some(
-			(candidate) => candidate.provider === model.provider && candidate.id === model.modelId,
-		);
+		return !this.#modelExcluded(model)
+			&& this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().some(
+				(candidate) => candidate.provider === model.provider && candidate.id === model.modelId,
+			);
+	}
+
+	#modelExcluded(model: Readonly<{ provider: string; modelId: string }>): boolean {
+		return isModelExcluded(this.#modelExclusions?.() ?? [], model);
 	}
 
 	#isCoordinationExtension(path: string): boolean {

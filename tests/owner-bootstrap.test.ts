@@ -574,6 +574,34 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 	await host.runtime.dispose();
 });
 
+test("Workflow Policy model exclusions refuse an explicit spawn model before Identity", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	const policyDirectory = join(host.services.agentDir, "config");
+	await mkdir(policyDirectory, { recursive: true });
+	await writeFile(
+		join(policyDirectory, "pi-durable-subagents.json"),
+		'{"excludedModels": ["coordination-test/*"]}',
+		"utf8",
+	);
+	await bindTestOwnerHost(host, "tui");
+
+	const receipt = await executeOwnerTool(host, "agent_spawn", "spawn-excluded-model", {
+		title: "Fixture request",
+		request: "This request must never acquire a child.",
+		config: { model: { id: "coordination-test/deterministic-owner", thinking: "off" } },
+	});
+	assert.deepEqual(receipt, {
+		spawnStatus: "not_created",
+		failedStage: "configuration",
+		reason: "Configured Agent model is excluded by model policy: coordination-test/deterministic-owner",
+	});
+
+	await host.runtime.dispose();
+});
+
 test("a valid child Identity is not reclassified as Workflow Owner", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	host.session.sessionManager.appendCustomEntry("agent-coordination.identity", {

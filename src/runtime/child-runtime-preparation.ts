@@ -59,6 +59,7 @@ type PrepareChildRuntimeOptions = {
 	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
 	isModelAvailable?(model: ModelReference): boolean;
+	isModelExcluded?(model: ModelReference): boolean;
 };
 
 export function prepareChildRuntime(
@@ -84,6 +85,7 @@ export async function prepareChildRuntime(
 		template: options.template,
 		overrides: options.overrides,
 		isModelAvailable: options.isModelAvailable ?? (() => true),
+		...(options.isModelExcluded === undefined ? {} : { isModelExcluded: options.isModelExcluded }),
 	});
 	// Pi owns its shared default and model-capability clamp. Keep an absent
 	// Moderator selection unresolved until Pi starts instead of copying the Owner.

@@ -55,6 +55,8 @@ export function resolveAgentRunConfiguration(options: {
 	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
 	isModelAvailable(model: ModelReference): boolean;
+	/** Reported separately so a policy exclusion is never blamed on availability. */
+	isModelExcluded?(model: ModelReference): boolean;
 }): ResolvedAgentRunConfiguration {
 	const { inherited, template, overrides } = options;
 	// Exclusions accumulate: a Spawn config restricts further, it does not lift a
@@ -81,13 +83,19 @@ export function resolveAgentRunConfiguration(options: {
 		? parseModelId(overrides.model.id)
 		: undefined;
 	if (explicitlySelectedModel && !options.isModelAvailable(explicitlySelectedModel)) {
-		throw new Error(
-			`Configured Agent model is unavailable: ${explicitlySelectedModel.provider}/${explicitlySelectedModel.modelId}`,
-		);
+		const selectedIdentity = `${explicitlySelectedModel.provider}/${explicitlySelectedModel.modelId}`;
+		throw new Error(options.isModelExcluded?.(explicitlySelectedModel)
+			? `Configured Agent model is excluded by model policy: ${selectedIdentity}`
+			: `Configured Agent model is unavailable: ${selectedIdentity}`);
 	}
 	// Do not require available Template candidates when both fields are explicitly selected.
 	const defaults = overrides?.model?.id === undefined || overrides.model.thinking === undefined
-		? resolveTemplateModelConfiguration(inherited, template?.models, options.isModelAvailable)
+		? resolveTemplateModelConfiguration(
+			inherited,
+			template?.models,
+			options.isModelAvailable,
+			options.isModelExcluded,
+		)
 		: inherited;
 	const modelConfiguration = {
 		model: overrides?.model?.id === "inherit"
@@ -119,13 +127,17 @@ function resolveTemplateModelConfiguration(
 	inherited: Readonly<{ model: ModelReference; thinking: RuntimeThinkingLevel }>,
 	templateModels: AgentTemplate["models"],
 	isModelAvailable: (model: ModelReference) => boolean,
+	isModelExcluded: ((model: ModelReference) => boolean) | undefined,
 ): Readonly<{ model: ModelReference; thinking: RuntimeThinkingLevel }> {
 	if (!templateModels) return { model: inherited.model, thinking: inherited.thinking };
 	const selected = templateModels.find(({ model }) => isModelAvailable(model));
 	if (selected) return selected;
-	throw new Error(
-		`No configured Agent Template model is available: ${templateModels.map(({ model }) => `${model.provider}/${model.modelId}`).join(", ")}`,
-	);
+	const identities = templateModels
+		.map(({ model }) => `${model.provider}/${model.modelId}`)
+		.join(", ");
+	throw new Error(templateModels.every(({ model }) => isModelExcluded?.(model) ?? false)
+		? `Every configured Agent Template model is excluded by model policy: ${identities}`
+		: `No configured Agent Template model is available: ${identities}`);
 }
 
 function resolveExtensions(

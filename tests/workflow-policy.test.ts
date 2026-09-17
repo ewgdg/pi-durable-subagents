@@ -18,6 +18,7 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 		maxPendingDeliveriesPerAgent: 256,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 600_000,
+		excludedModels: [],
 	});
 	assert.equal(Object.isFrozen(defaults), true);
 
@@ -26,13 +27,16 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 		maxPendingDeliveriesPerAgent: 17,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
+		excludedModels: ["openai-codex/*", "openrouter/anthropic/claude-sonnet-4"],
 	}));
 	assert.deepEqual(configured, {
 		maxConcurrentAgentRuns: 3,
 		maxPendingDeliveriesPerAgent: 17,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
+		excludedModels: ["openai-codex/*", "openrouter/anthropic/claude-sonnet-4"],
 	});
+	assert.equal(Object.isFrozen(configured.excludedModels), true);
 	assert.equal(Object.isFrozen(configured), true);
 	assert.equal(Object.isFrozen(DEFAULT_WORKFLOW_POLICY), true);
 });
@@ -57,6 +61,19 @@ test("strict Workflow Policy parsing rejects the complete invalid document", () 
 		["fractional delivery interval", '{"deliveryProgressIntervalMs": 1000.5}'],
 		["short review interval", '{"operationReviewIntervalMs": 999}'],
 		["long review interval", '{"operationReviewIntervalMs": 2147483648}'],
+		["null excluded models", '{"excludedModels": null}'],
+		["non-array excluded models", '{"excludedModels": "openai-codex/*"}'],
+		["non-string excluded model", '{"excludedModels": [42]}'],
+		["empty excluded model", '{"excludedModels": [""]}'],
+		["excluded model without provider", '{"excludedModels": ["openai-codex"]}'],
+		["excluded model with empty provider", '{"excludedModels": ["/gpt-6-astra"]}'],
+		["excluded model with empty model id", '{"excludedModels": ["openai-codex/"]}'],
+		["bare wildcard", '{"excludedModels": ["*"]}'],
+		["wildcard provider", '{"excludedModels": ["*/gpt-6-astra"]}'],
+		["wildcard model segment", '{"excludedModels": ["openai-codex/gpt*"]}'],
+		["partial provider wildcard", '{"excludedModels": ["openai-codex*/*"]}'],
+		["whitespace in excluded model", '{"excludedModels": ["openai-codex/ gpt-6-astra"]}'],
+		["duplicate excluded model", '{"excludedModels": ["openai-codex/*", "openai-codex/*"]}'],
 	] as const;
 
 	for (const [name, source] of invalidPolicies) {
@@ -92,6 +109,7 @@ test("Workflow Policy loads only the exact optional user file", async (t) => {
 		maxPendingDeliveriesPerAgent: 256,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_200,
+		excludedModels: [],
 	});
 });
 
@@ -110,5 +128,6 @@ test("Workflow Policy reload publication replaces or preserves one whole snapsho
 		maxPendingDeliveriesPerAgent: 4,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
+		excludedModels: [],
 	});
 });

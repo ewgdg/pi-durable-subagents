@@ -334,6 +334,7 @@ export class WorkflowCoordinator {
 		};
 		const sessionFactory = new ProcessChildSessionFactory({
 			ownerRuntime: runtime,
+			modelExclusions: () => this.#workflowPolicy.current().excludedModels,
 			onLaunchBlocked: (error) => {
 				const diagnostic = retainDiagnostic(error);
 				if (!runtime.session.sessionManager.getSessionFile()) {

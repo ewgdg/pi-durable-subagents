@@ -606,3 +606,89 @@ test("Template candidates are resolved only when a model field needs defaults", 
 		}), /No configured Agent Template model is available/);
 	}
 });
+
+test("an excluded model is refused with the policy as its cause", () => {
+	const inherited = {
+		cwd: "/project",
+		model: { provider: "parent", modelId: "model" },
+		thinking: "low" as const,
+		extensions: [],
+	};
+	assert.throws(() => resolveAgentRunConfiguration({
+		inherited,
+		overrides: { model: { id: "openai-codex/gpt-6-astra" } },
+		isModelAvailable: () => false,
+		isModelExcluded: () => true,
+	}), /excluded by model policy/);
+
+	const fallback = resolveAgentRunConfiguration({
+		inherited,
+		template: {
+			models: [
+				{ model: { provider: "openai-codex", modelId: "gpt-6-astra" }, thinking: "high" as const },
+				{ model: { provider: "deepseek", modelId: "deepseek-v4-flash" }, thinking: "low" as const },
+			],
+			systemPromptMode: "append" as const,
+			loadContextFiles: true,
+			systemPrompt: "",
+		},
+		isModelAvailable: ({ provider }) => provider !== "openai-codex",
+		isModelExcluded: ({ provider }) => provider === "openai-codex",
+	});
+	assert.deepEqual(fallback.model, { provider: "deepseek", modelId: "deepseek-v4-flash" });
+	assert.equal(fallback.thinking, "low");
+});
+
+test("model exclusion never applies to an inherited parent model", () => {
+	const inherited = {
+		cwd: "/project",
+		model: { provider: "openai-codex", modelId: "gpt-6-astra" },
+		thinking: "low" as const,
+		extensions: [],
+	};
+	const excluded = {
+		isModelAvailable: () => true,
+		isModelExcluded: () => true,
+	};
+	assert.deepEqual(
+		resolveAgentRunConfiguration({ inherited, ...excluded }).model,
+		inherited.model,
+	);
+	assert.deepEqual(resolveAgentRunConfiguration({
+		inherited,
+		overrides: { model: { id: "inherit", thinking: "inherit" } },
+		...excluded,
+	}).model, inherited.model);
+	assert.deepEqual(resolveAgentRunConfiguration({
+		inherited,
+		template: {
+			systemPromptMode: "append" as const,
+			loadContextFiles: true,
+			systemPrompt: "",
+		},
+		...excluded,
+	}).model, inherited.model);
+});
+
+test("a Template whose candidates are all excluded names the model policy", () => {
+	const inherited = {
+		cwd: "/project",
+		model: { provider: "parent", modelId: "model" },
+		thinking: "low" as const,
+		extensions: [],
+	};
+	assert.throws(() => resolveAgentRunConfiguration({
+		inherited,
+		template: {
+			models: [
+				{ model: { provider: "openai-codex", modelId: "gpt-6-astra" }, thinking: "high" as const },
+				{ model: { provider: "deepseek", modelId: "deepseek-v4-flash" }, thinking: "low" as const },
+			],
+			systemPromptMode: "append" as const,
+			loadContextFiles: true,
+			systemPrompt: "",
+		},
+		isModelAvailable: () => false,
+		isModelExcluded: () => true,
+	}), /excluded by model policy/);
+});
