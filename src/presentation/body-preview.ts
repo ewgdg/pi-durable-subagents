@@ -11,8 +11,9 @@ const COLLAPSED_BODY_LINES = 10;
  *
  * One bounded preview for delivered Message bodies, sent Message/Request
  * payloads, Answers, cancellation reasons, and retrieved Answer previews:
- * source formatting is preserved, the body wraps to the supplied width, and a
- * a standalone hint ellipsis marks truncation after at most
+ * the body is normalized (line endings unified, framing blank lines dropped),
+ * source formatting inside it is preserved, the body wraps to the supplied
+ * width, and a standalone hint ellipsis marks truncation after at most
  * {@link COLLAPSED_BODY_LINES} visible body rows.
  */
 export class BodyPreview implements Component {

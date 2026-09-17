@@ -122,7 +122,7 @@ test("request call marks steer delivery", () => {
 	assert.match(rendered, /proceed immediately/);
 });
 
-test("expanded call shows the complete payload without an ellipsis", () => {
+test("expanded call shows the complete payload and identifies the target fully", () => {
 	initTheme("dark");
 	const body = "Context ".repeat(30) + "Distinctive ending.";
 	const rendered = renderAgentMessageCall(
@@ -134,6 +134,8 @@ test("expanded call shows the complete payload without an ellipsis", () => {
 	assert.match(rendered, /\[Send\]/);
 	assert.match(rendered, /Distinctive ending/);
 	assert.doesNotMatch(rendered, /…/);
+	// Expansion disambiguates identities: compact collapsed, full expanded.
+	assert.match(rendered, new RegExp(`to Researcher · ${targetAgentId}`));
 });
 
 test("answer and cancel calls show their own badges with payload and correlation", () => {
@@ -239,12 +241,12 @@ test("a Request reads the same whether sent or delivered", () => {
 		const sentStart = bodyStart(sent);
 		const deliveredStart = bodyStart(delivered);
 		// Neither frame may open a gap between its header and the body it introduces,
-		// and both must show the same body rows for the same payload. Expanded
-		// delivered blocks identify the sender fully while sent calls stay compact,
-		// so only the rows below the header are comparable.
+		// and both must show the same body rows for the same payload.
 		assert.notEqual(sent[sentStart - 1], "", `expanded: ${expanded}`);
 		assert.notEqual(delivered[deliveredStart - 1], "", `expanded: ${expanded}`);
 		assert.deepEqual(sent.slice(sentStart), delivered.slice(deliveredStart), `expanded: ${expanded}`);
+		// Identities use the same compact-collapsed, full-expanded detail either way.
+		assert.equal(sent[0]?.replace(" to ", " from "), delivered[0], `expanded: ${expanded}`);
 	}
 });
 

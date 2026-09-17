@@ -113,7 +113,13 @@ function renderMessageCallHeader(
 	if (targetAgentId !== undefined) {
 		text += theme.fg(
 			"muted",
-			` to ${formatAgentIdentity(targetAgentId, resolveAgentLabel)}`,
+			// Expansion is the disambiguation affordance for identities, so the target
+			// Agent follows the same compact-to-full rule as Message IDs here.
+			` to ${formatAgentIdentity(
+				targetAgentId,
+				resolveAgentLabel,
+				expanded ? "full" : "compact",
+			)}`,
 		);
 		if (
 			(args.operation === "send" || args.operation === "request") &&
