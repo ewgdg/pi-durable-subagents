@@ -91,6 +91,7 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 	let starting: Promise<void> | undefined;
 	let settling: Promise<void> | undefined;
 	let cancellation: Promise<void> | undefined;
+	let retirement: Promise<void> | undefined;
 	let modelActive = false;
 	let modelOutcome: "completed" | "aborted" | "error" = "completed";
 	let idle = Promise.resolve();
@@ -139,12 +140,14 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		})();
 		return cancellation;
 	}
-	channel.onClose(cause => {
+	function retireHelper(cause: Error): Promise<void> {
+		if (retirement) return retirement;
 		closing = true;
 		cancelled = true;
 		gate.revokeCompletion();
-		// No progress IPC here: a closed control channel must not prevent cleanup.
-		void (async () => {
+		// An application that crossed its irreversible boundary owns its result.
+		// No progress IPC here: disconnected and CLI-quit cleanup must both join.
+		retirement = (async () => {
 			try {
 				await joinModelAndMutations();
 				await starting?.catch(() => {});
@@ -152,10 +155,13 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 				await cancellation?.catch(() => {});
 				await releaseSnapshot();
 			} finally {
-				rejectAttempt(cause);
-				context?.shutdown();
+				if (phase !== "committed") rejectAttempt(cause);
 			}
-		})().catch(notify);
+		})();
+		return retirement;
+	}
+	channel.onClose(cause => {
+		void retireHelper(cause).finally(() => context?.shutdown()).catch(notify);
 	});
 
 	pi.registerTool({
@@ -326,16 +332,8 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		if (target) await channel.request("navigate", { target });
 	} });
 	pi.on("session_shutdown", async () => {
-		closing = true;
 		removeTerminalInput?.();
-		cancelled = true;
-		if (gate.state === "editing") gate.invalidate();
-		await joinModelAndMutations();
-		await starting?.catch(() => {});
-		await settling?.catch(() => {});
-		await cancellation?.catch(() => {});
-		await releaseSnapshot();
-		if (phase !== "committed") rejectAttempt(new Error("Repair Moderator shut down before commit"));
+		await retireHelper(new Error("Repair Moderator shut down before commit"));
 	});
 
 	async function startRepair(): Promise<void> {
@@ -411,6 +409,10 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 						await settling;
 						await releaseSnapshot(); return await recoverRepair(scope);
 					case "inspect": return { phase, directory, launch, events: await readFile(join(directory, "events.jsonl"), "utf8").catch(() => "No progress recorded.") };
+					case "shutdown":
+						await retireHelper(new Error("Original CLI is shutting down"));
+						// Let the control response enter its writer before native shutdown.
+						setImmediate(() => ctx.shutdown()); return null;
 					case "stop":
 						if (!cancelled && phase !== "committed" && phase !== "waiting") throw new Error("Cancel or await the active attempt before closing its helper");
 						closing = true;
