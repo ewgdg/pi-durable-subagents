@@ -374,6 +374,7 @@ function inspectMessageAuthorResult(options: {
 	deliveryEvidence?: EntryPointer;
 }): MessageAuthorResultState {
 	const { authorAgentId, transcript, toolCallId, identity, deliveryEvidence } = options;
+	let rejectedAuthorResult = false;
 	const results = coordinationEntries(transcript, authorAgentId, `result:${toolCallId}`).filter(
 		(entry) =>
 			entry.type === "message" &&
@@ -383,8 +384,12 @@ function inspectMessageAuthorResult(options: {
 	).filter(entry => {
 		if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError) return true;
 		const details = entry.message.details;
-		return readCoordinationRecord(transcript, authorAgentId, entry,
+		const accepted = readCoordinationRecord(transcript, authorAgentId, entry,
 			() => validateAgentMessageResultShape(details, identity.kind === "message" ? "send" : identity.kind === "request_cancellation" ? "cancel" : identity.kind), toolCallId).accepted;
+		// A rejected record stays visible in the replay-rejection index; unlike
+		// absence, it must never be replaced by Delivery evidence and canonicalized.
+		if (!accepted) rejectedAuthorResult = true;
+		return accepted;
 	});
 	if (results.length > 1) {
 		throw new Error(
@@ -412,7 +417,7 @@ function inspectMessageAuthorResult(options: {
 		const details = result.message.details;
 		const validated = readCoordinationRecord(transcript, authorAgentId, result,
 			() => validateMessageAuthorResult(details, identity), toolCallId);
-		if (!validated.accepted) return deliveryEvidence ? "canonical" : "indeterminate";
+		if (!validated.accepted) return "indeterminate";
 		// Initial definitive non-admission authors no Request. Retry outcomes are
 		// separate tool calls and cannot withdraw an already-admitted Request.
 		if (
@@ -427,6 +432,9 @@ function inspectMessageAuthorResult(options: {
 		}
 		return "canonical";
 	}
+	// Absence of an author result can still be canonicalized by Delivery evidence;
+	// a rejected one cannot.
+	if (rejectedAuthorResult) return "indeterminate";
 	return deliveryEvidence ? "canonical" : "indeterminate";
 }
 

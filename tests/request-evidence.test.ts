@@ -13,6 +13,7 @@ import { AgentTranscript } from "../src/transcript/agent-transcript.ts";
 import { participant, requestHistory } from "./support/request-history.ts";
 import { inspectAnswerDelivery } from "../src/protocol/message.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
+import { inspectCoordinationRejections } from "../src/protocol/replay-rejection.ts";
 
 test("a recovered child with skipped spawn has no authored Creation Request but retains its delivered duty", () => {
 	const history = requestHistory();
@@ -467,6 +468,117 @@ test("a committed Cancellation resolves a responder that never received it", () 
 			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
 			[],
 			"the requester's withdrawal ends the responder's duty without Delivery",
+		);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			[],
+		);
+	}
+});
+
+for (const delivered of [true, false]) test(`a malformed Cancellation author result ${delivered ? "with" : "without"} responder Delivery stays fail-closed`, () => {
+	const history = requestHistory();
+	const requestId = history.request();
+	const source = {
+		agentId: history.requester.record.identity.agentId,
+		entryId: history.requester.manager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "cancel", requestMessageId: requestId, reason: "Withdrawn" },
+					{ id: "cancel-malformed" },
+				),
+				{ stopReason: "toolUse" },
+			),
+		),
+		toolCallId: "cancel-malformed",
+	};
+	// An extra key fails author-result shape validation, so the record is rejected
+	// rather than accepted as the Cancellation's authoring evidence.
+	history.requester.manager.appendMessage({
+		role: "toolResult",
+		toolCallId: source.toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Malformed." }],
+		details: {
+			messageId: deriveMessageIdentity(source),
+			targetAgentId: history.responder.record.identity.agentId,
+			messageStatus: "sent",
+			unexpected: true,
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+	if (delivered) {
+		// Delivery proves notification, never authoring: a rejected author result must
+		// not be rescued by responder-side Delivery evidence.
+		appendEvidenceDelivery(history.responder, { source, projection: {
+			kind: "request_cancellation",
+			cancellationId: deriveMessageIdentity(source),
+			requestMessageId: requestId,
+			fromAgentId: history.requester.record.identity.agentId,
+			reason: "Withdrawn",
+		} });
+	}
+	for (const replay of [false, true]) {
+		if (replay) for (const participant of [history.requester, history.responder]) {
+			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
+		}
+		const evidence = new RequestEvidence(history.agents);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			[requestId],
+			"a rejected author result never canonicalizes the Cancellation",
+		);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			[requestId],
+		);
+		assert.ok(
+			inspectCoordinationRejections(
+				history.requester.record.transcript.inspect(),
+				history.requester.record.identity.agentId,
+			).some(rejection => rejection.recordKind === "tool-result"),
+			"the rejection stays surfaced through the replay-rejection index",
+		);
+	}
+});
+
+test("Delivery evidence still canonicalizes a Cancellation that has no author result at all", () => {
+	const history = requestHistory();
+	const requestId = history.request();
+	// The source is committed but no author result was ever recorded; responder
+	// Delivery is the only surviving evidence and keeps the fallback canonical.
+	const source = {
+		agentId: history.requester.record.identity.agentId,
+		entryId: history.requester.manager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "cancel", requestMessageId: requestId, reason: "Withdrawn" },
+					{ id: "cancel-result-less" },
+				),
+				{ stopReason: "toolUse" },
+			),
+		),
+		toolCallId: "cancel-result-less",
+	};
+	appendEvidenceDelivery(history.responder, { source, projection: {
+		kind: "request_cancellation",
+		cancellationId: deriveMessageIdentity(source),
+		requestMessageId: requestId,
+		fromAgentId: history.requester.record.identity.agentId,
+		reason: "Withdrawn",
+	} });
+	for (const replay of [false, true]) {
+		if (replay) for (const participant of [history.requester, history.responder]) {
+			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
+		}
+		const evidence = new RequestEvidence(history.agents);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			[],
+			"absence of an author result keeps the Delivery fallback canonical",
 		);
 		assert.deepEqual(
 			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
