@@ -58,6 +58,10 @@ than presented as a decision about the user's actual proposal.
 - A rejected Answer record has no discharge effect. Do not infer protocol facts
   from the rejected record's apparent intent or from a previous schema accepting
   it; model-visible history can still inform what work was performed.
+- Cancellation is the requester's committed withdrawal; the Cancellation Message's
+  Delivery is notification only, replayable, and never gates a decision. A
+  withdrawn Request is not delivered or re-retained, and its Cancellation is
+  announced only if the Request actually reached the responder.
 
 Concrete replay example:
 

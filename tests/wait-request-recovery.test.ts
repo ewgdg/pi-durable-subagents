@@ -852,7 +852,7 @@ test("ordinary Steer Messages queued before Wait admission preempt in one FIFO b
 	assert.deepEqual(h.messages.answerObligationRequestIds(h.requester.record), []);
 });
 
-test("Wait's Steer batch delivers Cancellation without its still-queued Request", { timeout: 5_000 }, async (t) => {
+test("a Cancellation whose Request never reached the responder is not announced", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	const author = h.addRecipient("author");
 	await h.message(h.requester, "dependency", { title: "Dependency", operation: "request", targetAgent: "responder", question: "Await this" });
@@ -868,10 +868,60 @@ test("Wait's Steer batch delivers Cancellation without its still-queued Request"
 	assert.deepEqual(await waiting, { disposition: "preempted" });
 	h.commitWait("cancel-batch", { disposition: "preempted" });
 	await h.tick();
-	assert.deepEqual(h.deliveries(h.requester).map(delivery => delivery.projection.kind), ["message", "request_cancellation"]);
+	assert.deepEqual(h.deliveries(h.requester).map(delivery => delivery.projection.kind), ["message"]);
 	assert.deepEqual(h.messages.answerObligationRequestIds(h.requester.record), []);
 	h.requester.settle(); await flush();
-	assert.equal(h.deliveries(h.requester).length, 2, "Cancellation suppresses the Request instead of delivering it later");
+	assert.equal(h.deliveries(h.requester).length, 1, "the withdrawn Request and its pointless Cancellation are both suppressed");
+});
+
+test("a Cancellation is notified when its Request reached the responder", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const request = await h.message(h.requester, "delivered", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Delivered work" });
+	assert.ok("requestMessageId" in request);
+	h.responder.settle(); await flush();
+	assert.equal(h.deliveries(h.responder).filter(delivery => delivery.projection.kind === "request").length, 1);
+	await h.message(h.requester, "cancel", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdrawn" });
+	h.responder.settle(); await flush();
+	assert.equal(
+		h.deliveries(h.responder).filter(delivery => delivery.projection.kind === "request_cancellation").length,
+		1,
+		"a Request the responder received still announces its withdrawal",
+	);
+});
+
+test("a Cancellation whose Request never reached the responder starts no Run", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	h.responder.blocked = true;
+	const request = await h.message(h.requester, "undelivered", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Never delivered" });
+	assert.ok("requestMessageId" in request);
+	h.responder.blocked = false;
+	h.responder.stop();
+	const startedBefore = h.responder.record.host.latestStartedRunSequence();
+	await h.message(h.requester, "cancel", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdrawn" });
+	assert.equal(
+		h.responder.record.host.latestStartedRunSequence(),
+		startedBefore,
+		"no Run starts for a Cancellation whose Request was never delivered",
+	);
+	assert.equal(h.deliveries(h.responder).filter(delivery => delivery.projection.kind === "request_cancellation").length, 0);
+});
+
+test("a Request Delivery committing after its Cancellation does not re-add answer_owed", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	h.responder.deferProof = true;
+	const request = await h.message(h.requester, "deferred", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Proof pending" });
+	assert.ok("requestMessageId" in request);
+	// The Request dispatch is in flight; hold the responder so the Cancellation
+	// cannot be delivered before the Request proof commits.
+	h.responder.blocked = true;
+	await h.message(h.requester, "cancel", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdrawn" });
+	h.responder.commitPending();
+	h.responder.settle(); await flush();
+	assert.equal(
+		h.responder.retentionReasons.has(`answer_owed:${request.requestMessageId}`),
+		false,
+		"the requester's committed Cancellation prevents re-adding the responder duty",
+	);
 });
 
 test("ordinary Steer Message preemption excludes incomplete Answers from the batch", { timeout: 5_000 }, async (t) => {
@@ -1117,6 +1167,7 @@ function runtimeParticipant(agentId: string) {
 		commitPending() { for (const commit of proofCommits.splice(0)) commit(); },
 		settle() { if (handle) for (const handler of settled) handler(handle, "settled"); },
 		dispatches: [] as AgentRuntimeDelivery[],
+		retentionReasons: new Set<string>(),
 		stop(cause: AgentRunEndCause = "termination") {
 			const previous = handle;
 			handle = undefined;
@@ -1142,7 +1193,12 @@ function runtimeParticipant(agentId: string) {
 		addEndedHandler: (handler: (handle: AgentRunHandle, cause: AgentRunEndCause) => void) => {
 			ended.add(handler); return () => { ended.delete(handler); };
 		},
-		addRetentionReason: () => undefined, removeRetentionReason: () => undefined,
+		addRetentionReason: (reason: string, requestId?: string) => {
+			runtime.retentionReasons.add(requestId === undefined ? reason : `${reason}:${requestId}`);
+		},
+		removeRetentionReason: (reason: string, requestId?: string) => {
+			runtime.retentionReasons.delete(requestId === undefined ? reason : `${reason}:${requestId}`);
+		},
 		hasRetentionReason: () => false,
 		blocksOrdinaryDelivery: () => runtime.blocked,
 		currentWorkState: () => attention === "agent_wait" ? "active" : "settled",

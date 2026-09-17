@@ -210,6 +210,13 @@ export class MessageCoordinator {
 		if (resolution?.cancellation || resolution?.answer) {
 			return { ...identity, disposition: "skipped", reason: "request_resolved" };
 		}
+		// A Cancellation only exists to stop work on a Request this responder saw.
+		if (
+			message.kind === "request_cancellation" &&
+			!this.#requestReachedResponder(message.requestId, recipient)
+		) {
+			return { ...identity, disposition: "skipped", reason: "request_not_delivered" };
+		}
 		if (delivery.deliveryEvidence) return { ...identity, disposition: "skipped", reason: "delivered" };
 		return undefined;
 	}
@@ -234,7 +241,7 @@ export class MessageCoordinator {
 			const scheduled = this.#scheduleGeneralMessage(recipient, message);
 			// Cancellation or completion can commit after admission but before dispatch.
 			const delivery = message.kind === "request" ? { ...scheduled, isSuppressed: () =>
-				this.#requestEvidence.findCancellation(message) !== undefined || this.#requestEvidence.findAnswer(message) !== undefined } : scheduled;
+				scheduled.isSuppressed?.() === true || this.#requestEvidence.findAnswer(message) !== undefined } : scheduled;
 			const admission = await this.#deliveryScheduler.admitInLane(recipient, delivery);
 			return admission === "pending"
 				? { ...identity, disposition: alreadyScheduled ? "skipped" : "scheduled", ...(alreadyScheduled ? { reason: "already_scheduled" } : {}) }
@@ -647,7 +654,9 @@ export class MessageCoordinator {
 					title,
 					source,
 				}).deliveryEvidence,
-			isSuppressed: () => this.#isCancellationDelivered(requestId, recipient),
+			// A withdrawn Request is never delivered; the Cancellation Message's Delivery is
+			// notification only and never gates this decision.
+			isSuppressed: () => this.#isRequestWithdrawn(requestId, recipient),
 			isIncomingRequest: true,
 			isDeliveryBlocked: () =>
 				this.#deliveryScheduler.isDeliveryBlocked(recipient, "deferred"),
@@ -655,7 +664,7 @@ export class MessageCoordinator {
 				const request = this.#requestEvidence.requireRequest(requestId);
 				if (
 					this.#requestEvidence.findAnswer(request) === undefined &&
-					!this.#isCancellationDelivered(requestId, recipient)
+					this.#requestEvidence.findCancellation(request) === undefined
 				) {
 					recipient.host.addRetentionReason("answer_owed", requestId);
 				}
@@ -1341,8 +1350,11 @@ export class MessageCoordinator {
 					message,
 				}).deliveryEvidence,
 			isSuppressed: message.kind === "request"
-				? () => this.#isCancellationDelivered(message.messageId, recipient)
-				: undefined,
+				? () => this.#isRequestWithdrawn(message.messageId, recipient)
+				: message.kind === "request_cancellation"
+					? () => this.#isCancellationNotified(message.requestId, recipient) ||
+						!this.#requestReachedResponder(message.requestId, recipient)
+					: undefined,
 			preemptsAgentWait: message.kind === "request_cancellation" ||
 				(message.kind === "message" && message.deliveryMode === "steer"),
 			isIncomingRequest: message.kind === "request"
@@ -1359,7 +1371,7 @@ export class MessageCoordinator {
 				? () => {
 					if (
 						this.#requestEvidence.findAnswer(message) === undefined &&
-						!this.#isCancellationDelivered(message.messageId, recipient)
+						this.#requestEvidence.findCancellation(message) === undefined
 					) {
 						recipient.host.addRetentionReason("answer_owed", message.messageId);
 					}
@@ -1434,7 +1446,23 @@ export class MessageCoordinator {
 		}
 	}
 
-	#isCancellationDelivered(requestId: string, responder: AgentRecord): boolean {
+	/**
+	 * The requester's committed Cancellation withdraws the Request; its Delivery is
+	 * notification only and never gates this decision. Without a resolvable authored
+	 * Request in this process, locally delivered Cancellation evidence is the only
+	 * available withdrawal signal.
+	 */
+	#isRequestWithdrawn(requestId: string, responder: AgentRecord): boolean {
+		const request = this.#requestEvidence.findRequest(requestId);
+		if (!request) return this.#requestEvidence.isLocalCancellationDelivered(responder, requestId);
+		return this.#requestEvidence.findCancellation(request) !== undefined;
+	}
+
+	/**
+	 * Notification-only evidence that the responder already received this Cancellation.
+	 * Dispatch paths use it to avoid a redundant notification, never to decide a duty.
+	 */
+	#isCancellationNotified(requestId: string, responder: AgentRecord): boolean {
 		const request = this.#requestEvidence.findRequest(requestId);
 		if (!request) return this.#requestEvidence.isLocalCancellationDelivered(responder, requestId);
 		const cancellation = this.#requestEvidence.findCancellation(request);
@@ -1444,6 +1472,15 @@ export class MessageCoordinator {
 				transcript: responder.transcript.inspect(),
 				message: cancellation,
 			}).deliveryEvidence !== undefined;
+	}
+
+	/**
+	 * Durable Request-Delivery evidence that the withdrawn Request reached this
+	 * responder. A Cancellation notification is pointless when it is absent: the
+	 * withdrawn Request is itself suppressed, so the responder sees neither message.
+	 */
+	#requestReachedResponder(requestId: string, responder: AgentRecord): boolean {
+		return this.#requestEvidence.findDeliveredRequest(responder, requestId) !== undefined;
 	}
 
 	#requireAgent(agentId: string): AgentRecord {

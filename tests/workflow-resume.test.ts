@@ -161,6 +161,59 @@ test("cancellation committed after the snapshot suppresses stale delivery admiss
 	assert.equal(h.deliveries(h.responder).length, 0);
 });
 
+test("recovery skips a withdrawn undelivered Request and its pointless Cancellation", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	h.responder.blocked = true;
+	const request = await h.message(h.requester, "request", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Original" });
+	assert.ok("requestMessageId" in request);
+	const cancellation = await h.message(h.requester, "cancel", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "No longer needed" });
+	assert.ok("messageId" in cancellation);
+	await h.recover();
+	const requestMessage = h.messages.recoveryMessage("requester", request.requestMessageId);
+	assert.ok(requestMessage);
+	assert.equal(h.messages.inspectRecoveryMessage(requestMessage)?.reason, "request_resolved");
+	const cancellationMessage = h.messages.recoveryMessage("requester", cancellation.messageId);
+	assert.ok(cancellationMessage);
+	assert.deepEqual(h.messages.inspectRecoveryMessage(cancellationMessage), {
+		messageId: cancellation.messageId, targetAgentId: "responder", kind: "request_cancellation",
+		disposition: "skipped", reason: "request_not_delivered",
+	});
+	const activated: string[] = [];
+	const receipt = await h.resume(new Set(), agentId => activated.push(agentId));
+	assert.deepEqual(receipt.outstandingRequests, []);
+	assert.deepEqual(activated, [], "a withdrawn Request activates no responder");
+	h.responder.blocked = false;
+	h.responder.settle(); await flush();
+	assert.equal(h.deliveries(h.responder).length, 0, "neither the withdrawn Request nor its Cancellation is re-admitted");
+});
+
+test("recovery still schedules a Cancellation whose Request reached the responder", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	const request = await h.message(h.requester, "request", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Original" });
+	assert.ok("requestMessageId" in request);
+	h.responder.settle(); await flush();
+	assert.equal(h.deliveries(h.responder).filter(delivery => delivery.projection.kind === "request").length, 1);
+	h.responder.blocked = true;
+	const cancellation = await h.message(h.requester, "cancel", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "No longer needed" });
+	assert.ok("messageId" in cancellation);
+	await h.recover();
+	const requestMessage = h.messages.recoveryMessage("requester", request.requestMessageId);
+	assert.ok(requestMessage);
+	assert.equal(h.messages.inspectRecoveryMessage(requestMessage)?.reason, "request_resolved");
+	const cancellationMessage = h.messages.recoveryMessage("requester", cancellation.messageId);
+	assert.ok(cancellationMessage);
+	assert.equal(h.messages.inspectRecoveryMessage(cancellationMessage), undefined);
+	h.responder.blocked = false;
+	const receipt = await h.resume();
+	assert.deepEqual(receipt.outstandingRequests, []);
+	h.responder.settle(); await flush();
+	assert.equal(
+		h.deliveries(h.responder).filter(delivery => delivery.projection.kind === "request_cancellation").length,
+		1,
+		"a Request the responder received still announces its withdrawal after recovery",
+	);
+});
+
 
 test("a dormant Agent with only delivered ordinary Messages is not proactively restarted", { timeout: 5_000 }, async t => {
 	const h = harness(t);
@@ -328,12 +381,16 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 			await flush();
 			return result;
 		},
-		resume(quarantinedAgentIds = new Set<string>()) {
+		resume(
+			quarantinedAgentIds = new Set<string>(),
+			onActivate?: (agentId: string, requestIds: readonly string[]) => void,
+		) {
 			return resumeWorkflow({
 				workflowId: "requester", ownerAgentId: "requester", agents, messages, quarantinedAgentIds,
-				activate: async (record, requestIds): Promise<WorkflowResumeActivation> => ({
-					agentId: record.identity.agentId, requestIds, disposition: "skipped", reason: "already_running",
-				}),
+				activate: async (record, requestIds): Promise<WorkflowResumeActivation> => {
+					onActivate?.(record.identity.agentId, requestIds);
+					return { agentId: record.identity.agentId, requestIds, disposition: "skipped", reason: "already_running" };
+				},
 			});
 		},
 		deliveries(p: ReturnType<typeof runtimeParticipant>) {

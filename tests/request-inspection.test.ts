@@ -90,13 +90,13 @@ test("inspection rejects incoming evidence for a different responder", () => {
 	assert.throws(() => h.evidence.inspectRequest(h.other.record, request.requestMessageId), /invariant_violation/);
 });
 
-test("Cancellation Delivery removes only its incoming obligation and keeps the Request inspectable", () => {
+test("a committed Cancellation resolves the incoming obligation and keeps the Request inspectable", () => {
 	const h = history();
 	const request = h.request("Cancel this work", "Instructions that remain inspectable.");
 	const source = h.call(h.author, { operation: "cancel", requestMessageId: request.requestMessageId, reason: "No longer needed." },
 		pointer => ({ messageId: deriveMessageIdentity(pointer), targetAgentId: "recipient", messageStatus: "sent" }));
-	assert.equal(h.evidence.openIncomingRequests(h.recipient.record).requests.length, 1,
-		"requester Cancellation commitment alone is not recipient Delivery");
+	assert.deepEqual(h.evidence.openIncomingRequests(h.recipient.record), { requests: [] },
+		"the requester's committed Cancellation alone resolves the incoming obligation");
 	h.deliver(h.recipient, { source, projection: { kind: "request_cancellation", cancellationId: deriveMessageIdentity(source),
 		requestMessageId: request.requestMessageId, fromAgentId: "author", reason: "No longer needed." } });
 	assert.deepEqual(h.evidence.openIncomingRequests(h.recipient.record), { requests: [] });

@@ -458,14 +458,19 @@ test("a committed Cancellation resolves a responder that never received it", () 
 		timestamp: Date.now(),
 	});
 
-	const evidence = new RequestEvidence(history.agents);
-	assert.deepEqual(
-		evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
-		[],
-		"the requester's withdrawal ends the responder's duty without Delivery",
-	);
-	assert.deepEqual(
-		evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
-		[],
-	);
+	for (const replay of [false, true]) {
+		if (replay) for (const participant of [history.requester, history.responder]) {
+			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
+		}
+		const evidence = new RequestEvidence(history.agents);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			[],
+			"the requester's withdrawal ends the responder's duty without Delivery",
+		);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			[],
+		);
+	}
 });
