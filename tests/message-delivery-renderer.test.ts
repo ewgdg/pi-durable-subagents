@@ -263,6 +263,26 @@ test("delivered items hug their badge; one blank row is the only item boundary",
 	}
 });
 
+test("a delivered body's own framing whitespace never renders", () => {
+	initTheme("dark");
+	for (const expanded of [false, true]) {
+		const rendered = renderMessageDelivery(customDelivery([{
+			kind: "message",
+			messageId: "message-one",
+			fromAgentId: "sender",
+			content: "\r\n\r\nFirst line.\r\n\r\nSecond line.\r\n\r\n",
+		}]),
+		{ expanded, outputPad: 1 },
+		plainTheme,
+		).render(80);
+		assert.deepEqual(
+			rendered.map((line) => line.trim()),
+			["", "[Message] from sender", "First line.", "", "Second line.", ""],
+			`expanded: ${expanded}`,
+		);
+	}
+});
+
 test("Owner and participant extensions register the Message Delivery renderer", async (t) => {
 	const unavailableView = () => {
 		throw new Error("Renderer registration does not execute coordination behavior");

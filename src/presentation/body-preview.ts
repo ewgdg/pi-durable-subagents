@@ -1,5 +1,7 @@
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
+import { normalizedBody } from "./body-text.ts";
+
 // Match Pi's built-in read preview so coordination messages expose a useful
 // amount of context without requiring expansion.
 const COLLAPSED_BODY_LINES = 10;
@@ -30,7 +32,7 @@ export class BodyPreview implements Component {
 
 	render(width: number): string[] {
 		if (width <= 0) return [];
-		const formatted = formattedBody(this.#body);
+		const formatted = normalizedBody(this.#body);
 		if (formatted.length === 0) return [];
 		const lines = wrapTextWithAnsi(this.#bodyColor(formatted), width);
 		if (lines.length <= COLLAPSED_BODY_LINES) return lines;
@@ -42,12 +44,4 @@ export class BodyPreview implements Component {
 	}
 
 	invalidate(): void {}
-}
-
-function formattedBody(body: string): string {
-	const lines = body.replaceAll(/\r\n?/g, "\n").split("\n");
-	const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
-	if (firstContentLine === -1) return "";
-	const lastContentLine = lines.findLastIndex((line) => line.trim().length > 0);
-	return lines.slice(firstContentLine, lastContentLine + 1).join("\n");
 }

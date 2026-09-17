@@ -17,6 +17,7 @@ import {
 	type AgentLabelResolver,
 } from "../presentation/agent-identity.ts";
 import { BodyPreview } from "../presentation/body-preview.ts";
+import { normalizedBody } from "../presentation/body-text.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 
 export function renderAgentMessageCall(
@@ -70,7 +71,8 @@ function renderAgentMessageBody(
 ): Component {
 	if (expanded) {
 		return new Markdown(
-			body,
+			// Expanding must not introduce rows the collapsed preview hides.
+			normalizedBody(body),
 			0,
 			0,
 			getMarkdownTheme(),

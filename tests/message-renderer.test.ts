@@ -14,6 +14,7 @@ import {
 	renderAgentMessageResult,
 } from "../src/tools/message-renderer.ts";
 import { renderAgentSpawnCall } from "../src/tools/spawn-renderer.ts";
+import { renderMessageProjection } from "../src/tools/message-delivery-renderer.ts";
 
 const plainTheme = {
 	fg: (_color: string, text: string) => text,
@@ -188,6 +189,14 @@ test("a coordination badge hugs its body so blank rows only mark item boundaries
 			resolveLabel,
 			true,
 		).render(60).join("\n")],
+		// Bodies arrive with framing whitespace; neither mode may render it.
+		["[Send]", "Send body.", renderCall({ operation: "send", targetAgent, content: "\n\nSend body.\n\n" })],
+		["[Send]", "Send body.", renderAgentMessageCall(
+			{ operation: "send", targetAgent, content: "\r\nSend body.\r\n" },
+			plainTheme,
+			resolveLabel,
+			true,
+		).render(60).join("\n")],
 	];
 	for (const [badge, body, rendered] of cases) {
 		const lines = rendered.split("\n");
@@ -196,11 +205,47 @@ test("a coordination badge hugs its body so blank rows only mark item boundaries
 		assert.ok(lines[header + 1]?.includes(body), `${badge} body must start on its badge's next row: ${rendered}`);
 	}
 	// The spawn summary and the Creation Request it created are separate items.
-	const [summary, blank, creationRequest, body] = spawn.split("\n");
-	assert.equal(summary?.trim(), "spawn Fixture");
-	assert.equal(blank?.trim(), "");
-	assert.match(creationRequest ?? "", /\[Request\] Fixture request/);
-	assert.equal(body?.trim(), "Spawn body.");
+	assert.deepEqual(
+		spawn.split("\n").map((line) => line.trim()),
+		[
+			"spawn Fixture",
+			"",
+			"[Request] Fixture request",
+			"Spawn body.",
+		],
+	);
+});
+
+test("a Request reads the same whether sent or delivered", () => {
+	initTheme("dark");
+	const question = "Which constants should I import?";
+	const projection = {
+		kind: "request" as const,
+		requestMessageId: "request-one",
+		fromAgentId: targetAgent,
+		title: "Fixture request",
+		question,
+	};
+	for (const expanded of [false, true]) {
+		const sent = renderAgentMessageCall(
+			{ operation: "request", targetAgent, title: "Fixture request", question },
+			plainTheme,
+			resolveLabel,
+			expanded,
+		).render(60).map((line) => line.trim());
+		const delivered = renderMessageProjection(projection, { expanded }, plainTheme, resolveLabel)
+			.render(60).map((line) => line.trim());
+		const bodyStart = (lines: readonly string[]) => lines.findIndex((line) => line.includes(question));
+		const sentStart = bodyStart(sent);
+		const deliveredStart = bodyStart(delivered);
+		// Neither frame may open a gap between its header and the body it introduces,
+		// and both must show the same body rows for the same payload. Expanded
+		// delivered blocks identify the sender fully while sent calls stay compact,
+		// so only the rows below the header are comparable.
+		assert.notEqual(sent[sentStart - 1], "", `expanded: ${expanded}`);
+		assert.notEqual(delivered[deliveredStart - 1], "", `expanded: ${expanded}`);
+		assert.deepEqual(sent.slice(sentStart), delivered.slice(deliveredStart), `expanded: ${expanded}`);
+	}
 });
 
 test("poll and retry calls show their badges and message id without a body preview", () => {

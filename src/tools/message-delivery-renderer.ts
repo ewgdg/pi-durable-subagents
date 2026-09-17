@@ -20,6 +20,7 @@ import {
 	type AgentLabelResolver,
 } from "../presentation/agent-identity.ts";
 import { BodyPreview } from "../presentation/body-preview.ts";
+import { normalizedBody } from "../presentation/body-text.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import {
 	MESSAGE_DELIVERY_CUSTOM_TYPE,
@@ -111,7 +112,8 @@ export function renderMessageProjection(
 	// expanding adds body rows instead of reflowing the block.
 	container.addChild(options.expanded
 		? new Markdown(
-			messageBody(projection),
+			// Expanding must not introduce rows the collapsed preview hides.
+			normalizedBody(messageBody(projection)),
 			0,
 			0,
 			getMarkdownTheme(),

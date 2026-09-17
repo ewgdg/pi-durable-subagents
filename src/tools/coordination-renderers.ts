@@ -43,6 +43,7 @@ import { boundedToolPreview } from "./bounded-preview.ts";
 import { renderMessageProjection } from "./message-delivery-renderer.ts";
 import { messageReceiptStatusColor } from "./message-renderer.ts";
 import { formatMessageIdentity } from "../presentation/message-identity.ts";
+import { normalizedBody } from "../presentation/body-text.ts";
 import type { OpenIncomingRequest } from "../protocol/request-inspection.ts";
 
 export function renderWorkflowResumeCall(_args: object, theme: Theme): Text {
@@ -482,7 +483,9 @@ function transcriptBlock(options: {
 		0,
 	));
 	box.addChild(new Markdown(
-		options.markdown,
+		// A label and its body are one item, so blank rows around the body would
+		// read as an item boundary that does not exist.
+		normalizedBody(options.markdown),
 		0,
 		0,
 		getMarkdownTheme(),
