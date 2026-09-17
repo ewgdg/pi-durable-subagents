@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -8,6 +8,7 @@ import {
 	WorkflowPolicyStore,
 	parseWorkflowPolicy,
 	readWorkflowPolicy,
+	writeExcludedModels,
 } from "../src/policy/workflow-policy.ts";
 import { createUnboundTestOwnerHost } from "./support/pi-host.ts";
 
@@ -130,4 +131,64 @@ test("Workflow Policy reload publication replaces or preserves one whole snapsho
 		operationReviewIntervalMs: 1_000,
 		excludedModels: [],
 	});
+});
+
+test("excluded models are written atomically and preserve unrelated policy fields", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		processVisibleModel: false,
+	});
+	const policyDirectory = join(host.services.agentDir, "config");
+	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
+
+	await writeExcludedModels(host.services.agentDir, ["openai-codex/*"]);
+	const created = JSON.parse(await readFile(policyPath, "utf8")) as Record<string, unknown>;
+	assert.deepEqual(created, { excludedModels: ["openai-codex/*"] });
+
+	await writeFile(
+		policyPath,
+		'{\n  "maxConcurrentAgentRuns": 4,\n  "excludedModels": ["openai-codex/*"]\n}\n',
+		"utf8",
+	);
+	await writeExcludedModels(host.services.agentDir, [
+		"openai-codex/*",
+		"deepseek/deepseek-v4-flash",
+	]);
+	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), {
+		maxConcurrentAgentRuns: 4,
+		excludedModels: ["openai-codex/*", "deepseek/deepseek-v4-flash"],
+	});
+
+	// An empty list removes the field so the file keeps only explicit values.
+	await writeExcludedModels(host.services.agentDir, []);
+	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), {
+		maxConcurrentAgentRuns: 4,
+	});
+
+	const loaded = await readWorkflowPolicy(host.services.agentDir);
+	assert.equal(loaded.ok, true);
+	if (!loaded.ok) throw new Error("Expected the written policy to load");
+	assert.deepEqual(loaded.snapshot.excludedModels, []);
+});
+
+test("an invalid exclusion entry or unreadable policy refuses the write", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		processVisibleModel: false,
+	});
+	const policyDirectory = join(host.services.agentDir, "config");
+	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
+	await mkdir(policyDirectory, { recursive: true });
+	await writeFile(policyPath, '{"maxConcurrentAgentRuns": 4}', "utf8");
+
+	await assert.rejects(
+		() => writeExcludedModels(host.services.agentDir, ["openai-codex"]),
+		/Workflow Policy excludedModels entries must be/,
+	);
+	assert.equal(await readFile(policyPath, "utf8"), '{"maxConcurrentAgentRuns": 4}');
+
+	await writeFile(policyPath, "{not json", "utf8");
+	await assert.rejects(
+		() => writeExcludedModels(host.services.agentDir, ["openai-codex/*"]),
+		/Workflow Policy must be strict JSON/,
+	);
+	assert.equal(await readFile(policyPath, "utf8"), "{not json");
 });

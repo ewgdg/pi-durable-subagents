@@ -1,5 +1,6 @@
 import type { AgentSessionRuntimeDiagnostic } from "@earendil-works/pi-coding-agent";
-import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
 
@@ -126,6 +127,49 @@ export async function readWorkflowPolicy(
 	} catch (error) {
 		return invalidRead(
 			error instanceof Error ? error.message : "Workflow Policy is invalid",
+		);
+	}
+}
+
+/**
+ * Replaces only the exclusion list in the user's policy file. The write is atomic
+ * so a failed toggle cannot leave a half-written file that blocks Owner admission.
+ */
+export async function writeExcludedModels(
+	agentDir: string,
+	entries: readonly string[],
+): Promise<void> {
+	const validated = parseExcludedModels(entries);
+	const directory = join(agentDir, POLICY_DIRECTORY);
+	const path = join(directory, POLICY_FILENAME);
+	let current: string | undefined;
+	try {
+		current = await readFile(path, "utf8");
+	} catch (error) {
+		if (!isMissingFile(error)) throw new Error("Workflow Policy could not be read");
+	}
+	const policy: Record<string, unknown> = {};
+	if (current !== undefined) {
+		// Refuse to rewrite a file this module cannot read back unchanged.
+		parseWorkflowPolicy(current);
+		Object.assign(policy, JSON.parse(current) as Record<string, unknown>);
+	}
+	if (validated.length === 0) {
+		delete policy.excludedModels;
+	} else {
+		policy.excludedModels = [...validated];
+	}
+	const body = `${JSON.stringify(policy, null, 2)}\n`;
+	parseWorkflowPolicy(body);
+	const temporaryPath = `${path}.${randomUUID()}.tmp`;
+	try {
+		await mkdir(directory, { recursive: true });
+		await writeFile(temporaryPath, body, { encoding: "utf8", mode: 0o600 });
+		await rename(temporaryPath, path);
+	} catch (error) {
+		await rm(temporaryPath, { force: true });
+		throw new Error(
+			`Workflow Policy could not be written: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
 }
