@@ -66,7 +66,7 @@ An unresolved Answer Obligation still determines eligibility for ordinary Run Fa
 
 ## Quota suspension
 
-A terminal, evidence-backed quota error displays **Suspended · Usage limit reached** after Pi's configured native retry/fallback has finished. It retains the exact Run instead of failing it or starting a Moderator. Suspension publishes no Runtime Report: the Agent's status and the retained Run evidence already carry provider/model and the exact diagnostic, and a reset time appears only when the provider supplied it. Observing that status does not resume execution.
+A terminal, evidence-backed quota error displays **Suspended · Usage limit reached** after Pi's configured native retry/fallback has finished. It retains the exact Run instead of failing it or starting a Moderator. Suspension publishes no Runtime Report: the Agent status retains provider/model and the exact diagnostic as `run.suspension.evidence`, shown in the Agent selector's Run detail, and a reset time appears only when the provider supplied it. Observing that status does not resume execution.
 
 Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Agent Messages, heartbeat scheduling, and Workflow continuation cannot release it. A new human message in the selected Agent's editor is deliberate resumption, using that message as the resumption instructions. Suspended children relinquish execution capacity so unrelated children can progress. Quota-blocked work and its genuinely blocked dependency path do not generate obligation reminders, stall/deadlock moderation, or Moderator replacements; unrelated incidents remain eligible.
 

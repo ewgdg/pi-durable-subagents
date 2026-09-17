@@ -12,7 +12,7 @@ export type RetainedQuotaSuspension = Readonly<{
 	nativeInput?: QuotaSuspendedNativeInput;
 }>;
 
-/** Owner-transcript journal: notice acknowledgement never clears execution suspension. */
+/** Owner-transcript journal: unrelated coordination entries never clear execution suspension. */
 export class QuotaSuspensionStore {
 	readonly #transcript: AgentTranscript;
 	readonly #append: (customType: string, data: unknown) => string;
