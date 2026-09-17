@@ -460,7 +460,7 @@ async function waitForChildSessionFile(
 	const workflowDirectory = join(
 		sessionDirectory,
 		"pi-durable-subagents",
-		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+		host.session.sessionId,
 	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);

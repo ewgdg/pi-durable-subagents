@@ -465,7 +465,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 		assert.equal(forkChildren.matches[0]?.workflowId, forkOwner.sessionId);
 		assert.match(
 			forkChildren.matches[0]?.primaryEvidence.transcriptPath ?? "",
-			new RegExp(Buffer.from(forkOwner.sessionId, "utf8").toString("base64url")),
+			new RegExp(forkOwner.sessionId),
 		);
 		assert.notEqual(forkChildId, directChildId);
 		assert.notEqual(forkChildId, nestedChildId);

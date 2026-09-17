@@ -3100,10 +3100,7 @@ async function findModerators(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
 ): Promise<Array<{ id: string; path: string }>> {
 	const sessionDirectory = host.session.sessionManager.getSessionDir();
-	const workflowDirectory = `${sessionDirectory}/pi-durable-subagents/${Buffer.from(
-		host.session.sessionId,
-		"utf8",
-	).toString("base64url")}`;
+	const workflowDirectory = `${sessionDirectory}/pi-durable-subagents/${host.session.sessionId}`;
 	const sessions = await SessionManager.list(host.cwd, workflowDirectory);
 	return sessions.flatMap(({ id, path }) => {
 		const isModerator = SessionManager.open(path).getEntries().some(
@@ -3130,10 +3127,7 @@ async function sessionPathFor(
 	agentId: string,
 ): Promise<string> {
 	const sessionDirectory = host.session.sessionManager.getSessionDir();
-	const workflowDirectory = `${sessionDirectory}/pi-durable-subagents/${Buffer.from(
-		host.session.sessionId,
-		"utf8",
-	).toString("base64url")}`;
+	const workflowDirectory = `${sessionDirectory}/pi-durable-subagents/${host.session.sessionId}`;
 	const session = (await SessionManager.list(host.cwd, workflowDirectory)).find(
 		(candidate) => candidate.id === agentId,
 	);

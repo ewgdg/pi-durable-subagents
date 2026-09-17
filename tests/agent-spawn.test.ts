@@ -287,7 +287,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	const workflowDirectory = join(
 		host.session.sessionManager.getSessionDir(),
 		"pi-durable-subagents",
-		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+		host.session.sessionId,
 	);
 	const childSessionFile = await waitForChildSessionFile(
 		host.cwd,
@@ -474,7 +474,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	const workflowDirectory = join(
 		host.session.sessionManager.getSessionDir(),
 		"pi-durable-subagents",
-		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+		host.session.sessionId,
 	);
 	const childSessionFile = await waitForChildSessionFile(
 		effectiveCwd,

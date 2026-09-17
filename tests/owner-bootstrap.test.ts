@@ -343,7 +343,7 @@ test("cold Owner admission skips off-branch invalid coordination and retains ind
 	const spawnEntryId = host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", {
 		title: "Evidence child", request: "Preserve this child's identity without starting work.", label: "Evidence child",
 	}, { id: spawnCallId }), { stopReason: "toolUse" }));
-	const directory = join(host.session.sessionManager.getSessionDir(), "pi-durable-subagents", Buffer.from(ownerId, "utf8").toString("base64url"));
+	const directory = join(host.session.sessionManager.getSessionDir(), "pi-durable-subagents", ownerId);
 	await host.runtime.dispose();
 	// A child Identity commits its Creation Request atomically. Cold admission
 	// must verify this native evidence without starting a child model process.

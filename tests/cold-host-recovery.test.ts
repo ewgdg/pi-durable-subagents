@@ -1427,7 +1427,7 @@ function workflowSessionDirectory(host: TestOwnerHost): string {
 	return join(
 		host.session.sessionManager.getSessionDir(),
 		"pi-durable-subagents",
-		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+		host.session.sessionId,
 	);
 }
 

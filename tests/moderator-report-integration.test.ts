@@ -45,7 +45,7 @@ test("Moderator reports return without human waiting and survive independent inc
 	t.after(async () => { await host.session.abort(); await prompt; });
 	let moderatorPath = "";
 	let moderatorId = "";
-	const workflowDirectory = `${host.session.sessionManager.getSessionDir()}/pi-durable-subagents/${Buffer.from(host.session.sessionId).toString("base64url")}`;
+	const workflowDirectory = `${host.session.sessionManager.getSessionDir()}/pi-durable-subagents/${host.session.sessionId}`;
 	await waitFor(async () => {
 		for (const session of await SessionManager.list(host.cwd, workflowDirectory)) {
 			if (SessionManager.open(session.path).getEntries().some((entry) => entry.type === "custom_message" && entry.customType === "agent-coordination.moderator-input")) {
