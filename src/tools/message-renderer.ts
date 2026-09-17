@@ -41,9 +41,12 @@ export function renderAgentMessageCall(
 }
 
 /**
- * Compose a coordination header with its optional body under one spacing policy:
- * every badge ([Send], [Request], [Answer], [Cancel], and a spawned Agent's
- * Creation Request block) starts its body after exactly one blank line.
+ * Compose a coordination header with its optional body.
+ *
+ * A badge hugs the body it introduces: blank rows never separate a header from
+ * its own payload, so they always mean "new item" — the same meaning they carry
+ * between transcript entries and between joined items (Wait Answers, batched
+ * Deliveries, spawn summary vs the Creation Request block).
  */
 export function renderCoordinationBlock(
 	header: string,
@@ -54,7 +57,6 @@ export function renderCoordinationBlock(
 	const container = new Container();
 	container.addChild(new Text(header, 0, 0));
 	if (body) {
-		container.addChild(new Spacer(1));
 		container.addChild(renderAgentMessageBody(body, theme, expanded));
 	}
 	return container;

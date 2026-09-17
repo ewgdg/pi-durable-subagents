@@ -27,6 +27,7 @@ export function renderAgentSpawnCall(
 	}
 	const container = new Container();
 	container.addChild(new Text(header, 0, 0));
+	// The spawn summary and the Creation Request it created are separate items.
 	container.addChild(new Spacer(1));
 	container.addChild(renderCoordinationBlock(
 		theme.fg("customMessageLabel", theme.bold("[Request]")) +

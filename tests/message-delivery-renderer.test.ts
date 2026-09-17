@@ -229,6 +229,40 @@ test("expanded Message Delivery shows each human-readable type and complete body
 	assert.doesNotMatch(rendered, /requestMessageId|fromAgentId|\{"messages"/);
 });
 
+test("delivered items hug their badge; one blank row is the only item boundary", () => {
+	initTheme("dark");
+	for (const expanded of [false, true]) {
+		const rendered = renderMessageDelivery(customDelivery([
+			{
+				kind: "request", title: "Fixture request", requestMessageId: "request-one",
+				fromAgentId: "requester", question: "Request body.",
+			},
+			{
+				kind: "answer", requestTitle: "Fixture request", requestMessageId: "request-one",
+				answerId: "answer-one", fromAgentId: "responder", answer: "Answer body.",
+			},
+		]),
+		{ expanded, outputPad: 1 },
+		plainTheme,
+		).render(80);
+		// Expanding changes the body renderer, never the block's spacing, and the
+		// blank row between items must survive so joined Deliveries stay separable.
+		assert.deepEqual(
+			rendered.map((line) => line.trim()),
+			[
+				"",
+				"[Request] Fixture request from requester",
+				"Request body.",
+				"",
+				"[Answer] Fixture request from responder",
+				"Answer body.",
+				"",
+			],
+			`expanded: ${expanded}`,
+		);
+	}
+});
+
 test("Owner and participant extensions register the Message Delivery renderer", async (t) => {
 	const unavailableView = () => {
 		throw new Error("Renderer registration does not execute coordination behavior");

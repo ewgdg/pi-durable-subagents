@@ -107,18 +107,19 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 		context,
 		resolveAgentLabel,
 	).render(120).join("\n");
-	assert.match(completed, /2 Answers/);
-	assert.match(
-		completed,
-		/\[Answer\] Fixture request from Researcher · ch-agent\s*\nThe implementation is viable\./,
-	);
-	assert.match(
-		completed,
-		/\[Answer\] Fixture request from Reviewer · ew-agent\s*\nThe race handling is sound\./,
-	);
-	assert.doesNotMatch(
-		completed,
-		/Researcher · ch-agent[^\n]*The implementation is viable\./,
+	// Each Answer body stays on its badge's next row; one blank row is the only
+	// item boundary, so joined items remain distinguishable from their payloads.
+	assert.deepEqual(
+		completed.split("\n").map((line) => line.trimEnd()),
+		[
+			"2 Answers",
+			"",
+			"[Answer] Fixture request from Researcher · ch-agent",
+			"The implementation is viable.",
+			"",
+			"[Answer] Fixture request from Reviewer · ew-agent",
+			"The race handling is sound.",
+		],
 	);
 	assert.doesNotMatch(completed, /answerSource/);
 });

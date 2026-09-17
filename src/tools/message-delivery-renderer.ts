@@ -68,6 +68,7 @@ export function renderMessageDelivery(
 	);
 
 	for (const [index, projection] of projections.entries()) {
+		// One blank row per item boundary is the only blank row inside the box.
 		if (index > 0) box.addChild(new Spacer(1));
 		const content = new Container();
 		const isExpanded = () => state.projections.get(index) ?? state.expanded;
@@ -106,23 +107,22 @@ export function renderMessageProjection(
 		0,
 		0,
 	));
-	if (options.expanded) {
-		container.addChild(new Spacer(1));
-		container.addChild(new Markdown(
+	// Collapsed and expanded differ only in the body renderer, never in spacing:
+	// expanding adds body rows instead of reflowing the block.
+	container.addChild(options.expanded
+		? new Markdown(
 			messageBody(projection),
 			0,
 			0,
 			getMarkdownTheme(),
 			{ color: (content) => theme.fg("customMessageText", content) },
 			{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
-		));
-	} else {
-		container.addChild(new BodyPreview(
+		)
+		: new BodyPreview(
 			messageBody(projection),
 			(content) => theme.fg("customMessageText", content),
 			(content) => theme.fg("dim", content),
 		));
-	}
 	return container;
 }
 

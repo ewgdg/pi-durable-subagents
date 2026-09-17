@@ -481,7 +481,6 @@ function transcriptBlock(options: {
 		0,
 		0,
 	));
-	box.addChild(new Spacer(1));
 	box.addChild(new Markdown(
 		options.markdown,
 		0,

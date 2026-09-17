@@ -161,7 +161,7 @@ test("answer and cancel calls show their own badges with payload and correlation
 	assert.match(cancel, /No longer needed/);
 });
 
-test("every coordination badge separates header and body with exactly one blank line", () => {
+test("a coordination badge hugs its body so blank rows only mark item boundaries", () => {
 	initTheme("dark");
 	const spawn = renderAgentSpawnCall(
 		{ title: "Fixture request", request: "Spawn body.", label: "Fixture" },
@@ -180,17 +180,27 @@ test("every coordination badge separates header and body with exactly one blank 
 		["[Cancel]", "Cancel body.", renderCall({
 			operation: "cancel", requestMessageId: "request-one", reason: "Cancel body.",
 		})],
-		// A spawned agent's Creation Request renders the same [Request] block as
-		// agent_message, so it must obey the same header/body spacing.
 		["[Request]", "Spawn body.", spawn],
+		// Expanding changes the body renderer, never the block's spacing.
+		["[Send]", "Send body.", renderAgentMessageCall(
+			{ operation: "send", targetAgent, content: "Send body." },
+			plainTheme,
+			resolveLabel,
+			true,
+		).render(60).join("\n")],
 	];
 	for (const [badge, body, rendered] of cases) {
 		const lines = rendered.split("\n");
 		const header = lines.findIndex((line) => line.includes(badge));
 		assert.notEqual(header, -1, `${badge} header must render`);
-		assert.equal((lines[header + 1] ?? "").trim(), "", `${badge} header must be followed by a blank line`);
-		assert.ok(lines[header + 2]?.includes(body), `${badge} body must follow the blank line: ${rendered}`);
+		assert.ok(lines[header + 1]?.includes(body), `${badge} body must start on its badge's next row: ${rendered}`);
 	}
+	// The spawn summary and the Creation Request it created are separate items.
+	const [summary, blank, creationRequest, body] = spawn.split("\n");
+	assert.equal(summary?.trim(), "spawn Fixture");
+	assert.equal(blank?.trim(), "");
+	assert.match(creationRequest ?? "", /\[Request\] Fixture request/);
+	assert.equal(body?.trim(), "Spawn body.");
 });
 
 test("poll and retry calls show their badges and message id without a body preview", () => {
