@@ -25,19 +25,17 @@ test("repair inspection selects read-only Owner, Moderator and audit evidence wi
 		model: { provider: "fixture", modelId: "fixture" }, thinking: "off", creationPreset: null,
 		admissionFailure: { stage: "Owner transcript recovery", reason: "duplicate Deliveries", transcriptPath: "/original/owner.jsonl", agentId: "owner" } };
 	let component!: Component;
-	let refresh!: () => void;
-	let renderCompleted: (() => void) | undefined;
 	let ready!: () => void;
 	const created = new Promise<void>((resolve) => { ready = resolve; });
 	const terminal = { rows: 12 };
 	const ui = { custom<T>(factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (value: T) => void) => Component) {
 		return new Promise<T>((resolve) => {
-			component = factory({ terminal, requestRender() { renderCompleted?.(); } } as unknown as TUI,
+			component = factory({ terminal, requestRender() {} } as unknown as TUI,
 				{ fg: (_color: string, text: string) => text } as Theme, {} as KeybindingsManager, resolve);
 			ready();
 		});
 	} } as unknown as ExtensionUIContext;
-	const inspected = openRepairDiagnostics(ui, launch, directory, { subscribe(handler) { refresh = handler; return () => {}; } });
+	const inspected = openRepairDiagnostics(ui, launch, directory);
 	await created;
 	assert.match(component.render(120).join("\n"), /Progress/);
 	assert.doesNotMatch(component.render(120).join("\n"), /attack|\x1b\]/);
@@ -51,12 +49,6 @@ test("repair inspection selects read-only Owner, Moderator and audit evidence wi
 		assert.equal(lines.length, rows);
 		assert.ok(lines.every((line) => visibleWidth(line) <= columns));
 	}
-	component.handleInput?.("3");
-	await writeFile(join(directory, "moderator.jsonl"), "Repair-only Moderator transcript\nUNIQUE_LATER_TOOL_RESULT: immutable snapshot contains two duplicate envelopes.");
-	const refreshed = new Promise<void>((resolve) => { renderCompleted = resolve; });
-	refresh();
-	await refreshed;
-	assert.match(component.render(120).join("\n"), /UNIQUE_LATER_TOOL_RESULT/, "already-open view must show completed persisted tool content");
 	component.handleInput?.("q");
 	await inspected;
 	assert.equal(await readFile(ownerPath, "utf8"), "Immutable Owner transcript");

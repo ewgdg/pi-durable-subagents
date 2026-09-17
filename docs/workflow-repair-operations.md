@@ -16,13 +16,14 @@ There is no later handoff or changeset confirmation. The existing Pi CLI and
 terminal stay open:
 
 ```text
-Owner session → unrelated repair-host session → freshly reopened Owner
-                         │
-               independent Node/Pi helper
-               snapshot → Moderator → validate → commit
+Owner → unrelated parked repair-host ──explicit Owner selection──→ fresh idle Owner
+                    │
+         attached native Pi Moderator (independent PTY)
+         snapshot → conversation/proposal → validate → commit
+                    └── stays interactive after commit
 ```
 
-The helper uses the installed stock Pi CLI in RPC mode, with only the dedicated
+The helper uses the installed stock Pi CLI in interactive TUI mode, with only the dedicated
 repair extension and three scoped tools. It does not inherit ordinary
 extensions, skills, context files, shell tools, or coordination tools. Its model
 must be available through Pi's built-in providers or user model configuration;
@@ -31,36 +32,43 @@ supplies model selection and guidance, not additional tool authority.
 
 ## During an attempt
 
-- The short native handoff returns editor control before model work. Progress,
-  model text/thinking, tool-argument streaming counts and tool activity appear
-  in the same terminal. `/agents` opens the Repair Moderator's live read-only
-  transcript or the immutable Owner snapshot; completed native tool arguments
-  and results refresh while the view stays open. Ordinary prompts cannot start
-  work in the repair host, and native reopening of the original is refused until
-  the controlled commit/reopen transition.
-- `/agents repair inspect` and `/agents repair cancel` remain usable while the
-  helper works. **Esc closes an open inspection/menu; outside those views it
-  cancels before application.** No second terminal or confirmation is needed.
+- The repair view is a real Pi conversation: native editor, streamed model/tool
+  output, prompts, steering and follow-up. Physical terminal attachment is the
+  same mechanism used by ordinary subagents, not a reconstructed chat dashboard.
+  `/agents` selects its live session; `/agents owner` inspects the immutable Owner
+  snapshot before commit and opens the real Owner only after commit.
+- `/agents repair inspect` shows audit evidence; `/agents repair cancel` cancels
+  the attempt before application. **Native Esc aborts only the current response**;
+  you can continue talking to the Moderator. Esc inside a menu closes the menu.
+  No second terminal or confirmation is needed. Native session replacement and
+  user `!`/`!!` shell commands are blocked in this restricted session.
 - The Moderator belongs to the verified original Workflow, has a fresh native
   session identity and no Direct Spawner, and is recorded in the separate repair
   store before its first model turn. It is not an ordinary child Request,
   Operational Incident, or new Owner Workflow.
 - The Moderator reads immutable snapshots and writes candidate copies and
   reports. A completed report is only a proposal. Host validation certifies the
-  exhaustive generation and records textual and protocol-effect changes.
-- Disk commit precedes reopening. Failed fresh admission retains the committed
+  exhaustive generation and records textual and protocol-effect changes. New
+  input, candidate edits or an aborted response invalidate a previous completion
+  report; automatic application requires a current proposal at successful idle
+  settlement, with no queued input. Invalid proposals remain editable before
+  application; mutation authority closes permanently once application begins.
+- Disk commit does not change the selected conversation. The Moderator remains
+  available to discuss the result with read-only evidence. Only explicit Owner
+  selection attempts fresh admission. Failed fresh admission retains the committed
   repair, later native writes, and helper diagnostics. Participant Runs are not
   automatically resumed. The restored Owner also stays idle until a **new human
   message**: existing obligations remain pending, but reminders, setting changes
   and navigation cannot implicitly start a turn or append an empty user message.
-  An unsubmitted editor draft is preserved across the final switch.
+  Drafts remain in their respective native editors, never transferred to Owner.
 
-The Repair Moderator remains a read-only `/agents` presentation row after
-completion, including archived attempts. Selecting it never creates an ordinary
-Agent Run, Request, membership record or delivery route. Live views are closed
-before automatic Owner reopening. Reloading or leaving the repair host can
-invalidate its retained native context; a committed repair then remains on disk
-for explicit recovery rather than forcing a switch through that stale context.
+The current live Moderator remains conversational through this CLI lifetime,
+including after explicit Owner admission. Selecting it reattaches the same
+process and native session, never a second writer or repeated kickoff. Prior
+processes are archived read-only rows; inspection cannot resurrect a transaction.
+No ordinary Agent Run, Request, membership record or delivery route is created.
+An invalidated presenter context refuses navigation rather than granting a stale
+context authority to reopen original transcripts.
 
 After refusal, `/agents repair` opens read-only progress, Owner snapshot,
 Moderator transcript, and validation-audit pages. `/agents repair inspect`
@@ -83,8 +91,8 @@ failed cleanup, cancellation, stale files, and invalid or ambiguous proposals
 refuse repair. Reloading does not erase a failed cleanup result. Repair cannot
 correct unrelated runtime policy or model configuration failures.
 
-- `/agents repair cancel` requests cancellation from the responsive repair-host
-  editor. Application cannot be cancelled once it has begun.
+- `/agents repair cancel` requests cancellation from the native Moderator or
+  parked repair-host editor. Application cannot be cancelled once it has begun.
 - `/agents repair recover` asks the retained helper to recover its existing
   journal, then explicitly reopens the Owner if recovery establishes a safe
   generation. It requires the positively acknowledged retirement handoff and is

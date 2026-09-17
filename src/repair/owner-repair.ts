@@ -17,13 +17,16 @@ import { closeRepairInput } from "./input-retirement.ts";
 import { clearAbandonedRepairLease, recoverRepair } from "./storage.ts";
 import { openRepairDiagnostics } from "../presentation/repair-diagnostics-surface.ts";
 import { sanitizeReportTerminalText } from "../presentation/moderator-report-surface.ts";
+import { openAgentViewSurface, type DurableAgentView } from "../presentation/agent-view-surface.ts";
 
 type Attempt = {
 	launch: RepairLaunch; directory: string; hostPath: string; helper: IndependentRepairHelper;
 	ui: ExtensionUIContext; running: boolean; outcome?: RepairOutcome;
 	switchTarget?: string;
-	liveText: string; liveStatus: string; listeners: Set<() => void>;
-	transcriptListeners: Set<() => void>;
+	context?: ExtensionCommandContext;
+	ended?: boolean;
+	attachment?: { close(): void; closed: Promise<void> };
+	recover?(action: string): Promise<void>;
 	view?: { controller: AbortController; closed: Promise<void> };
 };
 const REGISTRY_KEY = "__piAgentCoordinationRepairAttempts";
@@ -75,15 +78,11 @@ export function presentRepairHost(ctx: ExtensionContext, host: RepairHost): () =
 		"Workflow repair — this is not an Owner Workflow.",
 		`Original Owner: ${host.ownerPath}`,
 		`Diagnostics: ${dirname(host.bootstrapPath)}`,
-		"/agents: live Repair Moderator or read-only Owner snapshot. Ordinary prompts are paused.",
+		"/agents: interactive Repair Moderator. /agents owner: Owner (snapshot until commit).",
 		"/agents repair · /agents repair cancel · /agents repair recover",
 		"After a crash: stop ALL affected writers and old helper, then /agents repair recover-stopped.",
 	]);
-	return ctx.ui.onTerminalInput((data) => {
-		if (data !== "\u001b" || !attempt?.running || attempt.view) return;
-		void attempt.helper.request("cancel").catch((error: unknown) => attempt.ui.notify(String(error), "warning"));
-		return { consume: true };
-	});
+	return () => {};
 }
 
 async function inRepairView(attempt: Attempt | undefined, view: (signal: AbortSignal) => Promise<void>): Promise<void> {
@@ -96,15 +95,79 @@ async function inRepairView(attempt: Attempt | undefined, view: (signal: AbortSi
 }
 
 async function inspectAttempt(ctx: ExtensionContext, launch: RepairLaunch | Awaited<ReturnType<typeof readRepairArchiveLaunch>>, directory: string, attempt: Attempt | undefined, page = 2, signal?: AbortSignal): Promise<void> {
-	const inspect = (signal: AbortSignal) => openRepairDiagnostics(ctx.ui, launch, directory, { page, signal,
-		...(attempt ? { liveText: () => `${attempt.liveText}\n${attempt.liveStatus}`, subscribeLive: (refresh: () => void) => {
-			attempt.listeners.add(refresh); return () => { attempt.listeners.delete(refresh); };
-		}, subscribe: (refresh: () => void) => {
-			attempt.transcriptListeners.add(refresh); return () => { attempt.transcriptListeners.delete(refresh); };
-		} } : {}),
-	});
+	const inspect = (signal: AbortSignal) => openRepairDiagnostics(ctx.ui, launch, directory, { page, signal });
 	if (signal) await inspect(signal);
 	else await inRepairView(attempt, inspect);
+}
+
+async function detachModerator(attempt: Attempt): Promise<void> {
+	const attachment = attempt.attachment;
+	attachment?.close();
+	await attachment?.closed;
+}
+
+async function openModerator(ctx: ExtensionCommandContext, attempt: Attempt): Promise<void> {
+	if (attempt.ended) return inspectAttempt(ctx, attempt.launch, attempt.directory, undefined);
+	if (attempt.attachment) return;
+	attempt.context = ctx;
+	attempt.ui = ctx.ui;
+	const closeHandlers = new Set<() => void>();
+	let closed = false;
+	const close = () => { closed = true; for (const handler of closeHandlers) handler(); };
+	const view: DurableAgentView = {
+		agentId: attempt.launch.moderatorAgentId, label: "Repair Moderator",
+		projection: () => attempt.helper.projection,
+		addPresentationHandler: () => () => {},
+		addCloseHandler(handler) { closeHandlers.add(handler); if (closed) queueMicrotask(handler); return () => { closeHandlers.delete(handler); }; },
+		fail(error) { ctx.ui.notify(`Repair terminal: ${String(error)}`, "error"); },
+		async close() {},
+	};
+	const display = openAgentViewSurface(ctx.ui, view);
+	const attachment = { close, closed: display };
+	attempt.attachment = attachment;
+	try { await display; }
+	finally { if (attempt.attachment === attachment) attempt.attachment = undefined; }
+}
+
+/** The user selects Owner; a committed generation is never reopened by model completion. */
+async function selectRepairOwner(ctx: ExtensionCommandContext, attempt: Attempt): Promise<void> {
+	await detachModerator(attempt);
+	if (!readRepairHost(ctx.sessionManager)) return;
+	if (attempt.outcome !== "committed_awaiting_admission" && attempt.outcome !== "committed_admission_failed" && attempt.outcome !== "admitted") {
+		await inspectAttempt(ctx, attempt.launch, attempt.directory, attempt, 1);
+		return;
+	}
+	if (attempt.switchTarget) throw new Error("Owner navigation is already in progress");
+	attempt.running = true;
+	attempt.switchTarget = attempt.launch.owner.path;
+	humanWait.add(attempt.launch.owner.path);
+	try {
+		const result = await ctx.switchSession(attempt.launch.owner.path, { withSession: async fresh => {
+			attempt.context = fresh; attempt.ui = fresh.ui;
+			const admitted = isOwnerAdmitted(fresh.sessionManager);
+			attempt.outcome = admitted ? "admitted" : "committed_admission_failed";
+			try {
+				await attempt.helper.request("admission", { admitted, time: new Date().toISOString() });
+				await writeRepairRecord(join(attempt.directory, "admission-outcome.jsonl"), { outcome: attempt.outcome }, true);
+			} catch (error) { fresh.ui.notify(`Admission diagnostics: ${String(error)}`, "error"); }
+			fresh.ui.notify(admitted ? "Owner reopened idle. Send a new message to continue." : "Repair committed; fresh Owner admission failed. Data remains intact.", admitted ? "info" : "error");
+		} });
+		if (result.cancelled) throw new Error("Owner reopening cancelled");
+	} finally { attempt.running = false; attempt.switchTarget = undefined; }
+}
+
+async function navigateFromModerator(attempt: Attempt, target: "owner" | "inspect" | "cancel" | "recover" | "recover-stopped"): Promise<void> {
+	const ctx = attempt.context;
+	if (!ctx) throw new Error("Repair presenter is not attached");
+	if (target === "cancel") { await attempt.helper.request("cancel"); return; }
+	await detachModerator(attempt);
+	if (target === "recover" || target === "recover-stopped") { await attempt.recover?.(target); return; }
+	if (target === "owner") await selectRepairOwner(ctx, attempt);
+	else await inspectAttempt(ctx, attempt.launch, attempt.directory, attempt, 0);
+	// Snapshot/audit inspection returns to the same native conversation, not a new turn.
+	if (attempt.context === ctx && (target === "inspect" || readRepairHost(ctx.sessionManager))) {
+		void openModerator(ctx, attempt).catch(error => ctx.ui.notify(String(error), "error"));
+	}
 }
 
 /** Presentation-only identities never enter ordinary Agent routing or scheduling. */
@@ -113,12 +176,18 @@ export const repairNavigation = {
 		const host = readRepairHost(ctx.sessionManager);
 		if (!host) return false;
 		const attempt = findAttempt(host.ownerPath, host.attemptId);
+		if (attempt && !attempt.ended) {
+			attempt.context = ctx;
+			if (owner) await selectRepairOwner(ctx, attempt);
+			else await openModerator(ctx, attempt);
+			return true;
+		}
 		await inRepairView(attempt, async (signal) => {
 			const launch = await readRepairArchiveLaunch(host.bootstrapPath);
 			if (signal.aborted) return;
 			let page: number | undefined = owner ? 1 : undefined;
 			if (!owner) {
-				const selected = await ctx.ui.select("Workflow repair · read-only navigation", ["Repair Moderator · live transcript", "Owner · immutable snapshot"], { signal });
+				const selected = await ctx.ui.select("Archived repair · read-only navigation", ["Repair Moderator · archived transcript", "Owner · immutable snapshot"], { signal });
 				if (selected) page = selected.startsWith("Owner") ? 1 : 2;
 			}
 			if (page !== undefined && !signal.aborted) await inspectAttempt(ctx, launch, dirname(host.bootstrapPath), attempt, page, signal);
@@ -128,8 +197,8 @@ export const repairNavigation = {
 	async entries(ctx: ExtensionCommandContext) {
 		const path = ctx.sessionManager.getSessionFile();
 		const entries = [...attempts.values()].filter((attempt) => attempt.launch.owner.path === path).map((attempt) => ({
-			id: `repair:${attempt.launch.attemptId}`, label: "Repair Moderator", description: `${attempt.running ? "Running" : attempt.outcome} · read-only · ${attempt.launch.moderatorAgentId}`,
-			open: () => inspectAttempt(ctx, attempt.launch, attempt.directory, attempt),
+			id: `repair:${attempt.launch.attemptId}`, label: "Repair Moderator", description: `${attempt.running ? "Running" : attempt.outcome} · ${attempt.ended ? "archived" : "interactive"} · ${attempt.launch.moderatorAgentId}`,
+			open: () => openModerator(ctx, attempt),
 		}));
 		if (!path) return entries;
 		const hosts = join(dirname(path), "pi-agent-coordination-repair", Buffer.from(ctx.sessionManager.getSessionId()).toString("base64url"), "hosts");
@@ -220,7 +289,6 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 						} });
 						if (transition.cancelled) throw new Error("Recovery reopening cancelled");
 					} finally { attempt.running = false; attempt.switchTarget = undefined; }
-					if (attempt.outcome === "admitted") await attempt.helper.stop();
 					return;
 				}
 				if (action && action !== "inspect") throw new Error("Usage: /agents repair [inspect|cancel|recover|park|recover-stopped]");
@@ -280,41 +348,32 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 				extensionPath: join(import.meta.dirname, "helper-entry.ts"), bootstrapPath, sessionPath: moderatorPath,
 				logDirectory: directory, model: `${model.provider}/${model.modelId}`, thinking: launch.thinking,
 				onProgress: (message) => launched?.ui.setWidget("workflow-repair-progress", [sanitizeReportTerminalText(message), `Evidence: ${directory}`]),
-				onActivity: (text, status) => {
-					if (!launched) return;
-					if (status) launched.liveStatus = text;
-					else { launched.liveStatus = ""; launched.liveText = (launched.liveText + text).slice(-200_000); }
-					launched.ui.setWidget("workflow-repair-live", ["Repair Moderator · streaming (read-only)", sanitizeReportTerminalText(launched.liveStatus || launched.liveText.slice(-240))]);
-					for (const refresh of launched.listeners) refresh();
-				},
-				onTranscript: () => { for (const refresh of launched?.transcriptListeners ?? []) refresh(); },
+				onNavigate: async target => { if (!launched) throw new Error("Repair is not attached"); await navigateFromModerator(launched, target); },
 			});
-			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true, switchTarget: hostPath, liveText: "", liveStatus: "", listeners: new Set(), transcriptListeners: new Set() };
+			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true, switchTarget: hostPath };
 			presentation = launched;
 			attempts.set(attemptId, launched);
 			closeRepairInput(runtime.session);
-			const started = await startSameTerminalRepair({ context: ctx, ownerPath, repairHostPath: hostPath, retirement,
-				beforeReopen: async () => {
-					const view = launched?.view; view?.controller.abort(); await view?.closed;
-					humanWait.add(ownerPath);
-					if (launched) launched.switchTarget = ownerPath;
-				},
-				admission: (fresh) => { if (launched) launched.ui = fresh.ui; return isOwnerAdmitted(fresh.sessionManager); }, helper: {
+			const started = await startSameTerminalRepair({ context: ctx, repairHostPath: hostPath, retirement, helper: {
 					async repair() {
 						const result = await helper.request("retired") as { status?: string };
 						if (result?.status !== "committed") throw new Error("Helper did not acknowledge a durable commit");
 					},
-					async recordAdmission(admitted, diagnostic) { await helper.request("admission", { admitted, diagnostic, time: new Date().toISOString() }); },
 					async refuse(reason) { await helper.request("refuse", reason); },
 				} });
 			const active = launched;
+			active.recover = async action => {
+				if (!active.context) throw new Error("Repair presenter is unavailable");
+				await ownerRepairCommand(bridge, admissionFailure)(action, active.context);
+			};
 			void started.completion.then(async (outcome) => {
 				active.outcome = outcome;
 				active.running = false;
 				active.switchTarget = undefined;
 				await writeRepairRecord(join(directory, "outcome.json"), { outcome, time: new Date().toISOString() });
-				if (outcome === "admitted") await helper.stop();
 			}).catch((error: unknown) => { active.running = false; active.ui.notify(`Repair completion: ${String(error)}`, "error"); });
+			void helper.exited.then(() => { active.ended = true; }, () => { active.ended = true; });
+			if (started.context) await openModerator(started.context, active);
 		} catch (error) {
 			(presentation?.ui ?? ctx.ui).notify(`Repair unavailable: ${error instanceof Error ? error.message : String(error)}`, "error");
 		}

@@ -9,8 +9,7 @@ const MAX_VISIBLE_EVIDENCE_CHARACTERS = 200_000;
 
 /** Inspection never resumes a participant or grants write/application authority. */
 export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: RepairArchiveLaunch, directory: string, options: {
-	page?: number; liveText?(): string; subscribe?(refresh: () => void): () => void;
-	subscribeLive?(refresh: () => void): () => void; signal?: AbortSignal;
+	page?: number; signal?: AbortSignal;
 } = {}): Promise<void> {
 	const storageDirectory = join(launch.storageRoot, launch.attemptId);
 	const seals = await readdir(join(storageDirectory, "seals")).catch((error: NodeJS.ErrnoException) => {
@@ -31,37 +30,14 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 		return { ...source, contents: sanitizeReportTerminalText(bounded) };
 	};
 	const pages = await Promise.all(sources.map(readPage));
-	let unsubscribe = () => {};
-	let unsubscribeLive = () => {};
 	let removeAbort = () => {};
-	let closed = false;
 	if (options.signal?.aborted) return;
 	try { await ui.custom<void>((tui, theme, _keys, done) => {
 		let page = Math.min(options.page ?? 0, pages.length - 1);
 		let top = 0;
 		let maximumTop = 0;
-		const contents = () => page === 2 && options.liveText
-			? `${sanitizeReportTerminalText(options.liveText())}\n\nPersisted Moderator transcript:\n${pages[page].contents}` : pages[page].contents;
+		const contents = () => pages[page].contents;
 		const body = new Text(contents(), 0, 0);
-		const redraw = () => { if (!closed) { body.setText(contents()); tui.requestRender(); } };
-		let reading = false;
-		let dirty = false;
-		unsubscribe = options.subscribe?.(() => {
-			dirty = true;
-			if (reading) return;
-			reading = true;
-			void (async () => {
-				while (dirty && !closed) {
-					dirty = false;
-					const updated = await Promise.all([readPage(sources[0]), readPage(sources[2])]);
-					if (closed) return;
-					[pages[0], pages[2]] = updated;
-					redraw();
-				}
-			})().catch((error: unknown) => { if (!closed) ui.notify(`Repair transcript refresh failed: ${String(error)}`, "error"); })
-				.finally(() => { reading = false; });
-		}) ?? (() => {});
-		unsubscribeLive = options.subscribeLive?.(redraw) ?? (() => {});
 		const close = () => done();
 		options.signal?.addEventListener("abort", close, { once: true });
 		if (options.signal?.aborted) close();
@@ -101,5 +77,5 @@ export async function openRepairDiagnostics(ui: ExtensionUIContext, launch: Repa
 			invalidate() { body.invalidate(); },
 		};
 	}, { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } });
-	} finally { closed = true; unsubscribe(); unsubscribeLive(); removeAbort(); }
+	} finally { removeAbort(); }
 }

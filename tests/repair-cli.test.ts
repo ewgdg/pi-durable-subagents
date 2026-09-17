@@ -19,7 +19,7 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 	while (!await predicate()) { if (Date.now() > end) throw new Error(`Timed out: ${label}`); await delay(25); }
 }
 
-for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "cancel", "command-cancel", "helper-kill", "idle-human", "live-navigation"] as const) {
+for (const scenario of ["healthy", "rejected-only", "config-error", "duplicate", "preserve-rejected", "repeat", "bash", "cleanup-reject", "parking-cancel", "admission-fail", "native-chat", "native-esc", "followup-complete", "command-cancel", "helper-kill", "idle-human", "live-navigation"] as const) {
 test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip: process.platform === "win32" }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "repair-cli-"));
 	const agentDir = join(root, "agent");
@@ -29,19 +29,25 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 	let repairRequests = 0;
 	let ordinaryRequests = 0;
 	let releaseModel: (() => void) | undefined;
+	let moderatorConversation = 0;
 	server.setResponses((request) => {
 		if (!request.tools.some((tool) => JSON.stringify(tool).includes("repair_snapshot"))) { ordinaryRequests++; return "Ordinary conversation remains usable."; }
+		if (request.messages.some(message => JSON.stringify(message).includes("Explain the committed repair without editing"))) { moderatorConversation++; return "The exact duplicate Delivery was removed. This conversation cannot apply again."; }
 		repairRequests++;
+		if (scenario === "native-chat" && repairRequests === 1) return "We can discuss the duplicate before preparing a proposal.";
+		const proposalStep = repairRequests - (scenario === "native-chat" ? 1 : 0);
 		assert.deepEqual(request.tools.map((tool) => (tool as { function: { name: string } }).function.name).sort(), ["repair_candidate", "repair_report", "repair_snapshot"]);
-		if (scenario === "cancel" || scenario === "command-cancel" || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
+		if (scenario === "command-cancel" || scenario === "helper-kill") return new Promise<string>((resolve) => { releaseModel = () => resolve("Cancelled."); });
+		if ((scenario === "native-esc" || scenario === "followup-complete") && repairRequests === 4) return new Promise<string>((resolve) => { releaseModel = () => resolve("Stale completion must not apply."); });
+		if ((scenario === "native-esc" || scenario === "followup-complete") && repairRequests === 5) return { name: "repair_report", arguments: { kind: "complete", text: "Fresh completion after explicit human continuation." } };
 		if (scenario === "live-navigation" && repairRequests === 1) return new Promise((resolve) => {
 			releaseModel = () => resolve({ name: "repair_snapshot", arguments: { id: "file-0" } });
 		});
 		if (scenario === "live-navigation" && repairRequests === 3) return new Promise((resolve) => {
 			releaseModel = () => resolve({ name: "repair_report", arguments: { kind: "complete", text: "Only exact redundant Delivery removed." } });
 		});
-		if (repairRequests === 1) return { name: "repair_snapshot", arguments: { id: "file-0" } };
-		if (repairRequests === 2) {
+		if (proposalStep === 1) return { name: "repair_snapshot", arguments: { id: "file-0" } };
+		if (proposalStep === 2) {
 			const original = request.messages.findLast((message) => (message as { role: string }).role === "tool") as { content: string };
 			const entries = original.content.trim().split("\n").map((line) => JSON.parse(line));
 			const deliveries = entries.filter((entry) => entry.customType === "agent-coordination.message-delivery");
@@ -53,7 +59,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 				entry.parentId === duplicate.id ? { ...entry, parentId: duplicate.parentId } : entry);
 			return { name: "repair_candidate", arguments: { id: "file-0", contents: candidate.map((entry) => JSON.stringify(entry)).join("\n") + "\n" } };
 		}
-		if (repairRequests === 3) return { name: "repair_report", arguments: { kind: "complete", text: "Removed only the exact redundant Delivery envelope; kept original evidence and rejected history." } };
+		if (proposalStep === 3) return { name: "repair_report", arguments: { kind: "complete", text: "Removed only the exact redundant Delivery envelope; kept original evidence and rejected history." } };
 		return "Proposal complete.";
 	});
 	const modelsConfiguration = structuredClone(server.modelsConfiguration);
@@ -154,29 +160,47 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			assert.equal(JSON.parse(await readFile(join(root,"ping.json"),"utf8")).nativeManagerReplaced, false);
 			return;
 		}
-		if (scenario === "cancel" || scenario === "command-cancel") { await until(() => repairRequests > 0, "model started"); terminal.write(scenario === "cancel" ? "\u001b" : "/agents repair cancel\r"); }
+		if (scenario === "command-cancel") { await until(() => repairRequests > 0, "model started"); terminal.write("/agents repair cancel\r"); }
+		if (scenario === "native-chat") {
+			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("discuss the duplicate"), "native Moderator first response without a proposal");
+			const [attemptId] = await readdir(join(repairRoot, "hosts"));
+			assert.equal(existsSync(join(repairRoot, "hosts", attemptId, "outcome.json")), false, "settlement without a proposal remains conversational");
+			terminal.write("Now prepare only the safe duplicate correction.\r");
+			await until(() => repairRequests >= 2, "native human message reaches repair Moderator");
+			assert.ok(server.requests.some(request => JSON.stringify(request.messages).includes("Now prepare only the safe duplicate correction.")));
+		}
+		if (scenario === "native-esc") {
+			await until(() => repairRequests === 4, "completed report followed by held model response");
+			terminal.write("\u001b");
+			await delay(300);
+			const [attemptId] = await readdir(join(repairRoot, "hosts"));
+			assert.equal(existsSync(join(repairRoot, "storage", attemptId, "committed.json")), false, "native abort invalidates the earlier completed proposal");
+			terminal.write("Continue with a fresh completed proposal.\r");
+		}
+		if (scenario === "followup-complete") {
+			await until(() => repairRequests === 4, "completed report before native follow-up");
+			terminal.write("Address this queued follow-up before finalizing.\u001b\r");
+			await delay(200);
+			const [attemptId] = await readdir(join(repairRoot, "hosts"));
+			assert.equal(existsSync(join(repairRoot, "storage", attemptId, "committed.json")), false);
+			releaseModel?.();
+		}
 		if (scenario === "live-navigation") {
 			await until(() => repairRequests === 1, "held helper before completed tool output");
-			terminal.write("/repair-test-ping\r");
-			await delay(500);
-			assert.ok(existsSync(join(root, "ping.json")), "repair must leave native slash commands responsive while helper is held");
-			terminal.write("/repair-test-unsafe-open\r");
-			await until(() => existsSync(join(root, "unsafe-open.json")), "native reopening attempt refused while uncommitted");
-			assert.equal(JSON.parse(await readFile(join(root, "unsafe-open.json"), "utf8")).cancelled, true);
+			terminal.write("Keep all rejected historical work unchanged.\r");
 			terminal.write("/agents\r");
 			await delay(250);
 			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("Repair Moderator"), "repair-only Moderator must be navigable during repair");
-			terminal.write("\r");
-			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("Persisted Moderator transcript"), "actual repair Moderator view");
+			terminal.write("\u001b");
 			releaseModel?.();
 			await until(() => repairRequests === 3, "later candidate tool completed while viewer stays open");
-			await delay(100);
-			terminal.write("\u001b[F");
-			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("Candidate copy written"), "already-open view refreshes actual completed tool result");
-			terminal.write("2");
+			assert.ok(server.requests.some(request => JSON.stringify(request.messages).includes("Keep all rejected historical work unchanged.")), "native steering reaches the actual Moderator model");
+			terminal.write("/agents owner\r");
+			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).includes("Owner snapshot"), "Owner remains immutable snapshot before commit");
+			terminal.write("q");
 			await delay(100);
 			assert.equal(ordinaryRequests, 0, "Owner snapshot navigation starts no turn");
-			// Complete while the read-only overlay is open: reopening must close it.
+			terminal.write("A Moderator draft stays here");
 			releaseModel?.();
 		}
 		if (scenario === "helper-kill") {
@@ -192,7 +216,7 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			return !!id && existsSync(join(repairRoot,"hosts",id,"outcome.json"));
 		}, `repair outcome (${root})`);
 		const directory = join(repairRoot,"hosts",id);
-		const refused = ["cleanup-reject","parking-cancel","cancel","command-cancel","helper-kill"].includes(scenario);
+		const refused = ["cleanup-reject","parking-cancel","command-cancel","helper-kill"].includes(scenario);
 		const outcome = JSON.parse(await readFile(join(directory,"outcome.json"),"utf8"));
 		if (refused) {
 			assert.equal(outcome.outcome,"refused");
@@ -208,15 +232,17 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 				await until(async () => (await readFile(join(root,"terminal.log"),"utf8")).includes("no verified retirement handoff"),"missing ACK refusal");
 				assert.equal(existsSync(join(directory,"admission.jsonl")),false);
 			}
-			if (scenario === "cancel" || scenario === "command-cancel" || scenario === "helper-kill" || scenario === "cleanup-reject") {
-				terminal.write(scenario === "cancel" || scenario === "command-cancel" ? "/agents repair recover\r" : "/agents repair recover-stopped\r");
+			if (scenario === "command-cancel" || scenario === "helper-kill" || scenario === "cleanup-reject") {
+				terminal.write(scenario === "command-cancel" ? "/agents repair recover\r" : "/agents repair recover-stopped\r");
 				await until(() => existsSync(join(directory,"admission.jsonl")),"recovery attempts real admission");
 				// Restoring original blocked evidence is safe disk recovery, not successful admission.
 				assert.equal(JSON.parse((await readFile(join(directory,"admission.jsonl"),"utf8")).trim()).admitted,false);
 			}
 			return;
 		}
-		assert.equal(outcome.outcome, scenario === "admission-fail" ? "committed_admission_failed" : "admitted", root);
+		assert.equal(outcome.outcome, "committed_awaiting_admission", root);
+		assert.equal(existsSync(join(directory, "admission.jsonl")), false, "commit cannot steal Moderator selection or attempt Owner admission");
+		assert.equal(JSON.parse(await readFile(join(root, "ready.json"), "utf8")).path.endsWith("repair-host.jsonl"), true);
 		assert.ok(existsSync(join(repairRoot,"storage",id,"committed.json")));
 		const snapshot = await readFile(join(repairRoot,"storage",id,"snapshot","file-0"),"utf8");
 		if (scenario !== "idle-human") assert.match(snapshot,/repair-test-final-write/);
@@ -240,6 +266,12 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.equal(bootstrap.directSpawnerAgentId,null);
 		assert.notEqual(bootstrap.agentId,ownerId);
 		await delay(250);
+		if (scenario === "live-navigation") assert.ok((await readFile(join(root, "terminal.log"), "utf8")).includes("A Moderator draft stays here"), "commit leaves the native Moderator editor and its draft selected");
+		// Ctrl-U explicitly discards this test draft to type a navigation command;
+		// attachment-only draft retention is covered without clearing in the helper test.
+		terminal.write("\u0015/agents owner\r");
+		await until(() => existsSync(join(directory, "admission.jsonl")), "explicit Owner navigation attempts fresh admission");
+		assert.equal(JSON.parse((await readFile(join(directory, "admission.jsonl"), "utf8")).trim()).admitted, scenario !== "admission-fail");
 		terminal.write("/repair-test-ping\r");
 		await until(async ()=>existsSync(join(root,"ping.json")) && JSON.parse(await readFile(join(root,"ping.json"), "utf8")).path === ownerPath,"same terminal after repair");
 		const ping = JSON.parse(await readFile(join(root,"ping.json"),"utf8"));
@@ -248,7 +280,8 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 		assert.equal(ping.nativeManagerReplaced,true);
 		assert.equal(ping.tools.includes("agent_message"),scenario!=="admission-fail");
 		assert.equal(ordinaryRequests,0,"repair must not automatically resume participants");
-		assert.equal(repairRequests,4);
+		assert.equal(repairRequests,scenario === "native-esc" || scenario === "followup-complete" ? 6 : scenario === "native-chat" ? 5 : 4);
+		if (scenario === "followup-complete") assert.ok(server.requests.some(request => JSON.stringify(request.messages).includes("Address this queued follow-up before finalizing.")), "native queued follow-up reaches the Moderator before commit");
 		if (scenario === "live-navigation") {
 			assert.equal((await readFile(join(root, "terminal.log"), "utf8")).includes("startup_admission_cancelled"), false, "successful repair handoff is command completion, not cancelled model preflight");
 			const previousOutput = (await readFile(join(root, "terminal.log"), "utf8")).length;
@@ -256,11 +289,11 @@ test(`real same-terminal admission repair: ${scenario}`, { timeout: 30_000, skip
 			await delay(200);
 			assert.ok((await readFile(join(root, "terminal.log"), "utf8")).slice(previousOutput).includes("Repair Moderator"), "retained repair Moderator remains in normal /agents navigation");
 			terminal.write("\r");
-			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).slice(previousOutput).includes("Persisted Moderator transcript"), "retained Moderator selection opens actual transcript");
-			terminal.write("q");
-			await delay(100);
-			terminal.write("\u001b");
-			assert.equal(ordinaryRequests, 0, "selecting and closing Moderator cannot start Owner work");
+			await until(async () => (await readFile(join(root, "terminal.log"), "utf8")).slice(previousOutput).includes("Proposal complete."), "reattached native Moderator displays its actual persisted conversation");
+			terminal.write("\u0015Explain the committed repair without editing.\r");
+			await until(() => moderatorConversation === 1, "native postcommit conversation remains available");
+			terminal.write("/agents owner\r");
+			assert.equal(ordinaryRequests, 0, "selecting Moderator and back cannot start Owner work");
 		}
 		if (scenario === "idle-human") {
 			const originalUsers = repaired.trim().split("\n").map(line => JSON.parse(line)).filter(entry => entry.type === "message" && entry.message.role === "user");

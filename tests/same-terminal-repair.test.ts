@@ -42,11 +42,12 @@ function fixture(options: { cleanupFailure?: boolean; cancelParking?: boolean; a
 	};
 }
 
-test("one invocation retires into unrelated host, commits before reopening, and needs no confirmation", async () => {
+test("one invocation commits without confirmation and stays in Moderator until explicit Owner navigation", async () => {
 	const { options, events } = fixture();
 	const result = await (await startSameTerminalRepair(options)).completion;
-	assert.equal(result, "admitted");
-	assert.deepEqual(events.slice(0, 7), ["cleanup", "open host.jsonl", "replacement complete", "retirement verified", "snapshot and commit", "open owner.jsonl", "admitted"]);
+	assert.equal(result, "committed_awaiting_admission");
+	assert.deepEqual(events.slice(0, 5), ["cleanup", "open host.jsonl", "replacement complete", "retirement verified", "snapshot and commit"]);
+	assert.equal(events.includes("open owner.jsonl"), false);
 });
 
 test("failed cleanup and cancelled parking cannot start snapshot", async () => {
@@ -57,7 +58,7 @@ test("failed cleanup and cancelled parking cannot start snapshot", async () => {
 	}
 });
 
-test("handoff returns before helper completion and preserves the repair-host editor draft", async () => {
+test("handoff returns before helper completion and never transfers a Moderator draft into Owner", async () => {
 	const { options, events } = fixture({ draft: "Human draft not yet submitted" });
 	let release!: () => void;
 	const held = new Promise<void>((resolve) => { release = resolve; });
@@ -66,15 +67,15 @@ test("handoff returns before helper completion and preserves the repair-host edi
 	assert.equal(events.includes("snapshot and commit"), false);
 	assert.equal(events.includes("open owner.jsonl"), false);
 	release();
-	assert.equal(await task.completion, "admitted");
-	assert.ok(events.includes("draft: Human draft not yet submitted"));
+	assert.equal(await task.completion, "committed_awaiting_admission");
+	assert.equal(events.some(event => event.startsWith("draft:")), false);
 });
 
-test("failed fresh admission records committed data outcome without throwing from replacement", async () => {
+test("fresh Owner admission is not attempted implicitly after commit", async () => {
 	const { options, events } = fixture({ admission: false });
-	assert.equal(await (await startSameTerminalRepair(options)).completion, "committed_admission_failed");
+	assert.equal(await (await startSameTerminalRepair(options)).completion, "committed_awaiting_admission");
 	assert.ok(events.includes("snapshot and commit"));
-	assert.ok(events.some((event) => event.startsWith("failed:")));
+	assert.equal(events.some((event) => event.startsWith("failed:")), false);
 	assert.equal(events.some((event) => event.startsWith("refused:")), false);
 });
 
