@@ -41,6 +41,21 @@ const recoverySwitches = registry.__piAgentCoordinationRepairRecoverySwitches ??
 const humanWait = registry.__piAgentCoordinationRepairHumanWait ??= new Set();
 const lifetime: NonNullable<typeof registry.__piAgentCoordinationRepairLifetime> = registry.__piAgentCoordinationRepairLifetime ??= { closing: false, launches: new Set(), helpers: new Map() };
 
+/** Register helper birth and ownership together, before yielding to shutdown. */
+export async function launchOwnedRepairHelper(directory: string, launch: () => Promise<IndependentRepairHelper>): Promise<IndependentRepairHelper> {
+	// Preflight awaits may outlive the CLI's completed shutdown snapshot. Fence
+	// immediately before birth, with no await before launch registration.
+	if (lifetime.closing) throw new Error("Original CLI is shutting down");
+	const launching = launch();
+	lifetime.launches.add(launching);
+	try {
+		const helper = await launching;
+		lifetime.helpers.set(helper, directory);
+		if (lifetime.closing) throw new Error("Original CLI shut down during repair helper startup");
+		return helper;
+	} finally { lifetime.launches.delete(launching); }
+}
+
 /** Original CLI lifetime owns helpers; replacing/reloading an Owner does not. */
 export function shutdownRepairHelpers(): Promise<void> {
 	return lifetime.shutdown ??= (async () => {
@@ -371,17 +386,12 @@ export function ownerRepairCommand(bridge: InteractiveHostBridge, admissionFailu
 			await writeFile(moderatorPath, JSON.stringify({ type: "session", version: 3, id: launch.moderatorAgentId, timestamp: new Date().toISOString(), cwd: ctx.cwd }) + "\n", { flag: "wx", mode: 0o600 });
 			const hostPath = await createRepairHost({ directory, cwd: ctx.cwd, ownerPath, attemptId, bootstrapPath });
 			let launched: Attempt | undefined;
-			const launching = launchRepairHelper({ cwd: ctx.cwd, agentDir: launch.agentDir,
+			const helper = await launchOwnedRepairHelper(directory, () => launchRepairHelper({ cwd: ctx.cwd, agentDir: launch.agentDir,
 				extensionPath: join(import.meta.dirname, "helper-entry.ts"), bootstrapPath, sessionPath: moderatorPath,
 				logDirectory: directory, model: `${model.provider}/${model.modelId}`, thinking: launch.thinking,
 				onProgress: (message) => launched?.ui.setWidget("workflow-repair-progress", [sanitizeReportTerminalText(message), `Evidence: ${directory}`]),
 				onNavigate: async target => { if (!launched) throw new Error("Repair is not attached"); await navigateFromModerator(launched, target); },
-			});
-			lifetime.launches.add(launching);
-			let helper: IndependentRepairHelper;
-			try { helper = await launching; lifetime.helpers.set(helper, directory); }
-			finally { lifetime.launches.delete(launching); }
-			if (lifetime.closing) throw new Error("Original CLI shut down during repair helper startup");
+			}));
 			launched = { launch, directory, hostPath, helper, ui: ctx.ui, running: true, switchTarget: hostPath };
 			presentation = launched;
 			attempts.set(attemptId, launched);
