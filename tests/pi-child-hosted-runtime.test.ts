@@ -1111,6 +1111,7 @@ function fakeRuntimeSnapshot(options: Readonly<{
 		model: { provider: "test", modelId: options.modelId },
 		thinking: options.thinking,
 		tools: options.toolExecutionModes.map(({ name }) => name),
+		registeredTools: options.toolExecutionModes.map(({ name }) => name),
 		skills: [],
 		skillSources: [],
 		extensions: [],

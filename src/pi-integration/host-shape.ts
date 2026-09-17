@@ -283,6 +283,7 @@ export function assertAgentSessionShape(
 		"waitForIdle",
 		"dispose",
 		"getActiveToolNames",
+		"getAllTools",
 		"getToolDefinition",
 		"getContextUsage",
 		"compact",

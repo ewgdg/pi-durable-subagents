@@ -690,6 +690,9 @@ export const RuntimeSnapshotSchema = closed({
 	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
 	thinking: RuntimeThinkingSchema,
 	tools: StringListSchema,
+	// The child tool registry. Startup admission reads it as availability
+	// evidence only: descendants inherit the active tools, never this catalogue.
+	registeredTools: StringListSchema,
 	skills: StringListSchema,
 	skillSources: Type.Array(closed({ name: NonEmptyStringSchema, filePath: NonEmptyStringSchema })),
 	extensions: StringListSchema,
@@ -711,7 +714,7 @@ export const RuntimeSnapshotSchema = closed({
 	loadContextFiles: Type.Boolean(),
 });
 
-/** Bridge-proven version-eight method payload/result map. */
+/** Bridge-proven version-nine method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
 	"runtime.executionBegin": {

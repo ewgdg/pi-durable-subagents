@@ -360,7 +360,7 @@ for (const outcome of ["dispatch_rejected", "channel_loss", "process_exit", "com
 	let resolveExit!: (exit: { exitCode: number; signal: number }) => void;
 	let rejectResponse!: (error: Error) => void;
 	const admitted = {
-		snapshot: { cwd: "/runtime", model: { provider: "test", modelId: "test" }, thinking: "off", tools: [], skills: [], skillSources: [], extensions: [], toolExecutionModes: [], projectTrusted: true, sessionId: "recipient", sessionPath: "/sessions/recipient.jsonl", systemPrompt: null, loadContextFiles: true },
+		snapshot: { cwd: "/runtime", model: { provider: "test", modelId: "test" }, thinking: "off", tools: [], registeredTools: [], skills: [], skillSources: [], extensions: [], toolExecutionModes: [], projectTrusted: true, sessionId: "recipient", sessionPath: "/sessions/recipient.jsonl", systemPrompt: null, loadContextFiles: true },
 		channel: {
 			onClose: (handler: typeof close) => { close = handler; return () => {}; },
 			request: () => new Promise((_resolve, reject) => { rejectResponse = reject; }),

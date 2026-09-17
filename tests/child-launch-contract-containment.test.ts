@@ -17,6 +17,7 @@ import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-contract.ts";
 import { PiChildProcessRuntime, type StartPiChildProcessRuntimeOptions } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
+import { AGENT_CONTROL_PROTOCOL_VERSION } from "../src/control/control-protocol-schemas.ts";
 
 test("permanent launch rejection publishes one durable unread report without Owner cooperation", { timeout: 10_000 }, async (t) => {
 	let owner!: ReturnType<WorkflowCoordinator["forAgent"]>;
@@ -110,7 +111,7 @@ test("an unsaved Owner gets direct launch-block attention without losing the ori
 test("incompatible shared pending-delivery admission creates no Runs or Moderator launch path", { timeout: 10_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-contract-containment-"));
 	const schemaPath = join(root, "schemas.mjs");
-	await writeFile(schemaPath, "export const AGENT_CONTROL_PROTOCOL_VERSION = 9; export const ChildProcessBootstrapSchema = {};");
+	await writeFile(schemaPath, `export const AGENT_CONTROL_PROTOCOL_VERSION = ${AGENT_CONTROL_PROTOCOL_VERSION + 1}; export const ChildProcessBootstrapSchema = {};`);
 	const guard = new ChildLaunchContractGuard(pathToFileURL(schemaPath));
 	const assertCompatible = ChildLaunchContractGuard.prototype.assertCompatible;
 	t.mock.method(ChildLaunchContractGuard.prototype, "assertCompatible", () => assertCompatible.call(guard));
@@ -169,8 +170,8 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 		role: "ordinary", ownerPresentation: true, expectedSessionId: "child",
 	};
 	for (const [content, expected] of [
-		[JSON.stringify(legacy), /protocol_mismatch: expected 8, received 7/],
-		[JSON.stringify({ ...legacy, protocolVersion: 8 }), /schema_drift.*missing fields: tools/],
+		[JSON.stringify(legacy), new RegExp(String.raw`protocol_mismatch: expected ${AGENT_CONTROL_PROTOCOL_VERSION}, received 7`)],
+		[JSON.stringify({ ...legacy, protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION }), /schema_drift.*missing fields: tools/],
 		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/],
 	] as const) {
 		await writeFile(path, content, { mode: 0o600 });

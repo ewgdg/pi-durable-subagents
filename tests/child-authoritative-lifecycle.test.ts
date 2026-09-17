@@ -82,7 +82,7 @@ async function attachRuntime(host: Awaited<ReturnType<typeof createTestOwnerHost
 		ready: async () => ({
 			snapshot: {
 				cwd: context.cwd, model: { provider: "test", modelId: "test" }, thinking: "off",
-				tools: [], skills: [], skillSources: [], extensions: [], toolExecutionModes: [],
+				tools: [], registeredTools: [], skills: [], skillSources: [], extensions: [], toolExecutionModes: [],
 				projectTrusted: true, sessionId: session.sessionId, sessionPath: null,
 				systemPrompt: null, loadContextFiles: true,
 			},

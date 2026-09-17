@@ -781,6 +781,7 @@ async function assertRuntimeSnapshot(
 		// An unset selection deliberately delegates this one value to Pi.
 		thinking: expected.thinking ?? actual.thinking,
 		tools: [...actual.tools],
+		registeredTools: [...actual.registeredTools],
 		skills: [...expected.skills],
 		skillSources: await Promise.all(expected.skills.map(async (name, index) => ({
 			name,
@@ -807,8 +808,14 @@ async function assertRuntimeSnapshot(
 	}
 }
 
+/**
+ * Startup admission for the initial tool selection. Every selected tool must be
+ * available to the child; whether an inherited extension keeps it active is the
+ * child's own decision, exactly like activation changes after admission. Extra
+ * active tools stay acceptable, matching that later freedom.
+ */
 export function assertSelectedTools(
-	actual: Pick<PiChildRuntimeSnapshot, "tools" | "toolExecutionModes">,
+	actual: Pick<PiChildRuntimeSnapshot, "tools" | "registeredTools" | "toolExecutionModes">,
 	selectedTools: readonly string[],
 ): void {
 	const modeNames = actual.toolExecutionModes.map(({ name }) => name);
@@ -818,14 +825,18 @@ export function assertSelectedTools(
 		);
 	}
 	const selectedToolNames = new Set(selectedTools);
+	// Active names belong to the registry, but keep both: a name that is active
+	// while absent from the registry is still usable.
+	const availableToolNames = new Set([...actual.registeredTools, ...actual.tools]);
+	const unavailable = [...selectedToolNames].filter((name) => !availableToolNames.has(name));
+	if (unavailable.length === 0) return;
 	const activeToolNames = new Set(actual.tools);
-	const missing = [...selectedToolNames].filter((name) => !activeToolNames.has(name));
-	const unexpected = [...activeToolNames].filter((name) => !selectedToolNames.has(name));
-	if (missing.length > 0 || unexpected.length > 0) {
-		throw new Error(
-			`child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`,
-		);
-	}
+	const inactive = [...selectedToolNames].filter(
+		(name) => availableToolNames.has(name) && !activeToolNames.has(name),
+	);
+	throw new Error(
+		`child_runtime_tools_mismatch: unavailable ${JSON.stringify(unavailable)}, inactive ${JSON.stringify(inactive)}, active ${JSON.stringify(actual.tools)}`,
+	);
 }
 
 async function raceStartup<T>(

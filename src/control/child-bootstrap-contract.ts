@@ -1,7 +1,9 @@
 // Keep this canonical JSON Schema dependency-free: the fresh-process launch probe
 // cannot resolve peer modules supplied only by Pi's extension loader.
-// Version 8 makes the required initial tools selection an incompatible contract.
-export const AGENT_CONTROL_PROTOCOL_VERSION = 8 as const;
+// Version 8 made the required initial tools selection an incompatible contract.
+// Version 9 adds the child tool registry to runtime snapshots, which startup
+// admission reads as availability evidence.
+export const AGENT_CONTROL_PROTOCOL_VERSION = 9 as const;
 
 const NonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 

@@ -179,7 +179,8 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			mode: "tui",
 			hasUI: true,
 		});
-		assert.deepEqual(runtime.snapshot, {
+		const { registeredTools, ...snapshotFields } = runtime.snapshot;
+		assert.deepEqual(snapshotFields, {
 			cwd,
 			model: {
 				provider: PROCESS_RUNTIME_TEST_PROVIDER,
@@ -201,6 +202,9 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			},
 			loadContextFiles: true,
 		});
+		// The registry reports child availability; active tools stay authoritative.
+		assert.ok(registeredTools.includes("read"));
+		assert.ok(registeredTools.includes("runtime_sequential_probe"));
 		assert.equal((await stat(runtime.bootstrapPath)).mode & 0o777, 0o600);
 
 		await waitForFrame(runtime, "PROCESS_RUNTIME_CHILD_WIDGET");
@@ -1120,27 +1124,32 @@ test("an idle child defers threshold compaction until later work is admitted", {
 	}
 });
 
-test("startup tool admission compares sets and preserves execution-mode validation", () => {
-	const snapshot = (tools: string[]) => ({
+test("startup tool admission requires available selected tools and preserves execution-mode validation", () => {
+	const snapshot = (tools: string[], registeredTools: string[] = tools) => ({
 		tools,
+		registeredTools,
 		toolExecutionModes: tools.map((name) => ({ name, executionMode: "parallel" as const })),
 	});
 	assert.doesNotThrow(() => assertSelectedTools(snapshot([]), []));
 	assert.doesNotThrow(() => assertSelectedTools(snapshot(["read", "agent_message"]), ["agent_message", "read"]));
-	for (const [selected, active, missing, unexpected] of [
-		[["read"], [], ["read"], []],
-		[[], ["read"], [], ["read"]],
-		[["read"], ["extra"], ["read"], ["extra"]],
+	// An inherited extension may rewire activation during startup: a selected tool
+	// that stays in the registry is admissible, and extra active tools are its own
+	// business, exactly like activation changes after admission.
+	assert.doesNotThrow(() => assertSelectedTools(snapshot([], ["read"]), ["read"]));
+	assert.doesNotThrow(() => assertSelectedTools(snapshot(["exec", "wait"], ["read", "exec", "wait"]), ["read"]));
+	for (const [selected, active, registered, unavailable, inactive] of [
+		[["read"], [], [], ["read"], []],
+		[["read", "absent"], ["exec"], ["read"], ["absent"], ["read"]],
 	] as const) {
-		assert.throws(() => assertSelectedTools(snapshot([...active]), selected), {
-			message: `child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`,
+		assert.throws(() => assertSelectedTools(snapshot([...active], [...registered]), selected), {
+			message: `child_runtime_tools_mismatch: unavailable ${JSON.stringify(unavailable)}, inactive ${JSON.stringify(inactive)}, active ${JSON.stringify(active)}`,
 		});
 	}
-	assert.throws(() => assertSelectedTools({ tools: ["read"], toolExecutionModes: [] }, ["read"]), /child_runtime_tool_modes_mismatch/);
+	assert.throws(() => assertSelectedTools({ tools: ["read"], registeredTools: ["read"], toolExecutionModes: [] }, ["read"]), /child_runtime_tool_modes_mismatch/);
 });
 
-for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as const) {
-	test(`startup checks exact initial tools: ${selection}`, {
+for (const selection of ["reordered", "inactive", "rewired", "unavailable"] as const) {
+	test(`startup admission resolves the launch selection by availability: ${selection}`, {
 		timeout: TEST_TIMEOUT_MS,
 		skip: process.platform === "win32",
 	}, async () => {
@@ -1167,6 +1176,15 @@ for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as
 			"ask_user",
 			...(selection === "unavailable" ? ["unavailable_selected_tool"] : []),
 		] as const;
+		// Pi drops selected names the child has no tool definition for, so the
+		// reported active set is the launch selection minus unregistered tools.
+		// "rewired" mirrors an extension that runs its own surface: it deactivates a
+		// selected tool and activates one of its own.
+		const initialTools = [
+			...tools.filter((name) => name !== "read"),
+			...(selection === "inactive" || selection === "rewired" ? [] : ["read"]),
+			...(selection === "rewired" ? ["runtime_sequential_probe"] : []),
+		].filter((name) => name !== "unavailable_selected_tool");
 		let runtime: PiChildProcessRuntime | undefined;
 		try {
 			const startup = PiChildProcessRuntime.start({
@@ -1192,11 +1210,7 @@ for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as
 				ownerEnvironment: {
 					...process.env,
 					PI_SKIP_VERSION_CHECK: "1",
-					PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify([
-						...tools.filter((name) => name !== "read"),
-						...(selection === "missing" ? [] : ["read"]),
-						...(selection === "unexpected" ? ["runtime_sequential_probe"] : []),
-					]),
+					PROCESS_RUNTIME_INITIAL_TOOLS: JSON.stringify(initialTools),
 					// Yield in the inherited session_start handler before changing tools.
 					PROCESS_RUNTIME_STARTUP_DELAY_MS: "250",
 					PROCESS_RUNTIME_ACTIVATED_TOOL: "1",
@@ -1207,27 +1221,22 @@ for (const selection of ["reordered", "missing", "unexpected", "unavailable"] as
 					selectorSnapshot: processSelectorSnapshot(expectedSessionId),
 				}),
 			});
-			if (selection !== "reordered") {
-				const missing = selection === "missing" ? ["read"]
-					: selection === "unavailable" ? ["unavailable_selected_tool"] : [];
-				const unexpected = selection === "unexpected" ? ["runtime_sequential_probe"] : [];
+			if (selection === "unavailable") {
 				await assert.rejects(startup.then((admitted) => { runtime = admitted; return admitted; }), (error: unknown) => {
 					assert.ok(error instanceof Error);
-					assert.ok(error.message.includes(`child_runtime_tools_mismatch: missing ${JSON.stringify(missing)}, unexpected ${JSON.stringify(unexpected)}`), error.message);
+					assert.ok(error.message.includes(
+						`child_runtime_tools_mismatch: unavailable ["unavailable_selected_tool"], inactive [], active ${JSON.stringify(initialTools)}`,
+					), error.message);
 					return true;
 				});
 				return;
 			}
 			runtime = await startup;
+			// The bridge still applies the full launch selection before inherited startup.
 			assert.deepEqual(JSON.parse(await readFile(join(root, "initial-tools.jsonl"), "utf8")), tools);
-			assert.deepEqual(runtime.snapshot.tools, [
-				"agent_message",
-				"agent_control",
-				"agent_observe",
-				"agent_spawn",
-				"ask_user",
-				"read",
-			]);
+			assert.deepEqual(runtime.snapshot.tools, initialTools);
+			// Later native activation and dynamic tools are unrelated to startup admission.
+			if (selection !== "reordered") return;
 			await attachNativeChildDisplay(runtime);
 			runtime.writeInput("/runtime-state\r");
 			await waitForFrame(runtime, "PROCESS_RUNTIME_STATE_CHANGED");
@@ -1429,7 +1438,8 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			runtimeDirectory: root,
 		});
 		const systemPromptPath = join(dirname(runtime.bootstrapPath), "system-prompt.md");
-		assert.deepEqual(runtime.snapshot, {
+		const { registeredTools, ...snapshotFields } = runtime.snapshot;
+		assert.deepEqual(snapshotFields, {
 			cwd,
 			model: {
 				provider: PROCESS_RUNTIME_TEST_PROVIDER,
@@ -1451,6 +1461,8 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			},
 			loadContextFiles: true,
 		});
+		assert.ok(registeredTools.includes("read"));
+		assert.ok(registeredTools.includes("runtime_sequential_probe"));
 	} finally {
 		await runtime?.dispose();
 	}
