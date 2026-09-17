@@ -81,7 +81,7 @@ Changing the model/account alone is not resumption. No new paid fallback, provid
 
 If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota establishes a new suspension, and another terminal error follows ordinary failure handling. An aborted attempt before confirmation retains the original stop rather than inventing a human Interruption Hold.
 
-A stop is process-local. It is not a durable Run state: when the host process ends, the stop ends with it and the Agent recovers as ordinary dormant work. Recovery therefore does not resume work by itself, and a later explicit admission may start a successor Run. While quota remains exhausted, that attempt re-suspends on the same provider evidence without producing model output. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
+A stop is process-local. It is not a durable Run state: when the host process ends, the stop ends with it and the Agent recovers as ordinary dormant work. The suppression described above belongs to the live stop, so after host loss reminder, heartbeat, and deadlock or stall moderation treat the affected path as ordinary unfinished work again. Recovery itself does not resume work, and a later explicit admission may start a successor Run; while quota remains exhausted, that attempt re-suspends on the same provider evidence without producing model output. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
 
 ### Provider evidence and upstream limitation
 

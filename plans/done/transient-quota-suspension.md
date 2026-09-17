@@ -94,6 +94,16 @@ repeat runs, and `cold-host-recovery.test.ts` / `agent-view.test.ts` compared ag
 clean base worktree with identical pre-existing failure sets. `npm run test:fast` reproduces
 the same 10 pre-existing failures as base.
 
+Independent review (agent `transient-quota-review`) returned "ships as-is". Its two
+low-severity findings: the loss of post-restart reminder/moderation suppression was not
+stated (now documented in `docs/run-supervision.md` and `docs/cold-host-recovery.md`), and
+`#ensureRuntimeInLane`'s `quota_suspended` throw is reachable when selecting an in-process
+Runtime that has no terminal projection. That shape cannot present an editor in any state:
+the previous cold branch prepared without a projection and failed at
+`waitForStartupProjection` with `invariant_violation: prepared without a presentation
+projection`. Production children always have a projection, so only the reported error
+changed; no code change was made.
+
 Follow-ups not taken here: the two process test files that fail identically at base
 (`cold-host-recovery.test.ts`, `agent-view.test.ts`) remain failing and are unrelated to
 quota.
