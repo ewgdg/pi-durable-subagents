@@ -340,6 +340,37 @@ test("Wait leaves a frozen original Steer Request reserved exactly once", async 
 	assert.equal(h.deliveries(h.responder).length, 1);
 });
 
+test("a Cancellation suppresses a frozen Request before its Steer hand-off", { timeout: 5_000 }, async (t) => {
+	let release: (() => Promise<void>) | undefined;
+	const h = harness(t, { afterSteerFreeze(context) {
+		// Defer only the Request's own batch; a later Cancellation batch must be
+		// able to dispatch so a regression would actually deliver it.
+		if (release) return;
+		release = context.release;
+		return "defer";
+	} });
+	const request = await h.message(h.requester, "frozen-suppression-request", {
+		title: "Fixture request",
+		operation: "request", targetAgent: "responder", question: "Reserved work.", deliveryMode: "steer",
+	});
+	assert.ok("requestMessageId" in request);
+	assert.ok(release, "the Steer batch freezes before hand-off");
+	assert.equal(h.responder.dispatches.length, 0, "nothing was handed to the responder Runtime");
+	await h.message(h.requester, "frozen-suppression-cancel", {
+		operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdrawn",
+	});
+	await release();
+	// A suppressed Cancellation is never scheduled; settle to give an
+	// over-announcing regression a chance to dispatch it.
+	h.responder.settle();
+	await flush();
+	// Suppression must still stop a queued Request before hand-off: the frozen
+	// batch is not yet an in-flight dispatch, so neither message reaches the
+	// responder.
+	assert.equal(h.responder.dispatches.length, 0, "the withdrawn Request is dropped before hand-off");
+	assert.deepEqual(h.deliveries(h.responder), [], "neither the Request nor a pointless Cancellation is delivered");
+});
+
 test("Wait preserves a dispatched Request while recipient proof is in flight", async (t) => {
 	const h = harness(t);
 	h.responder.deferProof = true;

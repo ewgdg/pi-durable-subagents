@@ -586,3 +586,130 @@ test("Delivery evidence still canonicalizes a Cancellation that has no author re
 		);
 	}
 });
+
+test("a Cancellation author result rejected for a retry-only reason stays fail-closed against responder Delivery", () => {
+	const history = requestHistory();
+	const requestId = history.request();
+	const source = {
+		agentId: history.requester.record.identity.agentId,
+		entryId: history.requester.manager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "cancel", requestMessageId: requestId, reason: "Withdrawn" },
+					{ id: "cancel-retry-reason" },
+				),
+				{ stopReason: "toolUse" },
+			),
+		),
+		toolCallId: "cancel-retry-reason",
+	};
+	// "policy_rejected" is valid only for retry outcomes, so this authoring record
+	// is rejected rather than absent; responder Delivery must not replace it.
+	history.requester.manager.appendMessage({
+		role: "toolResult",
+		toolCallId: source.toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Rejected." }],
+		details: {
+			messageId: deriveMessageIdentity(source),
+			targetAgentId: history.responder.record.identity.agentId,
+			messageStatus: "not_sent",
+			reason: "policy_rejected",
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+	appendEvidenceDelivery(history.responder, { source, projection: {
+		kind: "request_cancellation",
+		cancellationId: deriveMessageIdentity(source),
+		requestMessageId: requestId,
+		fromAgentId: history.requester.record.identity.agentId,
+		reason: "Withdrawn",
+	} });
+	for (const replay of [false, true]) {
+		if (replay) for (const participant of [history.requester, history.responder]) {
+			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
+		}
+		const evidence = new RequestEvidence(history.agents);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			[requestId],
+			"a retry-only rejection reason must not canonicalize the Cancellation",
+		);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			[requestId],
+		);
+		assert.ok(
+			inspectCoordinationRejections(
+				history.requester.record.transcript.inspect(),
+				history.requester.record.identity.agentId,
+			).some(rejection => rejection.recordKind === "tool-result"),
+			"the rejection stays surfaced through the replay-rejection index",
+		);
+	}
+});
+
+test("an Answer author result rejected by shape cannot discharge a Request through requester Delivery", () => {
+	const history = requestHistory();
+	const requestId = history.request();
+	const source = {
+		agentId: history.responder.record.identity.agentId,
+		entryId: history.responder.manager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "answer", requestId, answer: "Completed." },
+					{ id: "answer-rejected-result" },
+				),
+				{ stopReason: "toolUse" },
+			),
+		),
+		toolCallId: "answer-rejected-result",
+	};
+	// "inspection_incomplete" is a retry-only reason, so this authoring result is
+	// rejected; requester Delivery proves notification, never authorship.
+	history.responder.manager.appendMessage({
+		role: "toolResult",
+		toolCallId: source.toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Rejected." }],
+		details: {
+			messageId: deriveMessageIdentity(source),
+			requestMessageId: requestId,
+			requestTitle: "Fixture request",
+			messageStatus: "unknown",
+			reason: "inspection_incomplete",
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+	appendEvidenceDelivery(history.requester, { source, projection: {
+		kind: "answer",
+		answerId: deriveMessageIdentity(source),
+		requestMessageId: requestId,
+		requestTitle: "Fixture request",
+		fromAgentId: history.responder.record.identity.agentId,
+		answer: "Completed.",
+	} });
+	for (const replay of [false, true]) {
+		if (replay) for (const participant of [history.requester, history.responder]) {
+			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
+		}
+		const evidence = new RequestEvidence(history.agents);
+		assert.equal(
+			evidence.findAnswer(evidence.requireRequest(requestId)),
+			undefined,
+			"a rejected Answer author result never canonicalizes through requester Delivery",
+		);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			[requestId],
+		);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			[requestId],
+		);
+	}
+});
