@@ -22,6 +22,8 @@ import {
 	truncateToWidth,
 	type Component,
 	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
@@ -149,7 +151,7 @@ export class PostMortemAgentViewSurface implements Component {
 		this.#scrollTop = clamp(this.#scrollTop, 0, this.#maximumScrollTop);
 		const title = `${this.#label} · ${this.#agentId}`;
 		const availability = `Runtime unavailable: ${this.#preparationError}`;
-		const help = "↑/k ↓/j scroll · PgUp/PgDn · Home/End · a agents · Esc/q back";
+		const help = "↑/k ↓/j/wheel scroll · PgUp/PgDn · Home/End · a agents · Esc/q back";
 		return [
 			truncateToWidth(
 				this.#theme.fg("accent", this.#theme.bold("Post-mortem · read-only")),
@@ -194,6 +196,14 @@ export class PostMortemAgentViewSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.end)) this.#scrollTo(this.#maximumScrollTop);
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "wheel") return undefined;
+		// Pi owns fullscreen mouse capture; consume the wheel even at the transcript boundaries.
+		const previous = this.#scrollTop;
+		this.#scrollTop = clamp(this.#scrollTop + (event.wheelDelta ?? 0), 0, this.#maximumScrollTop);
+		return { handled: true, render: previous !== this.#scrollTop };
 	}
 
 	invalidate(): void {

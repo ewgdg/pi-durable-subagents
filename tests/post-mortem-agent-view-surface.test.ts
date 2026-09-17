@@ -5,16 +5,25 @@ import {
 	SessionManager,
 	Theme,
 	initTheme,
+	type ExtensionUIContext,
+	type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
+	TuiAltScreen,
 	stripTerminalSequences,
 	type Component,
+	type OverlayHandle,
+	type OverlayOptions,
+	type Terminal,
 	type TUI,
+	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 
 import {
 	PostMortemAgentViewSurface,
+	openPostMortemAgentViewSurface,
+	type PostMortemAgentView,
 	type PostMortemAgentViewResult,
 } from "../src/presentation/post-mortem-agent-view-surface.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
@@ -33,7 +42,7 @@ test("post-mortem view renders durable evidence and starts at its tail", () => {
 	assert.match(rendered, /Last durable line/);
 	assert.doesNotMatch(rendered, /First durable line/);
 	assert.match(rendered, /Runtime unavailable: deterministic preparation failure/);
-	assert.match(rendered, /↑\/k ↓\/j scroll · PgUp\/PgDn · Home\/End · a agents · Esc\/q back/);
+	assert.match(rendered, /↑\/k ↓\/j\/wheel scroll · PgUp\/PgDn · Home\/End · a agents · Esc\/q back/);
 });
 
 test("post-mortem view scrolls with arrows and j/k plus paging and endpoints", () => {
@@ -57,6 +66,77 @@ test("post-mortem view scrolls with arrows and j/k plus paging and endpoints", (
 	assert.equal(surface.scrollTop(), 0);
 	surface.handleInput("\x1b[F");
 	assert.equal(surface.scrollTop(), surface.maximumScrollTop());
+});
+
+test("post-mortem view scrolls with the wheel and clamps at both ends", () => {
+	const { surface } = createHarness();
+	surface.render(80);
+
+	assert.deepEqual(surface.handleMouse(wheel(-1)), { handled: true, render: true });
+	assert.equal(surface.scrollTop(), surface.maximumScrollTop() - 1);
+	assert.deepEqual(surface.handleMouse(wheel(1)), { handled: true, render: true });
+	assert.equal(surface.scrollTop(), surface.maximumScrollTop());
+	assert.deepEqual(surface.handleMouse(wheel(1)), { handled: true, render: false });
+
+	for (let index = 0; index < surface.maximumScrollTop() + 2; index += 1) {
+		surface.handleMouse(wheel(-1));
+	}
+	assert.equal(surface.scrollTop(), 0);
+	assert.deepEqual(surface.handleMouse(wheel(-1)), { handled: true, render: false });
+
+	assert.equal(surface.handleMouse({ ...wheel(1), type: "click", button: "left" }), undefined);
+	assert.equal(surface.handleMouse({ ...wheel(1), type: "move" }), undefined);
+});
+
+test("fullscreen terminal wheel input scrolls the post-mortem overlay and returns to underlying content on close", { timeout: 5_000 }, async (t) => {
+	let input: (data: string) => void = () => {};
+	const terminal: Terminal = {
+		columns: 80, rows: 12, kittyProtocolActive: false,
+		start(onInput) { input = onInput; }, stop() {}, async drainInput() {},
+		write() {}, moveBy() {}, hideCursor() {}, showCursor() {},
+		clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {},
+	};
+	const tui = new TuiAltScreen(terminal);
+	let underlyingWheels = 0;
+	const underlying: Component = {
+		render: () => ["Underlying content"], invalidate() {},
+		handleMouse(event) { if (event.type === "wheel") underlyingWheels++; return { handled: true }; },
+	};
+	tui.addChild(underlying);
+	tui.setFocus(underlying);
+	let component!: Component;
+	let overlay: OverlayHandle | undefined;
+	t.after(() => { overlay?.hide(); tui.stop(); });
+	tui.start();
+	const ui = { custom<T>(
+		factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (value: T) => void) => Component,
+		config: { overlayOptions?: OverlayOptions },
+	) {
+		return new Promise<T>((resolve) => {
+			component = factory(tui, {
+				fg: (_color: string, text: string) => text, bold: (text: string) => text,
+			} as Theme, {} as KeybindingsManager, (value) => {
+				overlay?.hide();
+				resolve(value);
+			});
+			overlay = tui.showOverlay(component, config.overlayOptions);
+		});
+	} } as unknown as ExtensionUIContext;
+	const result = openPostMortemAgentViewSurface(ui, createView(createEvidence()));
+	tui.renderNow();
+	const initial = component.render(80);
+	input("\x1b[<64;3;3M");
+	tui.renderNow();
+	assert.notDeepEqual(component.render(80), initial);
+	input("\x1b[<65;3;3M");
+	tui.renderNow();
+	assert.deepEqual(component.render(80), initial);
+	assert.equal(underlyingWheels, 0);
+	input("q");
+	assert.equal(await result, "back");
+	tui.renderNow();
+	input("\x1b[<65;1;1M");
+	assert.equal(underlyingWheels, 1);
 });
 
 test("post-mortem view returns agents or back without mutating transcript", () => {
@@ -115,6 +195,35 @@ function createHarness(): {
 	results: PostMortemAgentViewResult[];
 	sessionManager: SessionManager;
 } {
+	const sessionManager = createEvidence();
+	const view = createView(sessionManager);
+	const results: PostMortemAgentViewResult[] = [];
+	const theme = createTheme();
+	const tui = {
+		terminal: { columns: 80, rows: 12 },
+		requestRender() {},
+	} as unknown as TUI;
+	return {
+		surface: new PostMortemAgentViewSurface({
+			tui,
+			theme,
+			agentId: view.agentId,
+			label: view.label,
+			transcript: view.transcript,
+			preparationError: new Error(view.preparationError),
+			done: (result) => results.push(result),
+		}),
+		results,
+		sessionManager,
+	};
+}
+
+const wheel = (wheelDelta: number): TuiMouseEvent => ({
+	type: "wheel", button: "none", x: 2, y: 2, screenX: 2, screenY: 2,
+	width: 80, height: 12, shift: false, alt: false, ctrl: false, wheelDelta,
+});
+
+function createEvidence(): SessionManager {
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: AGENT_ID });
 	for (let index = 0; index < 30; index += 1) {
 		sessionManager.appendMessage({
@@ -126,24 +235,16 @@ function createHarness(): {
 		});
 		sessionManager.appendMessage(fauxAssistantMessage(`Assistant line ${index}`));
 	}
-	const results: PostMortemAgentViewResult[] = [];
-	const theme = createTheme();
-	const tui = {
-		terminal: { columns: 80, rows: 12 },
-		requestRender() {},
-	} as unknown as TUI;
+	return sessionManager;
+}
+
+function createView(sessionManager: SessionManager): PostMortemAgentView {
 	return {
-		surface: new PostMortemAgentViewSurface({
-			tui,
-			theme,
-			agentId: AGENT_ID,
-			label: "Failed Moderator",
-			transcript: transcriptFromSessionManager(sessionManager).inspect(),
-			preparationError: new Error("deterministic preparation failure"),
-			done: (result) => results.push(result),
-		}),
-		results,
-		sessionManager,
+		kind: "post_mortem",
+		agentId: AGENT_ID,
+		label: "Failed Moderator",
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
+		preparationError: "deterministic preparation failure",
 	};
 }
 

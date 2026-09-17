@@ -56,7 +56,7 @@ This matrix records the production process-backed Agent-view contract and its re
 |---|---|
 | Only Agent Identity or Moderator Input commits before process launch; resolved configuration remains volatile | spawn, transcript, and process factory tests |
 | Dormant selection can prepare a Runtime without inventing model work | cold-recovery and Dormant Agent-view tests |
-| Failed Dormant Runtime preparation opens durable read-only post-mortem evidence and restores the exact prior presentation | post-mortem surface, remote selector, and failed Moderator Agent-view tests |
+| Failed Dormant Runtime preparation opens durable read-only post-mortem evidence with keyboard and mouse wheel scrolling and restores the exact prior presentation | post-mortem surface, post-mortem fullscreen wheel, remote selector, and failed Moderator Agent-view tests |
 | Extension, editor, command, Message, and `session_start` input activate exact Runs normally | Agent-view activation tests |
 | Dormant Runtime compaction and input accepted into Pi's compaction queue survive Owner detachment until the operation ends or the input transfers to a successor Run | detached Dormant compaction Agent-view regression |
 | `agent_settled` is authoritative; prompt acceptance is not settlement | hosted Runtime lifecycle and retry tests |
