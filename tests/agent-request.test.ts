@@ -3757,7 +3757,7 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("requester Cancellation suppresses an undelivered Request without reviving it", async (t) => {
+test("requester Cancellation suppresses an undelivered Request and its pointless Cancellation", async (t) => {
 	const harness = await createDormantChildHarness(t, {
 		afterDeliveryAdmission: ({ operation }) =>
 			operation === "cancel" ? "confirmation_lost" : undefined,
@@ -3839,37 +3839,30 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 		timestamp: Date.now(),
 	});
 
+	// Decision A: the Request never reached the responder, so the Cancellation is
+	// not announced and no Run starts for either message.
+	await new Promise<void>((resolve) => setTimeout(resolve, 50));
+	assert.equal(
+		harness.view.status(harness.childId).run.phase,
+		"dormant",
+		"a Cancellation whose Request was never delivered does not revive the responder",
+	);
 	const childSessionFile = await waitForChildSessionFile(
 		harness.host,
 		harness.childId,
 	);
-	const entries = await waitForEntry(
-		childSessionFile,
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === "agent-coordination.message-delivery" &&
-			JSON.stringify(entry.details) ===
-				JSON.stringify({ messages: [cancellationSource] }),
+	const entries = SessionManager.open(childSessionFile).getEntries();
+	assert.equal(
+		entries.some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.details) ===
+					JSON.stringify({ messages: [cancellationSource] }),
+		),
+		false,
+		"a Cancellation whose Request was never delivered is not announced",
 	);
-	const cancellationDelivery = entries.find(
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === "agent-coordination.message-delivery" &&
-			JSON.stringify(entry.details) ===
-				JSON.stringify({ messages: [cancellationSource] }),
-	);
-	assert.ok(cancellationDelivery && cancellationDelivery.type === "custom_message");
-	assert.deepEqual(JSON.parse(cancellationDelivery.content as string), {
-		messages: [
-			{
-				kind: "request_cancellation",
-				cancellationId,
-				requestMessageId: requestId,
-				fromAgentId: harness.host.session.sessionId,
-				reason: cancelInput.reason,
-			},
-		],
-	});
 	assert.equal(
 		entries.some(
 			(entry) =>
@@ -3887,6 +3880,21 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 					}),
 		),
 		false,
+		"the undelivered Request stays suppressed",
+	);
+	assert.equal(
+		entries.some(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				entry.message.content.some(
+					(part) =>
+						part.type === "text" &&
+						part.text === "I received only the Request Cancellation.",
+				),
+		),
+		false,
+		"the responder is not revived by the suppressed Cancellation",
 	);
 
 	const retryToolCallId = "retry-cancelled-request";
@@ -3907,7 +3915,7 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Cancellation delivered to a busy responder suppresses its queued Request", async (t) => {
+test("a Cancellation whose Request never reached a busy responder is not announced or revived", async (t) => {
 	const harness = await createDormantChildHarness(t);
 	let markActiveGenerationStarted!: () => void;
 	const activeGenerationStarted = new Promise<void>((resolve) => {
@@ -4018,17 +4026,11 @@ test("Cancellation delivered to a busy responder suppresses its queued Request",
 		harness.host,
 		harness.childId,
 	);
-	const entries = await waitForEntry(
-		childSessionFile,
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === "agent-coordination.message-delivery" &&
-			JSON.stringify(entry.details) ===
-				JSON.stringify({ messages: [cancellationSource] }),
-	);
 	await waitForCondition(
 		() => harness.view.status(harness.childId).run.phase === "dormant",
 	);
+	await new Promise<void>((resolve) => setTimeout(resolve, 50));
+	const entries = SessionManager.open(childSessionFile).getEntries();
 	assert.equal(
 		entries.some(
 			(entry) =>
@@ -4038,7 +4040,148 @@ test("Cancellation delivered to a busy responder suppresses its queued Request",
 					JSON.stringify({ messages: [requestSource] }),
 		),
 		false,
+		"the queued Request stays suppressed",
 	);
+	assert.equal(
+		entries.some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.details) ===
+					JSON.stringify({ messages: [cancellationSource] }),
+		),
+		false,
+		"a Cancellation whose Request never reached the responder is not announced",
+	);
+	assert.equal(
+		entries.some(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				entry.message.content.some(
+					(part) =>
+						part.type === "text" &&
+						part.text === "The Cancellation arrived without the queued Request.",
+				),
+		),
+		false,
+		"the responder is not revived by the suppressed Cancellation",
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("a Cancellation is announced when its Request reached the responder", async (t) => {
+	const harness = await createDormantChildHarness(t);
+	harness.host.model.setResponses([
+		fauxAssistantMessage("I received the Request."),
+		fauxAssistantMessage("I received the Cancellation."),
+	]);
+	const requestInput = {
+		title: "Fixture request",
+		operation: "request" as const,
+		targetAgent: harness.childId,
+		question: "Deliver this Request before it is withdrawn.",
+	};
+	const requestToolCallId = "deliver-request-before-announcement";
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", requestInput, { id: requestToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(requestEntry);
+	const requestSource = {
+		agentId: harness.host.session.sessionId,
+		entryId: requestEntry.id,
+		toolCallId: requestToolCallId,
+	};
+	const requestId = deriveMessageId(requestSource);
+	const requestReceipt = await harness.view.message(requestToolCallId, requestInput);
+	assert.equal(
+		"messageStatus" in requestReceipt ? requestReceipt.messageStatus : undefined,
+		"sent",
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: requestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(requestReceipt) }],
+		details: requestReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	await waitForCondition(
+		() => retentionCount(harness.view.status(harness.childId).run, "answer_owed") === 1,
+	);
+
+	const cancelToolCallId = "announce-cancellation-after-delivery";
+	const cancelInput = {
+		operation: "cancel" as const,
+		requestMessageId: requestId,
+		reason: "Withdraw the delivered Request.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", cancelInput, { id: cancelToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const cancellationEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(cancellationEntry);
+	const cancellationSource = {
+		agentId: harness.host.session.sessionId,
+		entryId: cancellationEntry.id,
+		toolCallId: cancelToolCallId,
+	};
+	const cancellationId = deriveMessageId(cancellationSource);
+	const cancellation = await harness.view.message(cancelToolCallId, cancelInput);
+	assert.equal(
+		"messageStatus" in cancellation ? cancellation.messageStatus : undefined,
+		"sent",
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: cancelToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(cancellation) }],
+		details: cancellation,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	const childSessionFile = await waitForChildSessionFile(
+		harness.host,
+		harness.childId,
+	);
+	const entries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.message-delivery" &&
+			JSON.stringify(entry.details) ===
+				JSON.stringify({ messages: [cancellationSource] }),
+	);
+	const cancellationDelivery = entries.find(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.message-delivery" &&
+			JSON.stringify(entry.details) ===
+				JSON.stringify({ messages: [cancellationSource] }),
+	);
+	assert.ok(cancellationDelivery && cancellationDelivery.type === "custom_message");
+	assert.deepEqual(JSON.parse(cancellationDelivery.content as string), {
+		messages: [
+			{
+				kind: "request_cancellation",
+				cancellationId,
+				requestMessageId: requestId,
+				fromAgentId: harness.host.session.sessionId,
+				reason: cancelInput.reason,
+			},
+		],
+	});
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
