@@ -30,6 +30,7 @@ import {
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
 import { openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
+import { openModelPolicySurface } from "../presentation/model-policy-surface.ts";
 
 type AgentCoordinatorView =
 	| OrdinaryAgentCoordinatorView
@@ -61,6 +62,8 @@ export function registerAgentsCommand(
 	pi: ExtensionAPI,
 	resolveView: () => HumanPresentationCoordinatorView,
 	ownerAdmission?: OwnerRecoveryError | "admitted",
+	/** Present only in the Workflow Owner session; enables `/agents models`. */
+	admittedOwnerView?: () => OrdinaryAgentCoordinatorView,
 ): void {
 	const admissionFailure = ownerAdmission === "admitted" ? undefined : ownerAdmission;
 	pi.registerCommand("agents", {
@@ -69,6 +72,7 @@ export function registerAgentsCommand(
 			const completions = [
 				...(getAgentsArgumentCompletions(prefix) ?? []),
 				...(ownerAdmission && "diagnostics".startsWith(prefix.trim()) ? [{ value: "diagnostics", label: "diagnostics" }] : []),
+				...(admittedOwnerView && "models".startsWith(prefix.trim()) ? [{ value: "models", label: "models" }] : []),
 			];
 			return completions.length ? completions : null;
 		},
@@ -76,6 +80,18 @@ export function registerAgentsCommand(
 			if (ownerAdmission && args.trim() === "diagnostics") {
 				if (ctx.mode !== "tui") return;
 				await openOwnerDiagnostics(ctx.ui, admissionFailure);
+				return;
+			}
+			if (admittedOwnerView && args.trim() === "models") {
+				if (ctx.mode !== "tui") return;
+				const view = admittedOwnerView();
+				await openModelPolicySurface(ctx.ui, {
+					...view.modelPolicy(),
+					persist: async (entries) => (await view.setModelExclusions(entries)).excludedModels,
+				});
+				// Spawn guidance is baked into the registered tool definitions, so refresh
+				// them rather than leaving the Owner's own prompt describing stale bans.
+				registerOwnerAgentTools(pi, admittedOwnerView, view.agentTemplateSnapshot());
 				return;
 			}
 			if (admissionFailure) {

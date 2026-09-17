@@ -8,6 +8,9 @@ import {
 } from "@earendil-works/pi-ai";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+
+import { readWorkflowPolicy } from "../src/policy/workflow-policy.ts";
 
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import piAgentCoordination from "../src/index.ts";
@@ -599,6 +602,51 @@ test("Workflow Policy model exclusions refuse an explicit spawn model before Ide
 		reason: "Configured Agent model is excluded by model policy: coordination-test/deterministic-owner",
 	});
 
+	await host.runtime.dispose();
+});
+
+test("/agents models toggles durable model exclusions from the Owner session", { timeout: 5_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	await bindTestOwnerHost(host, "tui");
+	const command = host.session.extensionRunner.getCommand("agents");
+	assert.ok(command);
+	const handled = command.handler(
+		"models",
+		host.session.extensionRunner.createContext() as Parameters<typeof command.handler>[1],
+	);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const surface = host.ui.customSurfaces.at(-1);
+	assert.ok(surface);
+	const rendered = () => surface.render(100).map(stripTerminalSequences);
+	assert.match(rendered().join("\n"), /Agent spawn model policy/);
+	assert.match(rendered().join("\n"), /Banned models cannot be used/);
+	assert.match(rendered().find((line) => line.includes("coordination-test/*")) ?? "", /✓/);
+
+	// The first row is the provider entry for the only authenticated provider.
+	surface.handleInput?.("\r");
+	const exclusions = async () => {
+		const policy = await readWorkflowPolicy(host.services.agentDir);
+		if (!policy.ok) throw new Error("Expected the written policy to load");
+		return policy.snapshot.excludedModels;
+	};
+	for (let attempt = 0; attempt < 200 && (await exclusions()).length === 0; attempt += 1) {
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	assert.deepEqual(await exclusions(), ["coordination-test/*"]);
+	assert.doesNotMatch(
+		rendered().find((line) => line.includes("coordination-test/*")) ?? "",
+		/✓/,
+	);
+	assert.doesNotMatch(
+		rendered().find((line) => line.includes("deterministic-owner")) ?? "",
+		/✓/,
+	);
+
+	surface.handleInput?.("\x1b");
+	await handled;
 	await host.runtime.dispose();
 });
 

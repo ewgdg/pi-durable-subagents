@@ -85,3 +85,7 @@ Keep one deny list and enforce it at the single existing model-availability pred
 - Exclusion is union-only: no negation, so a model cannot be carved out of a provider entry. Carving out requires banning the individual models instead.
 - Enter toggles; Space never toggles.
 - The config filename rename ships with this change; the session directory and inline extension identity renames do not.
+
+## Outcomes & Retrospective
+
+Delivered a durable, Owner-authored model deny list enforced at the existing availability predicate, plus a flat toggle menu and the policy filename rename. Enforcement, writer, matcher, surface, and command wiring are covered by unit, coordinator-level, and command-level tests. Two known gaps: the interactive menu was not exercised in a real terminal session, and `captureTemplateSnapshotFor` failures during a policy change are contained per Agent with a diagnostic instead of failing the whole publish.

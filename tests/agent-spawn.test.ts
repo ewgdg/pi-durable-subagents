@@ -23,6 +23,7 @@ import {
 } from "../src/coordination/workflow-coordinator.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
+import { readWorkflowPolicy } from "../src/policy/workflow-policy.ts";
 import {
 	deriveMessageIdentity,
 	ProtocolInvariantError,
@@ -580,6 +581,35 @@ test("a catalogued model under an unconfigured provider fails before Agent Ident
 		reason: `Configured Agent model is unavailable: ${configuredModelId}`,
 	});
 	assert.deepEqual(harness.view.children(), []);
+
+	await harness.shutdown();
+});
+
+test("Owner-authored model exclusions refuse an explicit spawn model", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
+	const available = harness.host.services.modelRuntime.getAvailableSnapshot()[0];
+	assert.ok(available, "expected an available model in the test catalogue");
+	await harness.view.setModelExclusions([`${available.provider}/*`]);
+
+	const receipt = await harness.spawn("spawn-policy-excluded", {
+		title: "Fixture request",
+		request: "This request must never acquire a child.",
+		config: {
+			model: { id: `${available.provider}/${available.id}`, thinking: "off" },
+		},
+	});
+	assert.deepEqual(receipt, {
+		spawnStatus: "not_created",
+		failedStage: "configuration",
+		reason: `Configured Agent model is excluded by model policy: ${available.provider}/${available.id}`,
+	});
+	assert.deepEqual(harness.view.children(), []);
+
+	// The exclusion list is durable user policy, not Workflow session state.
+	const policy = await readWorkflowPolicy(harness.host.services.agentDir);
+	assert.equal(policy.ok, true);
+	if (!policy.ok) throw new Error("Expected the written policy to load");
+	assert.deepEqual(policy.snapshot.excludedModels, [`${available.provider}/*`]);
 
 	await harness.shutdown();
 });

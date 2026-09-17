@@ -80,7 +80,8 @@ import type {
 	AgentTemplateCatalogueSnapshot,
 	AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
-import { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
+import { WorkflowPolicyStore, writeExcludedModels } from "../policy/workflow-policy.ts";
+import { parseExcludedModels, type ModelPolicySnapshot } from "../policy/model-exclusion.ts";
 import {
 	WorkflowExecutionScheduler,
 	type AgentExecutionRole,
@@ -157,6 +158,9 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	agentActivity(): AgentActivitySnapshot;
 	addAgentActivityChangeHandler(handler: () => void): () => void;
 	refreshAgentActivity(): void;
+	/** Owner-authored deny list of models child Runtime preparation must refuse. */
+	modelPolicy(): ModelPolicySnapshot;
+	setModelExclusions(entries: readonly string[]): Promise<ModelPolicySnapshot>;
 	refreshTranscriptFacts(): Promise<void>;
 	resumeFromHuman(
 		text: string,
@@ -244,6 +248,7 @@ export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 
 export class WorkflowCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
+	readonly #ownerRuntime: AgentSessionRuntime;
 	readonly #ownerDiagnostics: AgentSessionRuntime["services"]["diagnostics"];
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
@@ -298,6 +303,7 @@ export class WorkflowCoordinator {
 		},
 	) {
 		this.#ownerDiagnostics = runtime.services.diagnostics;
+		this.#ownerRuntime = runtime;
 		this.#postMortemAgentPresenter = options.postMortemAgentPresenter;
 		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
 		this.#quarantinedWorkflowAgentIds =
@@ -529,6 +535,41 @@ export class WorkflowCoordinator {
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
 	}
 
+	modelPolicy(): ModelPolicySnapshot {
+		return {
+			availableModels: this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().map(
+				(model) => ({ provider: model.provider, modelId: model.id, name: model.name }),
+			),
+			excludedModels: [...this.#workflowPolicy.current().excludedModels],
+		};
+	}
+
+	/**
+	 * Persists user policy before publishing it, then refreshes every cached
+	 * Template snapshot so later guidance matches the new list. A snapshot that
+	 * cannot be refreshed keeps its previous value and reports a diagnostic.
+	 */
+	async setModelExclusions(entries: readonly string[]): Promise<ModelPolicySnapshot> {
+		const validated = parseExcludedModels(entries);
+		await writeExcludedModels(this.#ownerRuntime.services.agentDir, validated);
+		this.#workflowPolicy.publish(Object.freeze({
+			...this.#workflowPolicy.current(),
+			excludedModels: validated,
+		}));
+		this.#sessionFactory.invalidateTemplateLoads();
+		for (const record of this.#agents.values()) {
+			try {
+				await this.#sessionFactory.captureTemplateSnapshotFor(record);
+			} catch (error) {
+				this.#ownerDiagnostics.push({
+					type: "error",
+					message: `Agent ${record.identity.agentId} kept its previous Agent Template snapshot after a model policy change: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			}
+		}
+		return this.modelPolicy();
+	}
+
 	async refreshAgentTemplateSnapshot(agentId: string): Promise<AgentTemplateCatalogueSnapshot> {
 		return this.#sessionFactory.captureTemplateSnapshotFor(this.#requireAgent(agentId));
 	}
@@ -620,6 +661,8 @@ export class WorkflowCoordinator {
 	#agentView(agentId: string): AgentCoordinatorView {
 		return {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
+			modelPolicy: () => this.modelPolicy(),
+			setModelExclusions: (entries) => this.setModelExclusions(entries),
 			agentLabel: (targetAgentId) =>
 				this.#agents.get(targetAgentId)?.identity.metadata.label,
 			answerTargetAgent: (toolCallId) => answerCallTargetAgentId({

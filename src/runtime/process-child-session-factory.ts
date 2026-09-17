@@ -255,6 +255,11 @@ export class ProcessChildSessionFactory {
 		);
 	}
 
+	/** Drops cached discovery so the next capture reflects a changed model policy. */
+	invalidateTemplateLoads(): void {
+		this.#templateLoads.clear();
+	}
+
 	agentTemplateSnapshotFor(record: AgentRecord): AgentTemplateCatalogueSnapshot {
 		if (!record.agentTemplateSnapshot) {
 			throw new Error(

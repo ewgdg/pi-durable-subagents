@@ -9,6 +9,18 @@ export type ModelIdentity = Readonly<{
 	modelId: string;
 }>;
 
+/** One model the spawning Owner may currently use. */
+export type ModelPolicyModel = Readonly<{
+	provider: string;
+	modelId: string;
+	name: string;
+}>;
+
+export type ModelPolicySnapshot = Readonly<{
+	availableModels: readonly ModelPolicyModel[];
+	excludedModels: readonly string[];
+}>;
+
 export const PROVIDER_EXCLUSION_WILDCARD = "*";
 
 const ENTRY_RULE =
