@@ -1525,7 +1525,9 @@ test("workflow resume and cancellation retain canonical identities through a lat
 	const identitiesBefore = allAgents();
 	const root = await mkdtemp(join(tmpdir(), "pi-workflow-contract-"));
 	const schemaPath = join(root, "schemas.mjs");
-	await writeFile(schemaPath, `export const AGENT_CONTROL_PROTOCOL_VERSION = ${AGENT_CONTROL_PROTOCOL_VERSION}; export const ChildProcessBootstrapSchema = {};`);
+	// The peer file is one version ahead of the loaded Owner modules, which is the
+	// mismatch this latched block exists for.
+	await writeFile(schemaPath, `export const AGENT_CONTROL_PROTOCOL_VERSION = ${AGENT_CONTROL_PROTOCOL_VERSION + 1}; export const ChildProcessBootstrapSchema = {};`);
 	const guard = new ChildLaunchContractGuard(pathToFileURL(schemaPath));
 	const assertCompatible = ChildLaunchContractGuard.prototype.assertCompatible;
 	t.mock.method(ChildLaunchContractGuard.prototype, "assertCompatible", () => assertCompatible.call(guard));
@@ -1540,7 +1542,7 @@ test("workflow resume and cancellation retain canonical identities through a lat
 		const receipt = await harness.ownerView.resumeWorkflow(id);
 		const retained = receipt.outstandingRequests.find(item => item.requestMessageId === request.requestMessageId);
 		assert.ok(retained);
-		assert.match(retained.reason ?? "", new RegExp(`control_bootstrap_schema_drift: the installed extension provides child launch contract version ${AGENT_CONTROL_PROTOCOL_VERSION}, this host loaded version ${AGENT_CONTROL_PROTOCOL_VERSION}`));
+		assert.match(retained.reason ?? "", new RegExp(`control_bootstrap_protocol_mismatch: the installed extension provides child launch contract version ${AGENT_CONTROL_PROTOCOL_VERSION + 1}, this host loaded version ${AGENT_CONTROL_PROTOCOL_VERSION}`));
 		assert.match(retained.reason ?? "", /Stop child and Moderator launches/);
 		assert.match(retained.reason ?? "", /Owner: report.*user immediately/);
 		assert.match(retained.reason ?? "", /Restart the Pi host that runs the Workflow Owner to load the installed extension/);

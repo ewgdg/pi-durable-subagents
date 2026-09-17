@@ -4,9 +4,10 @@ import { isDeepStrictEqual, promisify } from "node:util";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
 	ChildProcessBootstrapSchema,
-	CHILD_LAUNCH_REPAIR_GUIDANCE,
-	CHILD_LAUNCH_RESTART_GUIDANCE,
+	childLaunchBlockGuidance,
+	childLaunchContractRemedy,
 	describeChildLaunchContractSkew,
+	type ChildLaunchBlockRemedy,
 } from "../control/control-protocol-schemas.ts";
 
 const execFileAsync = promisify(execFile);
@@ -50,11 +51,17 @@ export class ChildLaunchContractGuard {
 			], { timeout: PROBE_TIMEOUT_MS, maxBuffer: 256 * 1024 });
 			const contract = JSON.parse(stdout) as { version: unknown; bootstrap: unknown; failure?: unknown };
 			if (typeof contract.failure === "string" && Object.hasOwn(PROBE_FAILURE_DETAILS, contract.failure)) {
-				throw new Error(`${PROBE_FAILURE_PREFIX}; ${PROBE_FAILURE_DETAILS[contract.failure as keyof typeof PROBE_FAILURE_DETAILS]}`);
+				throw new LaunchBlockRejection(
+					`${PROBE_FAILURE_PREFIX}; ${PROBE_FAILURE_DETAILS[contract.failure as keyof typeof PROBE_FAILURE_DETAILS]}`,
+					"repair_extension",
+				);
 			}
 			if (contract.version !== AGENT_CONTROL_PROTOCOL_VERSION || !isDeepStrictEqual(contract.bootstrap, OWNER_BOOTSTRAP_SCHEMA)) {
 				if (typeof contract.bootstrap !== "object" || contract.bootstrap === null) {
-					throw new Error(describeChildLaunchContractSkew(contract.version, AGENT_CONTROL_PROTOCOL_VERSION, [], ["bootstrapSchema"]));
+					throw new LaunchBlockRejection(
+						describeChildLaunchContractSkew(contract.version, AGENT_CONTROL_PROTOCOL_VERSION, [], ["bootstrapSchema"]),
+						"repair_extension",
+					);
 				}
 				const schema = contract.bootstrap as { required?: string[]; properties?: Record<string, unknown> };
 				const required = new Set(schema.required ?? []);
@@ -72,17 +79,18 @@ export class ChildLaunchContractGuard {
 					invalid.push("descriptor constraints");
 				}
 				// Schema-owned names are safe; never print constraints or descriptor values.
-				throw new Error(describeChildLaunchContractSkew(
-					contract.version, AGENT_CONTROL_PROTOCOL_VERSION, missing, invalid,
-				));
+				throw new LaunchBlockRejection(
+					describeChildLaunchContractSkew(contract.version, AGENT_CONTROL_PROTOCOL_VERSION, missing, invalid),
+					childLaunchContractRemedy(contract.version, AGENT_CONTROL_PROTOCOL_VERSION),
+				);
 			}
 		} catch (error) {
 			// Never forward subprocess stderr or descriptors, which can contain secrets.
-			const detail = error instanceof Error && /^control_bootstrap_(invalid|protocol_mismatch|schema_drift|probe_failed):/.test(error.message)
-				? error.message
-				: describeProbeExecutionFailure(error);
+			const rejection = error instanceof LaunchBlockRejection
+				? error
+				: new LaunchBlockRejection(describeProbeExecutionFailure(error), "investigate_probe");
 			if (!this.#failure) {
-				this.#failure = new Error(`${detail}. ${launchBlockGuidance(detail)}`);
+				this.#failure = new Error(`${rejection.message}. ${childLaunchBlockGuidance(rejection.remedy)}`);
 				this.#onBlocked?.(this.#failure);
 			}
 			throw this.#failure;
@@ -92,12 +100,17 @@ export class ChildLaunchContractGuard {
 	}
 }
 
-function launchBlockGuidance(detail: string): string {
-	// An unusable installed contract needs repair; two usable contracts that disagree
-	// are aligned by restarting this host, which then loads the installed extension.
-	return /^control_bootstrap_(invalid|probe_failed):/.test(detail)
-		? CHILD_LAUNCH_REPAIR_GUIDANCE
-		: CHILD_LAUNCH_RESTART_GUIDANCE;
+/**
+ * Keeps a rejection's cause and remedy together, so no caller has to infer a remedy
+ * from the diagnostic text.
+ */
+class LaunchBlockRejection extends Error {
+	readonly remedy: ChildLaunchBlockRemedy;
+
+	constructor(detail: string, remedy: ChildLaunchBlockRemedy) {
+		super(detail);
+		this.remedy = remedy;
+	}
 }
 
 function describeProbeExecutionFailure(error: unknown): string {

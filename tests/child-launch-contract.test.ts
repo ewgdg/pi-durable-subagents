@@ -102,7 +102,23 @@ test("a stalled contract probe reports its deadline and permanently blocks retri
 	const path = join(root, "schemas.mjs");
 	await writeFile(path, "await new Promise(() => setInterval(() => {}, 1000));");
 	const guard = new ChildLaunchContractGuard(pathToFileURL(path));
-	await assert.rejects(guard.assertCompatible(), /control_bootstrap_probe_failed:.*exceeded its 5000 ms deadline/);
+	await assert.rejects(guard.assertCompatible(), (error: Error) => {
+		assert.match(error.message, /control_bootstrap_probe_failed:.*exceeded its 5000 ms deadline/);
+		assert.match(error.message, /The launch probe could not run, so the installed extension was not verified/);
+		assert.doesNotMatch(error.message, /Repair the installed extension/);
+		return true;
+	});
 	await writeFile(path, `export const AGENT_CONTROL_PROTOCOL_VERSION = ${AGENT_CONTROL_PROTOCOL_VERSION}; export const ChildProcessBootstrapSchema = ${JSON.stringify(ChildProcessBootstrapSchema)};`);
 	await assert.rejects(guard.assertCompatible(), /exceeded its 5000 ms deadline/);
+});
+
+test("an installed contract with an unreadable version is repaired, not restarted", { timeout: 10_000 }, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-launch-contract-"));
+	const path = join(root, "schemas.mjs");
+	await writeFile(path, `export const AGENT_CONTROL_PROTOCOL_VERSION = "nine"; export const ChildProcessBootstrapSchema = ${JSON.stringify(ChildProcessBootstrapSchema)};`);
+	await assert.rejects(new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible(), (error: Error) => {
+		assert.match(error.message, new RegExp(`control_bootstrap_invalid: the installed extension provides child launch contract version invalid or missing, this host loaded version ${AGENT_CONTROL_PROTOCOL_VERSION}`));
+		assert.match(error.message, /Repair the installed extension so a fresh Node process can import its child launch contract/);
+		return true;
+	});
 });

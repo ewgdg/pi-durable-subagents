@@ -121,18 +121,47 @@ export type EventFrame = Static<typeof EventFrameSchema>;
 export type CancelFrame = Static<typeof CancelFrameSchema>;
 export type ControlFrame = Static<typeof ControlFrameSchema>;
 
+/** What clears one rejected child or Moderator launch. Every message carries exactly one. */
+export type ChildLaunchBlockRemedy =
+	| "restart_owner_host"
+	| "repair_extension"
+	| "investigate_probe"
+	| "retry_agent_launch";
+
 const CHILD_LAUNCH_BLOCK_DUTY = "Stop child and Moderator launches. Owner: report this diagnostic to the user immediately; ask the user to stop active work.";
 
-/** The installed extension provides a different contract than the copy this host loaded. */
-export const CHILD_LAUNCH_RESTART_GUIDANCE = `${CHILD_LAUNCH_BLOCK_DUTY} Restart the Pi host that runs the Workflow Owner to load the installed extension; retrying launches in that host cannot clear the block.`;
+const CHILD_LAUNCH_REMEDIES: Readonly<Record<ChildLaunchBlockRemedy, string>> = {
+	// This host loaded different code than the installed files; a restart aligns them.
+	restart_owner_host: "Restart the Pi host that runs the Workflow Owner to load the installed extension; retrying launches in that host cannot clear the block.",
+	// The installed files cannot provide a contract a fresh Node process can import.
+	repair_extension: "Repair the installed extension so a fresh Node process can import its child launch contract, then restart the Pi host that runs the Workflow Owner; retrying launches in that host cannot clear the block.",
+	// Nothing about the installation was verified: the probe itself never ran.
+	investigate_probe: "The launch probe could not run, so the installed extension was not verified; check Node subprocess startup in this Pi host, then restart it. Retrying launches in this host cannot clear the block.",
+	// A per-Agent handoff defect: a fresh launch can succeed, so no host-wide block is claimed.
+	retry_agent_launch: "Relaunch this Agent; if the same failure repeats, the Workflow Owner staged an unusable descriptor, so restart the Pi host that runs the Workflow Owner.",
+};
 
-/** The installed extension cannot provide a contract a fresh child process can load. */
-export const CHILD_LAUNCH_REPAIR_GUIDANCE = `${CHILD_LAUNCH_BLOCK_DUTY} Repair the installed extension so a fresh Node process can import its child launch contract, then restart the Pi host that runs the Workflow Owner; retrying launches in that host cannot clear the block.`;
+/**
+ * The remedy for one rejection. Host-wide launch blocks also carry the duty to stop
+ * launching; a per-Agent handoff defect carries only its own remedy.
+ */
+export function childLaunchBlockGuidance(remedy: ChildLaunchBlockRemedy): string {
+	return remedy === "retry_agent_launch"
+	? CHILD_LAUNCH_REMEDIES.retry_agent_launch
+	: `${CHILD_LAUNCH_BLOCK_DUTY} ${CHILD_LAUNCH_REMEDIES[remedy]}`;
+}
+
+/** A contract that cannot be read as a protocol version is unusable, not merely different. */
+export function childLaunchContractRemedy(installedVersion: unknown, hostVersion: unknown): ChildLaunchBlockRemedy {
+	return isProtocolVersion(installedVersion) && isProtocolVersion(hostVersion)
+	? "restart_owner_host"
+	: "repair_extension";
+}
 
 export function validateChildProcessBootstrap(value: unknown): ChildProcessBootstrap {
 	if (!Check(ChildProcessBootstrapSchema, value)) {
 		throw new Error(
-			`${bootstrapFailureDetail(value)}. ${CHILD_LAUNCH_RESTART_GUIDANCE}`,
+			`${bootstrapFailureDetail(value)}. ${childLaunchBlockGuidance("restart_owner_host")}`,
 		);
 	}
 	return value;

@@ -56,7 +56,7 @@ test("permanent launch rejection publishes one durable unread report without Own
 	assert.equal(item.report.source.kind, "runtime_diagnostic");
 	assert.match(item.report.symptom, /child and Moderator launches.*blocked/i);
 	assert.match(item.report.suspectedDefect, /control_bootstrap_probe_failed/);
-	assert.match(item.report.suspectedDefect, /Repair the installed extension so a fresh Node process can import its child launch contract, then restart the Pi host that runs the Workflow Owner/);
+	assert.match(item.report.suspectedDefect, /check Node subprocess startup in this Pi host/);
 	assert.match(item.report.recoveryActions, /follow the remedy in the reported diagnostic/);
 	assert.match(item.report.recoveryOutcome, /reading.*does not.*unblock/i);
 	assert.ok(notifiedWithUnreadReport, "report publication refreshes the human attention surface");
@@ -170,18 +170,17 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 		connectionToken: "SECRET-TOKEN", workflowId: "owner", agentId: "child",
 		role: "ordinary", ownerPresentation: true, expectedSessionId: "child",
 	};
-	for (const [content, expected] of [
-		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 9, the received bootstrap descriptor is version 7/],
-		[JSON.stringify({ ...legacy, protocolVersion: 9 }), /schema_drift.*missing descriptor fields: excludedTools/],
-		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/],
+	for (const [content, expected, remedy] of [
+		// This error is authored inside the child, so a contract disagreement must name the Owner host it needs.
+		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 9, the received bootstrap descriptor is version 7/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
+		[JSON.stringify({ ...legacy, protocolVersion: 9 }), /schema_drift.*missing descriptor fields: excludedTools/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
+		// A handoff defect involves no host-wide block, so it asks for a relaunch instead.
+		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/, /^control_bootstrap_invalid: descriptor could not be read as JSON\. Relaunch this Agent/],
 	] as const) {
 		await writeFile(path, content, { mode: 0o600 });
 		await assert.rejects(async () => bridge({ on() {}, registerMessageRenderer() {} } as unknown as Parameters<typeof bridge>[0]), (error: Error) => {
 			assert.match(error.message, expected);
-			assert.match(error.message, /Stop child and Moderator launches/);
-			assert.match(error.message, /Owner: report.*user immediately/);
-			// This error is authored inside the child, so it must name the Owner host it needs.
-			assert.match(error.message, /Restart the Pi host that runs the Workflow Owner/);
+			assert.match(error.message, remedy);
 			assert.doesNotMatch(error.message, /SECRET-TOKEN|unused.sock/);
 			return true;
 		});

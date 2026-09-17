@@ -27,7 +27,7 @@ import {
 import { connectControlTransport } from "../control/control-platform.ts";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
-	CHILD_LAUNCH_RESTART_GUIDANCE,
+	childLaunchBlockGuidance,
 	type ChildProcessBootstrap,
 	validateChildProcessBootstrap,
 } from "../control/control-protocol-schemas.ts";
@@ -1286,25 +1286,25 @@ class RemoteAgentActivitySource implements AgentActivitySource {
 async function readBootstrapDescriptor(): Promise<ChildProcessBootstrap> {
 	const path = process.env[CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE];
 	if (!path || !isAbsolute(path) || path.includes("\0")) {
-		throw new Error("control_bootstrap_invalid: descriptor path must be absolute");
+		throw new Error(`control_bootstrap_invalid: descriptor path must be absolute. ${childLaunchBlockGuidance("retry_agent_launch")}`);
 	}
 	const descriptorStats = await stat(path);
 	if (!descriptorStats.isFile()) {
-		throw new Error("control_bootstrap_invalid: descriptor path is not a regular file");
+		throw new Error(`control_bootstrap_invalid: descriptor path is not a regular file. ${childLaunchBlockGuidance("retry_agent_launch")}`);
 	}
 	// Windows stat modes do not expose ACL ownership and report synthesized
 	// group/other bits even for files created with mode 0600. The artifact lives
 	// in a unique current-user temporary directory there; POSIX keeps the exact
 	// owner-only mode check.
 	if (process.platform !== "win32" && (descriptorStats.mode & 0o077) !== 0) {
-		throw new Error("control_bootstrap_invalid: descriptor must be owner-only");
+		throw new Error(`control_bootstrap_invalid: descriptor must be owner-only. ${childLaunchBlockGuidance("retry_agent_launch")}`);
 	}
 	let value: unknown;
 	try {
 		value = JSON.parse(await readFile(path, "utf8"));
 	} catch {
 		// JSON parser errors can quote descriptor text, including the connection token.
-		throw new Error(`control_bootstrap_invalid: descriptor could not be read as JSON. ${CHILD_LAUNCH_RESTART_GUIDANCE}`);
+		throw new Error(`control_bootstrap_invalid: descriptor could not be read as JSON. ${childLaunchBlockGuidance("retry_agent_launch")}`);
 	}
 	return validateChildProcessBootstrap(value);
 }

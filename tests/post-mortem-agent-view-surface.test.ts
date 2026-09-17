@@ -86,6 +86,8 @@ test("post-mortem view scrolls with the wheel and clamps at both ends", () => {
 
 	assert.equal(surface.handleMouse({ ...wheel(1), type: "click", button: "left" }), undefined);
 	assert.equal(surface.handleMouse({ ...wheel(1), type: "move" }), undefined);
+	assert.equal(surface.handleMouse({ ...wheel(1), type: "press", button: "right" }), undefined);
+	assert.equal(surface.handleMouse({ ...wheel(1), type: "press", button: "middle" }), undefined);
 });
 
 test("fullscreen terminal wheel input scrolls the post-mortem overlay and returns to underlying content on close", { timeout: 5_000 }, async (t) => {
@@ -128,6 +130,11 @@ test("fullscreen terminal wheel input scrolls the post-mortem overlay and return
 	input("\x1b[<64;3;3M");
 	tui.renderNow();
 	assert.notDeepEqual(component.render(80), initial);
+	input("\x1b[<65;3;3M");
+	tui.renderNow();
+	assert.deepEqual(component.render(80), initial);
+	assert.equal(underlyingWheels, 0);
+	// A wheel at the tail is still consumed: it may not leak to the content behind the overlay.
 	input("\x1b[<65;3;3M");
 	tui.renderNow();
 	assert.deepEqual(component.render(80), initial);
