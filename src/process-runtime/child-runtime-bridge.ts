@@ -79,6 +79,7 @@ import {
 	type ChildParticipantControlRequester,
 } from "./remote-participant-control.ts";
 import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
+import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
 const INPUT_MODULE_PATH = fileURLToPath(new URL("./child-runtime-input.ts", import.meta.url));
@@ -466,7 +467,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				binding.activity.update(
 					await participantRequest("presentation.agents.snapshot", {}),
 				);
-				installAgentActivityDock(ctx.ui, binding.activity);
+				installAgentActivityDock(ctx.ui, binding.activity, {
+					openAgentsMenu: extensionCommandAction(pi, "/agents"),
+				});
 			}
 			await binding.publishRuntimeSnapshot();
 			if (retained) return;

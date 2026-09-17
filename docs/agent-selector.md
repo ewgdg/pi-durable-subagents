@@ -48,7 +48,7 @@ Pi's public fullscreen mouse routing supplies parsed events and component-local 
 - Hover adds the theme’s neutral `userMessageBg` tint while preserving existing text colors. Keyboard selection uses the stronger `selectedBg` and wins when the selected control is also hovered. Agent-body highlighting ends at the separate child button; hovering that button colors only the button. Neither layer colors details, frame margins, or neighboring controls. Custom themes control the contrast between these background tokens. It never moves keyboard focus. Pi does not send a leave event when the pointer exits the overlay, so the last highlight can remain until another selector pointer or keyboard event. Middle and secondary buttons have no selector action.
 - Tabs, Agents/path, Owner footer, details, borders, and help do not scroll the roster or the mounted editor. Wheel events outside the overlay follow Pi’s underlying UI behavior.
 
-These controls apply only to `/agents`. The above-editor activity dock remains informational. Resize rebuilds the visible hit regions together with the panel; clipped and offscreen controls are not actionable.
+These controls apply only to `/agents`. The above-editor activity dock adds one pointer action of its own: a fullscreen primary click on any rendered dock row opens this same menu, while drags, wheel gestures, and non-primary buttons keep Pi's native behavior. Resize rebuilds the visible hit regions together with the panel; clipped and offscreen controls are not actionable.
 
 ## Live roster
 

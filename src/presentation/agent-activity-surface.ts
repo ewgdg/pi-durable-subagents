@@ -7,6 +7,8 @@ import {
 	truncateToWidth,
 	type Component,
 	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
 import type {
@@ -52,32 +54,44 @@ export type AgentActivitySource = Readonly<{
 	addChangeHandler(handler: () => void): () => void;
 }>;
 
+export type AgentActivityDockOptions = Readonly<{
+	/**
+	 * Opens the Workflow Agent roster menu. Absent means an informational dock,
+	 * which keeps the presentation independent of any host command.
+	 */
+	openAgentsMenu?: () => void;
+}>;
+
 export function installAgentActivityDock(
 	ui: Pick<ExtensionUIContext, "setWidget">,
 	source: AgentActivitySource,
+	options: AgentActivityDockOptions = {},
 ): void {
 	ui.setWidget(
 		AGENT_ACTIVITY_WIDGET_KEY,
-		(tui, theme) => new AgentActivityDock(tui, theme, source),
+		(tui, theme) => new AgentActivityDock(tui, theme, source, options),
 		{ placement: "aboveEditor" },
 	);
 }
 
 export class AgentActivityDock implements Component {
-	readonly #tui: Pick<TUI, "requestRender">;
+	readonly #tui: Pick<TUI, "requestRender" | "hasOverlay">;
 	readonly #theme: Theme;
 	readonly #removeChangeHandler: () => void;
+	readonly #openAgentsMenu: (() => void) | undefined;
 	#snapshot: AgentActivitySnapshot;
 	#spinnerTimer: ReturnType<typeof setInterval> | undefined;
 	#disposed = false;
 
 	constructor(
-		tui: Pick<TUI, "requestRender">,
+		tui: Pick<TUI, "requestRender" | "hasOverlay">,
 		theme: Theme,
 		source: AgentActivitySource,
+		options: AgentActivityDockOptions = {},
 	) {
 		this.#tui = tui;
 		this.#theme = theme;
+		this.#openAgentsMenu = options.openAgentsMenu;
 		// Snapshot construction can inspect entire child histories. Keep that work
 		// on activity changes so editor, resize, and animation redraws stay cheap.
 		this.#snapshot = source.snapshot();
@@ -147,6 +161,23 @@ export class AgentActivityDock implements Component {
 	}
 
 	invalidate(): void {}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		// Only a completed primary click opens the menu. Presses must stay with Pi so
+		// drag-selection still works over the dock, and wheel keeps scrolling the
+		// transcript. Fullscreen is the only mode that routes pointer input here.
+		// A visible overlay is modal: the dock must not stack its menu from behind one.
+		if (
+			event.type !== "click" ||
+			event.button !== "left" ||
+			!this.#openAgentsMenu ||
+			this.#tui.hasOverlay()
+		) {
+			return undefined;
+		}
+		this.#openAgentsMenu();
+		return { handled: true };
+	}
 
 	dispose(): void {
 		if (this.#disposed) return;

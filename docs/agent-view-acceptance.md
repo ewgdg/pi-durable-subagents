@@ -104,3 +104,24 @@ npm run typecheck
 
 This verifies the real fullscreen renderer in-process, not a manual terminal session.
 Pi's regular terminal mode does not route component mouse input.
+
+## Fullscreen activity dock pointer
+
+`tests/agent-activity-dock-pointer-fullscreen.test.ts` mounts the dock inside the
+host's widget container above a mounted native Editor and routes terminal mouse
+reports through the real renderer. A primary click on any rendered dock row
+dispatches the registered `/agents` command; a drag, wheel gesture, or
+middle/secondary button reaches neither the menu nor the editor. Unit coverage in
+`tests/agent-activity-surface.test.ts` pins the exact command dispatch
+(`/agents` with template expansion), the informational dock without a menu
+action, and the gesture boundary.
+
+Run only the relevant presentation suites:
+
+```sh
+node --test tests/agent-activity-surface.test.ts tests/agent-activity-dock-pointer-fullscreen.test.ts
+npm run typecheck
+```
+
+This exercises the same fullscreen renderer boundary as the selector, not a manual
+terminal session.

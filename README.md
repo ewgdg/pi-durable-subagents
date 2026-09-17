@@ -10,7 +10,7 @@ Run `/agents` from the Owner or any Agent to open the Agent switcher. Use `/agen
 
 ![The Agent switcher overlay with Live and Dormant tabs](docs/images/agent-switcher.png)
 
-Select a subagent to enter its complete Pi session and interact with it directly—read its transcript, type into its editor, or use its commands and tools.
+Select a subagent to enter its complete Pi session and interact with it directly—read its transcript, type into its editor, or use its commands and tools. In fullscreen mode, a primary click on the activity dock above the editor opens the same switcher.
 
 ### Coordination and supervision
 

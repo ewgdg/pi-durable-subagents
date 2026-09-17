@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import xterm from "@xterm/headless";
 import type { ExtensionUIContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { Editor, TuiAltScreen, TuiMainScreen, getKeybindings, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TuiMouseEvent, type TUI } from "@earendil-works/pi-tui";
+import { Editor, TuiAltScreen, TuiMainScreen, getKeybindings, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type TuiMouseEvent, type TUI } from "@earendil-works/pi-tui";
 import type { AgentRosterStatus } from "../src/coordination/workflow-coordinator.ts";
 import { openAgentSelectorSurface, type AgentSelectorAction, type AgentSelectorOptions } from "../src/presentation/agent-selector-surface.ts";
+import { ScreenTerminal } from "./support/screen-terminal.ts";
 
 const identity = (text: string) => text;
 const theme = {
@@ -13,42 +13,6 @@ const theme = {
 	getBgAnsi: (color: string) => `\x1b[${color === "selectedBg" ? 44 : 100}m`,
 	bold: identity,
 } as Theme;
-
-// Only this terminal boundary encodes mouse reports: the selector receives the
-// renderer's normalized events, never manually constructed component events.
-class ScreenTerminal implements Terminal {
-	columns = 120;
-	rows = 30;
-	kittyProtocolActive = false;
-	screen = new xterm.Terminal({ cols: this.columns, rows: this.rows, allowProposedApi: true });
-	input: (data: string) => void = () => {};
-	resizeHandler: () => void = () => {};
-	start(input: (data: string) => void, resize: () => void) { this.input = input; this.resizeHandler = resize; }
-	stop() {}
-	async drainInput() {}
-	write(data: string) { this.screen.write(data); }
-	moveBy(lines: number) { this.write("\x1b[" + Math.abs(lines) + (lines < 0 ? "A" : "B")); }
-	hideCursor() { this.write("\x1b[?25l"); }
-	showCursor() { this.write("\x1b[?25h"); }
-	clearLine() { this.write("\x1b[2K"); }
-	clearFromCursor() { this.write("\x1b[J"); }
-	clearScreen() { this.write("\x1b[2J"); }
-	setTitle() {}
-	setProgress() {}
-	async flush() { await new Promise<void>((resolve) => this.screen.write("", resolve)); }
-	resize(columns: number, rows: number) {
-		this.columns = columns; this.rows = rows;
-		this.screen.resize(columns, rows);
-		this.resizeHandler();
-	}
-	lines() {
-		return Array.from({ length: this.rows }, (_, row) =>
-			this.screen.buffer.active.getLine(row)?.translateToString(true) ?? "");
-	}
-	mouse(code: number, x: number, y: number, release = false) {
-		this.input("\x1b[<" + code + ";" + (x + 1) + ";" + (y + 1) + (release ? "m" : "M"));
-	}
-}
 
 class EditorSpy extends Editor {
 	keyInputs: string[] = [];

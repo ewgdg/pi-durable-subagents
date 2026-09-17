@@ -20,6 +20,7 @@ import {
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
 import {
 	installAgentActivityDock,
+	type AgentActivityDockOptions,
 	type AgentActivitySource,
 } from "../presentation/agent-activity-surface.ts";
 import {
@@ -29,6 +30,7 @@ import {
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 import { bindPrimarySteeringAdmission } from "../pi-integration/primary-steering-admission.ts";
 import { disposeSessionStartup, registerSessionStartup } from "../pi-integration/session-startup.ts";
+import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
@@ -80,7 +82,9 @@ function registerAgentActivityDock(
 	resolveView: () => HumanPresentationCoordinatorView,
 ): void {
 	pi.on("session_start", (_event, ctx) => {
-		installResolvedAgentActivityDock(ctx.ui, resolveView);
+		installResolvedAgentActivityDock(ctx.ui, resolveView, {
+			openAgentsMenu: extensionCommandAction(pi, "/agents"),
+		});
 	});
 	// AgentSession publishes model changes only through the extension event path;
 	// forward that native invalidation to every scoped activity subscriber.
@@ -90,13 +94,14 @@ function registerAgentActivityDock(
 export function installResolvedAgentActivityDock(
 	ui: ExtensionUIContext,
 	resolveView: () => HumanPresentationCoordinatorView,
+	options: AgentActivityDockOptions = {},
 ): void {
 	const source: AgentActivitySource = {
 		snapshot: () => resolveView().agentActivity(),
 		addChangeHandler: (handler) =>
 			resolveView().addAgentActivityChangeHandler(handler),
 	};
-	installAgentActivityDock(ui, source);
+	installAgentActivityDock(ui, source, options);
 }
 
 export function bindHiddenOwnerAgentExtension(options: {

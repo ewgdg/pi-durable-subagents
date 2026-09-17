@@ -6,7 +6,11 @@ import type {
 	ExtensionUIContext,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
+import {
+	stripTerminalSequences,
+	type TUI,
+	type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 
 import { createAgentActivityExtension } from "../src/bootstrap/agent-extension.ts";
 import type {
@@ -17,6 +21,7 @@ import {
 	AgentActivityDock,
 	AGENT_ACTIVITY_WIDGET_KEY,
 	installAgentActivityDock,
+	type AgentActivityDockOptions,
 	type AgentActivitySnapshot,
 	type AgentActivitySource,
 } from "../src/presentation/agent-activity-surface.ts";
@@ -79,13 +84,21 @@ function source(initial: AgentActivitySnapshot) {
 	};
 }
 
-function createDock(snapshot: AgentActivitySnapshot) {
+function createDock(
+	snapshot: AgentActivitySnapshot,
+	options: AgentActivityDockOptions = {},
+	hasOverlay: () => boolean = () => false,
+) {
 	let renders = 0;
 	const snapshots = source(snapshot);
 	const dock = new AgentActivityDock(
-		{ requestRender: () => renders += 1 } as unknown as TUI,
+		{
+			requestRender: () => renders += 1,
+			hasOverlay,
+		} as unknown as TUI,
 		theme,
 		snapshots.source,
+		options,
 	);
 	return {
 		dock,
@@ -93,6 +106,143 @@ function createDock(snapshot: AgentActivitySnapshot) {
 		renderRequests: () => renders,
 	};
 }
+
+const ownerSnapshot: AgentActivitySnapshot = {
+	scope: agent({ agentId: "owner", label: "Owner", parent: null }),
+	children: [],
+	answerMode: false,
+	humanAttention: [],
+	operationalAttention: [],
+};
+
+/** Only the terminal boundary encodes mouse reports; components receive these. */
+function mouseEvent(overrides: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
+	return {
+		type: "click",
+		button: "left",
+		x: 1,
+		y: 0,
+		screenX: 1,
+		screenY: 2,
+		width: 80,
+		height: 1,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		...overrides,
+	};
+}
+
+test("activity dock opens the Agents menu on a completed primary click", () => {
+	let opened = 0;
+	const { dock } = createDock(ownerSnapshot, {
+		openAgentsMenu: () => opened += 1,
+	});
+
+	assert.deepEqual(dock.handleMouse(mouseEvent()), { handled: true });
+	assert.equal(opened, 1);
+	dock.dispose();
+});
+
+test("activity dock leaves pointer gestures it does not own to the host", () => {
+	let opened = 0;
+	const { dock } = createDock(ownerSnapshot, {
+		openAgentsMenu: () => opened += 1,
+	});
+	for (const event of [
+		mouseEvent({ type: "press" }),
+		mouseEvent({ type: "release" }),
+		mouseEvent({ type: "move" }),
+		mouseEvent({ type: "drag" }),
+		mouseEvent({ type: "wheel", button: "none", wheelDelta: -1 }),
+		mouseEvent({ button: "middle" }),
+		mouseEvent({ button: "right" }),
+	]) {
+		assert.equal(dock.handleMouse(event), undefined);
+	}
+	assert.equal(opened, 0);
+	dock.dispose();
+
+	// A dock without the menu action stays purely informational.
+	const { dock: inert } = createDock(ownerSnapshot);
+	assert.equal(inert.handleMouse(mouseEvent()), undefined);
+	inert.dispose();
+});
+
+test("activity dock ignores primary clicks while an overlay owns interaction", () => {
+	let opened = 0;
+	const { dock } = createDock(
+		ownerSnapshot,
+		{ openAgentsMenu: () => opened += 1 },
+		() => true,
+	);
+
+	assert.equal(dock.handleMouse(mouseEvent()), undefined);
+	assert.equal(opened, 0);
+	dock.dispose();
+});
+
+test("activity install forwards the Agents menu action to the installed dock", () => {
+	let installedFactory: ((tui: TUI, theme: Theme) => AgentActivityDock) | undefined;
+	const ui = {
+		setWidget(_key: string, factory: typeof installedFactory) {
+			installedFactory = factory;
+		},
+	} as unknown as ExtensionUIContext;
+	let opened = 0;
+
+	installAgentActivityDock(ui, source(ownerSnapshot).source, {
+		openAgentsMenu: () => opened += 1,
+	});
+	assert.ok(installedFactory);
+	const dock = installedFactory(
+		{ requestRender() {}, hasOverlay: () => false } as unknown as TUI,
+		theme,
+	);
+	dock.handleMouse(mouseEvent());
+	assert.equal(opened, 1);
+	dock.dispose();
+});
+
+test("activity extension dispatches the registered Agents command on a dock click", async () => {
+	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
+	const sent: Array<{ content: unknown; options: unknown }> = [];
+	const pi = {
+		on(event: string, handler: (...args: unknown[]) => unknown) {
+			const registered = handlers.get(event) ?? [];
+			registered.push(handler);
+			handlers.set(event, registered);
+		},
+		sendUserMessage(content: unknown, options: unknown) {
+			sent.push({ content, options });
+		},
+	} as unknown as ExtensionAPI;
+	let installedFactory: ((tui: TUI, theme: Theme) => AgentActivityDock) | undefined;
+	const ui = {
+		setWidget(_key: string, factory: typeof installedFactory) {
+			installedFactory = factory;
+		},
+	} as unknown as ExtensionUIContext;
+
+	await createAgentActivityExtension(() => ({
+		agentActivity: () => ownerSnapshot,
+		addAgentActivityChangeHandler: () => () => {},
+		refreshAgentActivity: () => {},
+	} as unknown as HumanPresentationCoordinatorView))(pi);
+	const sessionStart = handlers.get("session_start")?.[0];
+	assert.ok(sessionStart);
+	await sessionStart({}, { ui });
+	assert.ok(installedFactory);
+	const dock = installedFactory(
+		{ requestRender() {}, hasOverlay: () => false } as unknown as TUI,
+		theme,
+	);
+	dock.handleMouse(mouseEvent());
+	assert.deepEqual(sent, [
+		{ content: "/agents", options: { expandPromptTemplates: true } },
+	]);
+	dock.dispose();
+});
 
 test("activity extension publishes native model-selection changes", async () => {
 	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
@@ -458,7 +608,7 @@ test("activity redraws and animation use published state until the source change
 	let readingPublishedState = true;
 	let renderRequests = 0;
 	const dock = new AgentActivityDock(
-		{ requestRender: () => renderRequests += 1 } as unknown as TUI,
+		{ requestRender: () => renderRequests += 1, hasOverlay: () => false } as unknown as TUI,
 		theme,
 		{
 			...snapshots.source,

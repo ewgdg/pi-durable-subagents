@@ -31,6 +31,7 @@ import {
 import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
+import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 import { OwnerRecoveryError } from "./owner-recovery-error.ts";
 
 type InitializedWorkflow = {
@@ -125,7 +126,9 @@ export async function initializeOwnerWorkflow(options: {
 		return ownerReplacementPreparation;
 	};
 	const resolveView = () => coordinator.forAgent(identity.agentId);
-	installResolvedAgentActivityDock(ctx.ui, resolveView);
+	installResolvedAgentActivityDock(ctx.ui, resolveView, {
+		openAgentsMenu: extensionCommandAction(pi, "/agents"),
+	});
 	bindHiddenOwnerAgentExtension({
 		pi,
 		runtime,
