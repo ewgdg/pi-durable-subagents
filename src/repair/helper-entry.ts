@@ -1,5 +1,6 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { getKeybindings, isKeyRelease } from "@earendil-works/pi-tui";
 import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
@@ -10,6 +11,23 @@ import { createRepairSnapshot, recoverRepair, type RepairSnapshot } from "./stor
 import { validateRepairProposal, readRepairOwnerIdentity, prepareDuplicateDeliveryRepair } from "./workflow-validation.ts";
 import { ProposalSettlementGate } from "./proposal-settlement.ts";
 import { captureInteractivePresentation, type InteractivePresentation } from "../pi-integration/interactive-presentation.ts";
+
+/** The native TUI has already framed keys; protocol replies/paste are not submissions. */
+export function isRepairProposalRevocationInput(data: string): boolean {
+	if (isKeyRelease(data)) return false;
+	const keys = getKeybindings();
+	return keys.matches(data, "tui.input.submit") || keys.matches(data, "app.message.followUp") || keys.matches(data, "app.interrupt");
+}
+
+/** Native compaction owns a second editor queue that input hooks cannot drain. */
+export function createRepairCompactionHandler(gate: ProposalSettlementGate, isCommitted: () => boolean) {
+	return (_event: SessionBeforeCompactEvent, ctx: ExtensionContext): { cancel: true } | undefined => {
+		if (isCommitted()) return;
+		gate.revokeCompletion();
+		ctx.ui.notify("Compaction is unavailable until repair commits. The proposal was invalidated; discuss or report complete again without compaction.", "warning");
+		return { cancel: true };
+	};
+}
 
 const REPAIR_PROMPT = `You are a repair-only Moderator belonging to the verified Workflow in your bootstrap.
 The Owner actually failed transcript admission. Inspect the immutable full Workflow snapshots and the retained admission failure.
@@ -22,18 +40,51 @@ After commit the conversation remains available for explanation, but candidate c
 
 /** Independent, resource-restricted stock Pi TUI; control never carries chat output. */
 export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void> {
+	// A rejected extension factory is discarded by Pi, including its restrictions.
+	// Keep a failed bootstrap as a loaded, blocked extension instead. Reload must
+	// not reconnect to the one-shot broker before those restrictions are installed.
+	let bootstrapAccepted = false;
+	let bootstrapFailure = "Repair helper bootstrap did not complete";
+	pi.on("input", () => bootstrapAccepted ? undefined : { action: "handled" });
+	pi.on("user_bash", () => ({ result: { output: "Shell commands are unavailable in the repair-only Moderator.", exitCode: 1, cancelled: false, truncated: false } }));
+	pi.on("session_before_switch", () => ({ cancel: true }));
+	pi.on("session_before_fork", () => ({ cancel: true }));
+	pi.on("session_before_tree", () => ({ cancel: true }));
+	pi.on("session_before_compact", () => bootstrapAccepted ? undefined : { cancel: true });
+	pi.on("session_start", (_event, ctx) => {
+		if (bootstrapAccepted) return;
+		pi.setActiveTools([]);
+		ctx.ui.notify(bootstrapFailure, "error");
+		ctx.shutdown();
+	});
+	const lifetime = globalThis as typeof globalThis & { __piRepairHelperStarted?: boolean };
+	if (lifetime.__piRepairHelperStarted) {
+		bootstrapFailure = "Repair helper reload/reinitialization is unsupported; this attempt was not restarted";
+		return;
+	}
+	lifetime.__piRepairHelperStarted = true;
 	const bootstrapPath = process.env[REPAIR_BOOTSTRAP_ENV];
-	if (!bootstrapPath) throw new Error("Repair helper requires its host-owned bootstrap");
-	const { launch, channel } = await connectRepairControl(bootstrapPath);
-	const directory = dirname(bootstrapPath);
+	let connection: Awaited<ReturnType<typeof connectRepairControl>>;
+	try {
+		if (!bootstrapPath) throw new Error("Repair helper requires its host-owned bootstrap");
+		connection = await connectRepairControl(bootstrapPath);
+	} catch (error) {
+		bootstrapFailure = error instanceof Error ? error.message : String(error);
+		return;
+	}
+	bootstrapAccepted = true;
+	const { launch, channel } = connection;
+	const directory = dirname(bootstrapPath!);
 	const scope = { root: launch.storageRoot, attemptId: launch.attemptId,
 		ownerPath: launch.owner.path, participantDirectory: launch.participantDirectory };
 	const gate = new ProposalSettlementGate();
 	let context: ExtensionContext | undefined;
 	let presentation: InteractivePresentation | undefined;
+	let removeTerminalInput: (() => void) | undefined;
 	let snapshot: RepairSnapshot | undefined;
 	let cachedSnapshots = new Map<string, string>();
 	let phase: "waiting" | "snapshot" | "model" | "validating" | "applying" | "committed" | "refused" = "waiting";
+	pi.on("session_before_compact", createRepairCompactionHandler(gate, () => phase === "committed"));
 	let cancelled = false;
 	let closing = false;
 	let retirementAcknowledged = false;
@@ -88,6 +139,24 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		})();
 		return cancellation;
 	}
+	channel.onClose(cause => {
+		closing = true;
+		cancelled = true;
+		gate.revokeCompletion();
+		// No progress IPC here: a closed control channel must not prevent cleanup.
+		void (async () => {
+			try {
+				await joinModelAndMutations();
+				await starting?.catch(() => {});
+				await settling?.catch(() => {});
+				await cancellation?.catch(() => {});
+				await releaseSnapshot();
+			} finally {
+				rejectAttempt(cause);
+				context?.shutdown();
+			}
+		})().catch(notify);
+	});
 
 	pi.registerTool({
 		name: "repair_snapshot", label: "Repair snapshot", description: "List immutable snapshot IDs or read one original transcript. Available after commit for discussion.",
@@ -136,14 +205,20 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		}),
 	});
 	pi.on("before_agent_start", () => ({ systemPrompt: REPAIR_PROMPT + (launch.creationPreset?.systemPrompt ? "\n\nCaptured Moderator guidance (subject to the repair-only role):\n" + launch.creationPreset.systemPrompt : "") }));
-	pi.on("input", () => {
+	pi.on("input", event => {
 		if (closing) return { action: "handled" };
 		if (phase === "committed") return;
+		if (phase === "validating") {
+			gate.revokeCompletion();
+			context?.ui.setEditorText(event.text);
+			context?.ui.notify("Proposal revoked by new input. Validation will finish without applying; send your message again afterwards.", "warning");
+			return { action: "handled" };
+		}
 		if (phase === "model" && !cancelled && gate.state === "editing") {
 			gate.invalidate();
 			return;
 		}
-		context?.ui.notify(phase === "validating" || phase === "applying"
+		context?.ui.notify(phase === "applying"
 			? "Repair validation/application is in progress. Retry your message after it settles."
 			: "This repair attempt is not accepting model input.", "warning");
 		return { action: "handled" };
@@ -207,7 +282,12 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 				return;
 			}
 			if (cancelled) return;
-			gate.beginApplication(authorization);
+			if (!gate.beginApplication(authorization)) {
+				settling = undefined;
+				phase = "model";
+				context?.ui.notify("Proposal revoked by input or abort during validation. Report complete again when ready.", "warning");
+				return;
+			}
 			phase = "applying";
 			try {
 				await progress("Applying the sealed generation under the original repair-command authorization.");
@@ -230,10 +310,6 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 		settling = pending;
 		void pending.finally(() => { if (settling === pending) settling = undefined; }).catch(notify);
 	});
-	pi.on("user_bash", () => ({ result: { output: "Shell commands are unavailable in the repair-only Moderator.", exitCode: 1, cancelled: false, truncated: false } }));
-	pi.on("session_before_switch", () => ({ cancel: true }));
-	pi.on("session_before_fork", () => ({ cancel: true }));
-	pi.on("session_before_tree", () => ({ cancel: true }));
 	pi.registerCommand("agents", { description: "Navigate the repair conversation, Owner, and repair diagnostics.", handler: async (args, ctx) => {
 		const command = args.trim();
 		if (command === "repair cancel") { await cancelAttempt("Repair attempt cancelled by the human"); return; }
@@ -251,6 +327,7 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 	} });
 	pi.on("session_shutdown", async () => {
 		closing = true;
+		removeTerminalInput?.();
 		cancelled = true;
 		if (gate.state === "editing") gate.invalidate();
 		await joinModelAndMutations();
@@ -299,9 +376,15 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 	pi.on("session_start", async (event, ctx) => {
 		try {
 			context = ctx;
+			if (closing) { pi.setActiveTools([]); ctx.shutdown(); return; }
 			if (event.reason === "reload") throw new Error("Repair helper reload is unsupported; inspect this attempt rather than restarting it");
 			if (ctx.mode !== "tui") throw new Error("Repair Moderator requires native TUI mode");
 			if (ctx.sessionManager.getSessionId() !== launch.moderatorAgentId) throw new Error("Repair Moderator native identity mismatch");
+			removeTerminalInput = ctx.ui.onTerminalInput(data => {
+				// Observe before native editor admission: Esc while idle validation is
+				// pending otherwise has no model signal to abort. Never consume input.
+				if ((phase === "model" || phase === "validating") && isRepairProposalRevocationInput(data)) gate.revokeCompletion();
+			});
 			presentation = captureInteractivePresentation(ctx.ui);
 			presentation.setVisible(false);
 			pi.setActiveTools([...REPAIR_TOOL_NAMES]);
@@ -342,8 +425,8 @@ export default async function repairHelperEntry(pi: ExtensionAPI): Promise<void>
 			});
 			await channel.sendEvent("ready", {});
 		} catch (error) {
-			await channel.sendEvent("ready", { error: errorText(error) });
-			setImmediate(() => ctx.shutdown());
+			try { await channel.sendEvent("ready", { error: errorText(error) }); }
+			finally { setImmediate(() => ctx.shutdown()); }
 			throw error;
 		}
 	});

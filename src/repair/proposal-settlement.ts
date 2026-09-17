@@ -23,8 +23,15 @@ export class ProposalSettlementGate {
 	/** Call before input admission (including queued input), candidate writes, or abort. */
 	invalidate(): void {
 		this.#assertEditing();
+		this.revokeCompletion();
+	}
+
+	/** Input and abort revoke even a frozen validation, but never an application. */
+	revokeCompletion(): boolean {
+		if (this.#state === "applying") return false;
 		this.#generation++;
 		this.#completeGeneration = undefined;
+		return true;
 	}
 
 	reportComplete(): void {
@@ -52,11 +59,18 @@ export class ProposalSettlementGate {
 	}
 
 	/** Call immediately before application starts, never after the first file write. */
-	beginApplication(authorization: ProposalAuthorization): void {
+	beginApplication(authorization: ProposalAuthorization): boolean {
 		this.#assertAuthorization(authorization);
+		// Validation may await disk I/O while new input revokes this generation.
+		// The final check and irreversible transition must have no await between.
+		if (authorization.generation !== this.#generation) {
+			this.validationRejected(authorization);
+			return false;
+		}
 		// Irreversible even if application fails: storage recovery owns that outcome.
 		this.#state = "applying";
 		this.#authorization = undefined;
+		return true;
 	}
 
 	#assertAuthorization(authorization: ProposalAuthorization): void {
