@@ -36,10 +36,14 @@ function renderContext() {
 	};
 }
 
-test("selected Wait shows the requested references in its call", () => {
-	const call = renderAgentWaitCall({ requestMessageIds: ["abc123", "def456"] }, plainTheme).render(120).join("\n");
-	assert.match(call, /abc123/);
-	assert.match(call, /def456/);
+test("selected Wait shows requested references compactly, fully on expansion", () => {
+	const requestMessageId = "0123456789abcdefghijklmnopqrstuvwxyz";
+	const args = { requestMessageIds: [requestMessageId] };
+	assert.equal(renderAgentWaitCall(args, plainTheme).render(120).join("").trim(), "wait stuvwxyz");
+	assert.equal(
+		renderAgentWaitCall(args, plainTheme, true).render(120).join("").trim(),
+		`wait ${requestMessageId}`,
+	);
 });
 
 test("Agent Wait rendering shows snapshot responders, then their Answers", () => {

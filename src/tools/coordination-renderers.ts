@@ -91,8 +91,9 @@ export function renderWorkflowResumeResult(
 export function renderAgentWaitCall(
 	args: AgentWaitInput,
 	theme: Theme,
+	expanded = false,
 ): Text {
-	return toolCall(theme, "wait", args.requestMessageIds?.map(id => formatMessageIdentity(id)) ?? []);
+	return toolCall(theme, "wait", args.requestMessageIds?.map(id => formatMessageIdentity(id, expanded)) ?? []);
 }
 
 export function renderAgentWaitResult(
@@ -192,17 +193,21 @@ export function renderAgentObserveCall(
 	args: AgentObserveInput,
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
+	expanded = false,
 ): Text {
+	// Selector rows name the identity a caller typed, so expansion reveals it in
+	// full: the same compact-to-full rule as Message IDs elsewhere.
+	const identityDetail = expanded ? "full" : "compact";
 	if (args.operation === "obligations") return toolCall(theme, "observe", [args.operation]);
 	if (args.operation === "request") {
 		return toolCall(theme, "observe", [args.operation,
-			typeof args.requestId === "string" ? formatMessageIdentity(args.requestId) : undefined]);
+			typeof args.requestId === "string" ? formatMessageIdentity(args.requestId, expanded) : undefined]);
 	}
 	if (args.operation === "status") {
 		return toolCall(theme, "observe", [
 			args.operation,
 			args.agentId
-				? formatAgentIdentity(args.agentId, resolveAgentLabel)
+				? formatAgentIdentity(args.agentId, resolveAgentLabel, identityDetail)
 				: undefined,
 		]);
 	}
@@ -211,6 +216,7 @@ export function renderAgentObserveCall(
 		: `spawner ${formatAgentIdentity(
 			args.scope.directSpawnerAgentId,
 			resolveAgentLabel,
+			identityDetail,
 		)}`;
 	return toolCall(theme, "observe", [
 		args.operation,
@@ -276,10 +282,11 @@ export function renderAgentControlCall(
 	args: RunControlInput,
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
+	expanded = false,
 ): Text {
 	return toolCall(theme, "control", [
 		args.operation,
-		formatAgentIdentity(args.agentId, resolveAgentLabel),
+		formatAgentIdentity(args.agentId, resolveAgentLabel, expanded ? "full" : "compact"),
 		args.operation === "resume" ? boundedToolPreview(args.content) : undefined,
 	]);
 }

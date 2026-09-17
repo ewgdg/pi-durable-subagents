@@ -54,7 +54,7 @@ Each status contains the durable Agent identity and structural relationship, the
 
 Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, `interruption_hold`, and `moderator_handling`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
 
-The native status call and collapsed result identify the Agent as `label · compact identity`, using the final eight identity characters, and show its current semantic work status. When `agentId` is omitted for self-observation, the resolved identity appears in the result. Search returns the same `AgentStatus` contract, including `directSpawnerAgentId`, which identifies the one-hop Direct Spawner. Agent Control calls and receipts use the same identity format. Expanding a result identifies the Agent as `label · full identity`, followed by the exact structured observation or receipt.
+The native status call and collapsed result identify the Agent as `label · compact identity`, using the final eight identity characters, and show its current semantic work status. When `agentId` is omitted for self-observation, the resolved identity appears in the result. Search returns the same `AgentStatus` contract, including `directSpawnerAgentId`, which identifies the one-hop Direct Spawner. Agent Control calls and receipts use the same identity format. Expanding an Agent Observe or Agent Control call identifies the Agent as `label · full identity`, and an expanded Agent Wait call or `observe request` call shows its full Message IDs; expanding a result identifies the Agent as `label · full identity`, followed by the exact structured observation or receipt.
 
 ## Generation failure
 

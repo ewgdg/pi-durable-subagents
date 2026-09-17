@@ -643,7 +643,7 @@ export function registerParticipantCoordinationTools<
 		promptGuidelines: [AGENT_WAIT_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentWaitParameters,
-		renderCall: renderAgentWaitCall,
+		renderCall: (args, theme, context) => renderAgentWaitCall(args, theme, context.expanded),
 		renderResult: (result, options, theme, context) =>
 			renderAgentWaitResult(
 				result,
@@ -708,8 +708,8 @@ export function registerParticipantCoordinationTools<
 		promptGuidelines: [AGENT_OBSERVE_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentObserveParameters,
-		renderCall: (args, theme) =>
-			renderAgentObserveCall(args, theme, resolveAgentLabel),
+		renderCall: (args, theme, context) =>
+			renderAgentObserveCall(args, theme, resolveAgentLabel, context.expanded),
 		renderResult: (result, options, theme, context) =>
 			renderAgentObserveResult(result, options, theme, context, resolveAgentLabel),
 		async execute(_toolCallId, parameters) {
@@ -727,8 +727,8 @@ export function registerParticipantCoordinationTools<
 		promptGuidelines: [AGENT_CONTROL_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentControlParameters,
-		renderCall: (args, theme) =>
-			renderAgentControlCall(args, theme, resolveAgentLabel),
+		renderCall: (args, theme, context) =>
+			renderAgentControlCall(args, theme, resolveAgentLabel, context.expanded),
 		renderResult: (result, options, theme) =>
 			renderAgentControlResult(result, options, theme, resolveAgentLabel),
 		async execute(toolCallId, parameters) {

@@ -295,7 +295,7 @@ test("Agent Observe rendering consistently shows labels with compact identities"
 	assert.deepEqual(selfResult, ["Researcher · 983c81e3", "idle"]);
 });
 
-test("Agent Control rendering consistently shows labels with compact identities", () => {
+test("Agent Control rendering shows compact identities while collapsed and full ones on expansion", () => {
 	const agentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
 	const resolveAgentLabel = (candidateAgentId: string) =>
 		candidateAgentId === agentId ? "Researcher" : undefined;
@@ -305,6 +305,10 @@ test("Agent Control rendering consistently shows labels with compact identities"
 		.join("\n");
 	assert.match(call, /control interrupt · Researcher · 983c81e3/);
 	assert.doesNotMatch(call, new RegExp(agentId));
+	assert.match(
+		renderAgentControlCall(args, plainTheme, resolveAgentLabel, true).render(160).join("\n"),
+		new RegExp(`control interrupt · Researcher · ${agentId}`),
+	);
 
 	const result = renderAgentControlResult(
 		{

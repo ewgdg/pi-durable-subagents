@@ -38,3 +38,15 @@ test("Request inspection renders its title and full instructions on expansion", 
 	assert.match(result, /req-one/);
 	assert.match(renderAgentObserveCall(args, theme).render(160).join("\n"), /req-one/);
 });
+
+test("observe selector rows show compact identities while collapsed and full ones on expansion", () => {
+	const agentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+	const requestMessageId = "0123456789abcdefghijklmnopqrstuvwxyz";
+	const resolveAgentLabel = (candidate: string) => candidate === agentId ? "Researcher" : undefined;
+	const row = (args: Parameters<typeof renderAgentObserveCall>[0], expanded: boolean) =>
+		renderAgentObserveCall(args, theme, resolveAgentLabel, expanded).render(160).join("").trim();
+	assert.equal(row({ operation: "status", agentId }, false), "observe status · Researcher · 983c81e3");
+	assert.equal(row({ operation: "status", agentId }, true), `observe status · Researcher · ${agentId}`);
+	assert.equal(row({ operation: "request", requestId: requestMessageId }, false), "observe request · stuvwxyz");
+	assert.equal(row({ operation: "request", requestId: requestMessageId }, true), `observe request · ${requestMessageId}`);
+});
