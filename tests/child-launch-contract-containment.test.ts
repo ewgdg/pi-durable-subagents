@@ -56,7 +56,8 @@ test("permanent launch rejection publishes one durable unread report without Own
 	assert.equal(item.report.source.kind, "runtime_diagnostic");
 	assert.match(item.report.symptom, /child and Moderator launches.*blocked/i);
 	assert.match(item.report.suspectedDefect, /control_bootstrap_probe_failed/);
-	assert.match(item.report.recoveryActions, /restart/i);
+	assert.match(item.report.suspectedDefect, /Repair the installed extension so a fresh Node process can import its child launch contract, then restart the Pi host that runs the Workflow Owner/);
+	assert.match(item.report.recoveryActions, /follow the remedy in the reported diagnostic/);
 	assert.match(item.report.recoveryOutcome, /reading.*does not.*unblock/i);
 	assert.ok(notifiedWithUnreadReport, "report publication refreshes the human attention surface");
 	const diagnostic = host.session.sessionManager.getEntry(item.report.source.entryId);
@@ -170,16 +171,17 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 		role: "ordinary", ownerPresentation: true, expectedSessionId: "child",
 	};
 	for (const [content, expected] of [
-		[JSON.stringify(legacy), /protocol_mismatch: expected 9, received 7/],
-		[JSON.stringify({ ...legacy, protocolVersion: 9 }), /schema_drift.*missing fields: excludedTools/],
+		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 9, the received bootstrap descriptor is version 7/],
+		[JSON.stringify({ ...legacy, protocolVersion: 9 }), /schema_drift.*missing descriptor fields: excludedTools/],
 		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/],
 	] as const) {
 		await writeFile(path, content, { mode: 0o600 });
 		await assert.rejects(async () => bridge({ on() {}, registerMessageRenderer() {} } as unknown as Parameters<typeof bridge>[0]), (error: Error) => {
 			assert.match(error.message, expected);
-			assert.match(error.message, /stop.*align.*restart/i);
+			assert.match(error.message, /Stop child and Moderator launches/);
 			assert.match(error.message, /Owner: report.*user immediately/);
-			assert.match(error.message, /restart the Pi host/);
+			// This error is authored inside the child, so it must name the Owner host it needs.
+			assert.match(error.message, /Restart the Pi host that runs the Workflow Owner/);
 			assert.doesNotMatch(error.message, /SECRET-TOKEN|unused.sock/);
 			return true;
 		});

@@ -32,14 +32,14 @@ test("fresh launch contract detects an in-place update despite cached Owner modu
 	// The peer moved one version ahead of the loaded Owner modules.
 	await assert.rejects(
 		guard.assertCompatible(),
-		new RegExp(`protocol_mismatch.*expected ${AGENT_CONTROL_PROTOCOL_VERSION + 1}, received ${AGENT_CONTROL_PROTOCOL_VERSION}`),
+		new RegExp(`protocol_mismatch.*installed extension provides child launch contract version ${AGENT_CONTROL_PROTOCOL_VERSION + 1}, this host loaded version ${AGENT_CONTROL_PROTOCOL_VERSION}`),
 	);
 	await publish(AGENT_CONTROL_PROTOCOL_VERSION, ChildProcessBootstrapSchema);
 	// Resume, cancellation-triggered delivery and Moderator preparation must not repair by retry.
 	for (let attempt = 0; attempt < 3; attempt++) {
 		await assert.rejects(guard.assertCompatible(), (error: Error) => {
 			assert.match(error.message, /Owner: report.*user immediately/);
-			assert.match(error.message, /stop active work and correct.*align.*if incompatible.*restart the Pi host/);
+			assert.match(error.message, /Restart the Pi host that runs the Workflow Owner to load the installed extension; retrying launches in that host cannot clear the block/);
 			return true;
 		});
 	}
@@ -52,7 +52,7 @@ test("same-version on-disk schema drift is rejected before Pi launch", { timeout
 	await writeFile(path, `export const AGENT_CONTROL_PROTOCOL_VERSION = ${AGENT_CONTROL_PROTOCOL_VERSION}; export const ChildProcessBootstrapSchema = ${JSON.stringify({ ...ChildProcessBootstrapSchema, required: [...ChildProcessBootstrapSchema.required!, "newRequiredField"] })};`);
 	await assert.rejects(
 		new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible(),
-		new RegExp(`schema_drift: expected ${AGENT_CONTROL_PROTOCOL_VERSION}, received ${AGENT_CONTROL_PROTOCOL_VERSION}; missing fields: newRequiredField`),
+		new RegExp(`schema_drift: the installed extension provides child launch contract version ${AGENT_CONTROL_PROTOCOL_VERSION}, this host loaded version ${AGENT_CONTROL_PROTOCOL_VERSION}; fields the installed contract requires and this host lacks: newRequiredField`),
 	);
 });
 
@@ -62,7 +62,7 @@ test("same-version preflight names incompatible exclusion constraints without ex
 	const schema = { ...ChildProcessBootstrapSchema, properties: { ...ChildProcessBootstrapSchema.properties, excludedTools: { type: "string", const: "SECRET-SCHEMA-VALUE" } } };
 	await writeFile(path, `export const AGENT_CONTROL_PROTOCOL_VERSION = ${AGENT_CONTROL_PROTOCOL_VERSION}; export const ChildProcessBootstrapSchema = ${JSON.stringify(schema)};`);
 	await assert.rejects(new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible(), (error: Error) => {
-		assert.match(error.message, /schema_drift: expected 9, received 9; missing fields: none; invalid fields: excludedTools/);
+		assert.match(error.message, /schema_drift: the installed extension provides child launch contract version 9, this host loaded version 9; fields the installed contract requires and this host lacks: none; fields defined differently: excludedTools/);
 		assert.doesNotMatch(error.message, /SECRET-SCHEMA-VALUE/);
 		return true;
 	});
@@ -90,6 +90,7 @@ test("probe failures identify missing modules without revealing paths or depende
 	await writeFile(path, "import './SECRET-MODULE-PATH.mjs';");
 	await assert.rejects(new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible(), (error: Error) => {
 		assert.match(error.message, /control_bootstrap_probe_failed:.*contract module or dependency is unavailable/);
+		assert.match(error.message, /Repair the installed extension so a fresh Node process can import its child launch contract, then restart the Pi host that runs the Workflow Owner/);
 		assert.doesNotMatch(error.message, /SECRET-MODULE-PATH/);
 		assert.equal(error.message.includes(root), false);
 		return true;

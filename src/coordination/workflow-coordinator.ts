@@ -347,10 +347,10 @@ export class WorkflowCoordinator {
 				// The Owner may continue after a failed tool call. Publish directly to
 				// human attention instead of depending on it to relay launch guidance.
 				publishRuntimeReport({
-					symptom: "Child and Moderator launches are permanently blocked in this Pi host. The installed child bootstrap contract could not be verified as compatible.",
+					symptom: "Child and Moderator launches are permanently blocked in this Pi host: the child launch contract check failed.",
 					suspectedDefect: error.message,
 					uncertainty: "This diagnostic establishes a blocked launch path, not the state or outcome of existing Agent work. A failed probe does not by itself prove a package version mismatch.",
-					recoveryActions: "Stop active work and inspect the diagnostic. Correct the reported bootstrap or probe problem; align installed packages when a mismatch is reported. Then restart the Pi host. Retrying launches in this host cannot clear the block.",
+					recoveryActions: "Stop active work and follow the remedy in the reported diagnostic. Retrying launches in this host cannot clear the block.",
 					recoveryOutcome: "No recovery was attempted. Existing Runs were not terminated. Reading this report does not unblock launches or restart the host.",
 					evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`],
 				}, diagnostic);

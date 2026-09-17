@@ -121,12 +121,18 @@ export type EventFrame = Static<typeof EventFrameSchema>;
 export type CancelFrame = Static<typeof CancelFrameSchema>;
 export type ControlFrame = Static<typeof ControlFrameSchema>;
 
-export const CHILD_LAUNCH_ALIGNMENT_GUIDANCE = "Stop child and Moderator launches. Owner: report this diagnostic to the user immediately; ask them to stop active work and correct the reported problem (align installed packages if incompatible), then restart the Pi host.";
+const CHILD_LAUNCH_BLOCK_DUTY = "Stop child and Moderator launches. Owner: report this diagnostic to the user immediately; ask the user to stop active work.";
+
+/** The installed extension provides a different contract than the copy this host loaded. */
+export const CHILD_LAUNCH_RESTART_GUIDANCE = `${CHILD_LAUNCH_BLOCK_DUTY} Restart the Pi host that runs the Workflow Owner to load the installed extension; retrying launches in that host cannot clear the block.`;
+
+/** The installed extension cannot provide a contract a fresh child process can load. */
+export const CHILD_LAUNCH_REPAIR_GUIDANCE = `${CHILD_LAUNCH_BLOCK_DUTY} Repair the installed extension so a fresh Node process can import its child launch contract, then restart the Pi host that runs the Workflow Owner; retrying launches in that host cannot clear the block.`;
 
 export function validateChildProcessBootstrap(value: unknown): ChildProcessBootstrap {
 	if (!Check(ChildProcessBootstrapSchema, value)) {
 		throw new Error(
-			`${bootstrapFailureDetail(value)}. ${CHILD_LAUNCH_ALIGNMENT_GUIDANCE}`,
+			`${bootstrapFailureDetail(value)}. ${CHILD_LAUNCH_RESTART_GUIDANCE}`,
 		);
 	}
 	return value;
@@ -155,15 +161,42 @@ function bootstrapFailureDetail(value: unknown): string {
 
 /** Values and unknown descriptor keys must never enter a bootstrap diagnostic. */
 export function describeChildBootstrapFailure(
-	expectedVersion: unknown,
-	receivedVersion: unknown,
+	loadedVersion: unknown,
+	descriptorVersion: unknown,
 	missingFields: readonly string[],
 	invalidFields: readonly string[],
 	unexpectedFields = false,
 ): string {
-	const validExpectedVersion = typeof expectedVersion === "number" && Number.isSafeInteger(expectedVersion);
-	const validVersion = typeof receivedVersion === "number" && Number.isSafeInteger(receivedVersion);
-	const category = !validExpectedVersion || !validVersion ? "invalid"
-		: receivedVersion === expectedVersion ? "schema_drift" : "protocol_mismatch";
-	return `control_bootstrap_${category}: expected ${validExpectedVersion ? expectedVersion : "invalid or missing"}, received ${validVersion ? receivedVersion : "invalid or missing"}; missing fields: ${missingFields.join(", ") || "none"}; invalid fields: ${invalidFields.join(", ") || "none"}${unexpectedFields ? "; unexpected fields present" : ""}`;
+	return `control_bootstrap_${bootstrapDisagreementCategory(loadedVersion, descriptorVersion)}: the loaded child launch contract is version ${bootstrapVersion(loadedVersion)}, the received bootstrap descriptor is version ${bootstrapVersion(descriptorVersion)}; missing descriptor fields: ${bootstrapFields(missingFields)}; invalid descriptor fields: ${bootstrapFields(invalidFields)}${unexpectedFields ? "; unexpected fields present" : ""}`;
+}
+
+/**
+ * The launch probe compares the installed contract against the copy this host loaded
+ * when it started. Naming both sides keeps the repair unambiguous: a disagreement
+ * means a host running different code, not necessarily a stale installation.
+ */
+export function describeChildLaunchContractSkew(
+	installedVersion: unknown,
+	hostVersion: unknown,
+	missingFields: readonly string[],
+	differingFields: readonly string[],
+): string {
+	return `control_bootstrap_${bootstrapDisagreementCategory(installedVersion, hostVersion)}: the installed extension provides child launch contract version ${bootstrapVersion(installedVersion)}, this host loaded version ${bootstrapVersion(hostVersion)}; fields the installed contract requires and this host lacks: ${bootstrapFields(missingFields)}; fields defined differently: ${bootstrapFields(differingFields)}`;
+}
+
+function bootstrapDisagreementCategory(firstVersion: unknown, secondVersion: unknown): "invalid" | "schema_drift" | "protocol_mismatch" {
+	if (!isProtocolVersion(firstVersion) || !isProtocolVersion(secondVersion)) return "invalid";
+	return firstVersion === secondVersion ? "schema_drift" : "protocol_mismatch";
+}
+
+function bootstrapVersion(version: unknown): string | number {
+	return isProtocolVersion(version) ? version : "invalid or missing";
+}
+
+function bootstrapFields(fields: readonly string[]): string {
+	return fields.join(", ") || "none";
+}
+
+function isProtocolVersion(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value);
 }

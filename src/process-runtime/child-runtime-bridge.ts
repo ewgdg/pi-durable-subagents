@@ -27,7 +27,7 @@ import {
 import { connectControlTransport } from "../control/control-platform.ts";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
-	CHILD_LAUNCH_ALIGNMENT_GUIDANCE,
+	CHILD_LAUNCH_RESTART_GUIDANCE,
 	type ChildProcessBootstrap,
 	validateChildProcessBootstrap,
 } from "../control/control-protocol-schemas.ts";
@@ -1304,7 +1304,7 @@ async function readBootstrapDescriptor(): Promise<ChildProcessBootstrap> {
 		value = JSON.parse(await readFile(path, "utf8"));
 	} catch {
 		// JSON parser errors can quote descriptor text, including the connection token.
-		throw new Error(`control_bootstrap_invalid: descriptor could not be read as JSON. ${CHILD_LAUNCH_ALIGNMENT_GUIDANCE}`);
+		throw new Error(`control_bootstrap_invalid: descriptor could not be read as JSON. ${CHILD_LAUNCH_RESTART_GUIDANCE}`);
 	}
 	return validateChildProcessBootstrap(value);
 }

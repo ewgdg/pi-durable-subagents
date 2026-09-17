@@ -4,8 +4,9 @@ import { isDeepStrictEqual, promisify } from "node:util";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
 	ChildProcessBootstrapSchema,
-	CHILD_LAUNCH_ALIGNMENT_GUIDANCE,
-	describeChildBootstrapFailure,
+	CHILD_LAUNCH_REPAIR_GUIDANCE,
+	CHILD_LAUNCH_RESTART_GUIDANCE,
+	describeChildLaunchContractSkew,
 } from "../control/control-protocol-schemas.ts";
 
 const execFileAsync = promisify(execFile);
@@ -20,7 +21,7 @@ const PROBE_FAILURE_DETAILS = {
 // Compare the transportable contract, independently of loader-specific metadata.
 const OWNER_BOOTSTRAP_SCHEMA = JSON.parse(JSON.stringify(ChildProcessBootstrapSchema));
 
-/** Host-local rejection is permanent: retrying work cannot align an installed package. */
+/** Host-local rejection is permanent: this host keeps its loaded contract until it restarts. */
 export class ChildLaunchContractGuard {
 	readonly #schemaModuleUrl: URL;
 	readonly #onBlocked: ((error: Error) => void) | undefined;
@@ -53,7 +54,7 @@ export class ChildLaunchContractGuard {
 			}
 			if (contract.version !== AGENT_CONTROL_PROTOCOL_VERSION || !isDeepStrictEqual(contract.bootstrap, OWNER_BOOTSTRAP_SCHEMA)) {
 				if (typeof contract.bootstrap !== "object" || contract.bootstrap === null) {
-					throw new Error(describeChildBootstrapFailure(contract.version, AGENT_CONTROL_PROTOCOL_VERSION, [], ["bootstrapSchema"]));
+					throw new Error(describeChildLaunchContractSkew(contract.version, AGENT_CONTROL_PROTOCOL_VERSION, [], ["bootstrapSchema"]));
 				}
 				const schema = contract.bootstrap as { required?: string[]; properties?: Record<string, unknown> };
 				const required = new Set(schema.required ?? []);
@@ -71,7 +72,7 @@ export class ChildLaunchContractGuard {
 					invalid.push("descriptor constraints");
 				}
 				// Schema-owned names are safe; never print constraints or descriptor values.
-				throw new Error(describeChildBootstrapFailure(
+				throw new Error(describeChildLaunchContractSkew(
 					contract.version, AGENT_CONTROL_PROTOCOL_VERSION, missing, invalid,
 				));
 			}
@@ -81,7 +82,7 @@ export class ChildLaunchContractGuard {
 				? error.message
 				: describeProbeExecutionFailure(error);
 			if (!this.#failure) {
-				this.#failure = new Error(`${detail}. ${CHILD_LAUNCH_ALIGNMENT_GUIDANCE}`);
+				this.#failure = new Error(`${detail}. ${launchBlockGuidance(detail)}`);
 				this.#onBlocked?.(this.#failure);
 			}
 			throw this.#failure;
@@ -89,6 +90,14 @@ export class ChildLaunchContractGuard {
 		// A concurrent probe may already have rejected this host's launch path.
 		if (this.#failure) throw this.#failure;
 	}
+}
+
+function launchBlockGuidance(detail: string): string {
+	// An unusable installed contract needs repair; two usable contracts that disagree
+	// are aligned by restarting this host, which then loads the installed extension.
+	return /^control_bootstrap_(invalid|probe_failed):/.test(detail)
+		? CHILD_LAUNCH_REPAIR_GUIDANCE
+		: CHILD_LAUNCH_RESTART_GUIDANCE;
 }
 
 function describeProbeExecutionFailure(error: unknown): string {

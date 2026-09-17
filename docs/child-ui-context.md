@@ -52,13 +52,16 @@ and retries share that report; acknowledging it does not unblock launches.
 Publication does not depend on the Owner following tool-result instructions.
 With `--no-session`, the host instead sends a direct error notification and retains
 the diagnostic in memory; it cannot save a report without a session transcript.
-Diagnostics distinguish version mismatch from schema drift and identify affected
-fields without exposing descriptor values or connection tokens. All rejection
-paths use the shared `CHILD_LAUNCH_ALIGNMENT_GUIDANCE` in
-[the bootstrap contract](../src/control/control-protocol-schemas.ts).
-Correct the reported problem before restarting the Pi host; restart alone cannot
-repair it. The probe is not an atomic installation lock and does not terminate
-existing Runs or interrupt the Owner's current work.
+Diagnostics distinguish version mismatch from schema drift, name the installed
+contract and the contract this host loaded, and identify affected fields without
+exposing descriptor values or connection tokens. Each rejection path carries the
+launch-block duty plus exactly one remedy from
+[the bootstrap contract](../src/control/control-protocol-schemas.ts): restarting
+the Owner host loads the installed extension, while an installed extension that a
+fresh Node process cannot import must be repaired before that restart. A rejection
+authored inside a child still names the Owner host, which is the only process that
+can be restarted to clear the block. The probe is not an atomic installation lock
+and does not terminate existing Runs or interrupt the Owner's current work.
 
 Only Agent Identity or Moderator Input bootstrap evidence commits before process launch. Child Identity and Moderator Input commit their captured `creationPreset` atomically with the rest of their bootstrap. The Owner dynamically resolves the current parent configuration, captured creation rules, canonical explicit spawn input, resources, trust, native project context-file loading, and explicit system prompt into a volatile launch specification; it never re-selects the original Template name. It materializes the bootstrap evidence to the exact session JSONL, drops its staging writer, and launches the exact installed Pi CLI with the prepared cwd, model, thinking, startup tool selection, skill paths, file-backed extensions, explicit system prompt artifact when configured, trust decision, and session path. Admission requires the resolved tool selection to match the initial active set, regardless of order. After admission, extensions may change active tools through normal Pi behavior. The launch specification uses native loading of trusted project instruction files such as `AGENTS.md` and `CLAUDE.md` when `loadContextFiles` is true, and passes the explicit child system prompt with its independent `systemPromptMode`. A replacement child can disable native context files with `loadContextFiles: false`. The launch specification is not transcript evidence and is resolved again for every successor Runtime.
 

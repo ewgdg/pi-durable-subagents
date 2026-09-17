@@ -687,16 +687,16 @@ test("bootstrap incompatibility diagnostics distinguish versions and safe field 
 	};
 	assert.doesNotThrow(() => validateChildProcessBootstrap(descriptor));
 	for (const [value, pattern] of [
-		[{ ...descriptor, protocolVersion: 8, excludedTools: undefined }, /protocol_mismatch: expected 9, received 8; missing fields: excludedTools/],
-		[{ ...descriptor, excludedTools: undefined }, /schema_drift: expected 9, received 9; missing fields: excludedTools/],
-		[{ ...descriptor, excludedTools: 42 }, /schema_drift.*invalid fields: excludedTools/],
-		[{ ...descriptor, protocolVersion: "SECRET-TOKEN" }, /invalid fields: protocolVersion/],
+		[{ ...descriptor, protocolVersion: 8, excludedTools: undefined }, /protocol_mismatch: the loaded child launch contract is version 9, the received bootstrap descriptor is version 8; missing descriptor fields: excludedTools/],
+		[{ ...descriptor, excludedTools: undefined }, /schema_drift: the loaded child launch contract is version 9, the received bootstrap descriptor is version 9; missing descriptor fields: excludedTools/],
+		[{ ...descriptor, excludedTools: 42 }, /schema_drift.*invalid descriptor fields: excludedTools/],
+		[{ ...descriptor, protocolVersion: "SECRET-TOKEN" }, /invalid descriptor fields: protocolVersion/],
 	] as const) {
 		assert.throws(() => validateChildProcessBootstrap(value), (error: Error) => {
 			assert.match(error.message, pattern);
-			assert.match(error.message, /Stop.*align.*restart/i);
+			assert.match(error.message, /Stop child and Moderator launches/);
 			assert.match(error.message, /Owner: report.*user immediately/);
-			assert.match(error.message, /restart the Pi host/);
+			assert.match(error.message, /Restart the Pi host that runs the Workflow Owner to load the installed extension; retrying launches in that host cannot clear the block/);
 			assert.doesNotMatch(error.message, /SECRET-TOKEN|control.sock/);
 			return true;
 		});
