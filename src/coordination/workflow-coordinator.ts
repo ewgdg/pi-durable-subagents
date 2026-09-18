@@ -1517,7 +1517,6 @@ export class WorkflowCoordinator {
 			throw new Error("stale_run: execution admission lost its exact Agent Run");
 		}
 		this.#assertAdmissionOpen();
-		this.#operationalIncidents.beginExecution(agentId);
 	}
 
 	#captureInputSubmission(

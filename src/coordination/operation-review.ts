@@ -20,11 +20,8 @@ export type OperationReviewSnapshot = Readonly<{
 	reviewIntervalMs: number;
 }>;
 
-export type OperationReviewClassification = "blocking" | "asynchronous";
-
 type ReviewableCall = {
 	toolCall: ToolCallPointer;
-	classification: OperationReviewClassification;
 	policyIntervalMs: number;
 	humanWaiting: boolean;
 	moderatorInputCommitted: boolean;
@@ -38,7 +35,6 @@ export class OperationReviewWatcher {
 	readonly #hasAnswerObligation: (agentId: string) => boolean;
 	readonly #onReviewStateChanged: () => void;
 	readonly #calls = new Map<string, ReviewableCall>();
-	readonly #attendanceByAgentId = new Map<string, "attended" | "idle">();
 
 	constructor(options: {
 		clock: OperationReviewClock;
@@ -54,7 +50,6 @@ export class OperationReviewWatcher {
 
 	admit(options: {
 		toolCall: ToolCallPointer;
-		classification: OperationReviewClassification;
 		policyIntervalMs: number;
 	}): void {
 		if (!Number.isSafeInteger(options.policyIntervalMs) || options.policyIntervalMs <= 0) {
@@ -82,22 +77,6 @@ export class OperationReviewWatcher {
 	endRun(agentId: string): void {
 		for (const call of [...this.#calls.values()]) {
 			if (call.toolCall.agentId === agentId) this.#remove(call);
-		}
-		this.#attendanceByAgentId.delete(agentId);
-	}
-
-	setAgentAttendance(agentId: string, attendance: "attended" | "idle"): void {
-		this.#attendanceByAgentId.set(agentId, attendance);
-		for (const call of this.#calls.values()) {
-			if (
-				call.toolCall.agentId !== agentId ||
-				call.classification !== "asynchronous"
-			) continue;
-			if (attendance === "attended" && call.expired === undefined) {
-				this.#cancelInterval(call);
-				continue;
-			}
-			this.#reconcile(call);
 		}
 	}
 
@@ -154,7 +133,7 @@ export class OperationReviewWatcher {
 		}
 		this.#cancelInterval(call);
 		this.#clearExpired(call);
-		this.#startInterval(call, nextReviewInMs, false);
+			this.#startInterval(call, nextReviewInMs);
 		return "renewed";
 	}
 
@@ -164,11 +143,10 @@ export class OperationReviewWatcher {
 		);
 	}
 
-	hasUnresolvedAsynchronousCall(agentId: string): boolean {
+	hasUnresolvedCall(agentId: string): boolean {
 		return [...this.#calls.values()].some(
 			(call) =>
 				call.toolCall.agentId === agentId &&
-				call.classification === "asynchronous" &&
 				this.#isUnresolved(call.toolCall),
 		);
 	}
@@ -176,7 +154,6 @@ export class OperationReviewWatcher {
 	shutdown(): void {
 		for (const call of this.#calls.values()) this.#cancelInterval(call);
 		this.#calls.clear();
-		this.#attendanceByAgentId.clear();
 	}
 
 	#reconcile(call: ReviewableCall): void {
@@ -193,26 +170,15 @@ export class OperationReviewWatcher {
 			this.#clearExpired(call);
 			return;
 		}
-		const intervalApplies = call.classification === "blocking" ||
-			this.#attendanceByAgentId.get(call.toolCall.agentId) === "idle";
-		if (
-			intervalApplies &&
-			call.cancelTimer === undefined &&
-			call.expired === undefined
-		) {
-			this.#startInterval(
-				call,
-				call.policyIntervalMs,
-				call.classification === "asynchronous",
-			);
+		// Every admitted root call holds its Run while it stays unresolved: Pi awaits
+		// the whole tool batch before the next model request, so the interval is owed
+		// from execution admission rather than from an Idle boundary.
+		if (call.cancelTimer === undefined && call.expired === undefined) {
+			this.#startInterval(call, call.policyIntervalMs);
 		}
 	}
 
-	#startInterval(
-		call: ReviewableCall,
-		reviewIntervalMs: number,
-		requiresUnattendedIdle: boolean,
-	): void {
+	#startInterval(call: ReviewableCall, reviewIntervalMs: number): void {
 		call.moderatorInputCommitted = false;
 		call.cancelTimer = this.#clock.schedule(reviewIntervalMs, () => {
 			call.cancelTimer = undefined;
@@ -225,10 +191,6 @@ export class OperationReviewWatcher {
 				return;
 			}
 			if (call.humanWaiting) return;
-			if (
-				requiresUnattendedIdle &&
-				this.#attendanceByAgentId.get(call.toolCall.agentId) !== "idle"
-			) return;
 			call.expired = {
 				toolCall: call.toolCall,
 				reviewIntervalMs,

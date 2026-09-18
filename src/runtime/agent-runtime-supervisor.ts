@@ -20,7 +20,6 @@ import type {
 	ProjectionInputSubmission,
 	ResidualRequestRelationships,
 	RuntimeInitializationTermination,
-	ToolBatchClassification,
 	TranscriptCommitConfirmation,
 } from "./agent-runtime-host.ts";
 export type {
@@ -305,10 +304,6 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		return !!run?.admitted && (run.hasInput || run.runtime.workState() !== "settled" ||
 			run.runtime.hasPendingActivity() || run.runtime.queuedInputCount() > 0 ||
 			hasInFlightProjectionInput(run));
-	}
-
-	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
-		return this.#requireLiveRuntime().classifyToolBatch(toolNames);
 	}
 
 	exactRunCancellationSignal(handle: AgentRunHandle): AbortSignal {

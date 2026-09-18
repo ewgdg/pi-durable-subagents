@@ -255,7 +255,6 @@ export class OperationalIncidentCoordinator {
 		if (this.#integratedAgentIds.has(record.identity.agentId)) return;
 		this.#integratedAgentIds.add(record.identity.agentId);
 		record.host.addSettledHandler((_handle, settlement) => {
-			this.#containEvidenceInspection(() => this.#operationReviews.setAgentAttendance(record.identity.agentId, "idle"));
 			if (settlement !== "settled") return;
 			this.#scheduleReconciliationAfterHostLane(record);
 		});
@@ -392,10 +391,6 @@ export class OperationalIncidentCoordinator {
 			(this.#pendingReconciliation !== undefined || this.#cancelInspectionDeadline !== undefined);
 	}
 
-	beginExecution(agentId: string): void {
-		this.#containEvidenceInspection(() => this.#operationReviews.setAgentAttendance(agentId, "attended"));
-	}
-
 	admitToolExecution(agentId: string, toolCallId: string, toolName: string): void {
 		const record = this.#requireAgent(agentId);
 		this.#operationReviews.reconcileAgent(agentId);
@@ -413,13 +408,8 @@ export class OperationalIncidentCoordinator {
 		if (entry?.type !== "message" || entry.message.role !== "assistant") {
 			throw new Error("invariant_violation: root tool call source is unavailable");
 		}
-		const toolCalls = entry.message.content.filter((part) => part.type === "toolCall");
-		const classification = record.host.classifyToolBatch(
-			toolCalls.map(({ name }) => name),
-		);
 		this.#operationReviews.admit({
 			toolCall: source,
-			classification,
 			policyIntervalMs: this.#workflowPolicy.current().operationReviewIntervalMs,
 		});
 	}
@@ -1025,7 +1015,7 @@ export class OperationalIncidentCoordinator {
 		if (this.#isQuotaBlocked(record)) return false;
 		// Moderator Requests may depend on another Moderator; ordinary incident
 		// detection keeps its existing non-Moderator dependency graph.
-		return !this.#operationReviews.hasUnresolvedAsynchronousCall(record.identity.agentId) &&
+		return !this.#operationReviews.hasUnresolvedCall(record.identity.agentId) &&
 			!this.#hasExternalProgress(record, new Set(), this.#isModerator(record));
 	}
 
@@ -1222,7 +1212,7 @@ export class OperationalIncidentCoordinator {
 			run.work === "settled" &&
 			(run.attention === "none" || run.attention === "agent_wait") &&
 			!record.host.currentRunFailed() &&
-			!this.#operationReviews.hasUnresolvedAsynchronousCall(
+			!this.#operationReviews.hasUnresolvedCall(
 				record.identity.agentId,
 			) &&
 			run.retentionReasons.length > 0 &&

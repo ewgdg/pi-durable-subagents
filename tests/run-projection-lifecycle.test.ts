@@ -718,8 +718,6 @@ test("Runtime Host exposes process-neutral effective state and exact Run intenti
 		sessionId: "projected-run",
 	});
 	assert.equal(host.currentWorkState(), "settled");
-	assert.equal(host.classifyToolBatch(["read"]), "asynchronous");
-	assert.equal(host.classifyToolBatch(["read", "sequential_tool"]), "blocking");
 	assert.equal(host.exactRunCancellationSignal(handle), resource.signal);
 	assert.throws(
 		() => host.exactRunCancellationSignal({ sequence: handle.sequence + 1 }),

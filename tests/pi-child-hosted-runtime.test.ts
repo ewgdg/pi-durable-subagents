@@ -186,7 +186,6 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		});
 		assert.equal(host.currentProjection(), runtime.projection);
 		assert.equal(host.currentWorkState(), "settled");
-		assert.equal(host.classifyToolBatch(["read"]), "asynchronous");
 		await attachNativeChildDisplay(launch);
 		launch.writeInput("/runtime-state\r");
 		await waitUntil(() => nativeChildDisplayText(launch).includes("PROCESS_RUNTIME_STATE_CHANGED"));
@@ -197,15 +196,10 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 			PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
 		);
 		assert.deepEqual(host.effectiveRuntimeSnapshot()?.tools, []);
-		// Classification follows the adopted tool modes, so a name outside the child's
-		// current surface contributes nothing rather than failing the batch.
-		assert.equal(host.classifyToolBatch(["read"]), "asynchronous");
-		assert.deepEqual(host.effectiveRuntimeSnapshot()?.tools, []);
 		assert.equal(
 			host.effectiveRuntimeSnapshot()?.model.modelId,
 			PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
 		);
-		assert.equal(host.classifyToolBatch(["missing-tool"]), "asynchronous");
 
 		const handled = host.deliverInLane(
 			{ kind: "user", content: "PROCESS_RUNTIME_HANDLED_INPUT" },
@@ -302,7 +296,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 	}
 });
 
-test("a hosted child atomically refreshes its effective snapshot and tool modes", async () => {
+test("a hosted child atomically refreshes its effective snapshot", async () => {
 	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 	const initialSnapshot = fakeRuntimeSnapshot({
 		modelId: "initial-model",
@@ -324,7 +318,6 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
 	await runtime.ready;
 	assert.equal(runtime.snapshot().model.modelId, "initial-model");
-	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
 
 	currentSnapshot = fakeRuntimeSnapshot({
 		modelId: "current-model",
@@ -335,7 +328,6 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 		handler(controlEvent("runtime.snapshot.changed", currentSnapshot));
 	}
 	assert.equal(runtime.snapshot().model.modelId, "current-model");
-	assert.equal(runtime.classifyToolBatch(["sequential-tool"]), "blocking");
 	await runtime.synchronizeState();
 	assert.deepEqual(runtime.snapshot(), {
 		cwd: "/runtime",
@@ -348,14 +340,6 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 		projectTrusted: true,
 		sessionId: "dynamic-runtime",
 	});
-	assert.equal(runtime.classifyToolBatch(["sequential-tool"]), "blocking");
-	// The refresh replaced the earlier surface outright: the retired name is unknown
-	// now and cannot make the batch blocking, while the adopted one still can.
-	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
-	assert.equal(
-		runtime.classifyToolBatch(["parallel-tool", "sequential-tool"]),
-		"blocking",
-	);
 
 	let releaseStaleSnapshot!: () => void;
 	const staleSnapshotReleased = new Promise<void>((resolve) => {
@@ -383,7 +367,6 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 	releaseStaleSnapshot();
 	await synchronization;
 	assert.equal(runtime.snapshot().model.modelId, "newer-model");
-	assert.equal(runtime.classifyToolBatch(["newer-tool"]), "asynchronous");
 	await runtime.dispose();
 });
 
@@ -469,13 +452,6 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 		launch,
 	);
 	await runtime.ready;
-	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
-	assert.equal(
-		runtime.classifyToolBatch(["parallel-tool", "sequential-tool"]),
-		"blocking",
-	);
-	// A committed batch may name a tool this child never registered.
-	assert.equal(runtime.classifyToolBatch(["missing-tool"]), "asynchronous");
 	const completion = runtime.deliver({ kind: "user", content: "Retry this Run." }).completion;
 	const emit = (event: PiChildRuntimeEvent) => {
 		for (const handler of eventHandlers) handler(event);

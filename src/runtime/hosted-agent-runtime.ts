@@ -6,7 +6,6 @@ import type {
 	AgentRuntimeDeliveryDispatch,
 	AgentRuntimeWorkState,
 	EffectiveRuntimeSnapshot,
-	ToolBatchClassification,
 	TranscriptCommitConfirmation,
 } from "./agent-runtime-host.ts";
 import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
@@ -33,7 +32,6 @@ export interface HostedAgentRuntime {
 	/** Human-facing activity only; not a scheduling or lifecycle state. */
 	isCompacting(): boolean;
 	queuedInputCount(): number;
-	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification;
 	cancellationSignal(): AbortSignal;
 	deliver(
 		delivery: AgentRuntimeDelivery,

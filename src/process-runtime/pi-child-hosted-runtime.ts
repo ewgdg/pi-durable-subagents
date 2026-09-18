@@ -6,7 +6,6 @@ import type {
 	AgentRuntimeDeliveryDispatch,
 	AgentRuntimeWorkState,
 	EffectiveRuntimeSnapshot,
-	ToolBatchClassification,
 	TranscriptCommitConfirmation,
 } from "../runtime/agent-runtime-host.ts";
 import type {
@@ -47,7 +46,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#removeChannelCloseHandler: () => void = () => undefined;
 	#snapshot: EffectiveRuntimeSnapshot | undefined;
 	#snapshotRevision = 0;
-	#toolExecutionModes = new Map<string, "sequential" | "parallel">();
 	#workState: AgentRuntimeWorkState = "settled";
 	#compacting = false;
 	#queuedInputCount = 0;
@@ -128,18 +126,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	queuedInputCount(): number {
 		return this.#queuedInputCount;
-	}
-
-	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
-		for (const toolName of toolNames) {
-			// Batch names come from a committed model message, so one of them may name a
-			// tool this child never registered, or one that left its surface. Pi decides
-			// sequential execution with the same per-name mode lookup and tolerates an
-			// absent mode, so classification must ignore that name rather than refuse
-			// the whole batch.
-			if (this.#toolExecutionModes.get(toolName) === "sequential") return "blocking";
-		}
-		return "asynchronous";
 	}
 
 	cancellationSignal(): AbortSignal {
@@ -278,11 +264,8 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#adoptSnapshot(
 		snapshot: PiChildProcessRuntime["snapshot"],
 	): void {
-		// Tool classification and descendant inheritance must observe one coherent
-		// child state, never fields copied from different Runtime generations.
-		this.#toolExecutionModes = new Map(
-			snapshot.toolExecutionModes.map(({ name, executionMode }) => [name, executionMode]),
-		);
+		// Descendant inheritance must observe one coherent child state, never fields
+		// copied from different Runtime generations.
 		this.#snapshot = {
 			cwd: snapshot.cwd,
 			model: snapshot.model,

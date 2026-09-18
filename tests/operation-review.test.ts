@@ -7,7 +7,7 @@ import {
 import type { ToolCallPointer } from "../src/protocol/identities.ts";
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 
-test("a blocking root call expires from admission and clears with its final obligation", () => {
+test("a root call expires from admission and clears with its final obligation", () => {
 	const clock = new ControllableOperationReviewClock();
 	const unresolved = new Set(["blocking-call"]);
 	const obligatedAgents = new Set(["agent-1"]);
@@ -20,7 +20,6 @@ test("a blocking root call expires from admission and clears with its final obli
 
 	watcher.admit({
 		toolCall,
-		classification: "blocking",
 		policyIntervalMs: 1_000,
 	});
 	clock.advanceBy(999);
@@ -47,7 +46,7 @@ test("a blocking root call expires from admission and clears with its final obli
 	assert.deepEqual(watcher.expiredReviews(), []);
 });
 
-test("terminal tool-result commitment ends blocking review before expiry", () => {
+test("terminal tool-result commitment ends review before expiry", () => {
 	const clock = new ControllableOperationReviewClock();
 	const unresolved = new Set(["completed-call"]);
 	const watcher = new OperationReviewWatcher({
@@ -58,7 +57,6 @@ test("terminal tool-result commitment ends blocking review before expiry", () =>
 
 	watcher.admit({
 		toolCall: pointer("agent-1", "assistant-1", "completed-call"),
-		classification: "blocking",
 		policyIntervalMs: 1_000,
 	});
 	unresolved.delete("completed-call");
@@ -77,7 +75,6 @@ test("ending the exact Run removes all of its unresolved reviewed calls", () => 
 	});
 	watcher.admit({
 		toolCall: pointer("agent-1", "assistant-1", "abandoned-call"),
-		classification: "blocking",
 		policyIntervalMs: 1_000,
 	});
 
@@ -87,30 +84,24 @@ test("ending the exact Run removes all of its unresolved reviewed calls", () => 
 	assert.deepEqual(watcher.expiredReviews(), []);
 });
 
-test("parallel asynchronous calls expire independently only across unattended Idle", () => {
+test("independent calls expire from their own admission", () => {
 	const clock = new ControllableOperationReviewClock();
 	const watcher = new OperationReviewWatcher({
 		clock,
 		isUnresolved: () => true,
 		hasAnswerObligation: () => true,
 	});
-	const first = pointer("agent-1", "assistant-1", "async-first");
-	const second = pointer("agent-1", "assistant-1", "async-second");
+	const first = pointer("agent-1", "assistant-1", "first-call");
+	const second = pointer("agent-1", "assistant-1", "second-call");
 	watcher.admit({
 		toolCall: first,
-		classification: "asynchronous",
 		policyIntervalMs: 1_000,
 	});
 	watcher.admit({
 		toolCall: second,
-		classification: "asynchronous",
 		policyIntervalMs: 2_000,
 	});
 
-	clock.advanceBy(10_000);
-	assert.deepEqual(watcher.expiredReviews(), []);
-
-	watcher.setAgentAttendance("agent-1", "idle");
 	clock.advanceBy(1_000);
 	assert.deepEqual(watcher.expiredReviews(), [
 		{ toolCall: first, reviewIntervalMs: 1_000 },
@@ -120,39 +111,6 @@ test("parallel asynchronous calls expire independently only across unattended Id
 	assert.deepEqual(watcher.expiredReviews(), [
 		{ toolCall: first, reviewIntervalMs: 1_000 },
 		{ toolCall: second, reviewIntervalMs: 2_000 },
-	]);
-});
-
-test("resumed attendance ends a pre-expiry asynchronous interval and later Idle starts fresh", () => {
-	const clock = new ControllableOperationReviewClock();
-	const watcher = new OperationReviewWatcher({
-		clock,
-		isUnresolved: () => true,
-		hasAnswerObligation: () => true,
-	});
-	const toolCall = pointer("agent-1", "assistant-1", "attended-call");
-	watcher.admit({
-		toolCall,
-		classification: "asynchronous",
-		policyIntervalMs: 1_000,
-	});
-
-	watcher.setAgentAttendance("agent-1", "idle");
-	clock.advanceBy(999);
-	watcher.reconcileAgent("agent-1");
-	watcher.setAgentAttendance("agent-1", "attended");
-	clock.advanceBy(10_000);
-	assert.deepEqual(watcher.expiredReviews(), []);
-
-	watcher.setAgentAttendance("agent-1", "idle");
-	clock.advanceBy(1_000);
-	assert.deepEqual(watcher.expiredReviews(), [
-		{ toolCall, reviewIntervalMs: 1_000 },
-	]);
-
-	watcher.setAgentAttendance("agent-1", "attended");
-	assert.deepEqual(watcher.expiredReviews(), [
-		{ toolCall, reviewIntervalMs: 1_000 },
 	]);
 });
 
@@ -166,7 +124,6 @@ test("Human waiting excludes time between Request commit and result-commit work"
 	const toolCall = pointer("agent-1", "assistant-1", "human-question");
 	watcher.admit({
 		toolCall,
-		classification: "blocking",
 		policyIntervalMs: 1_000,
 	});
 
@@ -195,7 +152,6 @@ test("Human waiting cannot clear an expired review after Moderator Input commits
 	const toolCall = pointer("agent-1", "assistant-1", "committed-human-review");
 	watcher.admit({
 		toolCall,
-		classification: "blocking",
 		policyIntervalMs: 1_000,
 	});
 	clock.advanceBy(1_000);
@@ -221,7 +177,6 @@ test("Moderator renewal restarts only an exact unresolved reviewable call within
 	for (const toolCall of [renewedCall, completedCall]) {
 		watcher.admit({
 			toolCall,
-			classification: "blocking",
 			policyIntervalMs: 1_000,
 		});
 	}
@@ -245,24 +200,26 @@ test("Moderator renewal restarts only an exact unresolved reviewable call within
 	);
 });
 
-test("explicit renewal of an established asynchronous review survives resumed attendance", () => {
+test("explicit renewal replaces an established review and restarts only its own interval", () => {
 	const clock = new ControllableOperationReviewClock();
 	const watcher = new OperationReviewWatcher({
 		clock,
 		isUnresolved: () => true,
 		hasAnswerObligation: () => true,
 	});
-	const toolCall = pointer("agent-1", "assistant-1", "renewed-async-call");
+	const toolCall = pointer("agent-1", "assistant-1", "renewed-expired-call");
 	watcher.admit({
 		toolCall,
-		classification: "asynchronous",
 		policyIntervalMs: 1_000,
 	});
-	watcher.setAgentAttendance("agent-1", "idle");
 	clock.advanceBy(1_000);
-	watcher.setAgentAttendance("agent-1", "attended");
+
+	assert.deepEqual(watcher.expiredReviews(), [
+		{ toolCall, reviewIntervalMs: 1_000 },
+	]);
 
 	assert.equal(watcher.renew(toolCall, 500), "renewed");
+	assert.deepEqual(watcher.expiredReviews(), []);
 	clock.advanceBy(500);
 
 	assert.deepEqual(watcher.expiredReviews(), [

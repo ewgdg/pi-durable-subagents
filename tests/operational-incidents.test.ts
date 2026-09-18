@@ -596,6 +596,66 @@ test("an unknown tool name in the committed batch keeps that batch under review"
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
+test("a parked parallel root call is reviewed from execution admission", async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-parallel-"));
+	const toolStartedPath = join(cwd, "execution-gate.started");
+	const toolReleasePath = join(cwd, "execution-gate.released");
+	const executionGateExtensionPath = join(cwd, "execution-gate-tool.mjs");
+	await writeFile(
+		executionGateExtensionPath,
+		renderProcessExecutionGateExtension(toolStartedPath, toolReleasePath, "parallel"),
+		"utf8",
+	);
+	t.after(() => writeFile(toolReleasePath, "released", "utf8"));
+	const clock = new ControllableOperationReviewClock();
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+		implicitModeratorResponses: false,
+		cwd,
+		additionalExtensionPaths: [
+			executionGateExtensionPath,
+		],
+	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-durable-subagents>",
+		workflowPolicy: new WorkflowPolicyStore(
+			parseWorkflowPolicy(
+				'{"maxConcurrentAgentRuns":1,"operationReviewIntervalMs":1000}',
+			),
+		),
+		operationReviewClock: clock,
+	});
+	const owner = coordinator.forAgent(identity.agentId);
+	host.model.setResponses([
+		// Pi holds the whole Run on this parallel batch, so a parked call is owed the
+		// same review as any other unresolved root call.
+		fauxAssistantMessage(
+			fauxToolCall("execution_gate", {}, { id: "parked-parallel-call" }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The parked parallel call was reviewed."),
+	]);
+
+	const child = await spawnFromView(
+		host.session,
+		owner,
+		"spawn-parallel-parked-call",
+		"Keep the Creation Request open while one root call remains unresolved.",
+	);
+	await waitForCondition(async () => fileExists(toolStartedPath));
+	clock.advanceBy(1_000);
+	await coordinator.forAgent(child.agentId).reachSafeBoundary();
+
+	const moderator = await waitForModeratorKind(host, "operation_review");
+	assert.equal(await fileExists(toolReleasePath), false);
+	assert.equal(moderatorTriggerKind(moderator.path), "operation_review");
+	await writeFile(toolReleasePath, "released", "utf8");
+	await coordinator.shutdown(async () => host.runtime.dispose());
+});
+
 test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-run-failure-"));
 	const agentDir = join(cwd, ".pi-agent");
@@ -2867,6 +2927,7 @@ async function waitForModerator(
 function renderProcessExecutionGateExtension(
 	startedPath: string,
 	releasePath: string,
+	executionMode = "sequential",
 ): string {
 	return `
 import { access, writeFile } from "node:fs/promises";
@@ -2876,7 +2937,7 @@ export default function registerExecutionGateTool(pi) {
 		name: "execution_gate",
 		label: "Execution gate",
 		description: "Hold one real hosted Agent execution at an observable tool boundary.",
-		executionMode: "sequential",
+		executionMode: "${executionMode}",
 		parameters: { type: "object", properties: {}, additionalProperties: false },
 		async execute() {
 			await writeFile(${JSON.stringify(startedPath)}, "started", "utf8");
