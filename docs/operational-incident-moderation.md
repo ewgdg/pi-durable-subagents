@@ -12,8 +12,6 @@ Reminder suppression is per durable Request identity. A successor Run or a later
 
 An Operation Review exists when an independently watched root Pi tool call reaches its review deadline while still unresolved and its Agent still owes an Answer. Every reviewed call starts its interval at execution admission, because Pi holds the Run on the whole committed tool batch until each of its calls returns; parallel calls are concurrent with each other, never independent of the Run. Each call is tracked independently under its exact committed pointer and uses the Workflow Policy interval captured at admission.
 
-A committed call naming no tool the Runtime knows declares nothing, so it is ignored for that batch decision, exactly as Pi ignores the same name when it chooses its own execution mode. Batch classification reads committed model output, never a Runtime precondition.
-
 Human Request setup is reviewed from execution admission until Human waiting begins. Human waiting is excluded. Human Answer arrival starts a fresh result-commit interval until the terminal tool result commits. Progress, logs, heartbeat, partial output, and internal awaits do not affect review. Expiry establishes only the need for review: it does not abort, retry, interrupt, terminate, or declare the tool's outcome.
 
 Before Moderator Input commits, terminal tool-result commit, final Answer Obligation clearance, or Human waiting still suppresses the condition. After Moderator Input commits, Human waiting also cannot clear it; the tool must resolve, the final qualifying obligation must end, or a Moderator must renew the interval.

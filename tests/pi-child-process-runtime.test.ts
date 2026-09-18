@@ -15,7 +15,7 @@ import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
-import { assertToolExecutionModes, PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
+import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import type { AgentObserveInput } from "../src/tools/participant-coordination-tools.ts";
 import {
@@ -192,7 +192,6 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			skills: [],
 			skillSources: [],
 			extensions: [CHILD_EXTENSION],
-			toolExecutionModes: [],
 			projectTrusted: true,
 			sessionId: expectedSessionId,
 			sessionPath,
@@ -1124,29 +1123,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 	}
 });
 
-test("startup snapshot integrity compares active tools with their execution modes", () => {
-	const snapshot = (tools: string[]) => ({
-		tools,
-		toolExecutionModes: tools.map((name) => ({ name, executionMode: "parallel" as const })),
-	});
-	assert.doesNotThrow(() => assertToolExecutionModes(snapshot([])));
-	assert.doesNotThrow(() => assertToolExecutionModes(snapshot(["read", "agent_message"])));
-	assert.throws(
-		() => assertToolExecutionModes({ tools: ["read"], toolExecutionModes: [] }),
-		/child_runtime_tool_modes_mismatch/,
-	);
-	assert.throws(
-		() => assertToolExecutionModes({
-			tools: ["read", "agent_message"],
-			toolExecutionModes: [
-				{ name: "read", executionMode: "parallel" },
-				{ name: "agent_spawn", executionMode: "parallel" },
-			],
-		}),
-		/child_runtime_tool_modes_mismatch/,
-	);
-});
-
 /**
  * The inherited fixture extension rewrites the child surface from
  * PROCESS_RUNTIME_INITIAL_TOOLS inside its own session_start handler, so each
@@ -1283,9 +1259,6 @@ for (const scenario of STARTUP_TOOL_FILTER_SCENARIOS) {
 			await waitForFrame(runtime, "PROCESS_RUNTIME_TOOL_ACTIVATED");
 			const activatedSnapshot = await runtime.channel.request("runtime.snapshot", {});
 			assert.deepEqual(activatedSnapshot.tools, ["runtime_sequential_probe"]);
-			assert.deepEqual(activatedSnapshot.toolExecutionModes, [
-				{ name: "runtime_sequential_probe", executionMode: "sequential" },
-			]);
 			await runtime.channel.request("message.deliver", {
 				deliveryId: "activate-new-tool",
 				delivery: { kind: "user", content: "Call the newly activated probe." },
@@ -1497,7 +1470,7 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			"ask_user",
 			"runtime_sequential_probe",
 		];
-		const { toolExecutionModes, ...snapshot } = runtime.snapshot;
+		const snapshot = runtime.snapshot;
 		assert.deepEqual(snapshot, {
 			cwd,
 			model: {
@@ -1519,13 +1492,6 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			},
 			loadContextFiles: true,
 		});
-		// Execution modes stay a snapshot-integrity contract: one mode per active
-		// tool, and the fixture's own tool keeps its sequential classification.
-		assert.deepEqual(toolExecutionModes.map(({ name }) => name), expectedTools);
-		assert.equal(
-			toolExecutionModes.find(({ name }) => name === "runtime_sequential_probe")?.executionMode,
-			"sequential",
-		);
 	} finally {
 		await runtime?.dispose();
 	}

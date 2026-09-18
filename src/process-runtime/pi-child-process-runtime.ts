@@ -772,7 +772,6 @@ async function assertRuntimeSnapshot(
 	systemPromptArtifactPath: string | undefined,
 ): Promise<void> {
 	// This is a startup contract, not a restriction on later native activation.
-	assertToolExecutionModes(actual);
 	if ((systemPromptArtifactPath === undefined) !== (expected.systemPrompt === undefined)) {
 		throw new Error("child_runtime_system_prompt_mismatch: artifact and configuration disagree");
 	}
@@ -788,7 +787,6 @@ async function assertRuntimeSnapshot(
 			filePath: await realpath(skillPaths[index]!),
 		}))),
 		extensions: await Promise.all(expected.extensions.map((path) => realpath(path))),
-		toolExecutionModes: [...actual.toolExecutionModes],
 		projectTrusted,
 		sessionId: expectedSessionId,
 		sessionPath,
@@ -804,22 +802,6 @@ async function assertRuntimeSnapshot(
 	if (JSON.stringify(actual) !== JSON.stringify(expectedSnapshot)) {
 		throw new Error(
 			`child_runtime_configuration_mismatch: expected ${JSON.stringify(expectedSnapshot)}, received ${JSON.stringify(actual)}`,
-		);
-	}
-}
-
-/**
- * Snapshot integrity only: active tools and their execution modes must agree. A
- * child owns its own surface now, so startup admission makes no claim about which
- * tools are active or available beyond applying the exclusion filter itself.
- */
-export function assertToolExecutionModes(
-	actual: Pick<PiChildRuntimeSnapshot, "tools" | "toolExecutionModes">,
-): void {
-	const modeNames = actual.toolExecutionModes.map(({ name }) => name);
-	if (JSON.stringify(modeNames) !== JSON.stringify(actual.tools)) {
-		throw new Error(
-			`child_runtime_tool_modes_mismatch: tools ${JSON.stringify(actual.tools)}, modes ${JSON.stringify(modeNames)}`,
 		);
 	}
 }

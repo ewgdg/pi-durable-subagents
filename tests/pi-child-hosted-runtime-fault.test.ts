@@ -257,7 +257,6 @@ function createFakeRuntime(options: Readonly<{
 			skills: [],
 			skillSources: [],
 			extensions: [],
-			toolExecutionModes: [],
 			projectTrusted: true,
 			sessionId: "fault-runtime",
 			sessionPath: "/sessions/fault-runtime.jsonl",

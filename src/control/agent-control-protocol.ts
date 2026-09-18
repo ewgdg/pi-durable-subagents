@@ -694,10 +694,6 @@ export const RuntimeSnapshotSchema = closed({
 	skills: StringListSchema,
 	skillSources: Type.Array(closed({ name: NonEmptyStringSchema, filePath: NonEmptyStringSchema })),
 	extensions: StringListSchema,
-	toolExecutionModes: Type.Array(closed({
-		name: NonEmptyStringSchema,
-		executionMode: Type.Union([Type.Literal("sequential"), Type.Literal("parallel")]),
-	})),
 	projectTrusted: Type.Boolean(),
 	sessionId: NonEmptyStringSchema,
 	sessionPath: NonEmptyStringSchema,

@@ -912,13 +912,6 @@ async function runtimeSnapshot(
 	const sessionPath = context.sessionManager.getSessionFile();
 	if (!sessionPath) throw new Error("child_runtime_session_path_unavailable");
 	const tools = session.getActiveToolNames();
-	const toolExecutionModes = tools.map((name) => {
-		const definition = session.getToolDefinition(name);
-		if (!definition) {
-			throw new Error(`child_runtime_tool_definition_unavailable: ${name}`);
-		}
-		return { name, executionMode: definition.executionMode ?? "parallel" };
-	});
 	const skillSources = await Promise.all(
 		runtime.services.resourceLoader.getSkills().skills.map(async ({ name, filePath }) => ({
 			name,
@@ -933,7 +926,6 @@ async function runtimeSnapshot(
 		skills: skillSources.map(({ name }) => name),
 		skillSources,
 		extensions: extensions.filter((path) => path !== bridgePath && path !== inputPath),
-		toolExecutionModes,
 		projectTrusted: runtime.services.settingsManager.isProjectTrusted(),
 		sessionId: session.sessionId,
 		sessionPath,

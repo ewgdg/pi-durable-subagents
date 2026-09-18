@@ -305,7 +305,6 @@ test("every version-nine method and event has TypeBox payload/result schemas", (
 		skills: ["review"],
 		skillSources: [{ name: "review", filePath: "/skills/review/SKILL.md" }],
 		extensions: ["/extensions/review.ts"],
-		toolExecutionModes: [{ name: "read", executionMode: "parallel" }],
 		projectTrusted: true,
 		sessionId: "session",
 		sessionPath: "/sessions/session.jsonl",
@@ -314,8 +313,6 @@ test("every version-nine method and event has TypeBox payload/result schemas", (
 	} as const;
 	assert.equal(Check(RuntimeSnapshotSchema, validRuntimeSnapshot), true);
 	assert.equal(Check(agentControlEvents["runtime.snapshot.changed"].payload, validRuntimeSnapshot), true);
-	const { toolExecutionModes: _missingToolModes, ...missingToolModes } = validRuntimeSnapshot;
-	assert.equal(Check(RuntimeSnapshotSchema, missingToolModes), false);
 	assert.equal(Check(agentControlMethods["runtime.humanInput"].request, {
 		text: "continue",
 		images: [{ type: "image", data: "base64", mimeType: "image/png" }],

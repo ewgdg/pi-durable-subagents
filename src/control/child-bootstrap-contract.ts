@@ -3,7 +3,7 @@
 // Version 8 made the required initial tools selection an incompatible contract.
 // Version 9 replaces that selection with a required exclusion filter: the child
 // keeps its own runtime default surface plus its role coordination tools.
-export const AGENT_CONTROL_PROTOCOL_VERSION = 9 as const;
+export const AGENT_CONTROL_PROTOCOL_VERSION = 10 as const;
 
 const NonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 

@@ -301,7 +301,7 @@ test("a hosted child atomically refreshes its effective snapshot", async () => {
 	const initialSnapshot = fakeRuntimeSnapshot({
 		modelId: "initial-model",
 		thinking: "off",
-		toolExecutionModes: [{ name: "parallel-tool", executionMode: "parallel" }],
+		tools: ["parallel-tool"],
 	});
 	let currentSnapshot = initialSnapshot;
 	let requestSnapshot = async () => currentSnapshot;
@@ -322,7 +322,7 @@ test("a hosted child atomically refreshes its effective snapshot", async () => {
 	currentSnapshot = fakeRuntimeSnapshot({
 		modelId: "current-model",
 		thinking: "high",
-		toolExecutionModes: [{ name: "sequential-tool", executionMode: "sequential" }],
+		tools: ["sequential-tool"],
 	});
 	for (const handler of eventHandlers) {
 		handler(controlEvent("runtime.snapshot.changed", currentSnapshot));
@@ -359,7 +359,7 @@ test("a hosted child atomically refreshes its effective snapshot", async () => {
 	const newerSnapshot = fakeRuntimeSnapshot({
 		modelId: "newer-model",
 		thinking: "off",
-		toolExecutionModes: [{ name: "newer-tool", executionMode: "parallel" }],
+		tools: ["newer-tool"],
 	});
 	for (const handler of eventHandlers) {
 		handler(controlEvent("runtime.snapshot.changed", newerSnapshot));
@@ -375,7 +375,7 @@ test("a prepared hosted child has no Run queue or abort intention", async () => 
 	const snapshot = fakeRuntimeSnapshot({
 		modelId: "prepared-model",
 		thinking: "off",
-		toolExecutionModes: [],
+		tools: [],
 	});
 	const admitted = {
 		snapshot,
@@ -406,10 +406,6 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 			skills: [],
 			skillSources: [],
 			extensions: [],
-			toolExecutionModes: [
-				{ name: "parallel-tool", executionMode: "parallel" },
-				{ name: "sequential-tool", executionMode: "sequential" },
-			],
 			projectTrusted: true,
 			sessionId: "retry-runtime",
 			sessionPath: "/sessions/retry-runtime.jsonl",
@@ -552,7 +548,7 @@ for (const scenario of [
 		});
 		let channelClosed: ((error?: unknown) => void) | undefined;
 		const admitted = {
-			snapshot: fakeRuntimeSnapshot({ modelId: "quit-test", thinking: "off", toolExecutionModes: [] }),
+			snapshot: fakeRuntimeSnapshot({ modelId: "quit-test", thinking: "off", tools: [] }),
 			channel: {
 				onClose(handler: (error?: unknown) => void) {
 					channelClosed = handler;
@@ -625,7 +621,7 @@ test("hosted child reminder busy releases explicit reservation", { timeout: 5000
 	let callbackCalls = 0;
 	const calls: Array<{ method: string; payload: unknown }> = [];
 	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-busy", thinking: "off", toolExecutionModes: [] }),
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-busy", thinking: "off", tools: [] }),
 		channel: {
 			onClose: () => () => undefined,
 			async request(method: string, payload: unknown) {
@@ -675,7 +671,7 @@ test("hosted child reminder stale callback suppresses and releases reservation",
 	let reserved = false;
 	const calls: Array<{ method: string; payload: unknown }> = [];
 	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-stale", thinking: "off", toolExecutionModes: [] }),
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-stale", thinking: "off", tools: [] }),
 		channel: {
 			onClose: () => () => undefined,
 			async request(method: string, payload: unknown) {
@@ -719,7 +715,7 @@ test("hosted child reminder throwing callback releases reservation", { timeout: 
 	let prepareCalls = 0;
 	const callbackError = new Error("reconciliation failed");
 	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-throw", thinking: "off", toolExecutionModes: [] }),
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-throw", thinking: "off", tools: [] }),
 		channel: {
 			onClose: () => () => undefined,
 			async request(method: string, payload: unknown) {
@@ -770,7 +766,7 @@ test("hosted child reminder abort while callback waits releases promptly and lat
 	let lateCommitRejected = false;
 	let finishCommitCalls = 0;
 	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-abort", thinking: "off", toolExecutionModes: [] }),
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-abort", thinking: "off", tools: [] }),
 		channel: {
 			onClose: () => () => undefined,
 			async request(method: string, payload: unknown) {
@@ -829,7 +825,7 @@ test("hosted child reminder transport rejection does not strand future admission
 		let prepareCalls = 0;
 		let reserved = false;
 		const admitted = {
-			snapshot: fakeRuntimeSnapshot({ modelId: "reminder-prepare-fault", thinking: "off", toolExecutionModes: [] }),
+			snapshot: fakeRuntimeSnapshot({ modelId: "reminder-prepare-fault", thinking: "off", tools: [] }),
 			channel: {
 				onClose: () => () => undefined,
 				async request(method: string, payload: unknown) {
@@ -865,7 +861,7 @@ test("hosted child reminder transport rejection does not strand future admission
 		let reserved = false;
 		let finishCommitCalls = 0;
 		const admitted = {
-			snapshot: fakeRuntimeSnapshot({ modelId: "reminder-finish-fault", thinking: "off", toolExecutionModes: [] }),
+			snapshot: fakeRuntimeSnapshot({ modelId: "reminder-finish-fault", thinking: "off", tools: [] }),
 			channel: {
 				onClose: () => () => undefined,
 				async request(method: string, payload: unknown) {
@@ -904,7 +900,7 @@ test("hosted child reminder busy does not create speculative Run id", { timeout:
 	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 	let reserved = false;
 	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-no-run", thinking: "off", toolExecutionModes: [] }),
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-no-run", thinking: "off", tools: [] }),
 		channel: {
 			onClose: () => () => undefined,
 			async request(method: string, payload: unknown) {
@@ -1090,20 +1086,16 @@ async function waitUntil(condition: () => boolean | Promise<boolean>): Promise<v
 function fakeRuntimeSnapshot(options: Readonly<{
 	modelId: string;
 	thinking: "off" | "high";
-	toolExecutionModes: readonly Readonly<{
-		name: string;
-		executionMode: "parallel" | "sequential";
-	}>[];
+	tools: readonly string[];
 }>): PiChildProcessRuntime["snapshot"] {
 	return {
 		cwd: "/runtime",
 		model: { provider: "test", modelId: options.modelId },
 		thinking: options.thinking,
-		tools: options.toolExecutionModes.map(({ name }) => name),
+		tools: [...options.tools],
 		skills: [],
 		skillSources: [],
 		extensions: [],
-		toolExecutionModes: [...options.toolExecutionModes],
 		projectTrusted: true,
 		sessionId: "dynamic-runtime",
 		sessionPath: "/sessions/dynamic-runtime.jsonl",
