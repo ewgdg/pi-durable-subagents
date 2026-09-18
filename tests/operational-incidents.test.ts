@@ -535,6 +535,67 @@ test("an overdue root call starts a Moderator outside full child capacity", asyn
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
+test("an unknown tool name in the committed batch keeps that batch under review", async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-unknown-name-"));
+	const toolStartedPath = join(cwd, "execution-gate.started");
+	const toolReleasePath = join(cwd, "execution-gate.released");
+	const executionGateExtensionPath = join(cwd, "execution-gate-tool.mjs");
+	await writeFile(
+		executionGateExtensionPath,
+		renderProcessExecutionGateExtension(toolStartedPath, toolReleasePath),
+		"utf8",
+	);
+	t.after(() => writeFile(toolReleasePath, "released", "utf8"));
+	const clock = new ControllableOperationReviewClock();
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+		implicitModeratorResponses: false,
+		cwd,
+		additionalExtensionPaths: [
+			executionGateExtensionPath,
+		],
+	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-durable-subagents>",
+		workflowPolicy: new WorkflowPolicyStore(
+			parseWorkflowPolicy(
+				'{"maxConcurrentAgentRuns":1,"operationReviewIntervalMs":1000}',
+			),
+		),
+		operationReviewClock: clock,
+	});
+	const owner = coordinator.forAgent(identity.agentId);
+	host.model.setResponses([
+		// One committed batch: an invented name ahead of a sequential call that parks.
+		// The invented name names no tool and carries no execution mode, so it must
+		// leave the call beside it under review.
+		fauxAssistantMessage([
+			fauxToolCall("code", { code: "text('invented tool name')" }, { id: "unknown-batch-call" }),
+			fauxToolCall("execution_gate", {}, { id: "overdue-root-call" }),
+		], { stopReason: "toolUse" }),
+		fauxAssistantMessage("The parked call beside the invented name was reviewed."),
+	]);
+
+	const child = await spawnFromView(
+		host.session,
+		owner,
+		"spawn-unknown-batch-name",
+		"Keep the Creation Request open while one root call remains unresolved.",
+	);
+	await waitForCondition(async () => fileExists(toolStartedPath));
+	clock.advanceBy(1_000);
+	await coordinator.forAgent(child.agentId).reachSafeBoundary();
+
+	const moderator = await waitForModeratorKind(host, "operation_review");
+	assert.equal(await fileExists(toolReleasePath), false);
+	assert.equal(moderatorTriggerKind(moderator.path), "operation_review");
+	await writeFile(toolReleasePath, "released", "utf8");
+	await coordinator.shutdown(async () => host.runtime.dispose());
+});
+
 test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-run-failure-"));
 	const agentDir = join(cwd, ".pi-agent");

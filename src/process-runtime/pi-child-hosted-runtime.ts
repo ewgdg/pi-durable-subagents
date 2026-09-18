@@ -132,11 +132,12 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
 		for (const toolName of toolNames) {
-			const executionMode = this.#toolExecutionModes.get(toolName);
-			if (!executionMode) {
-				throw new Error(`invariant_violation: tool definition ${toolName} is unavailable`);
-			}
-			if (executionMode === "sequential") return "blocking";
+			// Batch names come from a committed model message, so one of them may name a
+			// tool this child never registered, or one that left its surface. Pi decides
+			// sequential execution with the same per-name mode lookup and tolerates an
+			// absent mode, so classification must ignore that name rather than refuse
+			// the whole batch.
+			if (this.#toolExecutionModes.get(toolName) === "sequential") return "blocking";
 		}
 		return "asynchronous";
 	}

@@ -101,6 +101,12 @@ test("InProcessHostedRuntime translates Pi lifecycle and owns Pi intentions", as
 	assert.equal(runtime.queuedInputCount(), 2);
 	assert.equal(runtime.classifyToolBatch(["read"]), "asynchronous");
 	assert.equal(runtime.classifyToolBatch(["read", "sequential"]), "blocking");
+	// A committed batch can name a tool this session never registered, whether the
+	// model invented it or the tool surface changed. The name contributes nothing,
+	// exactly as Pi's own sequential-batch decision reads the same definitions.
+	assert.equal(runtime.classifyToolBatch(["read", "code"]), "asynchronous");
+	assert.equal(runtime.classifyToolBatch(["sequential", "code"]), "blocking");
+	assert.equal(runtime.classifyToolBatch(["code", "sequential"]), "blocking");
 	assert.equal(runtime.cancellationSignal(), cancellation.signal);
 	assert.deepEqual(await runtime.clearQueue(), {
 		steering: ["steer"],

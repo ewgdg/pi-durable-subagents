@@ -197,19 +197,15 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 			PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
 		);
 		assert.deepEqual(host.effectiveRuntimeSnapshot()?.tools, []);
-		assert.throws(
-			() => host.classifyToolBatch(["read"]),
-			/invariant_violation: tool definition read is unavailable/,
-		);
+		// Classification follows the adopted tool modes, so a name outside the child's
+		// current surface contributes nothing rather than failing the batch.
+		assert.equal(host.classifyToolBatch(["read"]), "asynchronous");
 		assert.deepEqual(host.effectiveRuntimeSnapshot()?.tools, []);
 		assert.equal(
 			host.effectiveRuntimeSnapshot()?.model.modelId,
 			PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
 		);
-		assert.throws(
-			() => host.classifyToolBatch(["missing-tool"]),
-			/invariant_violation: tool definition missing-tool is unavailable/,
-		);
+		assert.equal(host.classifyToolBatch(["missing-tool"]), "asynchronous");
 
 		const handled = host.deliverInLane(
 			{ kind: "user", content: "PROCESS_RUNTIME_HANDLED_INPUT" },
@@ -353,9 +349,12 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 		sessionId: "dynamic-runtime",
 	});
 	assert.equal(runtime.classifyToolBatch(["sequential-tool"]), "blocking");
-	assert.throws(
-		() => runtime.classifyToolBatch(["parallel-tool"]),
-		/invariant_violation: tool definition parallel-tool is unavailable/,
+	// The refresh replaced the earlier surface outright: the retired name is unknown
+	// now and cannot make the batch blocking, while the adopted one still can.
+	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
+	assert.equal(
+		runtime.classifyToolBatch(["parallel-tool", "sequential-tool"]),
+		"blocking",
 	);
 
 	let releaseStaleSnapshot!: () => void;
@@ -475,10 +474,8 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 		runtime.classifyToolBatch(["parallel-tool", "sequential-tool"]),
 		"blocking",
 	);
-	assert.throws(
-		() => runtime.classifyToolBatch(["missing-tool"]),
-		/invariant_violation: tool definition missing-tool is unavailable/,
-	);
+	// A committed batch may name a tool this child never registered.
+	assert.equal(runtime.classifyToolBatch(["missing-tool"]), "asynchronous");
 	const completion = runtime.deliver({ kind: "user", content: "Retry this Run." }).completion;
 	const emit = (event: PiChildRuntimeEvent) => {
 		for (const handler of eventHandlers) handler(event);

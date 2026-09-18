@@ -83,11 +83,13 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
 		for (const toolName of toolNames) {
-			const definition = this.#session.getToolDefinition(toolName);
-			if (!definition) {
-				throw new Error(`invariant_violation: tool definition ${toolName} is unavailable`);
+			// Batch names come from a committed model message, so one of them may name a
+			// tool this session never registered. Pi decides sequential execution with
+			// the same per-name definition lookup and tolerates an absent definition, so
+			// classification must ignore that name rather than refuse the whole batch.
+			if (this.#session.getToolDefinition(toolName)?.executionMode === "sequential") {
+				return "blocking";
 			}
-			if (definition.executionMode === "sequential") return "blocking";
 		}
 		return "asynchronous";
 	}
