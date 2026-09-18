@@ -116,3 +116,45 @@ test("native quota evidence never invents identity or reset time or classifies c
 		assert.deepEqual(event.quota, expected);
 	}
 });
+
+test("a cancelled Run publishes cancellation instead of its cancelled request setup as failure", () => {
+	let emit!: (event: unknown) => void;
+	const cancellation = new AbortController();
+	const runtime = new InProcessHostedRuntime({
+		session: {
+			subscribe(handler: typeof emit) { emit = handler; return () => undefined; },
+			agent: { signal: cancellation.signal },
+		} as unknown as AgentSession,
+		projection: undefined, inspectSnapshot: () => { throw new Error("not used"); },
+	});
+	const events: HostedRuntimeEvent[] = [];
+	runtime.subscribe(event => events.push(event));
+	emit({ type: "agent_end", willRetry: false, messages: [{ role: "assistant", stopReason: "error", errorMessage: "This operation was aborted" }] });
+	assert.deepEqual(events.at(-1), {
+		type: "agent_end", outcome: "error", willRetry: false,
+		failure: { stage: "model", error: "This operation was aborted", provenance: "in-process-hosted-runtime" },
+	}, "an uncancelled Run keeps reporting its unexpected model failure");
+	// Pi reports a request setup abandoned by the Run's own abort signal as a model
+	// error message whose text is that abort reason. Cancellation owns that stop.
+	cancellation.abort();
+	emit({ type: "agent_end", willRetry: false, messages: [{ role: "assistant", stopReason: "error", errorMessage: "This operation was aborted" }] });
+	assert.deepEqual(events.at(-1), { type: "agent_end", outcome: "aborted", willRetry: false });
+});
+
+test("a Run with a live cancellation signal keeps reporting an unexpected model failure", () => {
+	let emit!: (event: unknown) => void;
+	const runtime = new InProcessHostedRuntime({
+		session: {
+			subscribe(handler: typeof emit) { emit = handler; return () => undefined; },
+			agent: { signal: new AbortController().signal },
+		} as unknown as AgentSession,
+		projection: undefined, inspectSnapshot: () => { throw new Error("not used"); },
+	});
+	const events: HostedRuntimeEvent[] = [];
+	runtime.subscribe(event => events.push(event));
+	emit({ type: "agent_end", willRetry: false, messages: [{ role: "assistant", stopReason: "error", errorMessage: "upstream provider exploded" }] });
+	assert.deepEqual(events.at(-1), {
+		type: "agent_end", outcome: "error", willRetry: false,
+		failure: { stage: "model", error: "upstream provider exploded", provenance: "in-process-hosted-runtime" },
+	});
+});

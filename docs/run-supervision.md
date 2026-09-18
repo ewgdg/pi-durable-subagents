@@ -62,6 +62,10 @@ Coordination preserves Pi's user-configured compaction, retry, provider-retry, a
 
 If Pi's configured native behavior ultimately ends the exact Run unexpectedly, the runtime retains a Run Failure Report, even when no Answer Obligation remains. It captures the observed error and stage, exact Agent and Run, affected work, and recovery findings or explicit uncertainty. Startup errors observed by the host do not require a child-side error transcript entry. Successfully recovered transient errors, ongoing provider recovery, deliberate termination, and recognized quota suspension are not Run Failures.
 
+The Run's own cancellation signal owns classification. Pi reports a request setup that its abort signal abandoned as a model error message carrying the abort reason, so an Owner Run stopped through native abort — Escape, Ctrl+C, or an extension `ctx.abort()` — can end on a `stopReason: "error"` assistant message. The in-process Owner Runtime classifies any such message as `aborted` once that exact Run's signal is aborted: a Run whose cancellation is requested is a deliberate stop, never an unexpected terminal failure, and a successor Run is admitted by ordinary input.
+
+Required upstream improvement: Pi's `lazyStream` request-setup failure path publishes `stopReason: "error"` for a setup abandoned by its own abort signal. It should classify that stop from the signal it already receives, so the terminal message is `aborted` before any consumer reads it.
+
 An unresolved Answer Obligation still determines eligibility for ordinary Run Failure moderation; reporting does not broaden that policy. Reports use the Owner's existing read/unread, copy, and retained history surfaces. Marking read acknowledges the notification only: it does not clear live failure handling, settle Requests, or initiate recovery. See [Operational Incident moderation](operational-incident-moderation.md) for report grouping and recovery findings.
 
 ## Quota suspension

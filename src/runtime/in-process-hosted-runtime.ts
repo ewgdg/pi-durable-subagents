@@ -102,6 +102,12 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		return signal;
 	}
 
+	#cancellationRequested(): boolean {
+		// Agent-core keeps the exact Run's controller until its listeners settle, so
+		// this reads the terminal Run's own cancellation state at agent_end.
+		return this.#session.agent?.signal?.aborted === true;
+	}
+
 	deliver(
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,
@@ -152,10 +158,17 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 				const assistant = [...event.messages]
 					.reverse()
 					.find((message) => message.role === "assistant");
-				const outcome = assistant?.role === "assistant" &&
-					(assistant.stopReason === "error" || assistant.stopReason === "aborted")
-					? assistant.stopReason
-					: "completed";
+				// Pi reports a request setup that its own abort signal abandoned as a
+				// model error message carrying the abort reason, so the cancelled Run
+				// would otherwise enter terminal failure handling. Cancellation is the
+				// deliberate stop of this exact Run: it is never an unexpected failure,
+				// and a successor Run is admitted by ordinary input instead.
+				const outcome: "completed" | "aborted" | "error" =
+					assistant?.role === "assistant" && assistant.stopReason === "error"
+						? this.#cancellationRequested() ? "aborted" : "error"
+						: assistant?.role === "assistant" && assistant.stopReason === "aborted"
+							? "aborted"
+							: "completed";
 				const quota = outcome === "error" && assistant?.role === "assistant"
 					? classifyQuotaEvidence(assistant) : undefined;
 				// Pi checks queued continuation after this synchronous callback. Leave
