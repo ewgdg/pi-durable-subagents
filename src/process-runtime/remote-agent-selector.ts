@@ -183,10 +183,12 @@ export function registerRemoteAgentsCommand(
 		handler: async (args, ctx) => {
 			if (parseAgentsCommandArgument(args) === "owner") {
 				const snapshot = await presentation.snapshot();
-				const owner = snapshot.live.find(
+				// The Owner exists in the roster whatever its Run phase, so /agents owner
+				// still returns to it while a stopped Owner Run is Dormant.
+				const owner = [...snapshot.live, ...snapshot.dormant].find(
 					(status) => status.agentId === status.workflowId,
 				);
-				if (!owner) throw new Error("Agent selector roster has no live Owner");
+				if (!owner) throw new Error("Agent selector roster has no Owner");
 				await presentation.select({
 					kind: "select_agent",
 					agentId: owner.agentId,

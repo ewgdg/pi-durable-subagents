@@ -614,7 +614,11 @@ class AgentSelectorSurface implements Component {
 			}
 		}
 		this.#liveTree = allStatuses.filter(({ agentId }) => liveTreeIds.has(agentId));
-		this.#dormantRoster = this.#options.dormant.filter(({ agentId }) => !liveTreeIds.has(agentId));
+		const ownerId = this.#ownerIdentityId();
+		// The Owner is a global destination rendered in the fixed footer, never a
+		// roster row: a Dormant Owner belongs to that footer, not to the Dormant list.
+		this.#dormantRoster = this.#options.dormant.filter(({ agentId }) =>
+			agentId !== ownerId && !liveTreeIds.has(agentId));
 	}
 
 	#liveChildren(agentId: string): AgentRosterStatus[] {
@@ -732,11 +736,20 @@ class AgentSelectorSurface implements Component {
 		};
 	}
 
-	#ownerStatus(): AgentRosterStatus {
-		const owner = this.#options.live.find(
+	#ownerIdentityId(): string | undefined {
+		return this.#ownerCandidate()?.agentId;
+	}
+
+	/** The Owner exists in the roster whatever its Run phase: a stopped Owner Run is Dormant, not absent. */
+	#ownerCandidate(): AgentRosterStatus | undefined {
+		return [...this.#options.live, ...this.#options.dormant].find(
 			(status) => status.agentId === status.workflowId,
 		);
-		if (!owner) throw new Error("Agent selector roster has no live Owner");
+	}
+
+	#ownerStatus(): AgentRosterStatus {
+		const owner = this.#ownerCandidate();
+		if (!owner) throw new Error("Agent selector roster has no Owner");
 		return owner;
 	}
 

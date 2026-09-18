@@ -1480,6 +1480,33 @@ test("mounted Owner marks only its action label across all tabs and focus", asyn
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
 });
 
+test("a Dormant Owner still opens the selector and remains the single Owner destination", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [],
+		dormant: [
+			dormantAgentStatus("owner", "Owner", null),
+			dormantAgentStatus("worker", "Worker", "owner"),
+		],
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	assert.ok(harness.component, "the selector opens while the Owner Run is Dormant");
+
+	const live = renderPanel(harness.component, 80).join("\n");
+	assert.match(live, /Go to Owner\* \[o\]/);
+	assert.doesNotMatch(live, /→ Owner/);
+
+	harness.component.handleInput?.("\t");
+	const dormant = renderPanel(harness.component, 80).join("\n");
+	assert.match(dormant, /→ Worker/);
+	assert.match(dormant, /Go to Owner\* \[o\]/);
+	assert.doesNotMatch(dormant, /→ Owner/);
+
+	harness.component.handleInput?.("o");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
+});
+
 for (const tab of ["live", "reports"] as const) {
 	test(`m marks the selected report read in ${tab} without leaving the menu`, { timeout: 5_000 }, async () => {
 		const harness = surfaceHarness(30);

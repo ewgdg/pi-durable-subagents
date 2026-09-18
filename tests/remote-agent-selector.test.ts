@@ -198,6 +198,35 @@ test("remote registered /agents owner selects Owner without opening the selector
 	assert.deepEqual(actions, [{ kind: "select_agent", agentId: "owner" }]);
 });
 
+test("remote registered /agents owner selects a Dormant Owner instead of failing", async () => {
+	const actions: unknown[] = [];
+	const command = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+		async setReportRead() {},
+		async snapshot() {
+			return {
+				live: [],
+				dormant: [{ ...ownerStatus, run: { phase: "dormant", retentionReasons: [] } }],
+				selectedAgentId: "child",
+				humanAttention: [],
+				operationalAttention: [], reports: [],
+			};
+		},
+		async select(action: unknown) {
+			actions.push(action);
+			return { kind: "selected" as const };
+		},
+	}));
+	const ui = {
+		custom: () => {
+			throw new Error("selector must not open for /agents owner");
+		},
+	};
+
+	await command.handler("owner", { ui } as unknown as ExtensionCommandContext);
+
+	assert.deepEqual(actions, [{ kind: "select_agent", agentId: "owner" }]);
+});
+
 test("registered /agents rejects unsupported arguments before opening or selecting", async () => {
 	const localOpened: string[] = [];
 	const localView = presentationView({
