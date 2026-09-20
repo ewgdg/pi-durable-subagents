@@ -97,7 +97,28 @@ const UsageSchema = closed({
 		total: Type.Number(),
 	}),
 });
+// Pi 0.86 carries a leading system message plus mid-conversation prompt and tool
+// updates in the transcript, so `message_end` fires for role "system" too.
+const ToolDeclarationSchema = closed({
+	name: NonEmptyStringSchema,
+	description: Type.String(),
+	parameters: Type.Record(Type.String(), Type.Unknown()),
+	constrainedSampling: Type.Optional(Type.Unknown()),
+});
+const ToolReferenceSchema = closed({ name: NonEmptyStringSchema });
+const PromptSectionsSchema = Type.Record(
+	Type.String(),
+	Type.Union([Type.String(), Type.Null()]),
+);
 const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
+	closed({
+		role: Type.Literal("system"),
+		content: Type.Union([Type.String(), Type.Array(TextContentSchema)]),
+		sections: Type.Optional(PromptSectionsSchema),
+		toolsAdded: Type.Optional(Type.Array(ToolDeclarationSchema)),
+		toolsRemoved: Type.Optional(Type.Array(ToolReferenceSchema)),
+		timestamp: Type.Number(),
+	}),
 	closed({
 		role: Type.Literal("user"),
 		content: Type.Union([Type.String(), Type.Array(ToolContentSchema)]),
