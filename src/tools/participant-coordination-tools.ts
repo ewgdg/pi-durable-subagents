@@ -15,7 +15,7 @@ import type { AgentStatus } from "../coordination/agent-record.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
 import type { AgentLabelResolver } from "../presentation/agent-identity.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
-import type { AgentMessageInput, MessageDeliveryMode } from "../protocol/agent-message-input.ts";
+import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import type {
@@ -256,10 +256,11 @@ const messageDeliveryModeParameters = Type.Union([
 ], {
 	description: "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: delivers an admission-ordered batch at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. Steer Messages, Requests, or Cancellations preempt agent_wait with the eligible Steer batch. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.",
 });
-const messageDeliveryModeReference = Type.Optional(
-	Type.Unsafe<MessageDeliveryMode>(Type.Ref("#/$defs/deliveryMode")),
-);
-
+// Project policy: tool declarations carry no resolution keywords ($id, $ref, $defs).
+// Gemini rejects a reference inside a schema that declares $id, transports that strip
+// definitions would leave references dangling, and strict constrained sampling rejects
+// references outright. Inlining costs nothing on Gemini, which expands references per
+// use site anyway.
 const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
@@ -269,7 +270,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 				description: "Exact Agent label, full Agent ID, or unique Agent ID suffix",
 			}),
 			content: Type.String({ minLength: 1 }),
-			deliveryMode: messageDeliveryModeReference,
+			deliveryMode: Type.Optional(messageDeliveryModeParameters),
 		},
 		{ additionalProperties: false },
 	),
@@ -282,7 +283,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 				description: "Exact Agent label, full Agent ID, or unique Agent ID suffix",
 			}),
 			question: Type.String({ minLength: 1 }),
-			deliveryMode: messageDeliveryModeReference,
+			deliveryMode: Type.Optional(messageDeliveryModeParameters),
 			contextPreparation: Type.Optional(contextPreparationParameters),
 		},
 		{ additionalProperties: false },
@@ -317,12 +318,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 		},
 		{ additionalProperties: false },
 	),
-], {
-	// The tool is also nested inside control requests. Its own resource ID keeps
-	// local definition references scoped to this schema rather than the envelope.
-	$id: "urn:pi-durable-subagents:agent-message-parameters",
-	$defs: { deliveryMode: messageDeliveryModeParameters },
-}));
+]));
 
 const agentWaitParameters = Type.Object({
 	requestMessageIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
