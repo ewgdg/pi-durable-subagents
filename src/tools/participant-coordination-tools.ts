@@ -111,7 +111,16 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 For poll/retry messageId and cancel requestMessageId, use the full ID or a unique case-sensitive suffix from your own earlier authored Messages (including Creation Requests). Ambiguous suffixes fail; use a longer suffix or the full ID. Receipts retain full canonical IDs.
 </agent_message>`;
 
+const MESSAGE_DELIVERY_RULES = "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: delivers an admission-ordered batch at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. Steer Messages, Requests, or Cancellations preempt agent_wait with the eligible Steer batch. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.";
+
+// Stated once here rather than once per authoring operation: the schema repeats any
+// field both authoring operations accept, and this rule text is long.
+const DELIVERY_MODE_PROMPT_GUIDE = `<delivery_modes>
+${MESSAGE_DELIVERY_RULES}
+</delivery_modes>`;
+
 const AGENT_DELEGATION_PROMPT_GUIDE = `<agent_delegation>
+
 When agent_message operation "request" or agent_spawn delegates work, partition it into bounded, non-overlapping work units before sending the Request.
 
 Reuse an existing Agent with agent_message operation "request" only when context acquired through its earlier work materially reduces rediscovery. When useful, set contextPreparation with both workScale and contextDependence so the idle recipient can prepare a bounded working zone before Delivery. Omit it to keep ordinary Pi compaction behavior. Spawn a fresh Agent when prior context is not relevant to the new work.
@@ -254,7 +263,7 @@ const messageDeliveryModeParameters = Type.Union([
 	Type.Literal("steer"),
 	Type.Literal("background"),
 ], {
-	description: "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: delivers an admission-ordered batch at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. Steer Messages, Requests, or Cancellations preempt agent_wait with the eligible Steer batch. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.",
+	description: "Defaults to deferred when omitted.",
 });
 // Project policy: tool declarations carry no resolution keywords ($id, $ref, $defs).
 // Gemini rejects a reference inside a schema that declares $id, transports that strip
@@ -630,6 +639,7 @@ export function registerParticipantCoordinationTools<
 		promptSnippet: "Send, request, answer, cancel, poll, or retry direct Agent communication.",
 		promptGuidelines: [
 			AGENT_MESSAGE_PROMPT_GUIDE,
+			DELIVERY_MODE_PROMPT_GUIDE,
 			AGENT_DELEGATION_PROMPT_GUIDE,
 		],
 		executionMode: "sequential",

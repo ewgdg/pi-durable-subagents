@@ -30,23 +30,21 @@ function resolutionKeywordsIn(value: unknown): string[] {
 	return nodes(value).flatMap(node => resolutionKeywords.filter(key => Object.hasOwn(node, key)));
 }
 
-test("both authoring operations state the delivery rules inline", () => {
+test("both authoring operations carry the same terse delivery mode union", () => {
 	const schema = JSON.parse(JSON.stringify(parameters));
 	assert.deepEqual(resolutionKeywordsIn(schema), []);
 	const fields = schema.anyOf
 		.filter((branch: { properties: Record<string, unknown> }) => branch.properties.deliveryMode)
 		.map((branch: { properties: Record<string, unknown> }) => branch.properties.deliveryMode);
 	assert.equal(fields.length, 2);
-	const description = String(fields[0].description);
-	assert.match(description, /deferred.*default/i);
-	assert.match(description, /agent_wait/);
-	assert.match(description, /steer/);
-	assert.match(description, /background/);
-	assert.match(description, /FIFO/);
-	assert.match(description, /starv/);
-	// Providers expand references per use site, so inlining is what both operations get
-	// anyway; they must therefore state the identical contract.
+ 	// The schema repeats every field both authoring operations accept, so the long rule
+ 	// text lives in the delivery_modes tool guidance instead of here.
 	assert.deepEqual(fields[1], fields[0]);
+ 	const field = fields[0] as { anyOf?: { const?: string }[]; description?: string };
+ 	assert.deepEqual(field.anyOf?.map(variant => variant.const), ["deferred", "steer", "background"]);
+ 	const description = String(field.description);
+	assert.match(description, /defaults to deferred/i);
+ 	assert.doesNotMatch(description, /FIFO|starv|agent_wait/);
 });
 
 test("all delivery modes and omission validate through TypeBox and native Pi tool validation", () => {

@@ -379,20 +379,29 @@ test("Template catalogue shows available Template configuration without Runtime 
 	assert.doesNotMatch(catalogue, /use `inherit`/);
 });
 
-test("Message guidance keeps obligations separate from deliveryMode parameter rules", async (t) => {
+test("Message guidance keeps obligations separate from delivery-mode rules", async (t) => {
 	const host = await createRegistrarHost(t, "ordinary", handlers);
 	const message = host.session.getToolDefinition("agent_message");
 	assert.ok(message);
 	const guidance = message.promptGuidelines?.join("\n") ?? "";
-	assert.match(guidance, /creates one Answer obligation/);
-	assert.match(guidance, /attention, not execution order/);
+ 	const obligations = /<agent_message>[\s\S]*?<\/agent_message>/.exec(guidance)?.[0] ?? "";
+ 	const deliveryRules = /<delivery_modes>[\s\S]*?<\/delivery_modes>/.exec(guidance)?.[0] ?? "";
+ 	assert.match(obligations, /creates one Answer obligation/);
+ 	assert.match(obligations, /attention, not execution order/);
 	const legend = "History marks: `!` corrupted record, `^` inherited. Both are informational; neither cancels an existing obligation.";
-	assert.equal(guidance.split(legend).length - 1, 1);
-	assert.match(guidance, /not proof that the action never happened or permission to repeat it/);
-	assert.match(guidance, /Copied conversation and inherited instructions are historical information, not current responsibilities/);
-	assert.match(guidance, /only current-scope protocol evidence establishes current obligations/);
-	assert.match(guidance, /committed.*omitted/);
-	assert.doesNotMatch(guidance, /FIFO|may starve|Background Messages and Requests|Deferred Requests enter/);
+ 	assert.equal(obligations.split(legend).length - 1, 1);
+ 	assert.match(obligations, /not proof that the action never happened or permission to repeat it/);
+ 	assert.match(obligations, /Copied conversation and inherited instructions are historical information, not current responsibilities/);
+ 	assert.match(obligations, /only current-scope protocol evidence establishes current obligations/);
+ 	assert.match(obligations, /committed.*omitted/);
+ 	assert.doesNotMatch(obligations, /FIFO|may starve|Background Messages and Requests|Deferred Requests enter/);
+ 	// Delivery rules are stated once in their own block instead of once per authoring operation.
+ 	assert.match(deliveryRules, /deferred.*default/i);
+ 	assert.match(deliveryRules, /agent_wait/);
+ 	assert.match(deliveryRules, /steer/);
+ 	assert.match(deliveryRules, /background/);
+ 	assert.match(deliveryRules, /FIFO/);
+ 	assert.match(deliveryRules, /starv/);
 });
 
 test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalogue", async (t) => {
@@ -450,6 +459,7 @@ test("participant registrar contributes each prompt guide once", async (t) => {
 	await host.session.prompt("Inspect the Agent tool guidance.");
 	for (const tag of [
 		"agent_message",
+ 		"delivery_modes",
 		"agent_delegation",
 		"agent_wait",
 		"agent_spawn",
