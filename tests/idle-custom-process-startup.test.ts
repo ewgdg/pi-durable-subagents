@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, getCurrentTools, type Context } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
@@ -158,9 +158,9 @@ async function startChild(t: TestContext) {
 async function assertPreparedTurn(child: Awaited<ReturnType<typeof startChild>>, turn: number) {
 	assert.equal(child.contexts.length, turn * 2, "each idle start executes one registered tool and its continuation");
 	for (const context of child.contexts.slice((turn - 1) * 2)) {
-		assert.ok(context.tools?.some(tool => tool.name === STARTUP_TOOL));
-		assert.ok(context.systemPrompt?.includes(STARTUP_GUIDANCE), "idle custom Runs must receive before-start tool guidance, including after the tool result");
-		assert.ok(context.systemPrompt?.includes(`Startup input ${turn}; preparation ${turn}.`));
+		assert.ok(getCurrentTools(context.messages).some(tool => tool.name === STARTUP_TOOL));
+		assert.ok(getCurrentSystemPrompt(context.messages).includes(STARTUP_GUIDANCE), "idle custom Runs must receive before-start tool guidance, including after the tool result");
+		assert.ok(getCurrentSystemPrompt(context.messages).includes(`Startup input ${turn}; preparation ${turn}.`));
 	}
 	const toolResult = child.contexts.at(-1)?.messages.findLast(message => message.role === "toolResult");
 	assert.ok(toolResult?.role === "toolResult");

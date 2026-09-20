@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentTools, type Context } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
 import type { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
@@ -24,7 +24,7 @@ test("Moderator reports return without human waiting and survive independent inc
 	let affectedAgentId = "";
 	let moderatorStep = 0;
 	const route = (context: Context) => {
-		if (!context.tools?.some(({ name }) => name === "moderator_control")) return fauxAssistantMessage("Settled without answering.");
+		if (!getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) return fauxAssistantMessage("Settled without answering.");
 		if (!affectedAgentId) {
 			const text = context.messages.flatMap((message) => message.role !== "user" ? [] : typeof message.content === "string" ? [message.content] : message.content.flatMap((part) => part.type === "text" ? [part.text] : [])).find((text) => text.includes('"kind":"obligation_stall"'));
 			assert.ok(text);

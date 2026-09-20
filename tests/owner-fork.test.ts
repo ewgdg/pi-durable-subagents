@@ -6,6 +6,7 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 	type Context,
+	type JsonObject,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
@@ -863,7 +864,7 @@ async function assertSourceIdentityIsUnavailable(
 		const toolCallId = `reject-source-identity-${index}`;
 		session.sessionManager.appendMessage(
 			fauxAssistantMessage(
-				fauxToolCall(candidate.tool, candidate.input, { id: toolCallId }),
+				fauxToolCall(candidate.tool, candidate.input as unknown as JsonObject, { id: toolCallId }),
 				{ stopReason: "toolUse" },
 			),
 		);

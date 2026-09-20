@@ -6,6 +6,7 @@ import type { WorkflowResumeDelivery } from "./workflow-recovery-outcomes.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { resolveAgentMessageReferences } from "../protocol/message-reference.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -343,9 +344,9 @@ export class MessageCoordinator {
 			transcript: caller.transcript.inspect(),
 			answer,
 		}).deliveryEvidence;
-		const result = deliveryEvidence
+		const result: JsonValue | undefined = deliveryEvidence
 			? {
-				disposition: "answer_already_delivered" as const,
+				disposition: "answer_already_delivered",
 				requestMessageId: request.messageId,
 				requestTitle: request.title,
 				answerId: answer.messageId,
@@ -357,8 +358,8 @@ export class MessageCoordinator {
 			)
 				? {
 					requestMessageId: request.messageId,
-					messageStatus: "unknown" as const,
-					reason: "inspection_incomplete" as const,
+					messageStatus: "unknown",
+					reason: "inspection_incomplete",
 				}
 				: undefined;
 		if (!result) return undefined;

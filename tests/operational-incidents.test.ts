@@ -16,7 +16,9 @@ import { fileURLToPath } from "node:url";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	getCurrentTools,
 	type Context,
+	type JsonValue,
 } from "@earendil-works/pi-ai";
 import {
 	SessionManager,
@@ -76,7 +78,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		fauxAssistantMessage("I settled without discharging the Answer obligation."),
 		fauxAssistantMessage("I settled again after the runtime reminder without answering."),
 		(context) => {
-			moderatorTools = context.tools?.map(({ name }) => name).sort() ?? [];
+			moderatorTools = getCurrentTools(context.messages).map(({ name }) => name).sort() ?? [];
 			return fauxAssistantMessage("I will inspect the stalled obligation.");
 		},
 	]);
@@ -677,7 +679,7 @@ test("one failed provider request creates Run Failure without regenerating an an
 	const routedResponses = Array.from(
 		{ length: 6 },
 		() => (context: Context) => {
-			if (context.tools?.some(({ name }) => name === "moderator_control")) {
+			if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 				return fauxAssistantMessage("I will diagnose the failed obligated Run.");
 			}
 			if (context.messages.some(
@@ -813,7 +815,7 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 	});
 
 	const terminalOwnerFailure = (context: Context) =>
-		context.tools?.some(({ name }) => name === "moderator_control")
+		getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")
 			? fauxAssistantMessage("I will diagnose the failed obligated Owner Run.")
 			: fauxAssistantMessage("The Owner Run fails before answering.", {
 				stopReason: "error",
@@ -872,7 +874,7 @@ test("a live successor tells its Run Failure Moderator to resolve immediately", 
 		const latestUser = JSON.stringify(
 			[...context.messages].reverse().find(({ role }) => role === "user"),
 		);
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			if (messages.includes("successor_run_started")) {
 				return fauxAssistantMessage(
 					fauxToolCall(
@@ -986,7 +988,7 @@ test("a live successor tells its Run Failure Moderator to resolve immediately", 
 test("a successor clears Run Failure before its later Stall is handled separately", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	const routeRuns = (context: Context) => {
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I will inspect this exact condition.");
 		}
 		const transcript = JSON.stringify(context.messages);
@@ -1044,7 +1046,7 @@ test("a successor clears Run Failure before its later Stall is handled separatel
 test("a failed successor startup does not clear Run Failure handling", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	const routeFailure = (context: Context) =>
-		context.tools?.some(({ name }) => name === "moderator_control")
+		getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")
 			? fauxAssistantMessage("I will inspect the failed exact Run.")
 			: fauxAssistantMessage("The exact Run fails before answering.", {
 				stopReason: "error",
@@ -1105,7 +1107,7 @@ test("a failed successor startup does not clear Run Failure handling", async (t)
 test("Request Cancellation clears Run Failure without starting a successor Incident", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	const routeFailure = (context: Context) =>
-		context.tools?.some(({ name }) => name === "moderator_control")
+		getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")
 			? fauxAssistantMessage("I will inspect the failed exact Run.")
 			: fauxAssistantMessage("The exact Run fails before answering.", {
 				stopReason: "error",
@@ -1582,7 +1584,7 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 
 	const routePostReminderResponse = (context: Context) => {
 		const transcript = JSON.stringify(context.messages);
-		if (!context.tools?.some(({ name }) => name === "ask_user")) {
+		if (!getCurrentTools(context.messages).some(({ name }) => name === "ask_user")) {
 			return fauxAssistantMessage("The Owner observed the externally committed Answer.");
 		}
 		if (transcript.includes("answer-after-reminder")) {
@@ -1947,7 +1949,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 	const bothRoots = new Promise<void>(resolve => { releaseRoots = resolve; });
 	t.after(releaseRoots);
 	const routeCycle = async (context: Context) => {
-			if (context.tools?.some(({ name }) => name === "moderator_control")) {
+			if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 				return fauxAssistantMessage("I will inspect the closed Request cycle.");
 			}
 			const messages = JSON.stringify(context.messages);
@@ -2119,7 +2121,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	const bothRoots = new Promise<void>(resolve => { releaseRoots = resolve; });
 	t.after(releaseRoots);
 	const routeActiveCycle = async (context: Context) => {
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I will inspect the now-settled cycle.");
 		}
 		const messages = JSON.stringify(context.messages);
@@ -2229,7 +2231,7 @@ test("input, Human attention, selection, and Hold prevent a blocked Request-cycl
 		t.after(releaseRoots);
 
 		const routeSelfCycle = async (context: Context) => {
-			if (context.tools?.some(({ name }) => name === "moderator_control")) {
+			if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 				return fauxAssistantMessage("I will inspect the settled self-cycle.");
 			}
 			const messages = JSON.stringify(context.messages);
@@ -2469,7 +2471,7 @@ test("a post-commit Moderator startup failure creates one linked replacement", a
 test("a terminal Moderator Run failure creates one linked replacement", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	const routeFailure = (context: Context) => {
-		if (!context.tools?.some(({ name }) => name === "moderator_control")) {
+		if (!getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I settled without answering the Creation Request.");
 		}
 		const input = context.messages.find((message) =>
@@ -2539,7 +2541,7 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 		settings: { retry: { enabled: false } },
 	});
 	const routeFailure = (context: Context) => {
-		if (!context.tools?.some(({ name }) => name === "moderator_control")) {
+		if (!getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I settled without answering the Creation Request.");
 		}
 		const input = context.messages.find((message) =>
@@ -3299,7 +3301,7 @@ async function sendOwnerMessage(
 		toolCallId,
 		toolName: "agent_message",
 		content: result.content,
-		details: result.details,
+		details: result.details as JsonValue,
 		isError: false,
 		timestamp: Date.now(),
 	});
@@ -3394,7 +3396,7 @@ async function answerAsOwner(
 		toolCallId,
 		toolName: "agent_message",
 		content: result.content,
-		details: result.details,
+		details: result.details as JsonValue,
 		isError: false,
 		timestamp: Date.now(),
 	});
@@ -3828,7 +3830,7 @@ test("blocked Delivery follows existing obligations and does not time active rec
 	});
 	const route = async (context: Context) => {
 		const messages = JSON.stringify(context.messages);
-		if (!context.tools?.some(({name}) => name === "agent_spawn")) {
+		if (!getCurrentTools(context.messages).some(({name}) => name === "agent_spawn")) {
 			ownerStarted = true;
 			await ownerGate;
 			return fauxAssistantMessage("Owner's ordinary model work completed.");
@@ -4041,7 +4043,7 @@ test("a blocked replacement Moderator preparation receives deadline attention be
 	});
 	let moderatorTurns = 0;
 	const route = (context: Context) => {
-		if (!context.tools?.some(({name}) => name === "moderator_control")) {
+		if (!getCurrentTools(context.messages).some(({name}) => name === "moderator_control")) {
 			return fauxAssistantMessage("Settled without the owed Answer.");
 		}
 		if (++moderatorTurns === 1) {

@@ -8,6 +8,8 @@ import test from "node:test";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	getCurrentSystemPrompt,
+	getCurrentTools,
 	type Context,
 } from "@earendil-works/pi-ai";
 import { ProjectTrustStore, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -381,8 +383,8 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	let observedTools: string[] = [];
 	host.model.setResponses([
 		(context) => {
-			observedSystemPrompt = context.systemPrompt ?? "";
-			observedTools = context.tools?.map(({ name }) => name) ?? [];
+			observedSystemPrompt = getCurrentSystemPrompt(context.messages);
+			observedTools = getCurrentTools(context.messages).map(({ name }) => name) ?? [];
 			return fauxAssistantMessage("Configured child Run observed.");
 		},
 	]);
@@ -529,7 +531,7 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	let successorSystemPrompt = "";
 	host.model.setResponses([
 		(context) => {
-			successorSystemPrompt = context.systemPrompt ?? "";
+			successorSystemPrompt = getCurrentSystemPrompt(context.messages);
 			return fauxAssistantMessage("Dynamically prepared successor observed.");
 		},
 	]);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type Context, type JsonObject } from "@earendil-works/pi-ai";
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
@@ -12,7 +12,7 @@ test("public Background delivery waits for Creation Answer then delivers Message
 	t.after(releaseCreation);
 	const observed: string[] = [];
 	const call = (name: string, args: Record<string, unknown>, id: string) =>
-		fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
+		fauxAssistantMessage(fauxToolCall(name, args as JsonObject, { id }), { stopReason: "toolUse" });
 	const result = (context: Context, id: string) => context.messages.find(message => message.role === "toolResult" && message.toolCallId === id);
 	const route = async (context: Context) => {
 		const text = JSON.stringify(context.messages);

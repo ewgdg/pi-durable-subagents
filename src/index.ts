@@ -78,7 +78,6 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				ctx,
 				bridge,
 				entryModulePath: ENTRY_MODULE_PATH,
-				bootstrapHandler: bootstrapOwner,
 				event,
 				onOwnerIdentified: () => { ownerIdentified = true; },
 			});

@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	type JsonObject,
+	type JsonValue,
 } from "@earendil-works/pi-ai";
 import {
 	SessionManager,
@@ -465,7 +467,7 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 		toolCallId: sendToolCallId,
 		toolName: "agent_message",
 		content: sendResult.content,
-		details: sendResult.details,
+		details: sendResult.details as JsonValue,
 		isError: false,
 		timestamp: Date.now(),
 	});
@@ -643,7 +645,7 @@ test("Messages and Requests accept an exact label or unique Agent ID suffix", as
 		const toolCallId = `target-selector-${index}`;
 		harness.host.session.sessionManager.appendMessage(
 			fauxAssistantMessage(
-				fauxToolCall("agent_message", input, { id: toolCallId }),
+				fauxToolCall("agent_message", input as unknown as JsonObject, { id: toolCallId }),
 				{ stopReason: "toolUse" },
 			),
 		);

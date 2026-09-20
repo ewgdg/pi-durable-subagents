@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonValue } from "@earendil-works/pi-ai";
 import { SessionManager, type ContextEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
@@ -179,7 +179,7 @@ for (const outcome of [
 		const requestMessageId = deriveMessageIdentity({ agentId: "requester", entryId, toolCallId });
 		author.manager.appendMessage({
 			role: "toolResult", toolName: "agent_message", toolCallId, content: [], isError: false, timestamp: Date.now(),
-			details: { requestMessageId, targetAgentId: "responder", ...outcome },
+			details: { requestMessageId, targetAgentId: "responder", ...outcome } as JsonValue,
 		});
 		// A later retry failure cannot redefine the original authoring outcome.
 		author.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {

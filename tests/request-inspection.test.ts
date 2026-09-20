@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
 import { RequestEvidence } from "../src/coordination/request-evidence.ts";
 import { createMessageDelivery, type MessageDeliveryItem } from "../src/protocol/message-delivery.ts";
 import { deriveMessageIdentity, type ToolCallPointer } from "../src/protocol/identities.ts";
@@ -18,12 +18,12 @@ function history() {
 	function call(agent: Participant, input: Record<string, unknown>, result: (source: ToolCallPointer) => object) {
 		const toolCallId = `call-${++sequence}`;
 		const entryId = agent.manager.appendMessage(fauxAssistantMessage(
-			fauxToolCall("agent_message", input, { id: toolCallId }), { stopReason: "toolUse" },
+			fauxToolCall("agent_message", input as JsonObject, { id: toolCallId }), { stopReason: "toolUse" },
 		));
 		const source = { agentId: agent.record.identity.agentId, entryId, toolCallId };
 		const details = result(source);
 		agent.manager.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId,
-			content: [{ type: "text", text: JSON.stringify(details) }], details, isError: false, timestamp: Date.now() });
+			content: [{ type: "text", text: JSON.stringify(details) }], details: details as JsonValue, isError: false, timestamp: Date.now() });
 		return source;
 	}
 	function deliver(to: Participant, item: MessageDeliveryItem) {

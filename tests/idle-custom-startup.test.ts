@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, type Context } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
@@ -117,7 +117,7 @@ for (const phase of ["input", "before_agent_start"] as const) {
 		releaseModel.resolve();
 		await delivery;
 		assert.equal(contexts.length, 2);
-		assert.ok(contexts.every(context => context.systemPrompt === "Original prepared prompt."));
+		assert.ok(contexts.every(context => getCurrentSystemPrompt(context.messages) === "Original prepared prompt."));
 		assert.equal(host.deliveries().length, 1);
 	});
 
@@ -233,7 +233,7 @@ test("reload keeps late preparation excluded until the cancelled generation unwi
 	release.resolve();
 	await retired;
 	const prompts: string[] = [];
-	host.model.setResponses([context => { prompts.push(context.systemPrompt ?? ""); return fauxAssistantMessage("Current run."); }]);
+	host.model.setResponses([context => { prompts.push(getCurrentSystemPrompt(context.messages)); return fauxAssistantMessage("Current run."); }]);
 	await host.deliver();
 	assert.deepEqual(prompts, ["Current preparation."]);
 	assert.equal(host.deliveries().length, 1);
@@ -259,7 +259,7 @@ test("Owner native input forwarding hands off only its handled submission and pr
 		assert.equal(await dispatched.transcriptCommit, true);
 	};
 	const prompts: string[] = [];
-	host.model.setResponses([context => { prompts.push(context.systemPrompt ?? ""); return fauxAssistantMessage("Forwarded input completed."); }]);
+	host.model.setResponses([context => { prompts.push(getCurrentSystemPrompt(context.messages)); return fauxAssistantMessage("Forwarded input completed."); }]);
 	await host.session.prompt("Resume my work.");
 	await host.session.waitForIdle();
 	assert.deepEqual(errors, []);
@@ -308,7 +308,7 @@ for (const kind of ["message", "request"] as const) {
 		});
 		const runtime = InProcessHostedRuntime.fromSession({ session: host.session, services: host.runtime.services, projection: undefined });
 		const record = (response: ReturnType<typeof fauxAssistantMessage>) => (context: Context) => {
-			prompts.push(context.systemPrompt ?? "");
+			prompts.push(getCurrentSystemPrompt(context.messages));
 			return response;
 		};
 		host.model.setResponses(Array.from({ length: 2 }, () => [

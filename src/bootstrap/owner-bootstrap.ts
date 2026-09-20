@@ -2,7 +2,6 @@ import type {
 	AgentSession,
 	ExtensionAPI,
 	ExtensionContext,
-	ExtensionHandler,
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 
@@ -52,11 +51,10 @@ export async function initializeOwnerWorkflow(options: {
 	ctx: ExtensionContext;
 	bridge: InteractiveHostBridge;
 	entryModulePath: string;
-	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 	event: SessionStartEvent;
 	onOwnerIdentified(): void;
 }): Promise<() => OrdinaryAgentCoordinatorView> {
-	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event } = options;
+	const { pi, ctx, bridge, entryModulePath, event } = options;
 	const { runtime } = await bridge.capture(
 		ctx.sessionManager as AgentSession["sessionManager"],
 		ctx.ui,
@@ -69,7 +67,7 @@ export async function initializeOwnerWorkflow(options: {
 		await existing.prepareOwnerReplacement();
 		initializedWorkflows.delete(runtime.session);
 	}
-	assertOwnerAgentExtensionBindingReady({ runtime, bootstrapHandler });
+	assertOwnerAgentExtensionBindingReady({ runtime });
 
 	const initialPolicy = await readWorkflowPolicy(runtime.services.agentDir);
 	if (!initialPolicy.ok) {
@@ -132,7 +130,6 @@ export async function initializeOwnerWorkflow(options: {
 	bindHiddenOwnerAgentExtension({
 		pi,
 		runtime,
-		bootstrapHandler,
 		resolveView,
 		prepareOwnerReplacement,
 	});

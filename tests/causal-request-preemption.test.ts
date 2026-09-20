@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type Context, type JsonObject } from "@earendil-works/pi-ai";
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
@@ -19,7 +19,7 @@ let waitCallSequence = 0;
 function call(id: string, name: string, input: Record<string, unknown>) {
 	// Resuming after preemption authors a fresh Wait, not a replay of its committed source.
 	const toolCallId = name === "agent_wait" ? `${id}-${++waitCallSequence}` : id;
-	return fauxAssistantMessage(fauxToolCall(name, input, { id: toolCallId }), { stopReason: "toolUse" });
+	return fauxAssistantMessage(fauxToolCall(name, input as JsonObject, { id: toolCallId }), { stopReason: "toolUse" });
 }
 for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, siblings: false }, { extra: true, unrelated: false, siblings: false }, { extra: false, unrelated: true, siblings: false }, { extra: false, unrelated: false, siblings: true }]) test(`reverse clarification resumes delegated work with ${extra ? "two" : "one"} outgoing Requests${unrelated ? " behind an unrelated queue head" : ""}${siblings ? " and FIFO sibling clarifications" : ""}`, {
 	timeout: 10_000, // Starts two real child processes and exercises their cross-process waits.

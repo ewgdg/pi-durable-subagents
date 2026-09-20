@@ -5,6 +5,7 @@ import test from "node:test";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	getCurrentTools,
 	type Context,
 } from "@earendil-works/pi-ai";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -173,7 +174,7 @@ test("Owner stays active through terminal child failure and Moderator recovery, 
 	const lifecycle: string[] = [];
 	host.session.subscribe((event) => { if (event.type === "agent_settled") lifecycle.push(event.type); });
 	const routeResponse = async (context: Context) => {
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			moderatorStarted = true;
 			await recoveryGate;
 			return fauxAssistantMessage(fauxToolCall("ask_user", { question: "Recovery needs your decision." },

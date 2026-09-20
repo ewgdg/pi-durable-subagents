@@ -9,6 +9,8 @@ import test from "node:test";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	getCurrentSystemPrompt,
+	getCurrentTools,
 } from "@earendil-works/pi-ai";
 import {
 	initTheme,
@@ -423,7 +425,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 	let childSystemPrompt = "";
 	broker.setResponses([
 		(context) => {
-			childSystemPrompt = context.systemPrompt ?? "";
+			childSystemPrompt = getCurrentSystemPrompt(context.messages);
 			return fauxAssistantMessage(
 				fauxToolCall("bash", { command: `printf '%s' "$PPID" > ${JSON.stringify(pidEvidence)}` }, {
 					id: "real-child-bash",
@@ -510,8 +512,8 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		await writeFile(join(templateDirectory, "renamed.md"), "---\nname: renamed\n---\nChanged rules.");
 		broker.appendResponses([
 			(context) => {
-				assert.match(context.systemPrompt ?? "", /Process child context\./);
-				assert.doesNotMatch(context.systemPrompt ?? "", /Changed rules\./);
+				assert.match(getCurrentSystemPrompt(context.messages), /Process child context\./);
+				assert.doesNotMatch(getCurrentSystemPrompt(context.messages), /Changed rules\./);
 				return fauxAssistantMessage("Dynamically prepared successor used the same transcript.");
 			},
 		]);
@@ -640,7 +642,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let moderatorProviderRequests = 0;
 	broker.setResponses(Array.from({ length: 6 }, () => (context) => {
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			moderatorProviderRequests += 1;
 			if (moderatorProviderRequests === 1) {
 				return fauxAssistantMessage("First committed Moderator attempt fails.", {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fauxToolCall, validateToolArguments } from "@earendil-works/pi-ai";
+import { fauxToolCall, validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import { Compile } from "typebox/compile";
 import { Check } from "typebox/value";
 import { participantCoordinationToolSchemas } from "../src/tools/participant-coordination-tools.ts";
@@ -53,7 +53,7 @@ test("all delivery modes and omission validate through TypeBox and native Pi too
 		for (const deliveryMode of [undefined, "deferred", "steer", "background"]) {
 			const input = deliveryMode === undefined ? base : { ...base, deliveryMode };
 			assert.equal(validator.Check(input), true, JSON.stringify(input));
-			assert.deepEqual(validateToolArguments(tool, fauxToolCall(tool.name, input)), input);
+			assert.deepEqual(validateToolArguments(tool, fauxToolCall(tool.name, input as unknown as JsonObject)), input);
 		}
 	}
 });
@@ -68,7 +68,7 @@ test("closed operation-specific arguments reject foreign fields", () => {
 	];
 	for (const input of invalid) {
 		assert.equal(Check(parameters, input), false, JSON.stringify(input));
-		assert.throws(() => validateToolArguments(tool, fauxToolCall(tool.name, input)), /Validation failed/);
+		assert.throws(() => validateToolArguments(tool, fauxToolCall(tool.name, input as unknown as JsonObject)), /Validation failed/);
 	}
 });
 

@@ -1,7 +1,7 @@
 import {
 	createFauxCore,
 	type AssistantMessage,
-	type Context,
+	type TranscriptContext,
 	type FauxProviderState,
 	type FauxResponseStep,
 	type Model,
@@ -21,7 +21,7 @@ const DEFAULT_MODEL_NAME = "Deterministic process model";
 const DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 export type ProcessModelResponseOverride = (
-	context: Context,
+	context: TranscriptContext,
 	options: SimpleStreamOptions | undefined,
 	model: Model<string>,
 ) => AssistantMessage | undefined | Promise<AssistantMessage | undefined>;
@@ -160,7 +160,7 @@ type BrokerRequestDependencies = {
 
 type ResolveBrokerMessage = (
 	model: Model<string>,
-	context: Context,
+	context: TranscriptContext,
 	options: SimpleStreamOptions | undefined,
 ) => Promise<AssistantMessage>;
 
@@ -193,7 +193,7 @@ async function handleBrokerRequest(dependencies: BrokerRequestDependencies): Pro
 		const body = await readBoundedBody(request, maxPayloadBytes);
 		const payload = JSON.parse(body) as {
 			model?: Model<string>;
-			context?: Context;
+			context?: TranscriptContext;
 			options?: SimpleStreamOptions;
 		};
 		if (

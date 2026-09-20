@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonObject } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
@@ -41,7 +41,7 @@ async function harness(t: TestContext, retry = false, nativeOwnerLifecycle = fal
 	let sequence = 0;
 	function call(tool: string, input: Record<string, unknown>) {
 		const id = `quota-integration-${++sequence}`;
-		host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall(tool, input, { id }), { stopReason: "toolUse" }));
+		host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall(tool, input as JsonObject, { id }), { stopReason: "toolUse" }));
 		return id;
 	}
 	async function spawn() {

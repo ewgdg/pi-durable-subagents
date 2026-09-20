@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonObject } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { discoverColdWorkflow } from "../src/bootstrap/cold-host-discovery.ts";
 import { workflowSessionDirectory } from "../src/runtime/workflow-session-directory.ts";
@@ -42,7 +42,7 @@ for (const { name, input: rejected } of rejectedSpawns) {
 		const directory = workflowSessionDirectory(root, ownerIdentity.workflowId);
 		function child(parent: SessionManager, input: object, label: string, corrupt = false) {
 			const entryId = parent.appendMessage(
-				fauxAssistantMessage(fauxToolCall("agent_spawn", input, { id: label })),
+				fauxAssistantMessage(fauxToolCall("agent_spawn", input as JsonObject, { id: label })),
 			);
 			const session = SessionManager.create(root, directory);
 			if (corrupt) session.appendMessage(fauxAssistantMessage("Not a root bootstrap"));

@@ -2,8 +2,9 @@ import { createPhysicalTestDisplay } from "./physical-test-display.ts";
 import {
 	createFauxCore,
 	fauxAssistantMessage,
+	getCurrentTools,
 	type FauxResponseStep,
-	type Context,
+	type TranscriptContext,
 	type Model,
 	type SimpleStreamOptions,
 	type StreamOptions,
@@ -584,7 +585,7 @@ async function createTestModelRuntime(options: {
 	faux.setResponses([fauxAssistantMessage("Owner interaction preserved.")]);
 	const maybeImplicitOperationalResponse = (
 		model: Model<string>,
-		context: Context,
+		context: TranscriptContext,
 		streamOptions: StreamOptions | SimpleStreamOptions | undefined,
 	) => {
 		const response = options.implicitModeratorResponses
@@ -622,7 +623,7 @@ async function createTestModelRuntime(options: {
 	return { modelRuntime, faux };
 }
 
-function implicitOperationalResponse(context: Context): string | undefined {
+function implicitOperationalResponse(context: TranscriptContext): string | undefined {
 	if (isImplicitObligationReminder(context)) {
 		return "I remain settled after the automatic Answer reminder.";
 	}
@@ -631,16 +632,16 @@ function implicitOperationalResponse(context: Context): string | undefined {
 		: undefined;
 }
 
-function isImplicitObligationReminder(context: Context): boolean {
+function isImplicitObligationReminder(context: TranscriptContext): boolean {
 	const latestMessage = JSON.stringify(context.messages.at(-1));
 	return typeof latestMessage === "string" &&
 		latestMessage.includes("requestTitle") &&
 		latestMessage.includes("This Request still needs an Answer.");
 }
 
-function isImplicitModeratorRequest(context: Context): boolean {
+function isImplicitModeratorRequest(context: TranscriptContext): boolean {
 	return (
-		context.tools?.some(({ name }) => name === "moderator_control") === true &&
+		getCurrentTools(context.messages).some(({ name }) => name === "moderator_control") &&
 		context.messages.some((message) =>
 			message.role === "user" &&
 			Array.isArray(message.content) &&

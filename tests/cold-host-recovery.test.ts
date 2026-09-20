@@ -7,6 +7,8 @@ import test, { type TestContext } from "node:test";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	getCurrentSystemPrompt,
+	getCurrentTools,
 	type Context,
 	type FauxResponseStep,
 } from "@earendil-works/pi-ai";
@@ -644,8 +646,8 @@ test("cold successor retains captured template rules after rename and recovers r
 	let successorPrompt = "";
 	reopened.model.setResponses([
 		(context) => {
-			successorTools = context.tools?.map(({ name }) => name) ?? [];
-			successorPrompt = context.systemPrompt ?? "";
+			successorTools = getCurrentTools(context.messages).map(({ name }) => name) ?? [];
+			successorPrompt = getCurrentSystemPrompt(context.messages);
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"ask_user",
@@ -937,8 +939,8 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 	let recoveredPrompt = "";
 	reopened.model.setResponses([
 		(context) => {
-			recoveredTools = context.tools?.map(({ name }) => name).sort() ?? [];
-			recoveredPrompt = context.systemPrompt ?? "";
+			recoveredTools = getCurrentTools(context.messages).map(({ name }) => name).sort() ?? [];
+			recoveredPrompt = getCurrentSystemPrompt(context.messages);
 			return fauxAssistantMessage("The recovered Moderator received routing.");
 		},
 	]);
@@ -1362,7 +1364,7 @@ function implicitOperationalResponse(context: Context): string | undefined {
 }
 
 function isImplicitModeratorRequest(context: Context): boolean {
-	return context.tools?.some(({ name }) => name === "moderator_control") === true &&
+	return getCurrentTools(context.messages).some(({ name }) => name === "moderator_control") === true &&
 		context.messages.some((message) =>
 			message.role === "user" &&
 			Array.isArray(message.content) &&

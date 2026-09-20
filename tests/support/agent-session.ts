@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	type JsonObject,
+	type JsonValue,
 } from "@earendil-works/pi-ai";
 import type {
 	AgentSession,
@@ -26,7 +28,7 @@ export async function executeRegisteredTool(
 ): Promise<AgentToolResult<unknown>> {
 	session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall(toolName, input, { id: toolCallId }),
+			fauxToolCall(toolName, input as JsonObject, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
@@ -53,7 +55,7 @@ export async function executeAndCommitRegisteredTool(
 		toolCallId,
 		toolName,
 		content: result.content,
-		details: result.details,
+		details: result.details as JsonValue,
 		isError: false,
 		timestamp: Date.now(),
 	});

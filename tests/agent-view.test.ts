@@ -10,8 +10,11 @@ import test, { type TestContext } from "node:test";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	getCurrentTools,
 	type AssistantMessage,
 	type Context,
+	type TranscriptContext,
+	type JsonObject,
 } from "@earendil-works/pi-ai";
 import {
 	initTheme,
@@ -1388,7 +1391,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	) => {
 		host.session.sessionManager.appendMessage(
 			fauxAssistantMessage(
-				fauxToolCall(toolName, input, { id: toolCallId }),
+				fauxToolCall(toolName, input as JsonObject, { id: toolCallId }),
 				{ stopReason: "toolUse" },
 			),
 		);
@@ -1768,11 +1771,8 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 	let successorResponseGate = Promise.resolve();
 	let releaseSuccessorResponse: () => void = () => undefined;
 	t.after(() => releaseSuccessorResponse());
-	const routeFailure = async (context: {
-		messages: unknown;
-		tools?: Array<{ name: string }>;
-	}) => {
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+	const routeFailure = async (context: TranscriptContext) => {
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("Moderator observed repeated successor failure.");
 		}
 		const messages = JSON.stringify(context.messages);
@@ -1893,9 +1893,9 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	let attachedBeforeExecution = false;
 	let runAdmittedBeforeExecution = false;
 	let initialFailureProduced = false;
-	const routeSuccessor = async (context: { messages: unknown; tools?: Array<{ name: string }> }) => {
+	const routeSuccessor = async (context: TranscriptContext) => {
 		const messages = JSON.stringify(context.messages);
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("Moderator background work remains independent.");
 		}
 		if (

@@ -2,7 +2,7 @@ import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type Context, type JsonObject } from "@earendil-works/pi-ai";
 
 import piAgentCoordination from "../src/index.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
@@ -103,7 +103,7 @@ test("an ordinary Steer Message wakes Owner Wait before a later Request exists",
 	const questionGate = new Promise<void>(resolve => { releaseQuestion = resolve; });
 	t.after(releaseQuestion);
 	const call = (name: string, args: Record<string, unknown>, id: string) =>
-		fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
+		fauxAssistantMessage(fauxToolCall(name, args as JsonObject, { id }), { stopReason: "toolUse" });
 	const route = async (context: Context) => {
 		const text = JSON.stringify(context.messages);
 		if (text.includes("START_OWNER_BATCH")) {

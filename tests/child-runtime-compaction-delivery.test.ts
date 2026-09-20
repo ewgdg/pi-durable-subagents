@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Type } from "typebox";
 
-import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { MessageDeliveryScheduler } from "../src/coordination/message-delivery-scheduler.ts";
@@ -112,7 +112,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 		});
 		let checkpointRequested = false;
 		const respond: FauxResponseStep = async (modelContext) => {
-			assert.match(modelContext.systemPrompt ?? "", /CHILD_CUSTOM_PREPARED/,
+			assert.match(getCurrentSystemPrompt(modelContext.messages), /CHILD_CUSTOM_PREPARED/,
 				"each custom start and its tool continuation retain before-start preparation");
 			if (!previousTurnDone) return fauxAssistantMessage("Earlier work completed.");
 			if (!checkpointRequested) {
@@ -333,14 +333,14 @@ for (const cancellation of [undefined, "delivery", "native"] as const) {
 		host.model.setResponses([
 			async context => {
 				seen.push(JSON.stringify(context.messages).includes(preparation.prospectiveRequest.question));
-				assert.match(context.systemPrompt ?? "", /COMPETING_NATIVE_PREPARED/);
+				assert.match(getCurrentSystemPrompt(context.messages), /COMPETING_NATIVE_PREPARED/);
 				modelEntered.resolve();
 				await releaseModel.promise;
 				return fauxAssistantMessage("Native work completed.");
 			},
 			context => {
 				seen.push(JSON.stringify(context.messages).includes(preparation.prospectiveRequest.question));
-				assert.match(context.systemPrompt ?? "", /COMPETING_NATIVE_PREPARED/);
+				assert.match(getCurrentSystemPrompt(context.messages), /COMPETING_NATIVE_PREPARED/);
 				return fauxAssistantMessage("Custom follow-up completed.");
 			},
 		]);

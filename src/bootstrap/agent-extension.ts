@@ -1,10 +1,9 @@
 import type {
 	AgentSessionRuntime,
+	Extension,
 	ExtensionAPI,
 	ExtensionFactory,
-	ExtensionHandler,
 	ExtensionUIContext,
-	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 
 import type {
@@ -18,6 +17,7 @@ import {
 	registerOrdinaryAgentSurfaces,
 } from "../tools/owner-surfaces.ts";
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
+import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import {
 	installAgentActivityDock,
 	type AgentActivityDockOptions,
@@ -107,18 +107,16 @@ export function installResolvedAgentActivityDock(
 export function bindHiddenOwnerAgentExtension(options: {
 	pi: ExtensionAPI;
 	runtime: AgentSessionRuntime;
-	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 	resolveView: () => OrdinaryAgentCoordinatorView;
 	prepareOwnerReplacement: () => Promise<void>;
 }): void {
 	const {
 		pi,
 		runtime,
-		bootstrapHandler,
 		resolveView,
 		prepareOwnerReplacement,
 	} = options;
-	const ownerExtension = requireOwnerAgentExtension(runtime, bootstrapHandler);
+	const ownerExtension = requireOwnerAgentExtension(runtime);
 
 	// Pi loads package extensions publicly. Once this session is authenticated as
 	// Owner, the same extension becomes its hidden identity-bound Owner surface.
@@ -149,22 +147,19 @@ export function bindHiddenOwnerAgentExtension(options: {
 
 export function assertOwnerAgentExtensionBindingReady(options: {
 	runtime: AgentSessionRuntime;
-	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 }): void {
-	requireOwnerAgentExtension(options.runtime, options.bootstrapHandler);
+	requireOwnerAgentExtension(options.runtime);
 }
 
-function requireOwnerAgentExtension(
-	runtime: AgentSessionRuntime,
-	bootstrapHandler: ExtensionHandler<SessionStartEvent>,
-) {
+function requireOwnerAgentExtension(runtime: AgentSessionRuntime): Extension {
+	// Pi wraps registered event handlers, so the Owner bootstrap handler reference
+	// cannot identify its own extension. Match the extension that registered this
+	// plugin's Delivery renderer instead: the factory registers it for file-loaded
+	// package entries and inline in-process extensions alike.
 	const matchingExtensions = runtime.services.resourceLoader
 		.getExtensions()
 		.extensions.filter((extension) =>
-			extension.handlers
-				.get("session_start")
-				?.some((handler) => handler === bootstrapHandler),
-		);
+			extension.messageRenderers.has(MESSAGE_DELIVERY_CUSTOM_TYPE));
 	if (matchingExtensions.length !== 1) {
 		throw new Error("Incompatible Pi host: cannot bind the Owner Agent extension");
 	}

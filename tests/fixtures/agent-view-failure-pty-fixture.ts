@@ -1,4 +1,4 @@
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
 import {
 	InteractiveMode,
 	type AgentSession,
@@ -281,7 +281,7 @@ function appendToolSource(
 ): ToolSource {
 	session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall(toolName, input, { id: toolCallId }),
+			fauxToolCall(toolName, input as JsonObject, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
@@ -305,7 +305,7 @@ async function executeCommittedTool(session: AgentSession, source: ToolSource) {
 		toolCallId: source.toolCallId,
 		toolName: source.toolName,
 		content: result.content,
-		details: result.details,
+		details: result.details as JsonValue,
 		isError: false,
 		timestamp: Date.now(),
 	});

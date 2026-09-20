@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonObject } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { resolveMessageReference } from "../src/protocol/message-reference.ts";
@@ -42,6 +42,6 @@ test("Message references reconstruct the original target despite a later suffix 
 	assert.throws(() => resolveMessageReference(reopened, laterSource, "missing"), /unknown_identity/);
 
 	function call(id: string, parentId: string, toolCallId: string, input: Record<string, unknown>) {
-		return { type: "message", id, parentId, timestamp, message: fauxAssistantMessage(fauxToolCall("agent_message", input, { id: toolCallId })) };
+		return { type: "message", id, parentId, timestamp, message: fauxAssistantMessage(fauxToolCall("agent_message", input as JsonObject, { id: toolCallId })) };
 	}
 });

@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	type JsonObject,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
@@ -1233,7 +1234,7 @@ async function createRunSupervisionHarness(
 		) => {
 			SessionManager.open(transcriptPath).appendMessage(
 				fauxAssistantMessage(
-					fauxToolCall(toolName, input, { id: toolCallId }),
+					fauxToolCall(toolName, input as JsonObject, { id: toolCallId }),
 					{ stopReason: "toolUse" },
 				),
 			);
@@ -1347,7 +1348,7 @@ async function createRunSupervisionHarness(
 		}
 		caller.session.sessionManager.appendMessage(
 			fauxAssistantMessage(
-				fauxToolCall(toolName, input, { id: toolCallId }),
+				fauxToolCall(toolName, input as JsonObject, { id: toolCallId }),
 				{ stopReason: "toolUse" },
 			),
 		);

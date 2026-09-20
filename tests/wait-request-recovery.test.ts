@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
 import { MessageCoordinator, type AgentMessageInput, type MessageBoundaryHooks } from "../src/coordination/messages.ts";
 import { AgentWaitCoordinator, type AgentWaitBoundaryHooks } from "../src/coordination/agent-waits.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
@@ -1178,7 +1178,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 			const message = {
 				role: "toolResult" as const, toolCallId: id, toolName: "agent_wait",
 				content: [{ type: "text" as const, text: JSON.stringify(result) }],
-				details: result, isError: false, timestamp: Date.now(),
+				details: result as JsonValue, isError: false, timestamp: Date.now(),
 			};
 			const committed = waits.guardResultCommit("requester", message)?.message ?? message;
 			if (committed.role !== "toolResult") throw new Error("Expected a Wait tool result");
@@ -1262,9 +1262,9 @@ function runtimeParticipant(agentId: string) {
 	return runtime;
 }
 function call(p: ReturnType<typeof participant>, id: string, name: string, input: Record<string, unknown>) {
-	p.manager.appendMessage(fauxAssistantMessage(fauxToolCall(name, input, { id }), { stopReason: "toolUse" }));
+	p.manager.appendMessage(fauxAssistantMessage(fauxToolCall(name, input as JsonObject, { id }), { stopReason: "toolUse" }));
 }
 function commit(p: ReturnType<typeof participant>, id: string, name: string, details: unknown) {
-	p.manager.appendMessage({ role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text: JSON.stringify(details) }], details, isError: false, timestamp: Date.now() });
+	p.manager.appendMessage({ role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text: JSON.stringify(details) }], details: details as JsonValue, isError: false, timestamp: Date.now() });
 }
 async function flush() { for (let i = 0; i < 8; i++) await setImmediate(); }

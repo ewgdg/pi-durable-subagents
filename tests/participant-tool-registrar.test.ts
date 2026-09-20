@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 
@@ -436,7 +436,7 @@ test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalog
 		true,
 	);
 	host.model.setResponses([(context) => {
-		observedSystemPrompt = context.systemPrompt ?? "";
+		observedSystemPrompt = getCurrentSystemPrompt(context.messages);
 		return fauxAssistantMessage("Done.");
 	}]);
 
@@ -452,7 +452,7 @@ test("participant registrar contributes each prompt guide once", async (t) => {
 	const host = await createRegistrarHost(t, "ordinary", handlers);
 
 	host.model.setResponses([(context) => {
-		observedSystemPrompt = context.systemPrompt ?? "";
+		observedSystemPrompt = getCurrentSystemPrompt(context.messages);
 		return fauxAssistantMessage("Done.");
 	}]);
 

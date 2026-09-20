@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type Context, type JsonObject } from "@earendil-works/pi-ai";
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
@@ -20,7 +20,7 @@ test("public observation lists and inspects a Creation Request across the child 
 		return context.messages.find(message => message.role === "toolResult" && message.toolCallId === id);
 	}
 	function call(name: string, args: Record<string, unknown>, id: string) {
-		return fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
+		return fauxAssistantMessage(fauxToolCall(name, args as JsonObject, { id }), { stopReason: "toolUse" });
 	}
 	const route = (context: Context) => {
 		if (JSON.stringify(context.messages).includes("START_CREATION_INSPECTION")) {

@@ -1,4 +1,4 @@
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentRecord } from "../../src/coordination/agent-record.ts";
 import { transcriptFromSessionManager } from "../../src/pi-integration/session-manager-transcript.ts";
@@ -95,7 +95,7 @@ function appendCall(
 	input: Record<string, unknown>,
 ): ToolCallPointer {
 	const entryId = author.manager.appendMessage(
-		fauxAssistantMessage(fauxToolCall("agent_message", input, { id: toolCallId }), {
+		fauxAssistantMessage(fauxToolCall("agent_message", input as JsonObject, { id: toolCallId }), {
 			stopReason: "toolUse",
 		}),
 	);
@@ -111,7 +111,7 @@ function appendResult(
 		toolCallId: source.toolCallId,
 		toolName: "agent_message",
 		content: [{ type: "text", text: "Committed." }],
-		details,
+		details: details as JsonValue,
 		isError: false,
 		timestamp: Date.now(),
 	});

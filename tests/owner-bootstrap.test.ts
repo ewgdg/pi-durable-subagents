@@ -5,6 +5,9 @@ import { join } from "node:path";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	getCurrentSystemPrompt,
+	type JsonObject,
+	type JsonValue,
 } from "@earendil-works/pi-ai";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -429,7 +432,7 @@ test("Owner prompts retain their prepared Template snapshot until resource reloa
 	].join("\n"), "utf8");
 	let promptBeforeReload = "";
 	host.model.setResponses([(context) => {
-		promptBeforeReload = context.systemPrompt ?? "";
+		promptBeforeReload = getCurrentSystemPrompt(context.messages);
 		return fauxAssistantMessage("Used the retained snapshot.");
 	}]);
 	await host.session.prompt("Inspect the prepared Agent Templates.");
@@ -440,7 +443,7 @@ test("Owner prompts retain their prepared Template snapshot until resource reloa
 	await host.session.reload();
 	let promptAfterReload = "";
 	host.model.setResponses([(context) => {
-		promptAfterReload = context.systemPrompt ?? "";
+		promptAfterReload = getCurrentSystemPrompt(context.messages);
 		return fauxAssistantMessage("Used the refreshed snapshot.");
 	}]);
 	await host.session.prompt("Inspect the refreshed Agent Templates.");
@@ -755,7 +758,7 @@ async function executeOwnerTool(
 ): Promise<unknown> {
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall(toolName, input, { id: toolCallId }),
+			fauxToolCall(toolName, input as JsonObject, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
@@ -770,7 +773,7 @@ async function executeOwnerTool(
 	);
 	host.session.sessionManager.appendMessage({
 		role: "toolResult", toolName, toolCallId, content: result.content,
-		details: result.details, isError: false, timestamp: Date.now(),
+		details: result.details as JsonValue, isError: false, timestamp: Date.now(),
 	});
 	return result.details;
 }
