@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-contract.ts";
 import { AGENT_CONTROL_PROTOCOL_VERSION } from "../src/control/control-protocol-schemas.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
+import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -1193,7 +1194,12 @@ async function createRunSupervisionHarness(
 	let didDeferResume = false;
 	let activeAgentView: Awaited<ReturnType<CoordinatorView["openAgentView"]>>;
 	let promptSequence = 0;
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+	// A coordination Delivery to the Owner is injected by the registered startup hook at
+	// `before_agent_start`; without it the empty kickoff prompt can never carry the
+	// delivery into the Owner transcript, so the runtime would reject every Owner-bound
+	// custom Delivery. Register the one hook this Runtime relies on, as a real Owner
+	// host does through the extension entrypoint.
+	const host = await createUnboundTestOwnerHost(t, (pi) => registerSessionStartup(pi), {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_RUNTIME_FIXTURE],
