@@ -88,8 +88,11 @@ export function resolveAgentRunConfiguration(options: {
 			? `Configured Agent model is excluded by model policy: ${selectedIdentity}`
 			: `Configured Agent model is unavailable: ${selectedIdentity}`);
 	}
-	// Do not require available Template candidates when both fields are explicitly selected.
-	const defaults = overrides?.model?.id === undefined || overrides.model.thinking === undefined
+	// A Template candidate is one (model, thinking) pair: its thinking level describes
+	// that candidate model, so an explicit model id discards it rather than pairing it
+	// with a model the caller chose. The current parent Runtime is then the only
+	// remaining default, and such a selection needs no available Template candidate.
+	const defaults = overrides?.model?.id === undefined
 		? resolveTemplateModelConfiguration(
 			inherited,
 			template?.models,

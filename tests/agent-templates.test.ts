@@ -339,7 +339,7 @@ test("fails when no configured Template model is available", () => {
 	);
 });
 
-test("fully specified spawn model override bypasses unavailable Template candidates", () => {
+test("a spawn model id discards the Template pair's thinking level and needs no candidate", () => {
 	const inherited = {
 		cwd: "/project",
 		model: { provider: "parent", modelId: "model" },
@@ -386,6 +386,30 @@ test("fully specified spawn model override bypasses unavailable Template candida
 		excludeTools: [],
 		excludeSkills: [],
 		thinking: "max",
+		systemPrompt: { mode: "append", body: "" },
+		loadContextFiles: true,
+	});
+	// A candidate thinking level describes the candidate model it was paired with, so a
+	// selected model id discards it instead of pairing it with another model. Such a
+	// selection also resolves without any available Template candidate.
+	assert.deepEqual(resolveAgentRunConfiguration({
+		...base,
+		overrides: { model: { id: "explicit/model" } },
+	}), {
+		...inherited,
+		excludeTools: [],
+		excludeSkills: [],
+		model: { provider: "explicit", modelId: "model" },
+		systemPrompt: { mode: "append", body: "" },
+		loadContextFiles: true,
+	});
+	assert.deepEqual(resolveAgentRunConfiguration({
+		...base,
+		overrides: { model: { id: "inherit" } },
+	}), {
+		...inherited,
+		excludeTools: [],
+		excludeSkills: [],
 		systemPrompt: { mode: "append", body: "" },
 		loadContextFiles: true,
 	});
@@ -539,7 +563,7 @@ test("permits only the missing reserved Moderator Template", () => {
 	);
 });
 
-test("model fields independently use Template defaults or explicit parent inheritance", () => {
+test("model fields use a Template candidate pair, explicit values, or parent inheritance", () => {
 	const inherited = {
 		cwd: "/project",
 		model: { provider: "parent", modelId: "model" },
@@ -553,12 +577,14 @@ test("model fields independently use Template defaults or explicit parent inheri
 		],
 		systemPromptMode: "append" as const, loadContextFiles: true, systemPrompt: "",
 	};
+	// An explicit model id takes no part of the candidate pair, so the parent thinking
+	// level is the only remaining default for that field.
 	const cases: Array<[AgentSpawnConfigurationInput["model"], string, string, string]> = [
 		[undefined, "template", "high", "low"],
 		[{}, "template", "high", "low"],
 		[{ thinking: "max" }, "template", "max", "max"],
-		[{ id: "explicit/model" }, "explicit", "high", "low"],
-		[{ id: "inherit" }, "parent", "high", "low"],
+		[{ id: "explicit/model" }, "explicit", "low", "low"],
+		[{ id: "inherit" }, "parent", "low", "low"],
 		[{ thinking: "inherit" }, "template", "low", "low"],
 		[{ id: "inherit", thinking: "inherit" }, "parent", "low", "low"],
 	];
@@ -577,7 +603,7 @@ test("model fields independently use Template defaults or explicit parent inheri
 	}
 });
 
-test("Template candidates are resolved only when a model field needs defaults", () => {
+test("Template candidates are resolved only while no model id is selected", () => {
 	const base = {
 		inherited: {
 			cwd: "/project", model: { provider: "parent", modelId: "model" },
@@ -591,16 +617,18 @@ test("Template candidates are resolved only when a model field needs defaults", 
 	for (const model of [
 		{ id: "explicit/model", thinking: "max" },
 		{ id: "inherit", thinking: "inherit" },
+		{ id: "explicit/model" },
+		{ id: "inherit" },
 	] as const) {
 		const checked: string[] = [];
 		const actual = resolveAgentRunConfiguration({
 			...base, overrides: { model },
 			isModelAvailable: ({ provider }) => { checked.push(provider); return provider === "explicit"; },
 		});
-		assert.equal(actual.thinking, model.thinking === "inherit" ? "low" : "max");
+		assert.equal(actual.thinking, model.thinking === undefined || model.thinking === "inherit" ? "low" : "max");
 		assert.deepEqual(checked, model.id === "inherit" ? [] : ["explicit"]);
 	}
-	for (const model of [{}, { id: "explicit/model" }, { thinking: "max" }] as const) {
+	for (const model of [{}, { thinking: "max" }] as const) {
 		assert.throws(() => resolveAgentRunConfiguration({
 			...base, overrides: { model }, isModelAvailable: ({ provider }) => provider === "explicit",
 		}), /No configured Agent Template model is available/);
