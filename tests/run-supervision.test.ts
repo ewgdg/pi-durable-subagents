@@ -105,49 +105,6 @@ test("activity subscriptions publish queued Delivery changes while a child Run r
 	assert.equal(hasPendingDelivery, true);
 });
 
-test("interruption holds one exact settled Run and blocks ordinary Message Delivery", async (t) => {
-	const harness = await createRunSupervisionHarness(t);
-	const child = await harness.spawnChild("spawn-held-child");
-	await child.waitForIdle();
-
-	const interrupted = await harness.control("interrupt-held-child", {
-		operation: "interrupt",
-		agentId: child.agentId,
-	});
-	assert.deepEqual(interrupted, {
-		agentId: child.agentId,
-		disposition: "held",
-	});
-	assert.deepEqual(
-		harness.ownerView.status(child.agentId).run.retentionReasons,
-		[
-			{ reason: "answer_owed", count: 1 },
-			{ reason: "interruption_hold", count: 1 },
-		],
-	);
-
-	const message = await harness.sendMessage(
-		"message-admitted-while-held",
-		child.agentId,
-		"This ordinary Message must remain pending behind the Hold.",
-	);
-	assert.ok("messageStatus" in message);
-	assert.equal(message.messageStatus, "sent");
-	await harness.ownerView.reachSafeBoundary();
-	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.equal(
-		child.entries().some(
-			(entry) =>
-				entry.type === "custom_message" &&
-				String(entry.content).includes("This ordinary Message must remain pending"),
-		),
-		false,
-	);
-	assert.equal(child.isIdle, true);
-
-	await harness.shutdown();
-});
-
 test("interruption keeps an aborted Human Request Run held when Pi reports an error", async (t) => {
 	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-aborted-human-request-child");
@@ -260,6 +217,31 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	await child.waitForIdle();
 	const owner = { session: harness.host.session, view: harness.ownerView };
 
+	const interrupted = await harness.control("interrupt-request-child", {
+		operation: "interrupt",
+		agentId: child.agentId,
+	});
+	assert.deepEqual(interrupted, {
+		agentId: child.agentId,
+		disposition: "held",
+	});
+	assert.deepEqual(
+		harness.ownerView.status(child.agentId).run.retentionReasons,
+		[
+			{ reason: "answer_owed", count: 1 },
+			{ reason: "interruption_hold", count: 1 },
+		],
+	);
+
+	const heldMessageText = "This ordinary Message must remain pending behind the Hold.";
+	const heldMessage = await harness.sendMessage(
+		"message-admitted-while-held",
+		child.agentId,
+		heldMessageText,
+	);
+
+	// The Hold bounds Delivery to the held Agent. Its own outbound Request still
+	// settles with the Owner, whose Answer it then holds alongside the backlog.
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The Owner retained the child's unanswered Request."),
 	]);
@@ -282,10 +264,6 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	);
 	assert.ok("requestMessageId" in incoming);
 	await child.waitForIdle();
-	await harness.control("interrupt-request-child", {
-		operation: "interrupt",
-		agentId: child.agentId,
-	});
 
 	const heldRequestText = "This Request must wait behind the exact Hold.";
 	const heldAnswerText = "This Answer must wait behind the exact Hold.";
@@ -309,14 +287,19 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 			reason: heldCancellationText,
 		},
 	);
-	for (const receipt of [heldRequest, heldAnswer, heldCancellation]) {
+	for (const receipt of [heldMessage, heldRequest, heldAnswer, heldCancellation]) {
 		assert.ok("messageStatus" in receipt);
 		assert.equal(receipt.messageStatus, "sent");
 	}
 	await harness.ownerView.reachSafeBoundary();
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	const childEntries = child.entries();
-	for (const blockedText of [heldRequestText, heldAnswerText, heldCancellationText]) {
+	for (const blockedText of [
+		heldMessageText,
+		heldRequestText,
+		heldAnswerText,
+		heldCancellationText,
+	]) {
 		assert.equal(
 			childEntries.some(
 				(entry) =>

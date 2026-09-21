@@ -232,118 +232,89 @@ test("/agents presents the live Agent's native interactive mode while Owner stay
 
 });
 
-test("a real child editor failure closes the view and reports one Owner diagnostic", async (t) => {
-	const probe = configureProcessAgentViewProbe(t, "failure-input");
+test("a real child input or render failure closes the view and reports one Owner diagnostic", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	host.model.setResponses(creationAnswerResponses(
-		"answer-throwing-editor-creation-request",
-		"The throwing-editor Agent is ready.",
-	));
-	const spawn = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-throwing-agent-editor",
-		{
-			title: "Fixture request",
-			request: "Remain available so the Owner can trigger the editor failure.",
-			label: "Throwing Editor Worker",
-		},
-	);
-	const agentId = (spawn.details as { agentId: string }).agentId;
-	await waitForCondition(async () =>
-		JSON.stringify(await childEntries(host, agentId)).includes(
-			"The throwing-editor Agent is ready.",
-		)
-	);
-	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	const ownerSession = host.runtime.session;
-	const ownerEditor = "Owner editor survives child input failure";
-	host.ui.setEditorText(ownerEditor);
-	const { command, view } = await openDormantAgentView(host, agentId);
-	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
-		childProcessSessionStarts(entries, agentId).length === 2
-	);
+	let reportedOwnerDiagnostics = 0;
+	const runChildFailureArm = async (arm: {
+		scenario: string;
+		creationToolCallId: string;
+		spawnToolCallId: string;
+		request: string;
+		label: string;
+		readyText: string;
+		failureKind: "input" | "render";
+		ownerEditor: string;
+	}) => {
+		const probe = configureProcessAgentViewProbe(t, arm.scenario);
+		host.model.setResponses(creationAnswerResponses(arm.creationToolCallId, arm.readyText));
+		const spawn = await executeAndCommitRegisteredTool(
+			host.session,
+			"agent_spawn",
+			arm.spawnToolCallId,
+			{
+				title: "Fixture request",
+				request: arm.request,
+				label: arm.label,
+			},
+		);
+		const agentId = (spawn.details as { agentId: string }).agentId;
+		await waitForCondition(async () =>
+			JSON.stringify(await childEntries(host, agentId)).includes(arm.readyText)
+		);
+		await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
+		host.ui.setEditorText(arm.ownerEditor);
+		const { command, view } = await openDormantAgentView(host, agentId);
+		await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+			childProcessSessionStarts(entries, agentId).length === 2
+		);
 
-	assert.doesNotThrow(() => view.handleInput?.("x"));
-	await command;
-	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.filter(
-		(entry) => entry.kind === "failure_trigger" && entry.failureKind === "input" && entry.pid !== process.pid,
-	).length === 1);
-	await waitForCondition(() => host.ui.customSurfaces.length === 0 && host.services.diagnostics.some(
-		({ message }) => message.includes("Agent view failed:"),
-	));
-	assert.equal(host.ui.customSurfaces.length, 0);
-	assert.equal(host.runtime.session, ownerSession);
-	assert.equal(host.ui.getEditorText(), ownerEditor);
-	assert.equal(
-		host.services.diagnostics.filter(({ message }) =>
+		assert.doesNotThrow(() => view.handleInput?.("x"));
+		await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.filter(
+			(entry) => entry.kind === "failure_trigger" && entry.failureKind === arm.failureKind && entry.pid !== process.pid,
+		).length === 1);
+		await command;
+		await waitForCondition(() => host.ui.customSurfaces.length === 0 && host.services.diagnostics.some(
+			({ message }) => message.includes("Agent view failed:"),
+		));
+		assert.equal(host.ui.customSurfaces.length, 0);
+		assert.equal(host.runtime.session, ownerSession);
+		assert.equal(host.ui.getEditorText(), arm.ownerEditor);
+		// Each failing child channel reports exactly one new Owner diagnostic.
+		const reported = host.services.diagnostics.filter(({ message }) =>
 			/Agent view failed: child_runtime_(?:unexpected_exit|channel_closed):/.test(message)
-		).length,
-		1,
-	);
+		).length;
+		assert.equal(reported, reportedOwnerDiagnostics + 1);
+		reportedOwnerDiagnostics = reported;
+	};
+
+	await runChildFailureArm({
+		scenario: "failure-input",
+		creationToolCallId: "answer-throwing-editor-creation-request",
+		spawnToolCallId: "spawn-throwing-agent-editor",
+		request: "Remain available so the Owner can trigger the editor failure.",
+		label: "Throwing Editor Worker",
+		readyText: "The throwing-editor Agent is ready.",
+		failureKind: "input",
+		ownerEditor: "Owner editor survives child input failure",
+	});
 	await host.session.prompt("Owner remains usable after child editor failure.");
 	await host.session.waitForIdle();
-});
-
-test("a real child render failure closes the view and restores Owner input", async (t) => {
-	const probe = configureProcessAgentViewProbe(t, "failure-render");
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-		physicalDisplay: true,
-		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
+	await runChildFailureArm({
+		scenario: "failure-render",
+		creationToolCallId: "answer-throwing-render-creation-request",
+		spawnToolCallId: "spawn-throwing-agent-render",
+		request: "Remain available so the Owner can trigger the render failure.",
+		label: "Throwing Render Worker",
+		readyText: "The throwing-render Agent is ready.",
+		failureKind: "render",
+		ownerEditor: "Owner editor survives child render failure",
 	});
-	host.model.setResponses(creationAnswerResponses(
-		"answer-throwing-render-creation-request",
-		"The throwing-render Agent is ready.",
-	));
-	const spawn = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-throwing-agent-render",
-		{
-			title: "Fixture request",
-			request: "Remain available so the Owner can trigger the render failure.",
-			label: "Throwing Render Worker",
-		},
-	);
-	const agentId = (spawn.details as { agentId: string }).agentId;
-	await waitForCondition(async () =>
-		JSON.stringify(await childEntries(host, agentId)).includes(
-			"The throwing-render Agent is ready.",
-		)
-	);
-	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
-	const ownerSession = host.runtime.session;
-	const ownerEditor = "Owner editor survives child render failure";
-	host.ui.setEditorText(ownerEditor);
-	const { command, view } = await openDormantAgentView(host, agentId);
-	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
-		childProcessSessionStarts(entries, agentId).length === 2
-	);
-
-	assert.doesNotThrow(() => view.handleInput?.("x"));
-	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.filter(
-		(entry) => entry.kind === "failure_trigger" && entry.failureKind === "render" && entry.pid !== process.pid,
-	).length === 1);
-	await command;
-	await waitForCondition(() => host.ui.customSurfaces.length === 0 && host.services.diagnostics.some(
-		({ message }) => message.includes("Agent view failed:"),
-	));
-	assert.equal(host.ui.customSurfaces.length, 0);
-	assert.equal(host.runtime.session, ownerSession);
-	assert.equal(host.ui.getEditorText(), ownerEditor);
-	assert.equal(
-		host.services.diagnostics.filter(({ message }) =>
-			/Agent view failed: child_runtime_(?:unexpected_exit|channel_closed):/.test(message)
-		).length,
-		1,
-	);
 });
 
 test("a session_start modal is interactive before Agent Run startup settles", async (t) => {

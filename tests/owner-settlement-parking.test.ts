@@ -544,6 +544,7 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 	const request = `${requestMarker} ${"retained context ".repeat(30_000)}`;
 	const answerCallId = "answer-owner-parked-request";
 	const explicitNextTurnProbe = "Store this only for a later fresh prompt.";
+	const customProbe = "Process this custom input using native active-Agent semantics.";
 	const routeResponse = async (context: Context) => {
 		const serialized = JSON.stringify(context.messages);
 		if (serialized.includes(explicitNextTurnProbe)) {
@@ -581,11 +582,14 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 			if (serialized.includes("The background result is ready.")) {
 				return fauxAssistantMessage("The Owner received the background result.");
 			}
+			if (serialized.includes(customProbe)) {
+				return fauxAssistantMessage("The parked Owner processed native custom input.");
+			}
 			return fauxAssistantMessage("No independent work remains in this turn.");
 		}
 		return fauxAssistantMessage("No coordination action was needed.");
 	};
-	host.model.setResponses(Array.from({ length: 8 }, () => routeResponse));
+	host.model.setResponses(Array.from({ length: 12 }, () => routeResponse));
 
 	const prompt = host.session.prompt(request);
 	await waitUntil(() => ownerAssistantTexts(host).includes(
@@ -619,6 +623,26 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 	assert.deepEqual(lifecycle, ["agent_end"]);
 	assert.equal(compactionStarts, compactionsBeforeParking);
 
+	// A custom message without an explicit delivery mode keeps Pi's active-Agent
+	// behavior: it enters the steering queue and resumes this same continuation
+	// instead of waiting for a fresh prompt.
+	await host.session.sendCustomMessage({
+		customType: "owner-parking-native-custom-wake",
+		content: customProbe,
+		display: false,
+	});
+	await waitUntil(() => ownerAssistantTexts(host).includes(
+		"The parked Owner processed native custom input.",
+	));
+	assert.equal(host.session.isIdle, false);
+	assert.equal(lifecycle.includes("agent_settled"), false);
+	assert.equal(
+		host.session.sessionManager.getEntries().some((entry) =>
+			entry.type === "custom_message" && entry.content === customProbe
+		),
+		true,
+	);
+
 	releaseAnswer();
 	await withTimeout(prompt, 5_000, "Owner did not resume after Answer Delivery");
 	await host.session.waitForIdle();
@@ -639,99 +663,6 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 		),
 		false,
 	);
-});
-
-test("native custom input wakes a parked working Owner and remains in model context", {
-	timeout: 10_000,
-}, async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-	});
-	let releaseAnswer!: () => void;
-	const answerGate = new Promise<void>((resolve) => {
-		releaseAnswer = resolve;
-	});
-	const lifecycle: string[] = [];
-	host.session.subscribe((event) => {
-		if (event.type === "agent_end") lifecycle.push("agent_end");
-		if (event.type === "agent_settled") lifecycle.push("agent_settled");
-	});
-	const requestMarker = "OWNER_NATIVE_CUSTOM_WAKE_REQUEST";
-	const customProbe = "Process this custom input using native active-Agent semantics.";
-	const routeResponse = async (context: Context) => {
-		const serialized = JSON.stringify(context.messages);
-		if (
-			serialized.includes(requestMarker) &&
-			hasDeliveredRequest(context) &&
-			!serialized.includes("spawn-native-custom-wake")
-		) {
-			if (!serialized.includes("answer-native-custom-wake")) {
-				await answerGate;
-				return fauxAssistantMessage(
-					fauxToolCall(
-						"agent_message",
-						{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Native custom wake test complete." },
-						{ id: "answer-native-custom-wake" },
-					),
-					{ stopReason: "toolUse" },
-				);
-			}
-			return fauxAssistantMessage("The child Answer was committed.");
-		}
-		if (!serialized.includes("spawn-native-custom-wake")) {
-			return fauxAssistantMessage(
-				fauxToolCall(
-					"agent_spawn",
-						{ title: "Fixture request", request: requestMarker },
-					{ id: "spawn-native-custom-wake" },
-				),
-				{ stopReason: "toolUse" },
-			);
-		}
-		if (serialized.includes("Native custom wake test complete.")) {
-			return fauxAssistantMessage("The Owner received the final Answer.");
-		}
-		if (serialized.includes(customProbe)) {
-			return fauxAssistantMessage("The parked Owner processed native custom input.");
-		}
-		return fauxAssistantMessage("The Owner is parked with background work outstanding.");
-	};
-	host.model.setResponses(Array.from({ length: 8 }, () => routeResponse));
-
-	const prompt = host.session.prompt(requestMarker);
-	await waitUntil(() => ownerAssistantTexts(host).includes(
-		"The Owner is parked with background work outstanding.",
-	));
-	// Same parked boundary as the Creation Request case: the assistant text is
-	// readable before agent_end, so the lifecycle event is the evidence to wait on.
-	await waitUntil(
-		() => lifecycle.includes("agent_end"),
-		() => `Owner run never reached agent_end while parked: lifecycle=[${lifecycle.join(", ")}] streaming=${host.session.isStreaming} idle=${host.session.isIdle}`,
-	);
-	assert.equal(host.session.isIdle, false);
-	assert.deepEqual(lifecycle, ["agent_end"], "a parked run must not start another turn or settle before its Answer arrives");
-
-	await host.session.sendCustomMessage({
-		customType: "owner-parking-native-custom-wake",
-		content: customProbe,
-		display: false,
-	});
-	await waitUntil(() => ownerAssistantTexts(host).includes(
-		"The parked Owner processed native custom input.",
-	));
-	assert.equal(host.session.isIdle, false);
-	assert.equal(lifecycle.includes("agent_settled"), false);
-	assert.equal(
-		host.session.sessionManager.getEntries().some((entry) =>
-			entry.type === "custom_message" && entry.content === customProbe
-		),
-		true,
-	);
-
-	releaseAnswer();
-	await withTimeout(prompt, 5_000, "Owner did not settle after the final Answer");
-	assert.equal(lifecycle.filter((event) => event === "agent_settled").length, 1);
 });
 
 function ownerDockText(host: Awaited<ReturnType<typeof createTestOwnerHost>>): string {
