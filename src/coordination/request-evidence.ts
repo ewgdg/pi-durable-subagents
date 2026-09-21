@@ -45,6 +45,7 @@ import {
 	cancellationSourcesAfter,
 	answerSourceResultRequestId,
 	findAuthoredAgentMessageSource,
+	findAuthoredAgentMessageSources,
 	inspectCanonicalRequestResolution,
 } from "../protocol/request-resolution.ts";
 import type { AgentWaitAnswer } from "../protocol/agent-wait.ts";
@@ -353,6 +354,20 @@ export class RequestEvidence {
 		return obligationStack(agent.transcript.inspect(), agent.identity.agentId).filter(frame => owed.has(frame.requestId));
 	}
 
+	/**
+	 * A Creation Request holds the incoming Request slot until it is answered or
+	 * withdrawn: the child's activation contract comes before ordinary Requests.
+	 * Delivered ordinary Requests are attention, not exclusive ownership, so later
+	 * Requests (including Steer Requests) may still reach the same responder.
+	 */
+	isIncomingRequestBlocked(responder: AgentRecord, requestId: string): boolean {
+		const foreground = this.obligationFrames(responder).at(-1);
+		// The Request already occupying the slot may be redelivered (retry) or
+		// cancelled; neither competes with itself.
+		if (!foreground || foreground.requestId === requestId) return false;
+		return this.#findCreationRequest(foreground.requestId) !== undefined;
+	}
+
 	openIncomingRequests(agent: AgentRecord): OpenIncomingRequestList {
 		return summarizeRequestObligations(this.obligationFrames(agent));
 	}
@@ -566,6 +581,7 @@ export class RequestEvidence {
 		creationIds: readonly string[],
 		cursors: Map<AgentRecord, RelationshipCursor>,
 	): Generator<void> {
+		this.#validateAnswerResultReferences(agent);
 		const changed = new Set(creationIds);
 		for (const [record, cursor] of cursors) {
 			for (let index = graph.cursors.get(record)?.count ?? 0; index < cursor.count; index++) {
@@ -982,6 +998,33 @@ export class RequestEvidence {
 			);
 		}
 		return request;
+	}
+
+	/**
+	 * Reject only an Answer result that names a Request with no evidence anywhere.
+	 * A delivered Request whose authored source was skipped during replay keeps its
+	 * obligation (docs/request-lifetime-decision-matrix.md, alternative B); the
+	 * recipient-side Delivery is the evidence, so that Answer stays answerable.
+	 */
+	#validateAnswerResultReferences(responder: AgentRecord): void {
+		const transcript = responder.transcript.inspect();
+		// A record without a bootstrap Identity in this transcript has no authored
+		// coordination facts to validate (test-only records, unadopted histories).
+		if (!indexedState(transcript).scopes.has(responder.identity.agentId)) return;
+		for (const { source, input } of findAuthoredAgentMessageSources({
+			authorAgentId: responder.identity.agentId,
+			transcript,
+		})) {
+			if (input.operation !== "answer") continue;
+			const requestId = answerSourceResultRequestId({ transcript, source });
+			if (requestId === undefined) continue;
+			if (this.findRequest(requestId)) {
+				this.#requireResponderRequest(responder, requestId);
+				continue;
+			}
+			if (this.findDeliveredRequest(responder, requestId)) continue;
+			throw new Error(`unknown_identity: Request ${requestId}`);
+		}
 	}
 
 	#inspectMessageTarget(

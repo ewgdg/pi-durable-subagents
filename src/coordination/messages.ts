@@ -662,7 +662,8 @@ export class MessageCoordinator {
 			isSuppressed: () => this.#isRequestWithdrawn(requestId, recipient),
 			isIncomingRequest: true,
 			isDeliveryBlocked: () =>
-				this.#deliveryScheduler.isDeliveryBlocked(recipient, "deferred"),
+				this.#deliveryScheduler.isDeliveryBlocked(recipient, "deferred") ||
+				this.#requestEvidence.isIncomingRequestBlocked(recipient, requestId),
 			afterCommit: () => {
 				const request = this.#requestEvidence.requireRequest(requestId);
 				if (
@@ -1365,6 +1366,7 @@ export class MessageCoordinator {
 				: undefined,
 			isDeliveryBlocked: message.kind === "request" || message.deliveryMode === "background"
 				? () => this.#deliveryScheduler.isDeliveryBlocked(recipient, message.deliveryMode) ||
+					(message.kind === "request" && this.#requestEvidence.isIncomingRequestBlocked(recipient, message.messageId)) ||
 					(message.deliveryMode === "background" && this.answerObligationRequestIds(recipient).length > 0)
 				: undefined,
 			suppressesAfterCommitMessageId: message.kind === "request_cancellation"
