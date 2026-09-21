@@ -666,6 +666,7 @@ export class OperationalIncidentCoordinator {
 		const inspections = await this.#messages.refreshTranscriptFacts();
 		if (this.#isShuttingDown()) return;
 		const toRecover: RunFailureSnapshot[] = [];
+		const recoveringKeys = new Set<string>();
 		const toAttemptCreation: OperationalIncidentHandling[] = [];
 		withAgentTranscriptObservations(this.#agents.values(), () => {
 			const snapshots: OperationalConditionSnapshot[] = [];
@@ -683,6 +684,7 @@ export class OperationalIncidentCoordinator {
 			for (const [key, snapshot] of this.#runFailureByKey) {
 				if (!this.#conditionRemains(snapshot)) {
 					toRecover.push(snapshot);
+					recoveringKeys.add(key);
 					this.#runFailureByKey.delete(key);
 					continue;
 				}
@@ -709,7 +711,8 @@ export class OperationalIncidentCoordinator {
 				if (key.startsWith("moderation:creation:") && !currentKeys.has(key.slice("moderation:creation:".length))) this.#dismissFault(key);
 			}
 			for (const key of this.#handlingByKey.keys()) {
-				if (!currentKeys.has(key)) this.#releaseHandling(key);
+				if (currentKeys.has(key) || recoveringKeys.has(key)) continue;
+				this.#releaseHandling(key);
 			}
 			for (const snapshot of snapshots) {
 				const existing = this.#handlingByKey.get(snapshot.key);
@@ -735,7 +738,10 @@ export class OperationalIncidentCoordinator {
 			}
 		}, inspections);
 		for (const snapshot of toRecover) {
+			// The cleared condition still owes its Moderator the successor-start notice.
+			// Admit that delivery while handling retention is live, then release as usual.
 			await this.#notifyRunFailureRecovery(snapshot);
+			this.#releaseHandling(snapshot.key);
 		}
 		for (const handling of toAttemptCreation) {
 			await this.#attemptModeratorCreation(handling);
