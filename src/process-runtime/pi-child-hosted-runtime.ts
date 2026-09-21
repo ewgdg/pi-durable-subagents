@@ -217,20 +217,23 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	}
 
 	async clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>> {
-		const runId = this.#latestRunId;
+		const runtime = await this.#admitted;
+		// The child accepts only its current or newest settled Run. Resolve that
+		// identity after awaiting admission: a lifecycle edge can be accepted while
+		// this call is still pending, and an identity read earlier is then stale.
+		const runId = this.#currentRunId ?? this.#latestRunId;
 		if (!runId) return { steering: [], followUp: [] };
-		const result = await this.#admitted.then((runtime) =>
-			runtime.channel.request("queue.clear", { runId })
-		);
+		const result = await runtime.channel.request("queue.clear", { runId });
 		this.#updateQueuedInputCount(result.queuedInputCount);
 		return { steering: result.steering, followUp: result.followUp };
 	}
 
 	async abort(): Promise<void> {
 		this.#reminderAdmissionAbort?.abort();
-		const runId = this.#latestRunId;
 		const deliveryIds = [...this.#dispatchCompletions.keys()];
 		const runtime = await this.#admitted;
+		// Read the Run identity at dispatch time for the same reason as clearQueue.
+		const runId = this.#currentRunId ?? this.#latestRunId;
 		await Promise.all([
 			...deliveryIds.map(deliveryId => runtime.channel.request("message.cancel", { deliveryId })),
 			...(runId ? [runtime.channel.request("run.interrupt", { runId })] : []),
