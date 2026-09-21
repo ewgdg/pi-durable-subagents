@@ -215,6 +215,19 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	);
 	let participantLifecycle: ParticipantLifecycleHandlers;
 	let refreshOrdinaryAgentTools: ((refresh?: boolean) => Promise<void>) | undefined;
+	// Pi stops terminal input handling together with a hidden TUI. A blocked ask_user
+	// therefore has to keep this Agent's native editor live to receive the human's
+	// keystrokes, which the Owner forwards into this process's PTY.
+	let setNativeEditorRequired: (required: boolean) => void = () => undefined;
+	const holdNativeEditorWhileAsking = () => {
+		setNativeEditorRequired(true);
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			setNativeEditorRequired(false);
+		};
+	};
 	if (bootstrap.role === "ordinary") {
 		const participant = createControlBackedChildParticipantHandlers(
 			"ordinary",
@@ -222,12 +235,13 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			nativeInputIdentity,
 			waitProgress,
 		);
+		const coordination = { ...participant.coordination, holdNativeEditorWhileAsking };
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
 		registerParticipantCoordinationTools(
 			pi,
 			"ordinary",
-			participant.coordination,
+			coordination,
 			resolveAgentLabel,
 			undefined,
 			resolveAnswerTargetAgent,
@@ -235,9 +249,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		refreshOrdinaryAgentTools = async (refresh = false) => registerParticipantCoordinationTools(
 			pi,
 			"ordinary",
-			participant.coordination,
+			coordination,
 			resolveAgentLabel,
-			await participant.coordination.agentTemplateSnapshot(refresh),
+			await coordination.agentTemplateSnapshot(refresh),
 			resolveAnswerTargetAgent,
 		);
 	} else {
@@ -247,12 +261,13 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			nativeInputIdentity,
 			waitProgress,
 		);
+		const coordination = { ...participant.coordination, holdNativeEditorWhileAsking };
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
 		registerParticipantCoordinationTools(
 			pi,
 			"moderator",
-			participant.coordination,
+			coordination,
 			resolveAgentLabel,
 			undefined,
 			resolveAnswerTargetAgent,
@@ -288,6 +303,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		);
 		const { runtime } = capture;
 		assertExpectedSession(runtime, bootstrap);
+		setNativeEditorRequired = capture.setNativeEditorRequired;
 		const retained = childControls.get(runtime.session);
 		if (retained && event.reason !== "reload") {
 			throw new Error("child_runtime_bridge_rebound: session replacement is not supported");

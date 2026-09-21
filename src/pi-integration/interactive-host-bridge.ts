@@ -53,6 +53,7 @@ export type InteractiveHostBridge = {
 	): Promise<Readonly<{
 		runtime: AgentSessionRuntime;
 		setPresentationVisible(visible: boolean): void;
+		setNativeEditorRequired(required: boolean): void;
 	}>>;
 };
 
@@ -193,6 +194,7 @@ function bindInteractivePresentation(
 	return {
 		runtime,
 		setPresentationVisible: presentation.setVisible,
+		setNativeEditorRequired: presentation.setNativeEditorRequired,
 	};
 }
 

@@ -214,6 +214,13 @@ type HumanParticipantCoordinationToolHandler = Readonly<{
 		input: HumanRequestInput,
 		signal: AbortSignal | undefined,
 	): Promise<HumanAnswer>;
+	/**
+	 * Keep this Agent's native editor live while `askUser` blocks, and return the
+	 * release. Pi stops terminal input handling together with a hidden TUI, so an
+	 * Agent blocked on a Human Request cannot otherwise receive the human's
+	 * keystrokes, which the Owner forwards into its PTY.
+	 */
+	holdNativeEditorWhileAsking?(): () => void;
 }>;
 
 export type ReportToUserReceipt = Readonly<{ reportId: string; createdAt: string }>;
@@ -791,9 +798,14 @@ export function registerParticipantCoordinationTools<
 			renderCall: renderHumanRequestCall,
 			renderResult: renderHumanRequestResult,
 			async execute(toolCallId, parameters, signal) {
-				return toolResult(
-					await availableHandlers.askUser!(toolCallId, parameters, signal),
-				);
+				const releaseNativeEditor = availableHandlers.holdNativeEditorWhileAsking?.();
+				try {
+					return toolResult(
+						await availableHandlers.askUser!(toolCallId, parameters, signal),
+					);
+				} finally {
+					releaseNativeEditor?.();
+				}
 			},
 		});
 	}
