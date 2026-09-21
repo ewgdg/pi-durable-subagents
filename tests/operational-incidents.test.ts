@@ -4050,7 +4050,12 @@ test("blocked Delivery remains observable after leaf termination without cancell
 	assert.equal(trigger.reason.kind, "scheduling_failure");
 	assert.equal(owner.status(leafAgentId).run.phase, "dormant");
 	const parentRun = owner.status(parent.agentId).run;
-	assert.ok(parentRun.phase === "live" && parentRun.attention === "agent_wait");
+	// A delivery-failure notice uses ordinary custom-input scheduling: it preempts the
+	// parked Agent Wait (returning "preempted") instead of completing the join with
+	// fabricated Answers, so the parent leaves agent_wait while its Request stays
+	// outstanding (docs/agent-messaging.md, "Asynchronous Delivery failure notices";
+	// src/coordination/delivery-failure-notifications.ts reserves the notice delivery).
+	assert.ok(parentRun.phase === "live" && parentRun.attention === "none" && parentRun.work === "settled");
 	assert.ok(parentRun.retentionReasons.some(({reason}) => reason === "awaiting_answer"));
 	assert.ok(parentRun.retentionReasons.some(({reason}) => reason === "answer_owed"));
 	clock.advanceBy(10_000);

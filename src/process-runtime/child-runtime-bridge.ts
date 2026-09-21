@@ -729,8 +729,15 @@ async function handleOwnerRequest(
 						execution.signal = binding.runtime.session.agent.signal;
 						execution.admitted = delivery.kind === "custom" && !binding.runtime.session.isIdle;
 						return binding.deliveryExecution.run(execution, () =>
+							// Pi reports preflight acceptance only after it has taken the submission
+							// into its own steering/follow-up queue, or begun that submission's own
+							// Run. Only the pre-dispatch fence may consult the session-wide startup
+							// cancellation: an unrelated abort() (Pi's manual compaction, a sibling
+							// Run interruption) poisons startupAdmission.signal, and re-checking it
+							// here would reject an input Pi already owns and will still deliver.
 							dispatchDelivery(binding, delivery, () => {
-								dispatchCheckpoint();
+								checkpoint();
+								admissionSignal.throwIfAborted();
 								execution.admitted = true;
 							})
 						);
@@ -804,16 +811,23 @@ async function handleOwnerRequest(
 		}
 		case "run.interrupt": {
 			binding.reminderAdmission.cancel();
-			const accepted = await sequenceQueueIntention(state, async () => {
-				requireReportedRun(state, request.payload.runId);
-				// This revalidation runs immediately before mutation. A successor cycle
-				// that started while this request waited in the queue is the Agent's
-				// active generation too, and interrupting active generation is exactly
-				// what the Owner asked for; only a cycle the child never reported is drift.
-				if (state.currentRunId === undefined) return false;
-				await binding.runtime.session.abort();
-				return true;
-			});
+			// Queue intentions execute in Owner arrival order, so the interrupt takes the
+			// same turn-admission lane the native clear does. Without it an interrupt can
+			// overtake a clear that is still waiting for the admission, and its long
+			// session.abort() then runs first: the clear would remove the queued steer only
+			// after the interrupted turn had already settled.
+			const accepted = await binding.turnCompaction.admit(() =>
+				sequenceQueueIntention(state, async () => {
+					requireReportedRun(state, request.payload.runId);
+					// This revalidation runs immediately before mutation. A successor cycle
+					// that started while this request waited in the queue is the Agent's
+					// active generation too, and interrupting active generation is exactly
+					// what the Owner asked for; only a cycle the child never reported is drift.
+					if (state.currentRunId === undefined) return false;
+					await binding.runtime.session.abort();
+					return true;
+				})
+			);
 			return { accepted };
 		}
 		case "presentation.setVisible":
