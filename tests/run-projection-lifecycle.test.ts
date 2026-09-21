@@ -797,6 +797,10 @@ function createRunResource(options?: {
 	};
 	const projection: HostedAgentProjection = {
 		presentation: component,
+		screenView: {
+			async begin() {},
+			async end() {},
+		},
 		physicalTerminal: {
 			async beginAttachment() { return () => undefined; },
 			async endAttachment() {},

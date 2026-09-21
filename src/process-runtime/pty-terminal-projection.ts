@@ -4,6 +4,8 @@ import * as nodePty from "node-pty";
 
 const { Terminal } = xtermHeadless;
 const GENERATED_REPLY_QUIET_MS = 10;
+/** DEC private mode Pi's fullscreen TUI wraps each frame in. */
+const SYNCHRONIZED_OUTPUT_MODE = 2026;
 
 export type TerminalCellColor =
 	| Readonly<{ kind: "default" }>
@@ -71,9 +73,11 @@ export interface PtyTerminalProjection {
 	dimensions(): Readonly<{ columns: number; rows: number }>;
 	frame(): TerminalProjectionFrame;
 	addChangeHandler(handler: () => void): () => void;
+	addScreenConsumer(): () => void;
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	addOutputHandler(handler: (data: string) => void): () => void;
 	enterNativeTerminalMode(): Promise<void>;
+	waitForCompleteFrame(): Promise<void>;
 	pauseOutput(): void;
 	resumeOutput(): void;
 	writeInput(data: string | Buffer): void;
@@ -120,8 +124,13 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	readonly #changeHandlers = new Set<() => void>();
 	readonly #failureHandlers = new Set<(error: unknown) => void>();
 	readonly #outputHandlers = new Set<(data: string) => void>();
-	#terminalMode: "startup" | "native" = "startup";
+	#parsingSuspended = false;
+	#screenConsumers = 0;
 	#terminalTransitionTail = Promise.resolve();
+	#completeFrameWaiter: Readonly<{
+		resolve(): void;
+		reject(error: unknown): void;
+	}> | undefined;
 	#cursorVisible = true;
 	#cursorStyle: TerminalCursorStyle = "block";
 	#cursorBlink = false;
@@ -163,12 +172,17 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 				{ final: "c" },
 				() => this.#observeTerminalReset(),
 			),
+			terminal.parser.registerCsiHandler(
+				{ prefix: "?", final: "l" },
+				(params) => this.#observeSynchronizedOutputEnd(params),
+			),
 		);
 		this.exited = new Promise<PtyExit>((resolve) => {
 			this.#subscriptions.push(
 				child.onExit((event) => {
 					this.#exitObserved = true;
 					this.#discardGeneratedReplies();
+					this.#rejectCompleteFrameWaiter(new Error("terminal_projection_exited"));
 					void this.#finishExit(event, resolve);
 				}),
 			);
@@ -244,13 +258,49 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	}
 
 	enterNativeTerminalMode(): Promise<void> {
-		return this.#sequenceTerminalTransition(async () => {
-			this.#requireActive();
-			if (this.#terminalMode === "native") return;
-			await this.#waitForParserDrain();
-			this.#requireActive();
-			this.#terminalMode = "native";
-			this.#discardGeneratedReplies();
+		return this.#suspendBackgroundParsing();
+	}
+
+	/**
+	 * Observe this child's screen for as long as the returned release is held.
+	 * A watched projection keeps parsing PTY output after admission suspended
+	 * hidden background parsing, so any screen viewer sees live content.
+	 */
+	addScreenConsumer(): () => void {
+		if (this.#disposed) return () => undefined;
+		this.#screenConsumers += 1;
+		// Resume synchronously: a repaint requested immediately after registration
+		// must never race the asynchronous hidden-mode transition and be dropped.
+		this.#parsingSuspended = false;
+		// A resize while hidden reached only the child PTY, so the emulator must adopt
+		// the child's current geometry before the repaint that follows is parsed.
+		if (this.#terminal.cols !== this.#child.cols || this.#terminal.rows !== this.#child.rows) {
+			this.#terminal.resize(this.#child.cols, this.#child.rows);
+		}
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			this.#screenConsumers = Math.max(0, this.#screenConsumers - 1);
+			if (this.#screenConsumers === 0) {
+				void this.#suspendBackgroundParsing().catch(() => undefined);
+			}
+		};
+	}
+
+	/**
+	 * Resolve once a complete native frame has been parsed. Pi's fullscreen TUI
+	 * brackets every frame in DEC 2026 synchronized output, so its end sequence is
+	 * ordered after every cell of that frame. Register this before asking the child
+	 * to repaint; a hidden child is not rendering, so no earlier frame can satisfy it.
+	 */
+	waitForCompleteFrame(): Promise<void> {
+		this.#requireActive();
+		if (this.#completeFrameWaiter) {
+			throw new Error("terminal_complete_frame_already_pending");
+		}
+		return new Promise<void>((resolve, reject) => {
+			this.#completeFrameWaiter = { resolve, reject };
 		});
 	}
 
@@ -280,11 +330,11 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		requireDimension("rows", rows);
 		if (columns === this.#child.cols && rows === this.#child.rows) return;
 		try {
-			// Only startup diagnostics need emulator geometry. Native sessions redraw
-			// from their own data and never maintain this offscreen cell grid.
-			if (this.#terminalMode === "startup") this.#terminal.resize(columns, rows);
+			// Only a parsed screen needs emulator geometry. A hidden child redraws
+			// from its own data and never maintains this offscreen cell grid.
+			if (this.#isParsing()) this.#terminal.resize(columns, rows);
 			this.#child.resize(columns, rows);
-			if (this.#terminalMode === "startup") this.#notifyChange();
+			if (this.#isParsing()) this.#notifyChange();
 		} catch (error) {
 			this.#notifyFailure(error);
 			throw error;
@@ -324,7 +374,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 				this.#notifyFailure(error);
 			}
 		}
-		if (this.#terminalMode === "native") return;
+		if (!this.#isParsing()) return;
 		this.#pendingWrites += 1;
 		try {
 			this.#terminal.write(data, () => {
@@ -342,7 +392,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			this.#disposed ||
 			this.#disposing ||
 			this.#exitObserved ||
-			this.#terminalMode === "native"
+			!this.#isParsing()
 		) return;
 		this.#pendingGeneratedReplies.push(Buffer.from(data));
 		if (this.#generatedReplyFlush) clearTimeout(this.#generatedReplyFlush);
@@ -360,7 +410,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			this.#disposed ||
 			this.#disposing ||
 			this.#exitObserved ||
-			this.#terminalMode === "native"
+			!this.#isParsing()
 		) {
 			this.#pendingGeneratedReplies = [];
 			return;
@@ -425,6 +475,40 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		return transition;
 	}
 
+	/** Screen parsing runs by default and while a viewer watches a hidden child. */
+	#isParsing(): boolean {
+		return this.#screenConsumers > 0 || !this.#parsingSuspended;
+	}
+
+	#suspendBackgroundParsing(): Promise<void> {
+		return this.#sequenceTerminalTransition(async () => {
+			this.#requireActive();
+			if (this.#parsingSuspended) return;
+			await this.#waitForParserDrain();
+			this.#requireActive();
+			// A viewer can register while the drain settles; it keeps parsing alive.
+			if (this.#screenConsumers > 0) return;
+			this.#parsingSuspended = true;
+			this.#discardGeneratedReplies();
+		});
+	}
+
+	#observeSynchronizedOutputEnd(params: (number | number[])[]): false {
+		if (!params.some((parameter) => parameter === SYNCHRONIZED_OUTPUT_MODE)) {
+			return false;
+		}
+		const waiter = this.#completeFrameWaiter;
+		this.#completeFrameWaiter = undefined;
+		waiter?.resolve();
+		return false;
+	}
+
+	#rejectCompleteFrameWaiter(error: unknown): void {
+		const waiter = this.#completeFrameWaiter;
+		this.#completeFrameWaiter = undefined;
+		waiter?.reject(error);
+	}
+
 	#notifyChange(): void {
 		if (this.#disposed) return;
 		for (const handler of this.#changeHandlers) handler();
@@ -432,6 +516,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	#notifyFailure(error: unknown): void {
 		if (this.#disposed) return;
+		this.#rejectCompleteFrameWaiter(error);
 		this.#failure ??= { error };
 		for (const handler of this.#failureHandlers) handler(error);
 	}

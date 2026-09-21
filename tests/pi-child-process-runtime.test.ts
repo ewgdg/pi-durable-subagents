@@ -1911,10 +1911,14 @@ test("hidden real child persists work without rendering and repeated attachment 
 	runtime.addChangeHandler(() => changes++);
 	const events = async () => (await readFile(probePath, "utf8")).trim().split("\n");
 	await runtime.drain();
-	const initialFrame = runtime.frame();
+	// A hidden child is not parsed, so its frame is whatever the last watched phase
+	// left behind. Re-pin at each hidden-work boundary: an offscreen frame must not
+	// move while nothing watches it, and a watched phase is allowed to advance it.
+	let hiddenFrame = runtime.frame();
 	for (let turn = 1; turn <= 2; turn++) {
 		const renderCount = (await events()).filter(line => line === "render").length;
 		output.length = 0;
+		hiddenFrame = runtime.frame();
 		await runtime.channel.request("message.deliver", { deliveryId: "visibility-" + turn, delivery: { kind: "user", content: "HIDDEN_WORK_" + turn } });
 		await waitUntil(() => settled === turn);
 		const transcript = JSON.stringify(SessionManager.open(sessionPath).getEntries());
@@ -1922,7 +1926,7 @@ test("hidden real child persists work without rendering and repeated attachment 
 		assert.equal(transcript.split(PROCESS_RUNTIME_TEST_RESPONSE).length - 1, turn);
 		assert.equal((await events()).filter(line => line === "render").length, renderCount);
 		assert.equal(changes, 0, "hidden output must not update an offscreen terminal");
-		assert.deepEqual(runtime.frame(), initialFrame);
+		assert.deepEqual(runtime.frame(), hiddenFrame);
 		assert.doesNotMatch(output.join(""), /HIDDEN_WORK_|VISIBILITY_WIDGET|\x1b\[\?2026h/);
 
 		const columns = turn === 1 ? 100 : 120;

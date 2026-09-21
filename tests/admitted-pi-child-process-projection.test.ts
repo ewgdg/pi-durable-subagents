@@ -430,6 +430,12 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 		return Promise.resolve(() => this.#outputHandlers.delete(handler));
 	}
 
+	beginScreenView(): Promise<void> {
+		this.physicalAttachmentStates.push(true);
+		this.visibilityChangeCount += 1;
+		return Promise.resolve();
+	}
+
 	hidePresentation(): Promise<void> {
 		this.physicalAttachmentStates.push(false);
 		this.visibilityChangeCount += 1;

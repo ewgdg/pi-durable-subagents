@@ -40,6 +40,7 @@ export type AdmittedPiChildProjectionRuntime = Readonly<{
 	addChangeHandler(handler: () => void): () => void;
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	beginPhysicalTerminalAttachment(handler: (data: string) => void): Promise<() => void>;
+	beginScreenView(): Promise<void>;
 	hidePresentation(): Promise<void>;
 	pauseOutput(): void;
 	resumeOutput(): void;
@@ -106,6 +107,10 @@ export function createAdmittedPiChildProcessProjection(
 
 	return Object.freeze({
 		presentation,
+		screenView: Object.freeze({
+			begin: () => runtime.beginScreenView(),
+			end: () => runtime.hidePresentation(),
+		}),
 		physicalTerminal: Object.freeze({
 			beginAttachment: (handler: (data: string) => void) =>
 				runtime.beginPhysicalTerminalAttachment(handler),

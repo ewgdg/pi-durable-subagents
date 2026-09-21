@@ -575,6 +575,10 @@ function createProjectionHarness(
 			render: () => [name],
 			invalidate() {},
 		},
+		screenView: {
+			async begin() {},
+			async end() {},
+		},
 		physicalTerminal: {
 			async beginAttachment(handler) {
 				attachedStates.push(true);

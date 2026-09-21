@@ -210,7 +210,7 @@ class DetachedDiagnosticAttachment implements AgentTerminalAttachment {
 
 	async attach(projection: TerminalProjection): Promise<void> {
 		if (this.#closed || this.#projection === projection) return;
-		this.#releaseProjection();
+		await this.#releaseProjection();
 		if (this.#closed) return;
 		this.#projection = projection;
 		const removeFailureHandler = projection.addFailureHandler((error) => {
@@ -232,6 +232,9 @@ class DetachedDiagnosticAttachment implements AgentTerminalAttachment {
 			return;
 		}
 		this.#removeExitHandler = removeExitHandler;
+		// This surface renders the projection's parsed screen, so it must resume the
+		// child's native rendering and keep observing it while it stays open.
+		await projection.screenView.begin();
 	}
 
 	dispatchInput(data: string): void {
@@ -246,15 +249,18 @@ class DetachedDiagnosticAttachment implements AgentTerminalAttachment {
 	async close(): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;
-		this.#releaseProjection();
+		await this.#releaseProjection();
 	}
 
-	#releaseProjection(): void {
+	async #releaseProjection(): Promise<void> {
+		const projection = this.#projection;
 		this.#projection = undefined;
 		this.#removeFailureHandler();
 		this.#removeExitHandler();
 		this.#removeFailureHandler = () => undefined;
 		this.#removeExitHandler = () => undefined;
+		if (!projection) return;
+		await projection.screenView.end().catch((error: unknown) => this.#fail(error));
 	}
 }
 

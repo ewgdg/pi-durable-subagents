@@ -1621,13 +1621,21 @@ test("later Runtime preparations load current file-backed child configuration wi
 		return run.phase === "live" && run.work === "settled";
 	});
 	const secondOpen = await openSelectedAgentView(host, secondAgentId);
-	assert.match(
-		stripTerminalSequences(secondOpen.view.render(80).join("\n")),
-		/Factory generation · replacement/,
+	// The test-owned display parses the child's repaint asynchronously, so the first
+	// synchronous snapshot after the surface appears can precede the frame itself.
+	await waitForCondition(() =>
+		/Factory generation · replacement/.test(
+			stripTerminalSequences(secondOpen.view.render(80).join("\n")),
+		)
 	);
 	await returnAgentViewToOwner(host, secondOpen.view, secondOpen.command);
 
 	const reopenedFirst = await openSelectedAgentView(host, firstAgentId);
+	await waitForCondition(() =>
+		/Factory generation · original/.test(
+			stripTerminalSequences(reopenedFirst.view.render(80).join("\n")),
+		)
+	);
 	const retainedFrame = stripTerminalSequences(reopenedFirst.view.render(80).join("\n"));
 	assert.match(retainedFrame, /Factory generation · original/);
 	assert.doesNotMatch(retainedFrame, /Factory generation · replacement/);

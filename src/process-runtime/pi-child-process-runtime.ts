@@ -49,7 +49,6 @@ import {
 	type PtyTerminalProjection,
 	type TerminalProjectionFrame,
 } from "./pty-terminal-projection.ts";
-
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
 const DEFAULT_STARTUP_TIMEOUT_MILLISECONDS = 15_000;
@@ -483,6 +482,10 @@ export class PiChildProcessRuntime {
 		return this.#presentation.beginPhysicalTerminalAttachment(handler);
 	}
 
+	beginScreenView(): Promise<void> {
+		return this.#presentation.beginScreenView();
+	}
+
 	hidePresentation(): Promise<void> {
 		return this.#presentation.hidePresentation();
 	}
@@ -660,6 +663,10 @@ export class PiChildProcessLaunch {
 		handler: (data: string) => void,
 	): Promise<() => void> {
 		return this.#presentationReadiness.then(presentation => presentation.beginPhysicalTerminalAttachment(handler));
+	}
+
+	beginScreenView(): Promise<void> {
+		return this.#presentationReadiness.then(presentation => presentation.beginScreenView());
 	}
 
 	hidePresentation(): Promise<void> {
@@ -875,6 +882,7 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
 class ChildProcessPresentation {
 	#revision = 0;
 	#closed = false;
+	#releaseScreenView: (() => void) | undefined;
 	readonly projection: PtyTerminalProjection;
 	readonly channel: PiChildRuntimeChannel;
 
@@ -888,20 +896,47 @@ class ChildProcessPresentation {
 		void projection.exited.then(() => { this.#closed = true; });
 	}
 
-	beginPhysicalTerminalAttachment(handler: (data: string) => void): Promise<() => void> {
+	async beginPhysicalTerminalAttachment(handler: (data: string) => void): Promise<() => void> {
+		const removeOutputHandler = this.projection.addOutputHandler(handler);
+		try {
+			await this.beginScreenView();
+			return removeOutputHandler;
+		} catch (error) {
+			removeOutputHandler();
+			throw error;
+		}
+	}
+
+	/**
+	 * Resume the child's native screen for a viewer and observe it. Resolves once
+	 * the child's complete current frame has been parsed, so a handoff never
+	 * publishes a partially repainted screen; the hidden state resumes on hide.
+	 */
+	async beginScreenView(): Promise<void> {
+		if (this.#closed || this.#releaseScreenView) return;
 		const revision = ++this.#revision;
-		return beginPhysicalTerminalAttachment(
-			this.projection,
-			// Native-mode preparation yields; cancellation must invalidate a pending show.
-			() => revision === this.#revision
-				? this.setPresentationVisible(true)
-				: Promise.resolve(),
-			handler,
-		);
+		const releaseScreen = this.projection.addScreenConsumer();
+		const completeFrame = this.projection.waitForCompleteFrame();
+		try {
+			await this.setPresentationVisible(true);
+			await completeFrame;
+		} catch (error) {
+			releaseScreen();
+			await completeFrame.catch(() => undefined);
+			throw error;
+		}
+		if (revision !== this.#revision || this.#closed) {
+			// A concurrent hide already owns the child's visibility.
+			releaseScreen();
+			return;
+		}
+		this.#releaseScreenView = releaseScreen;
 	}
 
 	hidePresentation(): Promise<void> {
 		++this.#revision;
+		this.#releaseScreenView?.();
+		this.#releaseScreenView = undefined;
 		if (this.#closed) return Promise.resolve();
 		this.projection.resumeOutput();
 		return this.setPresentationVisible(false).catch(error => {
@@ -911,24 +946,7 @@ class ChildProcessPresentation {
 	}
 
 	setPresentationVisible(visible: boolean): Promise<void> {
-		++this.#revision;
 		return this.channel.request("presentation.setVisible", { visible }).then(() => undefined);
-	}
-}
-
-async function beginPhysicalTerminalAttachment(
-	projection: PtyTerminalProjection,
-	showPresentation: () => Promise<void>,
-	handler: (data: string) => void,
-): Promise<() => void> {
-	await projection.enterNativeTerminalMode();
-	const removeOutputHandler = projection.addOutputHandler(handler);
-	try {
-		await showPresentation();
-		return removeOutputHandler;
-	} catch (error) {
-		removeOutputHandler();
-		throw error;
 	}
 }
 
