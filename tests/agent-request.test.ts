@@ -29,6 +29,7 @@ import {
 } from "../src/policy/workflow-policy.ts";
 import type { AgentRunState } from "../src/runtime/agent-runtime-supervisor.ts";
 import { registerOwnerAgentTools } from "../src/tools/owner-surfaces.ts";
+import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -2453,9 +2454,9 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 	const committedWaitResult = {
 		answers: [
 			{
-				requestTitle: "Fixture request",
 				disposition: "answer_already_delivered" as const,
 				requestMessageId: requestId,
+				requestTitle: "Fixture request",
 				answerId,
 				deliveryEvidence: {
 					agentId: harness.host.session.sessionId,
@@ -4867,6 +4868,7 @@ async function createDormantChildHarness(
 ) {
 	let view!: ReturnType<WorkflowCoordinator["forAgent"]>;
 	const host = await createUnboundTestOwnerHost(t, (pi) => {
+		registerSessionStartup(pi);
 		registerOwnerAgentTools(pi, () => view);
 	}, {
 		persistent: true,
