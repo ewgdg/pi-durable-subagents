@@ -56,7 +56,7 @@ import type { ProcessChildSessionFactory } from "../runtime/process-child-sessio
 import type { AgentRunHandle, AgentRunFailure } from "../runtime/agent-runtime-host.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
-import { statusOf, type AgentRecord } from "./agent-record.ts";
+import { statusOf, withAgentTranscriptObservations, type AgentRecord } from "./agent-record.ts";
 import { detectDependencyDeadlocks } from "./dependency-deadlock.ts";
 import type { MessageCoordinator } from "./messages.ts";
 import {
@@ -663,73 +663,81 @@ export class OperationalIncidentCoordinator {
 	async #inspectWorkflow(): Promise<void> {
 		if (this.#isShuttingDown()) return;
 		await this.#boundaryHooks.beforeEvidenceInspection?.();
-		await this.#messages.refreshTranscriptFacts();
+		const inspections = await this.#messages.refreshTranscriptFacts();
 		if (this.#isShuttingDown()) return;
-		const snapshots: OperationalConditionSnapshot[] = [];
-		for (const [key, snapshot] of this.#reportedRunFailures) {
-			const affected = this.#agents.get(snapshot.agentId);
-			if (!affected) continue;
-			const successor = affected.host.latestStartedRunSequence();
-			if (successor <= snapshot.run.sequence) continue;
-			// Obligation clearance may release live handling before this successor.
-			// Its recovery evidence still belongs to the exact failed Run's report.
-			const source = this.#reportSourcesBySnapshot.get(snapshot);
-			if (!source) throw new Error("Reported Run failure has no retained report source");
-			this.#appendRuntimeReportFinding(source, { key: `successor:${successor}`, summary: `Successor Run ${successor} started for Agent ${snapshot.agentId}. This establishes resumption, not successful completion. Original Answer obligations remain: ${this.#messages.hasUnsettledAnswerObligation(affected, snapshot.requestIds)}.`, evidence: [`Inspected through: ${JSON.stringify(statusOf(affected).primaryEvidence.inspectedThrough)}`] });
-			this.#onAttentionChanged();
-			this.#reportedRunFailures.delete(key);
-		}
-		for (const [key, snapshot] of this.#runFailureByKey) {
-			if (!this.#conditionRemains(snapshot)) {
-				await this.#notifyRunFailureRecovery(snapshot);
-				this.#runFailureByKey.delete(key);
-				continue;
+		const toRecover: RunFailureSnapshot[] = [];
+		const toAttemptCreation: OperationalIncidentHandling[] = [];
+		withAgentTranscriptObservations(this.#agents.values(), () => {
+			const snapshots: OperationalConditionSnapshot[] = [];
+			for (const [key, snapshot] of this.#reportedRunFailures) {
+				const affected = this.#agents.get(snapshot.agentId);
+				if (!affected) continue;
+				const successor = affected.host.latestStartedRunSequence();
+				if (successor <= snapshot.run.sequence) continue;
+				const source = this.#reportSourcesBySnapshot.get(snapshot);
+				if (!source) throw new Error("Reported Run failure has no retained report source");
+				this.#appendRuntimeReportFinding(source, { key: `successor:${successor}`, summary: `Successor Run ${successor} started for Agent ${snapshot.agentId}. This establishes resumption, not successful completion. Original Answer obligations remain: ${this.#messages.hasUnsettledAnswerObligation(affected, snapshot.requestIds)}.`, evidence: [`Inspected through: ${JSON.stringify(statusOf(affected).primaryEvidence.inspectedThrough)}`] });
+				this.#onAttentionChanged();
+				this.#reportedRunFailures.delete(key);
 			}
+			for (const [key, snapshot] of this.#runFailureByKey) {
+				if (!this.#conditionRemains(snapshot)) {
+					toRecover.push(snapshot);
+					this.#runFailureByKey.delete(key);
+					continue;
+				}
 			snapshots.push(snapshot);
-		}
-		const deliveryStalls = this.#observeDeliveryStalls();
-		snapshots.push(...deliveryStalls);
-		snapshots.push(...this.#observeOperationReviews());
-		const dependencyDeadlocks = this.#observeDependencyDeadlocks();
-		snapshots.push(...dependencyDeadlocks);
-		const dependencyHandledAgentIds = new Set(
-			[...dependencyDeadlocks, ...deliveryStalls].flatMap(({ affectedAgentIds }) => affectedAgentIds),
-		);
-		for (const record of [...this.#agents.values()]) {
-			if (
-				this.#isModerator(record) ||
-				dependencyHandledAgentIds.has(record.identity.agentId)
-			) continue;
-			const snapshot = this.#observeObligationStall(record);
-			if (snapshot) snapshots.push(snapshot);
-		}
-		const currentKeys = new Set(snapshots.map(({ key }) => key));
-		for (const key of this.#faultAttention.keys()) {
-			if (key.startsWith("moderation:creation:") && !currentKeys.has(key.slice("moderation:creation:".length))) this.#dismissFault(key);
-		}
-		for (const key of this.#handlingByKey.keys()) {
-			if (!currentKeys.has(key)) this.#releaseHandling(key);
-		}
-		for (const snapshot of snapshots) {
-			const existing = this.#handlingByKey.get(snapshot.key);
-			if (existing?.moderatorAgentId !== undefined) {
-				this.#scheduleModeratorObligationReminder(existing);
-				continue;
 			}
-			if (existing?.exhausted || existing?.creationFailed) continue;
-			if (
-				!existing &&
-				snapshot.kind === "obligation_stall" &&
-				this.#scheduleObligationReminder(snapshot)
-			) continue;
-			const handling: OperationalIncidentHandling = existing ?? {
-				snapshot,
-				committedAttemptCount: 0,
-				diagnostics: [],
-				exhausted: false,
-				creationFailed: false,
-			};
-			this.#handlingByKey.set(snapshot.key, handling);
+			const deliveryStalls = this.#observeDeliveryStalls();
+			snapshots.push(...deliveryStalls);
+			snapshots.push(...this.#observeOperationReviews());
+			const dependencyDeadlocks = this.#observeDependencyDeadlocks();
+			snapshots.push(...dependencyDeadlocks);
+			const dependencyHandledAgentIds = new Set(
+				[...dependencyDeadlocks, ...deliveryStalls].flatMap(({ affectedAgentIds }) => affectedAgentIds),
+			);
+			for (const record of [...this.#agents.values()]) {
+				if (
+					this.#isModerator(record) ||
+					dependencyHandledAgentIds.has(record.identity.agentId)
+				) continue;
+				const snapshot = this.#observeObligationStall(record);
+				if (snapshot) snapshots.push(snapshot);
+			}
+			const currentKeys = new Set(snapshots.map(({ key }) => key));
+			for (const key of this.#faultAttention.keys()) {
+				if (key.startsWith("moderation:creation:") && !currentKeys.has(key.slice("moderation:creation:".length))) this.#dismissFault(key);
+			}
+			for (const key of this.#handlingByKey.keys()) {
+				if (!currentKeys.has(key)) this.#releaseHandling(key);
+			}
+			for (const snapshot of snapshots) {
+				const existing = this.#handlingByKey.get(snapshot.key);
+				if (existing?.moderatorAgentId !== undefined) {
+					this.#scheduleModeratorObligationReminder(existing);
+					continue;
+				}
+				if (existing?.exhausted || existing?.creationFailed) continue;
+				if (
+					!existing &&
+					snapshot.kind === "obligation_stall" &&
+					this.#scheduleObligationReminder(snapshot)
+				) continue;
+				const handling: OperationalIncidentHandling = existing ?? {
+					snapshot,
+					committedAttemptCount: 0,
+					diagnostics: [],
+					exhausted: false,
+					creationFailed: false,
+				};
+				this.#handlingByKey.set(snapshot.key, handling);
+				toAttemptCreation.push(handling);
+			}
+		}, inspections);
+		for (const snapshot of toRecover) {
+			await this.#notifyRunFailureRecovery(snapshot);
+		}
+		for (const handling of toAttemptCreation) {
 			await this.#attemptModeratorCreation(handling);
 		}
 	}

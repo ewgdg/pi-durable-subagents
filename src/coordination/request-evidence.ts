@@ -383,6 +383,11 @@ export class RequestEvidence {
 				return delivered ? [{ requestMessageId: requestId, requesterAgentId: delivered.fromAgentId,
 					responderAgentId: agentId, title: delivered.title, question: delivered.question }] : [];
 			}
+			if (!authored && request.targetAgentId !== agentId) {
+				throw new Error(
+					`invariant_violation: Incoming Request evidence on ${agentId} targets another responder ${request.targetAgentId}`,
+				);
+			}
 			const recipient = this.#agents.get(request.targetAgentId);
 			const deliveryEvidence = recipient ? this.#inspectRequestDelivery(request, recipient).deliveryEvidence : undefined;
 			const canonical = inspectCanonicalMessage({
@@ -421,13 +426,42 @@ export class RequestEvidence {
 		});
 	}
 
+	async refreshRelationships(): Promise<ReadonlyMap<AgentRecord, TranscriptInspection>> {
+		let result: ReadonlyMap<AgentRecord, TranscriptInspection> | undefined;
+		do {
+			const records = [...this.#agents.values()];
+			const inspections = new Map<AgentRecord, TranscriptInspection>();
+			for (const record of records) inspections.set(record, await record.transcript.refresh());
+			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
+			let allComplete = true;
+			withAgentTranscriptObservations(records, () => {
+				for (const agent of records) {
+					const graph = this.#relationshipGraph(agent);
+					this.#startRelationshipUpdate(agent, graph);
+					const started = performance.now();
+					let consumed = 0;
+					while (consumed++ < REQUEST_STEPS_PER_TURN && performance.now() - started < REQUEST_CATCH_UP_SLICE_MS) {
+						if (!this.#advanceRelationshipUpdate(graph)) {
+							this.#startRelationshipUpdate(agent, graph);
+							if (!graph.pending) break;
+						}
+					}
+					if (graph.pending) allComplete = false;
+				}
+			}, inspections);
+			if (allComplete) result = inspections;
+			else await yieldTurn();
+			} while (!result);
+		return result;
+	}
+
 	async refreshRelationshipsFor(agent: AgentRecord): Promise<ResidualRequestRelationships> {
 		let result: ResidualRequestRelationships | undefined;
 		do {
 			const records = [...this.#agents.values()];
 			const inspections = new Map<AgentRecord, TranscriptInspection>();
 			for (const record of records) inspections.set(record, await record.transcript.refresh());
-			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) continue;
+			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
 			// Pin these already-refreshed views. A synchronous read here would drain
 			// a concurrent append outside both the physical and relationship budgets.
 			withAgentTranscriptObservations(records, () => {
