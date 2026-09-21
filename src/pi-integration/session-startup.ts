@@ -126,8 +126,10 @@ export class SessionStartupAdmission {
 				preflightResult: success => {
 					const invocation = this.#invocations.getStore()!;
 					try {
+						if (this.#disposed) return;
 						if (success) this.#checkpoint(invocation);
 						options?.preflightResult?.(success);
+						if (this.#disposed) return;
 						if (success) this.#checkpoint(invocation);
 					} finally { this.#release(invocation); }
 				},
