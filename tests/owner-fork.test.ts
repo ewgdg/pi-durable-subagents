@@ -607,6 +607,21 @@ for (const invalidTool of ["agent_spawn", "agent_message"] as const) {
 			}) as { agentId: string; requestMessageId: string; spawnStatus: string };
 			assert.equal(spawn.spawnStatus, "created");
 			await waitForAgentTranscript(source, spawn.agentId, "The historical Creation Request remains unanswered.");
+			// A responder that never answers its Creation Request keeps holding the
+			// incoming Request slot, so no later Request reaches it while it has not
+			// yielded into Agent Wait (tests/agent-request.test.ts: "a Creation
+			// Request occupies the same incoming Request slot"). Withdraw that duty
+			// first; the historical Request below still stays unresolved.
+			source.model.setResponses([
+				fauxAssistantMessage("The historical Creation Request was withdrawn."),
+			]);
+			const withdrawal = await executeTool(source, "agent_message", "historical-withdraw-creation-request", {
+				operation: "cancel", requestMessageId: spawn.requestMessageId,
+				reason: "Release the incoming Request slot for later source-only work.",
+			}) as { messageId: string; messageStatus: string };
+			assert.equal(withdrawal.messageStatus, "sent");
+			await waitForMessageDelivery(source, spawn.agentId, withdrawal.messageId);
+			await waitForAgentTranscript(source, spawn.agentId, "The historical Creation Request was withdrawn.");
 			source.model.setResponses([
 				fauxAssistantMessage("The historical Request remains unanswered too."),
 			]);
@@ -837,7 +852,7 @@ async function waitForMessageDelivery(
 	const delivered = await executeTool(
 		host,
 		"agent_message",
-		"poll-delivered-source-request-before-clone",
+		`poll-delivered-${messageId}`,
 		{ operation: "poll", messageId },
 	) as { disposition: string };
 	assert.equal(delivered.disposition, "delivered");
