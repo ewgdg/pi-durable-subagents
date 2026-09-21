@@ -116,6 +116,7 @@ export class PiChildProcessRuntime {
 	#exitObserved = false;
 	#channelClosed = false;
 	readonly #presentation: ChildProcessPresentation;
+	readonly #nativeInput: LiveNativeInput;
 
 	readonly channel: PiChildRuntimeChannel;
 	readonly ready: PiChildRuntimeReady;
@@ -137,6 +138,10 @@ export class PiChildProcessRuntime {
 	}) {
 		this.#presentation = options.presentation;
 		this.#projection = options.projection;
+		this.#nativeInput = new LiveNativeInput(
+			options.projection,
+			() => this.setPresentationVisible(true),
+		);
 		this.#admissionBroker = options.admissionBroker;
 		this.#eventHandlers = options.eventHandlers;
 		this.channel = options.channel;
@@ -502,6 +507,7 @@ export class PiChildProcessRuntime {
 	}
 
 	hidePresentation(): Promise<void> {
+		this.#nativeInput.release();
 		return this.#presentation.hidePresentation();
 	}
 
@@ -518,7 +524,7 @@ export class PiChildProcessRuntime {
 	}
 
 	writeInput(data: string | Buffer): void {
-		this.#projection.writeInput(data);
+		this.#nativeInput.write(data);
 	}
 
 	resize(columns: number, rows: number): void {
@@ -597,6 +603,7 @@ export class PiChildProcessLaunch {
 	readonly #cleanupInitialization: () => Promise<void>;
 	readonly #readiness: Promise<PiChildProcessRuntime>;
 	readonly #presentationReadiness: Promise<ChildProcessPresentation>;
+	readonly #nativeInput: LiveNativeInput;
 	#presentation: ChildProcessPresentation | undefined;
 	#rejectCancellation!: (error: unknown) => void;
 	#state: PiChildProcessLaunchState = { kind: "pending" };
@@ -617,6 +624,10 @@ export class PiChildProcessLaunch {
 		this.#projection = options.projection;
 		this.bootstrapPath = options.bootstrapPath;
 		this.#eventHandlers = options.eventHandlers;
+		this.#nativeInput = new LiveNativeInput(
+			options.projection,
+			() => this.setPresentationVisible(true),
+		);
 		this.#cleanupInitialization = options.cleanup;
 		this.exited = options.projection.exited;
 		const cancellation = new Promise<never>((_resolve, reject) => {
@@ -694,6 +705,7 @@ export class PiChildProcessLaunch {
 	}
 
 	hidePresentation(): Promise<void> {
+		this.#nativeInput.release();
 		return this.#presentationReadiness.then(presentation => presentation.hidePresentation());
 	}
 
@@ -712,7 +724,7 @@ export class PiChildProcessLaunch {
 	}
 
 	writeInput(data: string | Buffer): void {
-		this.#projection.writeInput(data);
+		this.#nativeInput.write(data);
 	}
 
 	resize(columns: number, rows: number): void {
@@ -992,6 +1004,70 @@ function forceKillProjection(projection: PtyTerminalProjection): void {
 		projection.killProcessGroup("SIGKILL");
 	} catch {
 		// A concurrent group exit is success; exact leader settlement is observed via exited.
+	}
+}
+
+/**
+ * Deliver native keystrokes only while this child's own editor can read them.
+ *
+ * Pi couples terminal input to a running TUI: a hidden child stops its TUI, leaves
+ * cooked mode, and pauses stdin. Bytes written in that state are mangled before any
+ * Pi handler sees them -- the line discipline translates Enter's CR into LF, which Pi
+ * reads as shift+enter instead of a submission (and eats control bytes such as Ctrl+U) --
+ * so a dispatched `/quit` never becomes a native quit. Dispatching native input therefore
+ * has to keep the child's presentation live, and no byte may be written until the child
+ * confirms that its editor is running again. Keystrokes submitted during that handoff wait
+ * here and stay ordered; a later Owner hide makes the child cooked again, so the gate
+ * closes and the next keystroke re-activates it.
+ */
+class LiveNativeInput {
+	readonly #projection: PtyTerminalProjection;
+	readonly #activate: () => Promise<void>;
+	readonly #pending: Array<string | Buffer> = [];
+	#activating: Promise<void> | undefined;
+	#live = false;
+
+	constructor(projection: PtyTerminalProjection, activate: () => Promise<void>) {
+		this.#projection = projection;
+		this.#activate = activate;
+	}
+
+	write(data: string | Buffer): void {
+		if (this.#live) {
+			this.#projection.writeInput(data);
+			return;
+		}
+		this.#pending.push(typeof data === "string" ? data : Buffer.from(data));
+		this.#activating ??= this.#activate().then(
+			() => {
+				this.#activating = undefined;
+				this.#live = true;
+				this.#deliver();
+			},
+			() => {
+				// A child whose terminal never became live cannot accept these keystrokes;
+				// transport loss is already reported through the projection's failure and exit paths.
+				this.#activating = undefined;
+				this.#pending.length = 0;
+			},
+		);
+	}
+
+	release(): void {
+		this.#live = false;
+		this.#pending.length = 0;
+	}
+
+	#deliver(): void {
+		for (const data of this.#pending.splice(0)) {
+			try {
+				this.#projection.writeInput(data);
+			} catch {
+				// The projection records its own write failure and notifies its failure handlers;
+				// this delivery has no caller left to throw to.
+				return;
+			}
+		}
 	}
 }
 
