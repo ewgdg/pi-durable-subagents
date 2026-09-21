@@ -641,11 +641,14 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let moderatorProviderRequests = 0;
+	// The two turns this test pins later from durable transcript evidence.
+	const failedAttemptReply = "First committed Moderator attempt fails.";
+	const replacementSettlementReply = "Linked replacement Moderator process settled.";
 	broker.setResponses(Array.from({ length: 6 }, () => (context) => {
 		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			moderatorProviderRequests += 1;
 			if (moderatorProviderRequests === 1) {
-				return fauxAssistantMessage("First committed Moderator attempt fails.", {
+				return fauxAssistantMessage(failedAttemptReply, {
 					stopReason: "error",
 					errorMessage: "deterministic committed Moderator process failure",
 				});
@@ -660,7 +663,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 					{ stopReason: "toolUse" },
 				);
 			}
-			return fauxAssistantMessage("Linked replacement Moderator process settled.");
+			return fauxAssistantMessage(replacementSettlementReply);
 		}
 		return fauxAssistantMessage("Answer-obligated ordinary process fails.", {
 			stopReason: "error",
@@ -690,10 +693,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		assert.equal(spawned.spawnStatus, "created");
 		assert.equal("messageStatus" in spawned && spawned.messageStatus, "sent");
 
-		await waitFor(() =>
-			moderatorStatuses(owner, identity.agentId).length === 2 &&
-			moderatorProviderRequests === 3
-		);
+		await waitFor(() => moderatorStatuses(owner, identity.agentId).length === 2);
 		const moderators = moderatorStatuses(owner, identity.agentId);
 		assert.equal(new Set(moderators.map(({ agentId }) => agentId)).size, 2);
 		const attempts = moderators.map((status) => {
@@ -719,9 +719,12 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		const replacement = attempts.find(({ input }) => input.previousAttempt !== undefined);
 		assert.ok(replacement?.input.previousAttempt);
 		assert.notEqual(replacement.input.previousAttempt.agentId, replacement.status.agentId);
-		assert.ok(attempts.some(
+		const failedAttempt = attempts.find(
 			({ status }) => status.agentId === replacement.input.previousAttempt?.agentId,
-		));
+		);
+		assert.ok(failedAttempt);
+		const failedAttemptTranscriptPath = failedAttempt.status.primaryEvidence.transcriptPath;
+		assert.ok(failedAttemptTranscriptPath);
 		const replacementTranscriptPath = replacement.status.primaryEvidence.transcriptPath;
 		assert.ok(replacementTranscriptPath);
 		await waitFor(() => {
@@ -745,6 +748,10 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			(moderatorControlResult.message.details as { disposition: string }).disposition,
 			"blocked",
 		);
+		// The replacement's second turn only follows its committed proxied tool result.
+		await waitFor(() => moderatorAssistantTurns(replacementTranscriptPath).some(
+			(turn) => turn.texts.includes(replacementSettlementReply),
+		));
 		await waitFor(() => {
 			const run = owner.status(replacement.status.agentId).run;
 			return run.phase === "live" && run.work === "settled";
@@ -781,7 +788,22 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			"child Pi settings must use the same Agent directory as its Owner Runtime",
 		);
 		await view.close();
-		assert.equal(moderatorProviderRequests, 3);
+		// Durable transcripts pin the three expected Moderator turns instead of a global
+		// provider-request count: the proxied `moderator_control` resolve is blocked, so
+		// coordination legitimately delivers a later obligation reminder whose extra turn
+		// can land at any moment and would race any exact count.
+		const [failedAttemptTurn] = moderatorAssistantTurns(failedAttemptTranscriptPath);
+		assert.deepEqual(failedAttemptTurn, { texts: [failedAttemptReply], toolCallIds: [] });
+		const [replacementToolTurn, replacementSettlementTurn] =
+			moderatorAssistantTurns(replacementTranscriptPath);
+		assert.deepEqual(replacementToolTurn, {
+			texts: [],
+			toolCallIds: ["proxied-moderator-control"],
+		});
+		assert.deepEqual(replacementSettlementTurn, {
+			texts: [replacementSettlementReply],
+			toolCallIds: [],
+		});
 	} finally {
 		await coordinator.shutdown(async () => host.runtime.dispose());
 		await broker.close();
@@ -803,6 +825,25 @@ function moderatorStatuses(
 	const roster = owner.selectionRoster();
 	return [...roster.live, ...roster.dormant].filter(
 		(status) => status.directSpawnerAgentId === null && status.agentId !== ownerAgentId,
+	);
+}
+
+type ModeratorAssistantTurn = Readonly<{
+	texts: readonly string[];
+	toolCallIds: readonly string[];
+}>;
+
+/** Assistant turns a Moderator transcript durably recorded, in order. */
+function moderatorAssistantTurns(transcriptPath: string): readonly ModeratorAssistantTurn[] {
+	return SessionManager.open(transcriptPath).getEntries().flatMap((entry) =>
+		entry.type === "message" && entry.message.role === "assistant"
+			? [{
+				texts: entry.message.content.flatMap((part) =>
+					part.type === "text" ? [part.text] : []),
+				toolCallIds: entry.message.content.flatMap((part) =>
+					part.type === "toolCall" ? [part.id] : []),
+			}]
+			: [],
 	);
 }
 
