@@ -1201,7 +1201,7 @@ test("only the original sender can poll a Message", async (t) => {
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("Run failure discards uncommitted backlog and a successor receives only newly admitted work", async (t) => {
+test("Explicit termination discards a stopped Run backlog and a successor receives only newly admitted work", async (t) => {
 	const harness = await createDormantChildHarness(t, {});
 	let releaseFailure!: () => void;
 	const failureGate = new Promise<void>((resolve) => {
@@ -1229,6 +1229,30 @@ test("Run failure discards uncommitted backlog and a successor receives only new
 	);
 	releaseFailure();
 	await waitForDelivery(harness, deliveredBeforeFailure.source);
+	// The terminal error retains the exact Run as a stop; explicit termination is what
+	// discards its volatile backlog.
+	await waitForCondition(() => {
+		const run = harness.view.status(harness.childId).run;
+		return run.phase === "live" && run.suspension?.reason === "runtime_error";
+	});
+	const terminateInput = { operation: "terminate" as const, agentId: harness.childId };
+	const terminateCallId = "terminate-suspended-recipient";
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_control", terminateInput, { id: terminateCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const termination = await harness.view.control(terminateCallId, terminateInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: terminateCallId,
+		toolName: "agent_control",
+		content: [{ type: "text", text: JSON.stringify(termination) }],
+		details: termination,
+		isError: false,
+		timestamp: Date.now(),
+	});
 	await waitForCondition(() => harness.view.status(harness.childId).run.phase === "dormant");
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
 	let entries = SessionManager.open(childSessionFile).getEntries();

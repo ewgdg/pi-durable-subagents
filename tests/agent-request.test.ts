@@ -4779,6 +4779,30 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 		entryId: requestSourceEntry.id,
 		toolCallId: childRequestCallId,
 	});
+	await waitForCondition(() => {
+		const run = harness.view.status(harness.childId).run;
+		return run.phase === "live" && run.suspension?.reason === "runtime_error";
+	});
+	// The requester's terminal error retains its exact Run as a stop. Explicit
+	// termination reaches the dormant requester this Answer must wake.
+	const terminateInput = { operation: "terminate" as const, agentId: harness.childId };
+	const terminateCallId = "terminate-failed-requester";
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_control", terminateInput, { id: terminateCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const termination = await harness.view.control(terminateCallId, terminateInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: terminateCallId,
+		toolName: "agent_control",
+		content: [{ type: "text", text: JSON.stringify(termination) }],
+		details: termination,
+		isError: false,
+		timestamp: Date.now(),
+	});
 	await waitForCondition(
 		() => harness.view.status(harness.childId).run.phase === "dormant",
 	);

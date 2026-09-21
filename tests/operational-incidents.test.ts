@@ -2153,17 +2153,11 @@ test("a post-commit Moderator startup failure creates one linked replacement", a
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("a terminal Moderator Run failure creates one linked replacement", async (t) => {
+test("a terminal Moderator Run error suspends the handling Moderator without a replacement", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	const routeFailure = (context: Context) => {
 		if (!getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I settled without answering the Creation Request.");
-		}
-		const input = context.messages.find((message) =>
-			message.role === "user" && JSON.stringify(message).includes('"trigger"')
-		);
-		if (JSON.stringify(input).includes('"previousAttempt"')) {
-			return fauxAssistantMessage("I am the replacement Moderator.");
 		}
 		return fauxAssistantMessage("The first Moderator Run fails terminally.", {
 			stopReason: "error",
@@ -2183,40 +2177,45 @@ test("a terminal Moderator Run failure creates one linked replacement", async (t
 		"spawn-moderator-run-failure-agent",
 		"Settle with an Answer obligation.",
 	);
-	await waitForCondition(async () => (await findModerators(harness.host)).length === 2);
-
-	const moderators = await findModerators(harness.host);
-	const replacement = moderators.find(({ path }) => {
-		const input = SessionManager.open(path).getEntries()[0];
-		return input?.type === "custom_message" &&
-			typeof input.content === "string" &&
-			JSON.parse(input.content).previousAttempt !== undefined;
+	await waitForCondition(async () => (await findModerators(harness.host)).length === 1);
+	const [moderator] = await findModerators(harness.host);
+	assert.ok(moderator);
+	await waitForCondition(() => {
+		const run = harness.owner.status(moderator.id).run;
+		return run.phase === "live" && run.suspension?.reason === "runtime_error";
 	});
-	assert.ok(replacement);
-	const replacementInput = SessionManager.open(replacement.path).getEntries()[0];
-	assert.ok(
-		replacementInput?.type === "custom_message" &&
-			typeof replacementInput.content === "string",
+	const suspended = harness.owner.status(moderator.id).run;
+	assert.deepEqual(
+		suspended.phase === "live" ? suspended.suspension : undefined,
+		{
+			reason: "runtime_error",
+			evidence: {
+				stage: "model",
+				error: "deterministic Moderator Run failure",
+				provenance: "pi-child-hosted-runtime",
+			},
+		},
 	);
-	const previousAttempt = (JSON.parse(replacementInput.content) as {
-		previousAttempt: { agentId: string; entryId: string };
-	}).previousAttempt;
-	const failed = moderators.find(({ id }) => id === previousAttempt.agentId);
-	assert.ok(failed);
-	const failedTail = SessionManager.open(failed.path).getEntries().at(-1);
-	assert.ok(failedTail?.type === "message" && failedTail.message.role === "assistant");
-	assert.equal(failedTail.message.stopReason, "error");
-	assert.equal(previousAttempt.entryId, failedTail.id);
-	const report = harness.owner.reportHistory()[0];
-	assert.ok(report);
-	assert.equal(harness.owner.reportHistory().length, 1, "replacement does not create a competing incident report");
-	const failureFinding = report.findings?.find(finding => finding.key.startsWith(`moderator-failure:${failed.id}:1:`));
-	assert.ok(failureFinding);
-	assert.ok(failureFinding.summary.includes(failedTail.message.errorMessage!));
-	assert.match(failureFinding.evidence.join("\n"), new RegExp(failed.id));
+	assert.ok(
+		suspended.phase === "live" &&
+			suspended.retentionReasons.some(({ reason }) => reason === "moderator_handling"),
+		"the incident stays retained by its suspended handling Moderator",
+	);
+	// A stop is not a failed attempt: no replacement is staged and no failure
+	// evidence reaches Owner attention.
+	for (let attempt = 0; attempt < 3; attempt++) {
+		await harness.owner.reachSafeBoundary();
+		await new Promise(resolve => setTimeout(resolve, 30));
+	}
+	assert.equal(
+		(await findModerators(harness.host)).length,
+		1,
+		"a suspended Moderator is never replaced automatically",
+	);
+	assert.deepEqual(harness.owner.operationalAttention(), []);
+	assert.deepEqual(harness.owner.reportHistory(), []);
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
-
 test("an unopenable failed Dormant Moderator falls back to a read-only post-mortem view", async (t) => {
 	initTheme("dark", false);
 	// A Template is selected from current trusted discovery only at creation, and its
@@ -2403,12 +2402,17 @@ test("a same-obligation Stall recurrence publishes fresh attention after its pri
 	assert.deepEqual(owner.reportHistory()[0]?.report, original.report);
 	const originalModeratorId = original.findings!.find(finding => finding.key.startsWith("moderator-failure:"))!.key.split(":")[1]!;
 	const recurrenceFindings = owner.reportHistory()[1]!.findings;
-	host.model.setResponses([fauxAssistantMessage("Late original failure", { stopReason: "error", errorMessage: "400 late original Moderator failed" })]);
-	await sendMessageFromView(host.session, owner, "late-original-moderator-failure", originalModeratorId, "Inspect the original incident again.");
-	await waitForCondition(() => owner.reportHistory()[0]?.findings?.some(finding => finding.summary.includes("400 late original Moderator failed")) ?? false);
-	assert.equal(owner.reportHistory().length, 2);
-	assert.deepEqual(owner.reportHistory()[1]?.findings, recurrenceFindings, "old Moderator evidence cannot contaminate the recurrent episode");
-	assert.equal(owner.reportHistory()[0]?.readAt, undefined, "late evidence reopens its original report");
+	// A late unexpected stop in the original Moderator is a Run suspension, not a
+	// failure: it publishes no finding and cannot reopen or contaminate either episode.
+	host.model.setResponses([fauxAssistantMessage("The late original Run stops.", { stopReason: "error", errorMessage: "400 late original Moderator stop" })]);
+	await sendMessageFromView(host.session, owner, "late-original-moderator-stop", originalModeratorId, "Inspect the original incident again.");
+	await waitForCondition(() => {
+		const run = owner.status(originalModeratorId).run;
+		return run.phase === "live" && run.suspension?.reason === "runtime_error";
+	});
+	assert.equal(owner.reportHistory().length, 2, "a late stop publishes no report");
+	assert.deepEqual(owner.reportHistory()[1]?.findings, recurrenceFindings, "a late stop cannot contaminate the recurrent episode");
+	assert.ok(owner.reportHistory()[0]?.readAt, "a late stop publishes no evidence that could reopen its original report");
 });
 
 test("intentional child termination does not publish a Run failure report", async (t) => {
@@ -3781,23 +3785,20 @@ test("a blocked replacement Moderator preparation receives deadline attention be
 		return original.call(this, options);
 	});
 	const clock = new ControllableOperationReviewClock();
-	const { host, owner, coordinator } = await createIncidentBoundaryHarness(t, {}, {
+	let moderatorRunStarts = 0;
+	const { host, owner, coordinator } = await createIncidentBoundaryHarness(t, {
+		// Fail the first handling attempt at its Run boundary: a provider error would
+		// now suspend the Moderator instead of consuming the attempt.
+		beforeModeratorRunStart() {
+			return ++moderatorRunStarts === 1 ? "confirmed_failure" : undefined;
+		},
+	}, {
 		deliveryProgressClock: clock,
 		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}')),
 	});
-	let moderatorTurns = 0;
-	const route = (context: Context) => {
-		if (!getCurrentTools(context.messages).some(({name}) => name === "moderator_control")) {
-			return fauxAssistantMessage("Settled without the owed Answer.");
-		}
-		if (++moderatorTurns === 1) {
-			return fauxAssistantMessage("The first Moderator fails terminally.", {
-				stopReason: "error",
-				errorMessage: "400 invalid_request_error: controlled terminal Moderator failure",
-			});
-		}
-		return fauxAssistantMessage("Replacement investigation continues.");
-	};
+	const route = (context: Context) => getCurrentTools(context.messages).some(({name}) => name === "moderator_control")
+		? fauxAssistantMessage("Replacement investigation continues.")
+		: fauxAssistantMessage("Settled without the owed Answer.");
 	host.model.setResponses(Array.from({length: 8}, () => route));
 	await spawnFromView(host.session, owner, "replacement-watchdog-parent", "Settle without Answer.");
 	await waitForCondition(() => blocked);
