@@ -20,6 +20,17 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PI_CLI_READY_EVIDENCE_ENV } from "./fixtures/pi-cli-startup-ready-extension.ts";
 import { createProcessModelBroker } from "./support/process-model-broker.ts";
 
+// These tests launch an *Owner* Pi CLI. A Pi-hosted test runner (one whose own
+// process is a coordination child) carries the child-only bootstrap variables,
+// and launchPiCli spreads process.env into the spawned CLI. The startup-ready
+// fixture deliberately ignores inherited child startup, so a leaked bootstrap
+// path would stall every real-CLI test here. `tests/support/pi-host.ts` clears
+// the same names for its own file; this file does not import it.
+delete process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP;
+delete process.env.PI_DURABLE_SUBAGENTS_SYSTEM_PROMPT_MODE;
+delete process.env.PI_DURABLE_SUBAGENTS_SYSTEM_PROMPT_PATH;
+delete process.env.PI_DURABLE_SUBAGENTS_LOAD_CONTEXT_FILES;
+
 const SCRIPT = "/usr/bin/script";
 const PTY_WAIT_TIMEOUT_MS = 20_000;
 const SCREEN_POLL_INTERVAL_MS = 10;
@@ -838,8 +849,12 @@ async function attachCliRepeatWorker(
 			selector.some(isCliRepeatWorkerRow)
 		) break;
 		terminal.write("\t");
+		// The selector renders a Live/Dormant/Reports tab strip over one pinned
+		// roster; the separate "Dormant Agents" heading was removed. The active tab
+		// is only distinguishable by its background colour, which a colour-stripped
+		// frame cannot show, so wait for the roster row the Dormant tab must list.
 		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Dormant Agents"))
+			frame.some((line) => line.includes("Tab views")) && frame.some(isCliRepeatWorkerRow)
 		);
 		selector = await terminal.screen();
 		if (selector.some(isCliRepeatWorkerRow)) break;

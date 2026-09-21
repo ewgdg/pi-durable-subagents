@@ -53,8 +53,14 @@ export function captureInteractivePresentation(
 	};
 	return {
 		setVisible(nextVisible) {
+			const wasVisible = visible;
 			presentationRequested = nextVisible;
 			applyVisibility();
+			// Taking over a presentation that is already live -- a pending Human Request
+			// holds this Agent's editor open -- never transitions visibility, so the viewer
+			// would otherwise never receive Pi's complete current frame. The handoff in
+			// docs/child-ui-context.md orders a viewer against exactly that frame.
+			if (nextVisible && wasVisible) tui.renderNow(true);
 		},
 		setNativeEditorRequired(required) {
 			nativeEditorRequired = required;

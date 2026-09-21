@@ -936,7 +936,11 @@ class ChildProcessPresentation {
 	async beginPhysicalTerminalAttachment(handler: (data: string) => void): Promise<() => void> {
 		const removeOutputHandler = this.projection.addOutputHandler(handler);
 		try {
-			await this.beginScreenView();
+			// A physical terminal owns the screen: it needs Pi's ordered native output and
+			// a complete handoff frame, not the parsed cell grid a detached diagnostic view
+			// reads. Registering a screen consumer here would keep feeding that offscreen
+			// grid while the physical display owns the terminal (docs/child-ui-context.md).
+			await this.setPresentationVisible(true);
 			return removeOutputHandler;
 		} catch (error) {
 			removeOutputHandler();

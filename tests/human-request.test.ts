@@ -835,6 +835,10 @@ async function selectChildView(
 		assert.ok(child.projection);
 		activeChildViews.set(view, child.projection);
 	}
+	// A human sees a selected child through its attached presentation. The Owner only
+	// feeds the parsed cell grid while a viewer watches that child's screen
+	// (docs/child-ui-context.md), so this harness attaches exactly like the surface.
+	await child.projection.projection().screenView.begin();
 }
 
 function childEntries(child: HumanRequestChild) {

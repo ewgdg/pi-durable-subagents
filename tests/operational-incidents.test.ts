@@ -1750,6 +1750,13 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 	host.model.setResponses([
 		fauxAssistantMessage("I settled again without answering after the Hold cleared."),
 		fauxAssistantMessage("I am handling the new continuous Stall."),
+		// A fresh Moderator owns a fresh handling responsibility, so once it settles
+		// without progress it receives its own bounded handling reminder
+		// (docs/operational-incident-moderation.md, "Moderator handling reminders").
+		// Script that turn here: this fixture shares one model script across every
+		// child, so an unscripted reminder turn would claim the response this test
+		// reserves for the cleared Moderator's Resolution.
+		fauxAssistantMessage("I remain settled after the fresh handling reminder."),
 	]);
 	await controlAsOwner(host, "resume-recurring-stall", {
 		operation: "resume",
@@ -1777,6 +1784,14 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 			entry.message.content.some(
 				(part) => part.type === "text" &&
 					part.text === "I am handling the new continuous Stall.",
+			),
+	);
+	await waitForTranscriptEntry(
+		secondModerator.path,
+		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "text" &&
+					part.text === "I remain settled after the fresh handling reminder.",
 			),
 	);
 

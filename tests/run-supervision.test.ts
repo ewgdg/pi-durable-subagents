@@ -1227,6 +1227,9 @@ async function createRunSupervisionHarness(
 		if (opened) activeAgentView = opened;
 		assert.ok(activeAgentView);
 		assert.equal(activeAgentView.agentId, agentId);
+		// Selecting a child attaches its presentation, exactly as the human surface
+		// does; the Owner only parses a child's screen while a viewer watches it.
+		await activeAgentView.projection().screenView.begin();
 		return activeAgentView;
 	};
 	const createDriver = (agentId: string): ProcessAgentDriver => {
