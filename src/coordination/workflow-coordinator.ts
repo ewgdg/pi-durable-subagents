@@ -1052,17 +1052,24 @@ export class WorkflowCoordinator {
 		const transcriptContext = indexedState(transcript).settings();
 		const configured = record.effectiveConfiguration;
 		const prepared = record.launchConfiguration;
-		const ownerSnapshot = this.#agents.get(this.#ownerIdentity.agentId)
-			?.host.effectiveRuntimeSnapshot();
+		const owner = this.#agents.get(this.#ownerIdentity.agentId);
+		const ownerSnapshot = owner?.host.effectiveRuntimeSnapshot();
 		const model = runtimeSnapshot?.model ?? transcriptContext.model ?? configured?.model ??
-			prepared?.model ?? ownerSnapshot?.model;
+			prepared?.model ?? ownerSnapshot?.model ?? owner?.effectiveConfiguration?.model ??
+			owner?.launchConfiguration?.model;
 		if (!model) {
 			throw new Error(`invariant_violation: Agent ${status.agentId} has no resolvable model`);
 		}
 		const hasRecordedThinking = transcriptContext.hasRecordedThinking;
 		const thinking = runtimeSnapshot?.thinking ??
 			(hasRecordedThinking ? transcriptContext.thinkingLevel : undefined) ??
-			configured?.thinking ?? prepared?.thinking ?? ownerSnapshot?.thinking;
+			configured?.thinking ?? prepared?.thinking ?? ownerSnapshot?.thinking ??
+			owner?.effectiveConfiguration?.thinking ?? owner?.launchConfiguration?.thinking ??
+			// A participant that has not started yet records no selection of its own, so
+			// report the inherited one instead of failing a presentation-only projection:
+			// this also runs from delivery-progress bookkeeping, where a throw would
+			// escalate a notification into an operational failure.
+			"off";
 		if (!isRuntimeThinkingLevel(thinking)) {
 			throw new Error(`invariant_violation: Agent ${status.agentId} has invalid thinking level`);
 		}

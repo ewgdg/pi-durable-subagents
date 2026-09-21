@@ -4940,8 +4940,6 @@ async function cancelHarnessRequest(
 	responderAgentId: string,
 	toolCallId: string,
 ): Promise<void> {
-	const settledMessage = `Harness Request cancelled by ${toolCallId}.`;
-	harness.host.model.setResponses([fauxAssistantMessage(settledMessage)]);
 	const input = {
 		operation: "cancel" as const,
 		requestMessageId,
@@ -4963,14 +4961,24 @@ async function cancelHarnessRequest(
 		isError: false,
 		timestamp: Date.now(),
 	});
+	// The spawn admission hook above rejects this Agent's Creation Request Delivery, so
+	// the withdrawn Request never reached it: neither message is delivered and no child
+	// turn is owed. Commit the withdrawal receipt, and leave the responder untouched.
+	assert.equal(
+		(receipt as { messageStatus: string }).messageStatus,
+		"sent",
+		`${responderAgentId} did not accept the withdrawal receipt`,
+	);
 	const responderSessionFile = await waitForChildSessionFile(
 		harness.host,
 		responderAgentId,
 	);
-	await waitForEntry(responderSessionFile, (entry) =>
-		entry.type === "message" &&
-		entry.message.role === "assistant" &&
-		JSON.stringify(entry.message.content).includes(settledMessage)
+	assert.deepEqual(
+		SessionManager.open(responderSessionFile).getEntries().filter((entry) =>
+			entry.type === "message" && entry.message.role === "assistant"
+		),
+		[],
+		"a never-delivered Request leaves no responder turn behind",
 	);
 }
 
