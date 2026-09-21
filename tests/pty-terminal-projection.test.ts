@@ -7,6 +7,8 @@ import {
 } from "../src/process-runtime/pty-terminal-projection.ts";
 
 const TEST_TIMEOUT_MS = 10_000;
+/** Shorter than the test timeout, so a missing repaint fails an assertion, not the clock. */
+const FRAME_WAIT_BOUND_MS = 3_000;
 
 async function spawnNodeScript(
 	script: string,
@@ -386,6 +388,47 @@ test("resize updates xterm before notifying the real PTY", { timeout: TEST_TIMEO
 
 	await projection.exited;
 	assert.equal(projection.frame().lines[0]?.text, "PTY_SIZE=40x9");
+	await projection.dispose();
+});
+
+test("a complete-frame wait settles on the child's full repaint, not an earlier incremental frame", { timeout: TEST_TIMEOUT_MS }, async () => {
+	const projection = await spawnNodeScript(String.raw`
+		process.stdout.write("READY");
+		process.stdin.resume();
+		process.stdin.once("data", () => {
+			// Pi brackets a one-line incremental update exactly like a full redraw, so a
+			// viewer handoff must not treat this frame as the child's complete screen.
+			process.stdout.write("\x1b[?2026h\x1b[3;1H\x1b[?25l\x1b[?2026l");
+			setTimeout(() => {
+				process.stdout.write("\x1b[?2026h\x1b[2J\x1b[HREPAINTED\x1b[?25l\x1b[?2026l");
+			}, 50);
+		});
+	`);
+	await waitForText(projection, "READY");
+	const frameWait = projection.waitForCompleteFrame(FRAME_WAIT_BOUND_MS);
+	// The child's PTY is in cooked mode until it asks for raw input, so the command
+	// needs its line terminator to reach the child's stdin handler.
+	projection.writeInput("repaint\r");
+
+	assert.equal(await frameWait.outcome, "complete");
+	// The settled frame is the parsed repaint, not the grid the incremental frame left.
+	assert.equal(projection.frame().lines[0]?.text, "REPAINTED");
+	await projection.dispose();
+});
+
+test("a complete-frame wait stays bounded for a child that only repaints incrementally", { timeout: TEST_TIMEOUT_MS }, async () => {
+	const projection = await spawnNodeScript(String.raw`
+		process.stdout.write("READY");
+		process.stdin.resume();
+		process.stdin.once("data", () => {
+			process.stdout.write("\x1b[?2026h\x1b[3;1H\x1b[?25l\x1b[?2026l");
+		});
+	`);
+	await waitForText(projection, "READY");
+	const frameWait = projection.waitForCompleteFrame(250);
+	projection.writeInput("incremental\r");
+
+	assert.equal(await frameWait.outcome, "bounded");
 	await projection.dispose();
 });
 

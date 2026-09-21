@@ -58,8 +58,8 @@ export type PtyExit = Readonly<{ exitCode: number; signal: number }>;
 
 /**
  * Settled outcome of a complete-frame wait.
- * `bounded` means the child produced no DEC 2026 frame bracket inside the bound;
- * `abandoned` means the caller released the wait before any frame arrived.
+ * `bounded` means the child produced no complete repaint inside the bound;
+ * `abandoned` means the caller released the wait before any repaint arrived.
  */
 export type CompleteFrameWaitOutcome = "complete" | "bounded" | "abandoned";
 
@@ -143,6 +143,8 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	readonly #outputHandlers = new Set<(data: string) => void>();
 	#parsingSuspended = false;
 	#screenConsumers = 0;
+	/** Set by an erase-display inside the current DEC 2026 frame: a complete repaint. */
+	#frameRepaintedDisplay = false;
 	#terminalTransitionTail = Promise.resolve();
 	#completeFrameWaiter: Readonly<{
 		settle(outcome: CompleteFrameWaitOutcome): void;
@@ -177,6 +179,14 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			terminal.parser.registerCsiHandler(
 				{ prefix: "?", final: "h" },
 				(params) => this.#observeCursorVisibility(params, true),
+			),
+			terminal.parser.registerCsiHandler(
+				{ prefix: "?", final: "h" },
+				(params) => this.#observeSynchronizedOutputBegin(params),
+			),
+			terminal.parser.registerCsiHandler(
+				{ final: "J" },
+				(params) => this.#observeEraseDisplay(params),
 			),
 			terminal.parser.registerCsiHandler(
 				{ prefix: "?", final: "l" },
@@ -307,13 +317,15 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	}
 
 	/**
-	 * Observe the next complete native frame. Pi's fullscreen TUI brackets every frame
-	 * in DEC 2026 synchronized output, so its end sequence is ordered after every cell
-	 * of that frame. Register this before asking the child to repaint; a hidden child is
-	 * not rendering, so no earlier frame can satisfy it.
+	 * Observe the next complete native frame. Pi's fullscreen TUI brackets every repaint
+	 * in DEC 2026 synchronized output and clears the display inside a full redraw, so a
+	 * closed bracket that followed an erase-display is ordered after every cell of the
+	 * complete current frame. Register this before asking the child to repaint: a child
+	 * that is already rendering -- a pending Human Request holds its editor live -- also
+	 * emits partial frames, and none of those is the complete frame a viewer needs.
 	 *
 	 * The bracket orders a handoff, it is not a liveness contract: a child paused in
-	 * startup, blocked in a handler, or already exiting never emits one, so the bound
+	 * startup, blocked in a handler, or already exiting never repaints, so the bound
 	 * ends the wait and lets the viewer see the child's streamed output anyway.
 	 */
 	waitForCompleteFrame(boundMilliseconds: number): CompleteFrameWait {
@@ -547,8 +559,27 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		if (!params.some((parameter) => parameter === SYNCHRONIZED_OUTPUT_MODE)) {
 			return false;
 		}
+		// Pi brackets every repaint, including a one-line incremental update, so a closed
+		// bracket alone does not mean the screen was redrawn: a viewer attaching to a child
+		// that already renders -- a pending Human Request keeps its editor live -- would
+		// settle on an incidental status frame and read the stale grid. Only a frame that
+		// erased the display is the complete current frame the handoff promises.
+		if (!this.#frameRepaintedDisplay) return false;
 		const waiter = this.#completeFrameWaiter;
 		waiter?.settle("complete");
+		return false;
+	}
+
+	#observeSynchronizedOutputBegin(params: (number | number[])[]): false {
+		if (params.some((parameter) => parameter === SYNCHRONIZED_OUTPUT_MODE)) {
+			this.#frameRepaintedDisplay = false;
+		}
+		return false;
+	}
+
+	/** Pi's full redraw clears the display right after opening its frame bracket. */
+	#observeEraseDisplay(params: (number | number[])[]): false {
+		if (params.some((parameter) => parameter === 2)) this.#frameRepaintedDisplay = true;
 		return false;
 	}
 
