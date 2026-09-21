@@ -1,8 +1,15 @@
 import xtermHeadless from "@xterm/headless";
 import type { Component } from "@earendil-works/pi-tui";
 
-const DISPLAY_PARSE_TIMEOUT_MS = 5_000;
+// A display that never renders the expected content is a test failure, not a liveness
+// bound for a fast host: an idle host renders the same content in about 0.4 s, while a
+// contended one has been measured at 31.2 s for a single child boot (see the startup
+// bound in src/process-runtime/pi-child-process-runtime.ts). This budget follows that
+// scale so a loaded host reports a real assertion instead of a parse race.
+const DISPLAY_PARSE_TIMEOUT_MS = 45_000;
 const DISPLAY_PARSE_POLL_INTERVAL_MS = 1;
+/** Bounded so a failure message stays readable in a test log. */
+const DISPLAY_FAILURE_EXCERPT_LIMIT = 2_000;
 
 /**
  * xterm parses written bytes asynchronously, so a frame the production stdout
@@ -20,7 +27,12 @@ export async function waitForPhysicalDisplayContent(
 		const rendered = view.render(width).join("\n");
 		if (hasContent(rendered)) return rendered;
 		if (Date.now() >= deadline) {
-			throw new Error("Physical test display did not render the expected content");
+			throw new Error(
+				`Physical test display did not render the expected content within `
+				+ `${DISPLAY_PARSE_TIMEOUT_MS} ms. Expected content matching `
+				+ `${hasContent.toString()}; the display rendered:\n`
+				+ `${rendered.slice(0, DISPLAY_FAILURE_EXCERPT_LIMIT)}`,
+			);
 		}
 		await new Promise((resolve) => setTimeout(resolve, DISPLAY_PARSE_POLL_INTERVAL_MS));
 	}

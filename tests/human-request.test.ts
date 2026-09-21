@@ -36,6 +36,14 @@ import {
 
 const pendingCleanups = new Set<() => Promise<void>>();
 
+/**
+ * A presentation hand-off on an idle host lands in milliseconds, but the same work has
+ * been measured at 31.2 s on a contended one, so read the selected child's frame against
+ * a deadline that follows that scale instead of a poll count.
+ */
+const SELECTED_FRAME_DEADLINE_MS = 45_000;
+const SELECTED_FRAME_POLL_INTERVAL_MS = 20;
+
 afterEach(async () => {
 	const cleanups = [...pendingCleanups];
 	pendingCleanups.clear();
@@ -445,8 +453,13 @@ test("different Agents wait and commit Human Answers independently", async (t) =
 	selector.handleInput?.("\x1b");
 	await agentsCommand;
 	await selectChildView(view, second);
-	const selectedFrame = stripTerminalSequences(
-		second.projection?.projection().presentation.render(100).join("\n") ?? "",
+	// The hand-off in docs/child-ui-context.md resolves once the child's complete current
+	// frame is parsed, but a bounded hand-off releases the viewer first, so read the frame
+	// a human would see against a deadline instead of racing the parse.
+	const selectedFrame = await waitForSelectedChildFrame(
+		second,
+		/\[Ask User\]/,
+		"the selected second Agent's Human Request presentation",
 	);
 	assert.match(selectedFrame, /\[Ask User\]/);
 	assert.match(selectedFrame, /Answer the second Agent independently\./);
@@ -900,6 +913,35 @@ async function waitForCondition(
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected Human Request condition was not reached");
+}
+
+/**
+ * The frame a human sees for a selected child, once its presentation carries the expected
+ * content. A bounded hand-off releases the viewer before Pi's complete repaint is parsed,
+ * so the frame that follows the attachment is read by deadline, not by a single read.
+ */
+async function waitForSelectedChildFrame(
+	child: HumanRequestChild,
+	expected: RegExp,
+	description: string,
+): Promise<string> {
+	const deadline = Date.now() + SELECTED_FRAME_DEADLINE_MS;
+	let rendered = "";
+	while (true) {
+		rendered = stripTerminalSequences(
+			child.projection?.projection().presentation.render(100).join("\n") ?? "",
+		);
+		if (expected.test(rendered)) return rendered;
+		if (Date.now() >= deadline) {
+			throw new Error(
+				`${description} never rendered ${expected} within ${SELECTED_FRAME_DEADLINE_MS} ms. `
+				+ `The selected child frame rendered:\n${rendered}`,
+			);
+		}
+		await new Promise<void>((resolve) =>
+			setTimeout(resolve, SELECTED_FRAME_POLL_INTERVAL_MS)
+		);
+	}
 }
 
 async function fileExists(path: string): Promise<boolean> {
