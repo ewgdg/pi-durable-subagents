@@ -98,6 +98,10 @@ type OperationReviewConditionSnapshot = ConditionSnapshotBase & Readonly<{
 type DeliveryStallSnapshot = ConditionSnapshotBase & Readonly<{
 	kind: "delivery_stall";
 	delivery: Readonly<{ messageId: string; recipientAgentId: string }>;
+	// Agents whose own stall *is* this blocked Message: its recipient and its
+	// author. An agent further upstream reached them through a delivered Request,
+	// so it keeps its own independent Obligation Stall condition.
+	stalledAgentIds: readonly string[];
 	reason: import("./delivery-progress.ts").DeliveryBlockageReason;
 }>;
 
@@ -747,13 +751,25 @@ export class OperationalIncidentCoordinator {
 			snapshots.push(...this.#observeOperationReviews());
 			const dependencyDeadlocks = this.#observeDependencyDeadlocks();
 			snapshots.push(...dependencyDeadlocks);
-			const dependencyHandledAgentIds = new Set(
-				[...dependencyDeadlocks, ...deliveryStalls].flatMap(({ affectedAgentIds }) => affectedAgentIds),
+			// A closed Dependency Deadlock is one normalized condition, so its members are
+			// neither reminded nor independently moderated. A Delivery Stall only keeps the
+			// simple Obligation Stall reminder away from its affected paths: an upstream
+			// obligor still gets its own Stall moderation, while the stalled recipient's
+			// Stall *is* that delivery stall. (docs/operational-incident-moderation.md)
+			const deadlockNormalizedAgentIds = new Set(
+				dependencyDeadlocks.flatMap(({ affectedAgentIds }) => affectedAgentIds),
+			);
+			const deliveryStallAffectedAgentIds = new Set(
+				deliveryStalls.flatMap(({ affectedAgentIds }) => affectedAgentIds),
+			);
+			const deliveryStallStalledAgentIds = new Set(
+				deliveryStalls.flatMap(({ stalledAgentIds }) => stalledAgentIds),
 			);
 			for (const record of [...this.#agents.values()]) {
 				if (
 					this.#isModerator(record) ||
-					dependencyHandledAgentIds.has(record.identity.agentId)
+					deadlockNormalizedAgentIds.has(record.identity.agentId) ||
+					deliveryStallStalledAgentIds.has(record.identity.agentId)
 				) continue;
 				const snapshot = this.#observeObligationStall(record);
 				if (snapshot) snapshots.push(snapshot);
@@ -776,6 +792,7 @@ export class OperationalIncidentCoordinator {
 				if (
 					!existing &&
 					snapshot.kind === "obligation_stall" &&
+					!deliveryStallAffectedAgentIds.has(snapshot.agentId) &&
 					this.#scheduleObligationReminder(snapshot)
 				) continue;
 				const handling: OperationalIncidentHandling = existing ?? {
@@ -1203,10 +1220,17 @@ export class OperationalIncidentCoordinator {
 			}
 			if (requests.size === 0) continue;
 			const affectedAgentIds = [...affected].sort((a, b) => a.localeCompare(b));
+			const stalledAgentIds = new Set<string>([delivery.recipientAgentId]);
+			for (const candidate of this.#agents.values()) {
+				if (
+					this.#messages.outstandingRequestIdsFor(candidate).includes(delivery.messageId)
+				) stalledAgentIds.add(candidate.identity.agentId);
+			}
 			snapshots.push({
 				kind: "delivery_stall",
 				key: JSON.stringify(["delivery_stall", delivery.messageId]),
 				affectedAgentIds,
+				stalledAgentIds: [...stalledAgentIds].sort(),
 				requestIds: [...requests].sort(),
 				inspectedThrough: affectedAgentIds.map((id) => statusOf(this.#requireAgent(id)).primaryEvidence.inspectedThrough),
 				delivery: { messageId: delivery.messageId, recipientAgentId: delivery.recipientAgentId },
