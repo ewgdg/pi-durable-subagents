@@ -633,10 +633,19 @@ function implicitOperationalResponse(context: TranscriptContext): string | undef
 }
 
 function isImplicitObligationReminder(context: TranscriptContext): boolean {
-	const latestMessage = JSON.stringify(context.messages.at(-1));
-	return typeof latestMessage === "string" &&
-		latestMessage.includes("requestTitle") &&
-		latestMessage.includes("This Request still needs an Answer.");
+	// Pi appends coordination context (for example the Outstanding Requests
+	// presentation) after a reminder's own message, so the reminder is not
+	// necessarily last. Match the current turn's input: every message after the
+	// last assistant message, where stale reminders cannot appear as new input.
+	const lastAssistant = context.messages.findLast((message) => message.role === "assistant");
+	const currentInput = lastAssistant === undefined
+		? context.messages
+		: context.messages.slice(context.messages.indexOf(lastAssistant) + 1);
+	return currentInput.some((message) => {
+		const text = JSON.stringify(message);
+		return text.includes("requestTitle") &&
+			text.includes("This Request still needs an Answer.");
+	});
 }
 
 function isImplicitModeratorRequest(context: TranscriptContext): boolean {
