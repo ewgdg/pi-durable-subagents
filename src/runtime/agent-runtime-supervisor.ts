@@ -594,7 +594,13 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 
 	failExactRun(handle: AgentRunHandle): void {
 		const run = this.#runtime;
-		if (!run || run.handle !== handle || this.#ending) return;
+		// #ending must not suppress this fence. A teardown (release or failure
+		// discard) can start while the Run's parked Agent Wait result is still
+		// between "resolved" and "committed"; the coordinator calls this from the
+		// result-commit boundary to stop that stale result from landing. Bailing on
+		// #ending leaves run.failed false, so the guard would accept the result into
+		// a Run that is already going away. The exact-handle check is the real gate.
+		if (!run || run.handle !== handle) return;
 		this.#markRunFailed(run, handle);
 		this.#trackOperation(run.runtime.abort());
 	}
