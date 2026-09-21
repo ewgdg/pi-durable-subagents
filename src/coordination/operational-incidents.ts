@@ -868,7 +868,7 @@ export class OperationalIncidentCoordinator {
 				requestTitle,
 			}),
 			inspectProof,
-			isSuppressed: () => this.#isQuotaBlocked(recipient) || !this.#messages.hasUnsettledAnswerObligation(
+			isSuppressed: () => this.#isSuspensionBlocked(recipient) || !this.#messages.hasUnsettledAnswerObligation(
 				recipient,
 				[requestId],
 			),
@@ -1098,7 +1098,7 @@ export class OperationalIncidentCoordinator {
 		) {
 			return false;
 		}
-		if (this.#isQuotaBlocked(record)) return false;
+		if (this.#isSuspensionBlocked(record)) return false;
 		// Moderator Requests may depend on another Moderator; ordinary incident
 		// detection keeps its existing non-Moderator dependency graph.
 		return !this.#operationReviews.hasUnresolvedCall(record.identity.agentId) &&
@@ -1119,7 +1119,7 @@ export class OperationalIncidentCoordinator {
 			messageId: moderatorObligationReminderDeliveryId(recipient.identity.agentId),
 			commitIfCurrent: commit => this.#reconciliationLane.run(async () => {
 				if (this.#handlingByKey.get(handling.snapshot.key) !== handling ||
-					this.#isQuotaBlocked(recipient) ||
+					this.#isSuspensionBlocked(recipient) ||
 					handling.moderatorAgentId !== recipient.identity.agentId ||
 					!this.#conditionRemains(handling.snapshot)) return "suppressed";
 				// Clearance/resolve uses this same lane. Only native transcript ACK may
@@ -1130,7 +1130,7 @@ export class OperationalIncidentCoordinator {
 			customMessage: createModelVisibleModeratorObligationReminder(),
 			inspectProof,
 			isSuppressed: () => this.#handlingByKey.get(handling.snapshot.key) !== handling ||
-				this.#isQuotaBlocked(recipient) ||
+				this.#isSuspensionBlocked(recipient) ||
 				handling.moderatorAgentId !== recipient.identity.agentId ||
 				!this.#conditionRemains(handling.snapshot),
 		}).then((admission) => {
@@ -1315,24 +1315,24 @@ export class OperationalIncidentCoordinator {
 			);
 	}
 
-	#isQuotaBlocked(record: AgentRecord): boolean {
+	#isSuspensionBlocked(record: AgentRecord): boolean {
 		const pending = [record];
 		const visited = new Set<string>();
-		let quotaReached = false;
+		let suspendedPath = false;
 		while (pending.length) {
 			const current = pending.pop()!;
 			const agentId = current.identity.agentId;
 			if (visited.has(agentId)) continue;
 			visited.add(agentId);
 			if (current.host.observe().suspension) {
-				quotaReached = true;
+				suspendedPath = true;
 				continue;
 			}
 			const requests = this.#messages.unansweredRequestRelationships(
 				agentId, this.#messages.outstandingRequestIdsFor(current),
 			);
-			// A different runnable or stalled leaf must not be hidden by one quota
-			// descendant. Cycles may have a quota exit, but a quota-free cycle is
+			// A different runnable or stalled leaf must not be hidden by one suspended
+			// descendant. Cycles may have a suspended exit, but a suspension-free cycle is
 			// still a deadlock; delivery/deadlock inspection remains edge-local.
 			if (requests.length === 0) return false;
 			for (const { targetAgentId } of requests) {
@@ -1341,7 +1341,7 @@ export class OperationalIncidentCoordinator {
 				pending.push(target);
 			}
 		}
-		return quotaReached;
+		return suspendedPath;
 	}
 
 	#hasExternalProgress(record: AgentRecord, path: Set<string>, includeModerators = false): boolean {

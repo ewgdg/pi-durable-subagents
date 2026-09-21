@@ -1,11 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import type { AgentRunState } from "../runtime/agent-runtime-supervisor.ts";
-import type { QuotaEvidence } from "../runtime/quota-evidence.ts";
+import type { AgentRunSuspension, AgentRunState } from "../runtime/agent-runtime-supervisor.ts";
 import { compactAgentIdentity } from "./agent-identity.ts";
 
 export type AgentWorkStatus =
-	| Readonly<{ kind: "suspended"; evidence: QuotaEvidence }>
+	| Readonly<{ kind: "suspended"; suspension: AgentRunSuspension }>
 	| Readonly<{ kind: "active" | "compacting" }>
 	| Readonly<{ kind: "dormant" | "idle" }>
 	| Readonly<{
@@ -29,7 +28,7 @@ export function selectedAgentWorkStatus(
 	if (run.phase === "starting") return { kind: "starting" };
 	if (run.phase === "ending") return { kind: "ending" };
 	if (run.phase === "dormant") return { kind: "dormant" };
-	if (run.suspension) return { kind: "suspended", evidence: run.suspension.evidence };
+	if (run.suspension) return { kind: "suspended", suspension: run.suspension };
 	if (compacting) return { kind: "compacting" };
 	if (run.attention === "input_required") {
 		return { kind: "waiting", reason: "human input" };
@@ -62,7 +61,7 @@ export function formatAgentWorkStatus(
 	theme: Theme,
 ): string {
 	const label = status.kind === "suspended"
-		? "Suspended · Usage limit reached"
+		? formatSuspensionLabel(status.suspension.reason)
 		: status.kind === "waiting"
 		? `waiting (${status.reason})`
 		: status.kind;
@@ -76,4 +75,9 @@ export function formatAgentWorkStatus(
 					? "error"
 					: "dim";
 	return theme.fg(role, label);
+}
+
+/** One wording per stop reason; both stay visibly "Suspended". */
+export function formatSuspensionLabel(reason: AgentRunSuspension["reason"]): string {
+	return reason === "provider_quota" ? "Suspended · Usage limit reached" : "Suspended · Runtime error";
 }

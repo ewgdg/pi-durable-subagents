@@ -7,6 +7,12 @@ import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host
 import { createProcessModelBroker } from "./support/process-model-broker.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { discoverColdWorkflow } from "../src/bootstrap/cold-host-discovery.ts";
+import type { AgentRunState } from "../src/runtime/agent-runtime-host.ts";
+
+function quotaSuspension(run: AgentRunState) {
+	if (run.phase === "dormant" || run.suspension?.reason !== "provider_quota") return undefined;
+	return run.suspension;
+}
 
 test("host loss drops a quota stop: the Agent recovers dormant and resumes as ordinary work", { timeout: 30_000 }, async t => {
 	const broker = await createProcessModelBroker();
@@ -71,17 +77,28 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	}
 	const childEntries = () => JSON.stringify(SessionManager.open(originalStatus.primaryEvidence.transcriptPath!).getEntries());
 	assert.equal(childEntries().includes("PRESERVED_QUEUE"), true, "explicit recovery re-admits the captured Message");
-	assert.equal(view.status(agentId).run.suspension?.evidence.diagnostic, '{"error":{"code":"usage_limit_reached"}}', "a re-attempt on exhausted quota stops again");
+	assert.equal(quotaSuspension(view.status(agentId).run)?.evidence.diagnostic, '{"error":{"code":"usage_limit_reached"}}', "a re-attempt on exhausted quota stops again");
 	assert.equal(childEntries().includes("UNEXPECTED_AUTOMATIC_WAKE"), false, "recovery itself never generates");
 	// A human message in the resumed Agent's editor is the deliberate retry.
-	broker.setResponses([fauxAssistantMessage("EXPLICIT_RESUME_AFTER_RESTART")]);
+	broker.setResponses([
+		fauxAssistantMessage("EXPLICIT_RESUME_AFTER_RESTART"),
+		// The queued steer Message re-admitted by recovery continues in its own turn.
+		fauxAssistantMessage("QUEUED_STEER_COMPLETED"),
+	]);
 	projection.dispatchInput("Continue the original work after my account change.");
 	projection.dispatchInput("\r");
 	await until(() => Boolean(view.status(agentId).primaryEvidence.transcriptPath) && JSON.stringify(
 		SessionManager.open(view.status(agentId).primaryEvidence.transcriptPath!).getEntries(),
 	).includes("Continue the original work after my account change."));
 	assert.equal(view.status(agentId).run.suspension, undefined);
-	await until(() => view.status(agentId).run.phase === "dormant", "the resumed Run must end before teardown");
+	await until(() => childEntries().includes("QUEUED_STEER_COMPLETED"), "the re-admitted queued work continues in its own turn");
+	// The Answer Obligation is deliberately still outstanding, so the recovered Run stays
+	// retained until explicit termination ends it before teardown.
+	const terminate = { operation: "terminate" as const, agentId };
+	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_control", terminate, { id: "terminate-recovered-run" }), { stopReason: "toolUse" }));
+	const termination = await view.control("terminate-recovered-run", terminate);
+	reopened.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_control", toolCallId: "terminate-recovered-run", details: termination, content: [{ type: "text", text: JSON.stringify(termination) }], isError: false, timestamp: Date.now() });
+	await until(() => view.status(agentId).run.phase === "dormant", "termination ends the recovered Run before teardown");
 	assert.equal(view.status(agentId).primaryEvidence.transcriptPath, originalStatus.primaryEvidence.transcriptPath);
 	assert.deepEqual(coordinator.forAgent(agentId).obligationFrames(), originalObligations);
 });

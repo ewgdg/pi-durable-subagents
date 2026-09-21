@@ -13,6 +13,10 @@ import { participantLifecycleHandlers } from "../src/bootstrap/agent-extension.t
 import { registerParticipantLifecycle } from "../src/pi-integration/participant-lifecycle.ts";
 
 function suspension(run: AgentRunState) { return run.phase === "dormant" ? undefined : run.suspension; }
+function quotaSuspension(run: AgentRunState) {
+	const current = suspension(run);
+	return current?.reason === "provider_quota" ? current : undefined;
+}
 
 async function until(predicate: () => boolean, description: string) {
 	const deadline = Date.now() + 12_000;
@@ -116,7 +120,7 @@ test("native Workflow suspends structured quota without terminal failure", { tim
 	assert.equal(view.status(identity.agentId).run.phase, "live");
 	await view.reachSafeBoundary();
 	assert.ok(suspension(view.status(identity.agentId).run));
-	await assert.rejects(view.beginExecution(), /quota_suspended/);
+	await assert.rejects(view.beginExecution(), /run_suspended/);
 	assert.ok(suspension(view.status(identity.agentId).run));
 	let programmaticGenerations = 0;
 	host.model.setResponses([() => { programmaticGenerations++; return fauxAssistantMessage("PROGRAMMATIC_MUST_NOT_GENERATE"); }]);
@@ -124,7 +128,7 @@ test("native Workflow suspends structured quota without terminal failure", { tim
 		() => host.session.sendUserMessage("Extension input must not resume quota"),
 		() => host.session.prompt("RPC input must not resume quota", { source: "rpc" }),
 	]) {
-		await submit().catch(error => assert.match(String(error), /quota_suspended/));
+		await submit().catch(error => assert.match(String(error), /run_suspended/));
 		assert.ok(suspension(view.status(identity.agentId).run));
 	}
 	assert.equal(programmaticGenerations, 0);
@@ -142,15 +146,15 @@ test("exact Codex diagnostic suspends through the real process Workflow", { time
 	const receipt = await view.spawn(call("agent_spawn", input), input);
 	assert.ok("agentId" in receipt);
 	await until(() => Boolean(suspension(view.status(receipt.agentId).run)), "exact Codex error must suspend");
-	assert.equal(suspension(view.status(receipt.agentId).run)?.evidence.diagnostic, "Codex error: The usage limit has been reached");
-	assert.equal(suspension(view.status(receipt.agentId).run)?.evidence.provider, "openai-codex");
+	assert.equal(quotaSuspension(view.status(receipt.agentId).run)?.evidence.diagnostic, "Codex error: The usage limit has been reached");
+	assert.equal(quotaSuspension(view.status(receipt.agentId).run)?.evidence.provider, "openai-codex");
 	assert.deepEqual(view.reportHistory(), [], "quota suspension publishes no report");
 	const queued = { operation: "send" as const, targetAgent: receipt.agentId, content: "WAIT_THROUGH_RENEWED_QUOTA", deliveryMode: "steer" as const };
 	await view.message(call("agent_message", queued), queued);
 	const resume = { operation: "resume" as const, agentId: receipt.agentId, content: "Deliberately retry after reviewing quota." };
 	const resumed = await view.control(call("agent_control", resume), resume);
 	assert.ok("messageStatus" in resumed && resumed.messageStatus === "sent");
-	await until(() => suspension(view.status(receipt.agentId).run)?.evidence.resetAt === "2030-01-01T00:00:00.000Z", "an immediate renewed quota failure must survive resume commitment");
+	await until(() => quotaSuspension(view.status(receipt.agentId).run)?.evidence.resetAt === "2030-01-01T00:00:00.000Z", "an immediate renewed quota failure must survive resume commitment");
 	for (let index = 0; index < 3; index++) {
 		view.refreshAgentActivity();
 		await view.reachSafeBoundary();
@@ -177,17 +181,58 @@ test("temporary throttle uses native retry rather than quota suspension", { time
 	assert.deepEqual(view.reportHistory(), []);
 });
 
-test("unrelated terminal failure still publishes ordinary failure evidence", { timeout: 15_000 }, async t => {
+test("a child suspended on a runtime error resumes through explicit supervisor input", { timeout: 20_000 }, async t => {
+	const { host, view, call, spawn } = await harness(t);
+	host.model.setResponses([
+		fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 child runtime failure" }),
+		fauxAssistantMessage("Continued after the explicit resume."),
+	]);
+	const agentId = await spawn();
+	await until(
+		() => suspension(view.status(agentId).run)?.reason === "runtime_error",
+		"child Run stops on the provider error",
+	);
+	assert.deepEqual(view.reportHistory(), [], "a child runtime error publishes no report");
+	assert.equal(
+		view.selectionRoster().live.some(agent => agent.label.startsWith("Moderator")),
+		false,
+		"a child runtime error creates no Moderator",
+	);
+	const resume = { operation: "resume" as const, agentId, content: "Continue after reviewing the error." };
+	const resumed = await view.control(call("agent_control", resume), resume);
+	assert.ok("messageStatus" in resumed && resumed.messageStatus === "sent");
+	await until(() => !suspension(view.status(agentId).run), "explicit resume clears the stop");
+	const transcript = () => JSON.stringify(SessionManager.open(
+		view.status(agentId).primaryEvidence.transcriptPath!,
+	).getEntries());
+	await until(
+		() => transcript().includes("Continued after the explicit resume."),
+		"the resumed Run continues in the same Agent",
+	);
+	assert.deepEqual(view.reportHistory(), []);
+});
+
+test("an unrelated terminal failure suspends the exact Run instead of reporting it", { timeout: 15_000 }, async t => {
 	const { host, view, identity } = await harness(t);
 	host.model.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 unrelated terminal failure" })]);
 	await host.session.prompt("Exercise a non-quota failure.");
-	await until(() => view.reportHistory().length > 0, "terminal failure report");
-	assert.equal(suspension(view.status(identity.agentId).run), undefined);
-	assert.match(view.reportHistory()[0]!.report.symptom, /terminal Run failure/);
+	await until(
+		() => suspension(view.status(identity.agentId).run)?.reason === "runtime_error",
+		"terminal failure suspends",
+	);
+	assert.deepEqual(suspension(view.status(identity.agentId).run), {
+		reason: "runtime_error",
+		evidence: {
+			stage: "model",
+			error: "400 unrelated terminal failure",
+			provenance: "in-process-hosted-runtime",
+		},
+	});
+	assert.deepEqual(view.reportHistory(), [], "a Runtime error stop publishes no report");
 });
 
-test("quota dependency quiets its blocked parent without hiding an unrelated failure", { timeout: 35_000 }, async t => {
-	const { host, view, coordinator, spawn } = await harness(t);
+test("quota dependency quiets its blocked parent without hiding an unrelated stop", { timeout: 35_000 }, async t => {
+	const { host, view, coordinator, identity, spawn } = await harness(t);
 	host.model.setResponses([fauxAssistantMessage("Parent will delegate."), fauxAssistantMessage("Parent reminder acknowledged.")]);
 	const parentId = await spawn();
 	const parent = coordinator.forAgent(parentId);
@@ -216,6 +261,18 @@ test("quota dependency quiets its blocked parent without hiding an unrelated fai
 	assert.equal(view.reportHistory().length, reportCount, "quota alone must not create reports");
 	host.model.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 unrelated failure alongside suspended dependency" })]);
 	await host.session.prompt("Fail the unrelated Owner generation.");
-	await until(() => view.reportHistory().some(item => /unrelated failure alongside/.test(item.report.symptom)), "unrelated terminal incident remains visible");
+	await until(
+		() => suspension(view.status(identity.agentId).run)?.reason === "runtime_error",
+		"unrelated Owner stop remains visible",
+	);
+	assert.deepEqual(suspension(view.status(identity.agentId).run), {
+		reason: "runtime_error",
+		evidence: {
+			stage: "model",
+			error: "400 unrelated failure alongside suspended dependency",
+			provenance: "in-process-hosted-runtime",
+		},
+	});
+	assert.equal(view.reportHistory().length, reportCount, "neither stop publishes a report");
 	assert.ok(suspension(view.status(child.agentId).run));
 });

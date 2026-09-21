@@ -34,7 +34,7 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 			record.host = {
 				observe: () => ({ phase: "live", work: "settled", attention: agentId === "requester" ? "agent_wait" : "none", retentionReasons: [{ reason: "answer_owed", count: 1 }],
 					suspension: agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined }),
-				currentQuotaSuspension: () => agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined,
+				currentRunSuspension: () => agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined,
 				currentRunFailed: () => false,
 				hasRetentionReason: () => false,
 				requestRelationshipIds: (kind: string) => kind === "answer_owed" ? incoming.get(agentId) ?? [] : [],

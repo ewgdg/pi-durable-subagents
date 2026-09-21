@@ -22,6 +22,7 @@ import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
 import type { HumanAttentionItem } from "../coordination/human-requests.ts";
 import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
+import type { AgentRunSuspension } from "../runtime/agent-runtime-supervisor.ts";
 import {
 	formatOperationalIncidentHeadline,
 	operationalIncidentRequestEvidence,
@@ -29,6 +30,7 @@ import {
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
 import {
 	formatAgentWorkStatus,
+	formatSuspensionLabel,
 	selectedAgentWorkStatus,
 } from "./selected-agent-status.ts";
 
@@ -1089,14 +1091,7 @@ function formatRun(status: AgentRosterStatus, theme: Theme): string {
 function formatDetailedRun(status: AgentRosterStatus): string {
 	const { run } = status;
 	if (run.suspension) {
-		const { evidence } = run.suspension;
-		return [
-			"Suspended · Usage limit reached",
-			evidence.provider,
-			evidence.model,
-			evidence.diagnostic,
-			evidence.resetAt === undefined ? undefined : `Reset: ${evidence.resetAt}`,
-		].filter(Boolean).join(" · ");
+		return formatSuspensionDetail(run.suspension);
 	}
 	const state = run.phase === "dormant"
 		? ["Dormant"]
@@ -1118,4 +1113,21 @@ function formatDetailedRun(status: AgentRosterStatus): string {
 
 function capitalize(value: string): string {
 	return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
+}
+
+/** Retained stop evidence; showing it never implies recovery or resumption. */
+function formatSuspensionDetail(suspension: AgentRunSuspension): string {
+	const label = formatSuspensionLabel(suspension.reason);
+	if (suspension.reason === "provider_quota") {
+		const { evidence } = suspension;
+		return [
+			label,
+			evidence.provider,
+			evidence.model,
+			evidence.diagnostic,
+			evidence.resetAt === undefined ? undefined : `Reset: ${evidence.resetAt}`,
+		].filter(Boolean).join(" · ");
+	}
+	const { evidence } = suspension;
+	return [label, `Stage: ${evidence.stage}`, evidence.error, `Provenance: ${evidence.provenance}`].join(" · ");
 }

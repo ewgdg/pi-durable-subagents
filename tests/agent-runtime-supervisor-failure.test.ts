@@ -53,7 +53,14 @@ for (const willRetry of [false, true]) test(`terminal metadata excludes retry=${
 	const ended: unknown[][] = [];
 	host.addEndedHandler((...args) => ended.push(args));
 	emit({ type: "agent_end", outcome: "error", willRetry, failure });
-	assert.equal(host.currentRunFailed(), !willRetry);
+	// A terminal provider error stops the exact Run as a resumable suspension; a
+	// configured native retry keeps the Run healthy instead.
+	assert.deepEqual(host.currentRunSuspension(), willRetry
+		? undefined
+		: { reason: "runtime_error", evidence: failure });
+	assert.equal(host.currentRunFailed(), false);
 	await host.lane.run(() => host.discardAndEndInLane(willRetry ? "termination" : "failure"));
-	assert.deepEqual(ended, [[handle, willRetry ? "termination" : "failure", willRetry ? undefined : failure]]);
+	// The terminal error evidence belongs to the retained suspension, so a later
+	// fence or termination ends the Run without repeating it.
+	assert.deepEqual(ended, [[handle, willRetry ? "termination" : "failure", undefined]]);
 });

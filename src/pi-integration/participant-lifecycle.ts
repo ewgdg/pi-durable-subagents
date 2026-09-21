@@ -42,7 +42,7 @@ export type ParticipantLifecycleHandlers = Readonly<{
 	executionStarted(submissionSequence?: number): Promise<readonly ObligationFrame[]>;
 	humanInputSubmitted(input: ParticipantHumanInput): Promise<ParticipantHumanInputDisposition>;
 	primaryInputQueued(): Promise<void>;
-	humanInputMode(): Promise<"agent" | "answer" | "quota_suspended">;
+	humanInputMode(): Promise<"agent" | "answer" | "run_suspended">;
 	toolResultCommitting(
 		input: ParticipantToolResult,
 	): Promise<GuardedParticipantToolResult | undefined>;
@@ -260,7 +260,7 @@ export function createParticipantInputHandler(
 		if (event.source !== "interactive" || event.streamingBehavior === "followUp") {
 			// Pi reports extension event errors without aborting native generation.
 			// Block unauthorised input here, before model work, not at agent_start.
-			return await handlers.humanInputMode() === "quota_suspended"
+			return await handlers.humanInputMode() === "run_suspended"
 				? { action: "handled" } : { action: "continue" };
 		}
 		try {

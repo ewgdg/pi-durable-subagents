@@ -18,14 +18,22 @@ const identity = {
 	agentId: "019fa1ff-6e95-761e-b4ce-7415983c81e3",
 };
 
-test("quota suspension stays visible despite pending work or compaction", () => {
-	const evidence = { diagnostic: "Codex error: The usage limit has been reached", provider: "openai-codex", model: "gpt-5" };
-	const status = selectedAgentWorkStatus({
+test("a retained Run stop stays visible despite pending work or compaction", () => {
+	const quota = { reason: "provider_quota" as const, evidence: { diagnostic: "Codex error: The usage limit has been reached", provider: "openai-codex", model: "gpt-5" } };
+	const quotaStatus = selectedAgentWorkStatus({
 		phase: "live", work: "active", attention: "none", retentionReasons: [],
-		suspension: { reason: "provider_quota", evidence },
+		suspension: quota,
 	}, false, true);
-	assert.deepEqual(status, { kind: "suspended", evidence });
-	assert.match(formatSelectedAgentIdentity({ ...identity, status }, theme), /<warning>Suspended · Usage limit reached<\/warning>/);
+	assert.deepEqual(quotaStatus, { kind: "suspended", suspension: quota });
+	assert.match(formatSelectedAgentIdentity({ ...identity, status: quotaStatus }, theme), /<warning>Suspended · Usage limit reached<\/warning>/);
+
+	const runtimeError = { reason: "runtime_error" as const, evidence: { stage: "model", error: "400 unrelated terminal failure", provenance: "in-process-hosted-runtime" } };
+	const errorStatus = selectedAgentWorkStatus({
+		phase: "live", work: "settled", attention: "none", retentionReasons: [],
+		suspension: runtimeError,
+	}, false);
+	assert.deepEqual(errorStatus, { kind: "suspended", suspension: runtimeError });
+	assert.match(formatSelectedAgentIdentity({ ...identity, status: errorStatus }, theme), /<warning>Suspended · Runtime error<\/warning>/);
 });
 
 test("selected Agent identity gives every work status its specified theme role", () => {

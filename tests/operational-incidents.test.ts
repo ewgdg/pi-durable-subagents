@@ -31,6 +31,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
+import type { AgentRunState } from "../src/runtime/agent-runtime-host.ts";
 import {
 	WorkflowPolicyStore,
 	parseWorkflowPolicy,
@@ -621,8 +622,8 @@ test("an unregistered tool name beside a parked parallel root call keeps that ba
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async (t) => {
-	const cwd = await mkdtemp(join(tmpdir(), "pi-run-failure-"));
+test("one failed provider request suspends an answer-obligated Run without regenerating it or withholding capacity", async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-run-suspension-"));
 	const agentDir = join(cwd, ".pi-agent");
 	await mkdir(agentDir, { recursive: true });
 	await writeFile(
@@ -630,7 +631,7 @@ test("one failed provider request creates Run Failure without regenerating an an
 		JSON.stringify({ retry: { enabled: false, maxRetries: 0 } }),
 		"utf8",
 	);
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -638,13 +639,19 @@ test("one failed provider request creates Run Failure without regenerating an an
 		agentDir,
 		settings: { retry: { enabled: false } },
 	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-durable-subagents>",
+		workflowPolicy: new WorkflowPolicyStore(
+			parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}'),
+		),
+	});
+	const owner = coordinator.forAgent(identity.agentId);
 	let failedChildProviderRequests = 0;
 	const routedResponses = Array.from(
 		{ length: 6 },
 		() => (context: Context) => {
-			if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
-				return fauxAssistantMessage("I will diagnose the failed obligated Run.");
-			}
 			if (context.messages.some(
 				(message) =>
 					message.role === "user" &&
@@ -659,74 +666,108 @@ test("one failed provider request creates Run Failure without regenerating an an
 						"400 invalid_request_error: deterministic answer-obligated generation failure",
 				});
 			}
-			return fauxAssistantMessage("The failure case is delegated.");
+			return fauxAssistantMessage("The unrelated Run made progress.");
 		},
 	);
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall(
-				"agent_spawn",
-				{ title: "Fixture request", request: "Answer this Creation Request after the exact Run fails." },
-				{ id: "spawn-run-failure-agent" },
+	host.model.setResponses(routedResponses);
+
+	try {
+		const affected = await spawnFromView(
+			host.session,
+			owner,
+			"spawn-run-failure-agent",
+			"Answer this Creation Request after the exact Run fails.",
+		);
+		await waitForCondition(() =>
+			runSuspension(owner.status(affected.agentId).run)?.reason === "runtime_error"
+		);
+		assert.deepEqual(runSuspension(owner.status(affected.agentId).run), {
+			reason: "runtime_error",
+			evidence: {
+				stage: "model",
+				error:
+					"400 invalid_request_error: deterministic answer-obligated generation failure",
+				provenance: "pi-child-hosted-runtime",
+			},
+		});
+		assert.equal(
+			failedChildProviderRequests,
+			1,
+			"a suspended Run is not regenerated automatically",
+		);
+		assert.deepEqual(owner.reportHistory(), []);
+		assert.deepEqual(await findModerators(host), []);
+		const retained = owner.status(affected.agentId).run;
+		assert.equal(retained.phase, "live");
+		assert.equal("work" in retained && retained.work, "settled");
+		assert.ok(
+			retained.retentionReasons.some(({ reason }) => reason === "answer_owed"),
+		);
+		assert.ok(coordinator.forAgent(affected.agentId).obligationFrames().length > 0);
+		await assert.rejects(
+			coordinator.forAgent(affected.agentId).beginExecution(),
+			/run_suspended/,
+		);
+
+		// The stop releases the execution permit, so an unrelated Run is admitted
+		// while the exact suspended Run stays retained.
+		const unrelated = await spawnFromView(
+			host.session,
+			owner,
+			"spawn-unrelated-run",
+			"Make progress while another Run is suspended.",
+		);
+		await waitForCondition(async () => {
+			const path = await sessionPathFor(host, unrelated.agentId).catch(
+				() => undefined,
+			);
+			if (!path) return false;
+			return JSON.stringify(SessionManager.open(path).getEntries()).includes(
+				"The unrelated Run made progress.",
+			);
+		});
+		assert.equal(
+			runSuspension(owner.status(affected.agentId).run)?.reason,
+			"runtime_error",
+		);
+		// Remove the unrelated Run before the cleanup queue so it cannot consume
+		// another response.
+		await controlFromView(host.session, owner, "terminate-unrelated-run", {
+			operation: "terminate",
+			agentId: unrelated.agentId,
+		});
+		await waitForCondition(() =>
+			owner.status(unrelated.agentId).run.phase === "dormant"
+		);
+
+		// Cancelling the Request is the requester's own withdrawal, but a responder
+		// learns of it only through Cancellation Delivery, and a suspended Run accepts
+		// no ordinary Delivery. The stop therefore outlives the withdrawal.
+		await cancelRequestFromView(
+			host.session,
+			owner,
+			"cancel-suspended-obligation",
+			affected.requestMessageId,
+		);
+		await owner.reachSafeBoundary();
+		assert.equal(
+			runSuspension(owner.status(affected.agentId).run)?.reason,
+			"runtime_error",
+			"cancelling the Request does not clear the Run stop",
+		);
+		assert.deepEqual(
+			coordinator.forAgent(affected.agentId).obligationFrames().map(
+				({ requestId }) => requestId,
 			),
-			{ stopReason: "toolUse" },
-		),
-		...routedResponses,
-	]);
-
-	const ownerPrompt = host.session.prompt("Create an answer-obligated Run Failure.");
-	t.after(async () => {
-		await host.session.abort();
-		await ownerPrompt;
-	});
-
-	const moderator = await waitForModeratorKind(host, "run_failure");
-	const moderatorInput = SessionManager.open(moderator.path).getEntries().find(
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === "agent-coordination.moderator-input",
-	);
-	assert.ok(
-		moderatorInput?.type === "custom_message" &&
-			typeof moderatorInput.content === "string",
-	);
-	const input = JSON.parse(moderatorInput.content) as {
-		trigger: {
-			kind: string;
-			agentId: string;
-			runSequence: number;
-			obligations: { total: number; sources: unknown[] };
-		};
-		inspectedThrough: Array<{ agentId: string; entryId: string }>;
-	};
-	assert.equal(input.trigger.kind, "run_failure");
-	assert.equal(input.trigger.runSequence, 1);
-	assert.equal(input.trigger.obligations.total, 1);
-	assert.equal(input.trigger.obligations.sources.length, 1);
-	assert.deepEqual(input.inspectedThrough, [{
-		agentId: input.trigger.agentId,
-		entryId: await transcriptTailFor(host, input.trigger.agentId),
-	}]);
-	assert.equal(
-		(moderatorInput.details as { metadata: { description: string } })
-			.metadata.description,
-		"Incident: run failure",
-	);
-	assert.deepEqual((await observeStatus(host, input.trigger.agentId)).run, {
-		phase: "dormant",
-		retentionReasons: [],
-	});
-	assert.equal(failedChildProviderRequests, 1);
-	const reports = new ModeratorReportStore({ transcript: transcriptFromSessionManager(host.session.sessionManager), appendCustomEntry: (type, data) => host.session.sessionManager.appendCustomEntry(type, data) });
-	const report = reports.history().find(item => item.report.symptom.includes(input.trigger.agentId));
-	assert.ok(report, "answer-obligated terminal failure is retained immediately");
-	assert.match(report.report.suspectedDefect, /deterministic answer-obligated generation failure/);
-	assert.match(report.report.evidence.join("\n"), /Affected Requests: \["/);
-
-	await host.runtime.dispose();
+			[affected.requestMessageId],
+			"the undelivered Cancellation leaves the suspended responder's obligation open",
+		);
+	} finally {
+		await coordinator.shutdown(async () => host.runtime.dispose());
+	}
 });
 
-test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Moderator", async (t) => {
+test("an unexpectedly ended answer-obligated Owner Run suspends until explicit human resumption", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
@@ -761,7 +802,10 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ title: "Fixture request", request: "Ask the Owner one question, then wait for its Answer." },
+				{
+					title: "Fixture request",
+					request: "Ask the Owner one question, then wait for its Answer.",
+				},
 				{ id: "spawn-owner-requester" },
 			),
 			{ stopReason: "toolUse" },
@@ -772,342 +816,123 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 	const ownerPrompt = host.session.prompt(
 		"Create an Agent that will request Owner guidance.",
 	);
+	await waitForCondition(async () =>
+		(await observeStatus(host, host.session.sessionId)).run.retentionReasons.some(
+			({ reason }) => reason === "answer_owed",
+		)
+	);
 	await waitForCondition(async () => {
-		const owner = await observeStatus(host, host.session.sessionId);
-		return owner.run.retentionReasons.some(({ reason }) => reason === "answer_owed");
+		const run = (await observeStatus(host, host.session.sessionId)).run;
+		return run.phase === "live" && run.work === "settled";
 	});
+	await ownerPrompt;
 
-	const terminalOwnerFailure = (context: Context) =>
-		getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")
-			? fauxAssistantMessage("I will diagnose the failed obligated Owner Run.")
-			: fauxAssistantMessage("The Owner Run fails before answering.", {
-				stopReason: "error",
-				errorMessage: "deterministic answer-obligated Owner Run failure",
-			});
 	host.model.setResponses(Array.from(
 		{
 			length: host.services.settingsManager.getRetrySettings().maxRetries + 4,
 		},
-		() => terminalOwnerFailure,
-	));
-	await host.session.prompt(
-		"Fail this Owner Run before answering the Request.",
-		{ streamingBehavior: "steer" },
-	);
-	await ownerPrompt;
-	await host.session.waitForIdle();
-
-	const moderator = await waitForModeratorKind(host, "run_failure");
-	const input = SessionManager.open(moderator.path).getEntries()[0];
-	assert.ok(input?.type === "custom_message" && typeof input.content === "string");
-	const trigger = (JSON.parse(input.content) as {
-		trigger: {
-			kind: string;
-			agentId: string;
-			runSequence: number;
-			obligations: { total: number };
-		};
-	}).trigger;
-	assert.equal(trigger.kind, "run_failure");
-	assert.equal(trigger.agentId, host.session.sessionId);
-	assert.equal(trigger.runSequence, 1);
-	assert.equal(trigger.obligations.total, 1);
-
-	await host.runtime.dispose();
-});
-
-test("a live successor tells its Run Failure Moderator to resolve immediately", async (t) => {
-	const executionGate = await createProcessExecutionGate("run-failure-recovery");
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
-		persistent: true,
-		processVisibleModel: true,
-		implicitModeratorResponses: false,
-		additionalExtensionPaths: [
-			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
-		],
-	});
-	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-durable-subagents>",
-	});
-	const owner = coordinator.forAgent(identity.agentId);
-	const routeRecovery = (context: Context) => {
-		const messages = JSON.stringify(context.messages);
-		const latestUser = JSON.stringify(
-			[...context.messages].reverse().find(({ role }) => role === "user"),
-		);
-		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
-			if (messages.includes("successor_run_started")) {
-				return fauxAssistantMessage(
-					fauxToolCall(
-						"moderator_control",
-						{
-							operation: "resolve",
-							summary: "A successor Run started successfully.",
-							rationale:
-								"The Run Failure cleared; the Answer Obligation is ordinary Workflow work.",
-						},
-						{ id: "resolve-recovered-run-failure" },
-					),
-					{ stopReason: "toolUse" },
-				);
-			}
-			return fauxAssistantMessage("I will wait for exact recovery evidence.");
-		}
-		if (latestUser.includes("Start the live successor Run.")) {
-			return fauxAssistantMessage(
-				fauxToolCall("execution_gate", {}, { id: "hold-live-successor" }),
-				{ stopReason: "toolUse" },
-			);
-		}
-		return fauxAssistantMessage("The first exact Run fails before answering.", {
-			stopReason: "error",
-			errorMessage: "deterministic first Run failure",
-		});
-	};
-	host.model.setResponses(Array.from(
-		{
-			length: host.services.settingsManager.getRetrySettings().maxRetries + 16,
-		},
-		() => routeRecovery,
-	));
-
-	try {
-		const affected = await spawnFromView(
-			host.session,
-			owner,
-			"spawn-run-failure-recovery-target",
-			"Fail the first Run before answering this Creation Request.",
-		);
-		const moderator = await waitForModeratorKind(host, "run_failure");
-		await sendMessageFromView(
-			host.session,
-			owner,
-			"start-live-successor-after-run-failure",
-			affected.agentId,
-			"Start the live successor Run.",
-		);
-		await executionGate.waitUntilStarted();
-		await waitForCondition(() => {
-			const run = owner.status(affected.agentId).run;
-			return run.phase === "live" && run.work === "active" &&
-				run.retentionReasons.some(({ reason }) => reason === "answer_owed");
-		});
-
-		const recoveryEntry = await waitForTranscriptEntry(
-			moderator.path,
-			(entry) => entry.type === "custom_message" &&
-				entry.customType === "agent-coordination.run-failure-recovery",
-		);
-		assert.ok(
-			recoveryEntry.type === "custom_message" &&
-				typeof recoveryEntry.content === "string",
-		);
-		assert.deepEqual(JSON.parse(recoveryEntry.content), {
-			trigger: {
-				kind: "run_failure",
-				agentId: affected.agentId,
-				failedRunSequence: 1,
-			},
-			recovery: {
-				kind: "successor_run_started",
-				successorRunSequence: 2,
-			},
-			originalObligationsRemain: true,
-			requiredAction: "resolve",
-			guidance:
-				"Call moderator_control.resolve now. The remaining Answer Obligation is ordinary Workflow work.",
-		});
-		const resolution = await waitForTranscriptEntry(
-			moderator.path,
-			(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
-				entry.message.toolCallId === "resolve-recovered-run-failure",
-		);
-		assert.ok(resolution.type === "message" && resolution.message.role === "toolResult");
-		assert.deepEqual(resolution.message.details, { disposition: "resolved" });
-		const moderatorRun = owner.status(moderator.id).run;
-		assert.equal(
-			moderatorRun.retentionReasons.some(({ reason }) => reason === "awaiting_answer"),
-			false,
-		);
-		const moderatorEntries = SessionManager.open(moderator.path).getEntries();
-		assert.equal(
-			moderatorEntries.some(
-				(entry) => entry.type === "message" && entry.message.role === "assistant" &&
-					entry.message.content.some(
-						(part) => part.type === "toolCall" && part.name === "agent_message",
-					),
-			),
-			false,
-		);
-	} finally {
-		await executionGate.release();
-		executionGate.restoreEnvironment();
-		await coordinator.shutdown(async () => host.runtime.dispose());
-	}
-});
-
-test("a successor clears Run Failure before its later Stall is handled separately", async (t) => {
-	const harness = await createIncidentBoundaryHarness(t);
-	const routeRuns = (context: Context) => {
-		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
-			return fauxAssistantMessage("I will inspect this exact condition.");
-		}
-		const transcript = JSON.stringify(context.messages);
-		const latestUser = JSON.stringify(
-			[...context.messages].reverse().find(({ role }) => role === "user"),
-		);
-		if (
-			latestUser.includes("Start the successor Run.") ||
-			transcript.includes("requestTitle")
-		) {
-			return fauxAssistantMessage("The successor settled without answering.");
-		}
-		return fauxAssistantMessage("The first exact Run fails before answering.", {
-			stopReason: "error",
-			errorMessage: "deterministic first Run failure",
-		});
-	};
-	harness.host.model.setResponses(Array.from(
-		{
-			length:
-				harness.host.services.settingsManager.getRetrySettings().maxRetries + 10,
-		},
-		() => routeRuns,
-	));
-	const affected = await spawnFromView(
-		harness.host.session,
-		harness.owner,
-		"spawn-successor-after-run-failure",
-		"Fail the first Run, then leave the Answer obligation for a successor.",
-	);
-	const failureModerator = await waitForModeratorKind(harness.host, "run_failure");
-	assert.equal(harness.owner.status(affected.agentId).run.phase, "dormant");
-
-	await sendMessageFromView(
-		harness.host.session,
-		harness.owner,
-		"start-successor-after-run-failure",
-		affected.agentId,
-		"Start the successor Run.",
-	);
-	const stallModerator = await waitForModeratorKind(harness.host, "obligation_stall");
-	assert.notEqual(stallModerator.id, failureModerator.id);
-	await waitForCondition(() => {
-		const run = harness.owner.status(failureModerator.id).run;
-		return !run.retentionReasons.some(
-			({ reason }) => reason === "moderator_handling",
-		);
-	});
-	const successor = harness.owner.status(affected.agentId).run;
-	assert.equal(successor.phase, "live");
-	assert.equal("work" in successor && successor.work, "settled");
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-});
-
-test("a failed successor startup does not clear Run Failure handling", async (t) => {
-	const harness = await createIncidentBoundaryHarness(t);
-	const routeFailure = (context: Context) =>
-		getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")
-			? fauxAssistantMessage("I will inspect the failed exact Run.")
-			: fauxAssistantMessage("The exact Run fails before answering.", {
+		() =>
+			fauxAssistantMessage("The Owner Run fails before answering.", {
 				stopReason: "error",
-				errorMessage: "deterministic Run failure before unavailable successor",
-			});
+				errorMessage: "deterministic answer-obligated Owner Run failure",
+			}),
+	));
+	await host.session.prompt("Fail this Owner Run before answering the Request.");
+	await host.session.waitForIdle();
+	await waitForCondition(async () => {
+		const run = (await observeStatus(host, host.session.sessionId)).run;
+		return run.phase === "live" && run.suspension?.reason === "runtime_error";
+	});
+
+	const suspended = (await observeStatus(host, host.session.sessionId)).run;
+	assert.deepEqual(suspended.suspension, {
+		reason: "runtime_error",
+		evidence: {
+			stage: "model",
+			error: "deterministic answer-obligated Owner Run failure",
+			provenance: "in-process-hosted-runtime",
+		},
+	});
+	assert.ok(
+		suspended.retentionReasons.some(({ reason }) => reason === "answer_owed"),
+	);
+	assert.deepEqual(await findModerators(host), []);
+	const reports = new ModeratorReportStore({
+		transcript: transcriptFromSessionManager(host.session.sessionManager),
+		appendCustomEntry: (type, data) =>
+			host.session.sessionManager.appendCustomEntry(type, data),
+	});
+	assert.deepEqual(reports.history(), []);
+
+	host.model.setResponses([
+		fauxAssistantMessage("The Owner Run continued after explicit human resumption."),
+		fauxAssistantMessage("The resumed Owner Run settled with its Request still open."),
+	]);
+	await host.session.prompt("Resume this Owner Run after the provider error.", {
+		source: "interactive",
+	});
+	await waitForCondition(async () => {
+		const run = (await observeStatus(host, host.session.sessionId)).run;
+		return run.suspension === undefined;
+	});
+	assert.ok(
+		host.session.sessionManager.getEntries().some(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes(
+					"Resume this Owner Run after the provider error.",
+				),
+		),
+		"the human resume input is committed to the resumed Run",
+	);
+	assert.ok(
+		(await observeStatus(host, host.session.sessionId)).run.retentionReasons.some(
+			({ reason }) => reason === "answer_owed",
+		),
+		"the resumed Run still owes the Answer",
+	);
+	assert.deepEqual(await findModerators(host), []);
+	assert.deepEqual(reports.history(), []);
+});
+
+test("Request Cancellation retains the suspended Run without starting a successor Incident", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
 	harness.host.model.setResponses(Array.from(
 		{
 			length:
 				harness.host.services.settingsManager.getRetrySettings().maxRetries + 4,
 		},
-		() => routeFailure,
-	));
-	const affected = await spawnFromView(
-		harness.host.session,
-		harness.owner,
-		"spawn-run-failure-before-unavailable-successor",
-		"Fail before answering this Creation Request.",
-	);
-	const moderator = await waitForModeratorKind(harness.host, "run_failure");
-	assert.equal(harness.owner.status(affected.agentId).run.phase, "dormant");
-
-	const originalGetModel = harness.host.services.modelRuntime.getModel.bind(
-		harness.host.services.modelRuntime,
-	);
-	const controlledModelRuntime = harness.host.services
-		.modelRuntime as typeof harness.host.services.modelRuntime & {
-			getModel: typeof harness.host.services.modelRuntime.getModel;
-		};
-	controlledModelRuntime.getModel = (() => undefined) as typeof controlledModelRuntime.getModel;
-	try {
-		const input = {
-			operation: "send" as const,
-			targetAgent: affected.agentId,
-			content: "Attempt a successor Run while its model is unavailable.",
-		};
-		const toolCallId = "attempt-unavailable-successor";
-		harness.host.session.sessionManager.appendMessage(
-			fauxAssistantMessage(
-				fauxToolCall("agent_message", input, { id: toolCallId }),
-				{ stopReason: "toolUse" },
-			),
-		);
-		const receipt = await harness.owner.message(toolCallId, input);
-		assert.ok("messageStatus" in receipt);
-		assert.equal(receipt.messageStatus, "sent");
-		await harness.owner.reachSafeBoundary();
-		await waitForCondition(() =>
-			!harness.owner.status(moderator.id).run.retentionReasons.some(
-				({ reason }) => reason === "moderator_handling",
-			)
-		);
-	} finally {
-		controlledModelRuntime.getModel = originalGetModel;
-		await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-	}
-});
-
-test("Request Cancellation clears Run Failure without starting a successor Incident", async (t) => {
-	const harness = await createIncidentBoundaryHarness(t);
-	const routeFailure = (context: Context) =>
-		getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")
-			? fauxAssistantMessage("I will inspect the failed exact Run.")
-			: fauxAssistantMessage("The exact Run fails before answering.", {
+		() =>
+			fauxAssistantMessage("The exact Run fails before answering.", {
 				stopReason: "error",
 				errorMessage: "deterministic cancellable Run failure",
-			});
-	harness.host.model.setResponses(Array.from(
-		{
-			length:
-				harness.host.services.settingsManager.getRetrySettings().maxRetries + 4,
-		},
-		() => routeFailure,
+			}),
 	));
 	const affected = await spawnFromView(
 		harness.host.session,
 		harness.owner,
-		"spawn-cancelled-run-failure",
+		"spawn-suspended-cancellation",
 		"Fail before answering this Creation Request.",
 	);
-	const moderator = await waitForModeratorKind(harness.host, "run_failure");
-
-	harness.host.model.setResponses([
-		fauxAssistantMessage("The cancelled obligation no longer requires handling."),
-	]);
+	await waitForCondition(() =>
+		runSuspension(harness.owner.status(affected.agentId).run)?.reason === "runtime_error"
+	);
 	await cancelRequestFromView(
 		harness.host.session,
 		harness.owner,
-		"cancel-run-failure-obligation",
+		"cancel-suspended-obligation",
 		affected.requestMessageId,
 	);
-	await waitForCondition(() =>
-		!harness.owner.status(moderator.id).run.retentionReasons.some(
-			({ reason }) => reason === "moderator_handling",
-		)
-	);
 	await harness.owner.reachSafeBoundary();
-	assert.equal((await findModerators(harness.host)).length, 1);
+	assert.equal(
+		runSuspension(harness.owner.status(affected.agentId).run)?.reason,
+		"runtime_error",
+		"cancelling the Request does not clear the Run stop",
+	);
 	assert.deepEqual(harness.owner.operationalAttention(), []);
+	assert.deepEqual(harness.owner.reportHistory(), []);
+	assert.deepEqual(await findModerators(harness.host), []);
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
@@ -2642,41 +2467,70 @@ test("startup rejection before any child error transcript retains the original f
 	assert.deepEqual(reopened.history(), owner.reportHistory());
 });
 
-test("an un-obligated terminal Run failure is retained without widening Moderator eligibility", async (t) => {
-	const { host, owner } = await createIncidentBoundaryHarness(t);
-	host.model.setResponses([fauxAssistantMessage("Failed without obligations", {
-		stopReason: "error", errorMessage: "400 deterministic un-obligated terminal failure",
-	})]);
+test("an un-obligated terminal Run error suspends without widening Moderator eligibility", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		implicitModeratorResponses: false,
+	});
+	const terminalFailure = (message: string, errorMessage: string) =>
+		fauxAssistantMessage(message, {
+			stopReason: "error",
+			errorMessage,
+		});
+	host.model.setResponses(Array.from(
+		{ length: host.services.settingsManager.getRetrySettings().maxRetries + 4 },
+		() => terminalFailure(
+			"Failed without obligations",
+			"400 deterministic un-obligated terminal failure",
+		),
+	));
 	await host.session.prompt("Fail this Owner Run without delegating anything.");
-	await waitForCondition(() => owner.reportHistory().length === 1);
-	const original = owner.reportHistory()[0]!;
-	assert.match(original.report.symptom, /Run 1/);
-	assert.match(original.report.suspectedDefect, /deterministic un-obligated terminal failure/);
-	assert.match(original.report.evidence.join("\n"), /Affected Requests: \[\]/);
-	owner.setReportRead(original.report.reportId, true);
-	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
-	assert.equal(owner.reportHistory().length, 1, "repeated observation does not duplicate report");
-	assert.equal((await findModerators(host)).length, 0);
-	host.model.setResponses([fauxAssistantMessage("Recovered successor")]);
-	await owner.beginExecution();
-	await host.session.prompt("Start a successor Run.");
-	await waitForCondition(() => owner.reportHistory()[0]?.findings?.some(finding => finding.key.startsWith("successor:")) ?? false);
-	await owner.reachSafeBoundary();
-	assert.deepEqual(owner.reportHistory()[0]?.report, original.report);
-	assert.ok(owner.reportHistory()[0]?.findings?.some(finding => finding.key.startsWith("successor:")));
-	assert.equal(owner.reportHistory()[0]?.readAt, undefined, "successor evidence restores attention");
-	owner.setReportRead(original.report.reportId, true);
-	const manager = SessionManager.open(host.session.sessionManager.getSessionFile()!);
-	const reopened = new ModeratorReportStore({ transcript: transcriptFromSessionManager(manager), appendCustomEntry: (type, data) => manager.appendCustomEntry(type, data) });
-	assert.deepEqual(reopened.history(), owner.reportHistory());
-	host.model.setResponses([fauxAssistantMessage("Another terminal failure", {
-		stopReason: "error", errorMessage: "400 distinct Run recurrence",
-	})]);
-	await host.session.prompt("Fail a distinct Run.");
-	await waitForCondition(() => owner.reportHistory().length === 2);
-	assert.notEqual(owner.reportHistory()[1]?.report.reportId, original.report.reportId);
-	assert.match(owner.reportHistory()[1]!.report.symptom, /Run 2/);
-	assert.ok(owner.reportHistory()[0]?.readAt);
+	await waitForCondition(async () => {
+		const run = (await observeStatus(host, host.session.sessionId)).run;
+		return run.phase === "live" && run.suspension?.reason === "runtime_error";
+	});
+	const suspended = (await observeStatus(host, host.session.sessionId)).run;
+	assert.deepEqual(suspended.suspension, {
+		reason: "runtime_error",
+		evidence: {
+			stage: "model",
+			error: "400 deterministic un-obligated terminal failure",
+			provenance: "in-process-hosted-runtime",
+		},
+	});
+	assert.deepEqual(await findModerators(host), []);
+	const reports = new ModeratorReportStore({
+		transcript: transcriptFromSessionManager(host.session.sessionManager),
+		appendCustomEntry: (type, data) =>
+			host.session.sessionManager.appendCustomEntry(type, data),
+	});
+	assert.deepEqual(reports.history(), []);
+
+	// Repeated observation of the stop must not widen Moderator eligibility.
+	await host.session.waitForIdle();
+	assert.deepEqual(await findModerators(host), []);
+	assert.deepEqual(reports.history(), []);
+
+	// An explicit human resume clears the stop and lets the Run continue.
+	host.model.setResponses([
+		fauxAssistantMessage("Recovered after explicit resumption."),
+		fauxAssistantMessage("The resumed Run settled."),
+	]);
+	await host.session.prompt("Resume this Owner Run after the provider error.", {
+		source: "interactive",
+	});
+	await waitForCondition(async () => {
+		const run = (await observeStatus(host, host.session.sessionId)).run;
+		return run.suspension === undefined;
+	});
+	await waitForCondition(() =>
+		JSON.stringify(host.session.sessionManager.getEntries()).includes(
+			"Recovered after explicit resumption.",
+		)
+	);
+	assert.deepEqual(await findModerators(host), []);
+	assert.deepEqual(reports.history(), []);
 });
 
 test("selected-child native quit fences Workflow shutdown before exit and creates no Moderator", async (t) => {
@@ -3283,14 +3137,19 @@ async function observeStatus(
 	agentId: string,
 ): Promise<{
 	run:
-		| { phase: "dormant"; retentionReasons: readonly [] }
+		| { phase: "dormant"; retentionReasons: readonly []; suspension?: undefined }
 		| {
 			phase: "starting" | "ending";
 			retentionReasons: ReadonlyArray<{ reason: string; count: number }>;
+			suspension?: undefined;
 		}
 		| {
 			phase: "live";
 			work: "active" | "settled";
+			suspension?: {
+				reason: string;
+				evidence: { stage: string; error: string; provenance: string };
+			};
 			retentionReasons: ReadonlyArray<{ reason: string; count: number }>;
 		};
 }> {
@@ -3304,6 +3163,10 @@ async function observeStatus(
 		host.session.extensionRunner.createContext(),
 	);
 	return result.details as Awaited<ReturnType<typeof observeStatus>>;
+}
+
+function runSuspension(run: AgentRunState) {
+	return run.phase === "dormant" ? undefined : run.suspension;
 }
 
 async function waitForCondition(

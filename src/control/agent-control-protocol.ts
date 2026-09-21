@@ -205,6 +205,15 @@ const QuotaEvidenceSchema = closed({
 	model: Type.Optional(Type.String()),
 	resetAt: Type.Optional(Type.String()),
 });
+const RunFailureEvidenceSchema = closed({
+	stage: Type.String(),
+	error: Type.String(),
+	provenance: Type.String(),
+});
+const AgentRunSuspensionSchema = Type.Union([
+	closed({ reason: Type.Literal("provider_quota"), evidence: QuotaEvidenceSchema }),
+	closed({ reason: Type.Literal("runtime_error"), evidence: RunFailureEvidenceSchema }),
+]);
 const AgentRunStateSchema = Type.Union([
 	closed({ phase: Type.Literal("dormant"), retentionReasons: Type.Tuple([]) }),
 	closed({
@@ -216,10 +225,7 @@ const AgentRunStateSchema = Type.Union([
 			Type.Literal("agent_wait"),
 		]),
 		retentionReasons: Type.Array(RetentionSchema),
-		suspension: Type.Optional(closed({
-			reason: Type.Literal("provider_quota"),
-			evidence: QuotaEvidenceSchema,
-		})),
+		suspension: Type.Optional(AgentRunSuspensionSchema),
 	}),
 ]);
 const AgentStatusProperties = {
@@ -765,7 +771,7 @@ export const agentControlMethods = {
 	},
 	"runtime.humanInputMode": {
 		request: EmptySchema,
-		response: closed({ mode: Type.Union([Type.Literal("agent"), Type.Literal("answer"), Type.Literal("quota_suspended")]) }),
+		response: closed({ mode: Type.Union([Type.Literal("agent"), Type.Literal("answer"), Type.Literal("run_suspended")]) }),
 	},
 	"runtime.guardToolResult": {
 		request: closed({ message: AgentMessageSchema }),

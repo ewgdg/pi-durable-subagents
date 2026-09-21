@@ -116,7 +116,7 @@ export class RunSupervisor {
 				if (!hold) {
 					return { ...identity, delivery: "rejected", rejectionReason: "not_held" };
 				}
-				await target.host.prepareQuotaResumptionInLane();
+				await target.host.prepareSuspensionResumptionInLane();
 				const admission = await this.#messages.admitResumeInLane(target, message, hold);
 				if (admission === "pending") return { ...identity, messageStatus: "sent" };
 				return {
@@ -216,7 +216,7 @@ export class RunSupervisor {
 	): Promise<boolean> {
 		const hold = record.host.currentResumptionHold();
 		if (!hold) return false;
-		if (record.host.currentQuotaSuspension()) await record.host.prepareQuotaResumptionInLane({ humanInputPending: true });
+		if (record.host.currentRunSuspension()) await record.host.prepareSuspensionResumptionInLane({ humanInputPending: true });
 		if (!record.host.beginIsolatedResumptionInLane(hold)) {
 			throw new Error("Run resumption is already in progress");
 		}

@@ -199,7 +199,7 @@ type AgentViewTarget = Readonly<{
 }>;
 
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
-	humanInputMode(): "agent" | "answer" | "quota_suspended";
+	humanInputMode(): "agent" | "answer" | "run_suspended";
 	answerTargetAgent(toolCallId: string): string | undefined;
 	children(agentId?: string): readonly AgentStatus[];
 	search(input: AgentSearchInput): AgentSearchResult;
@@ -675,8 +675,8 @@ export class WorkflowCoordinator {
 				toolCallId,
 			}),
 			agentActivity: () => this.#agentActivity(agentId),
-			humanInputMode: () => this.#requireAgent(agentId).host.quotaSuspensionBlocksExecution()
-				? "quota_suspended"
+			humanInputMode: () => this.#requireAgent(agentId).host.runSuspensionBlocksExecution()
+				? "run_suspended"
 				: this.#agentActivity(agentId).answerMode ? "answer" : "agent",
 			addAgentActivityChangeHandler: (handler) => {
 				this.#agentActivityChangeHandlers.add(handler);
@@ -709,7 +709,7 @@ export class WorkflowCoordinator {
 			},
 			primaryInputQueued: () => {
 				this.#assertAdmissionOpen();
-				if (this.#requireAgent(agentId).host.currentQuotaSuspension()) return Promise.resolve();
+				if (this.#requireAgent(agentId).host.currentRunSuspension()) return Promise.resolve();
 				return this.#agentWaits.preemptForHumanInput(this.#requireAgent(agentId));
 			},
 			selectionRoster: () => this.#selectionRoster(),
@@ -785,7 +785,7 @@ export class WorkflowCoordinator {
 			// Isolated resumption blocks ordinary Delivery, not the resumed execution.
 			if (record.identity.agentId === this.#ownerIdentity.agentId ||
 				this.#waitingForExecution.has(record.identity.agentId) ||
-				record.host.currentInterruptionHold() || record.host.currentQuotaSuspension()) continue;
+				record.host.currentInterruptionHold() || record.host.currentRunSuspension()) continue;
 			const run = record.host.observe();
 			// Moderator startup belongs to the bounded recovery inspection below.
 			// A hung startup must stop counting when that inspection times out.
@@ -1163,7 +1163,7 @@ export class WorkflowCoordinator {
 	}
 
 	#integrateAgent(record: AgentRecord): void {
-		record.host.setQuotaSuspensionHandler((suspension, handle) => {
+		record.host.setRunSuspensionHandler((suspension, handle) => {
 			// Quota suspension is process-local: it stops this exact Run and releases its
 			// execution permit. Nothing durable has to be recorded or restored.
 			if (suspension) this.#releaseExecution(record.identity.agentId, handle);
@@ -1261,7 +1261,7 @@ export class WorkflowCoordinator {
 				return { projection: initializingProjection, retryIfChanged: false };
 			}
 		}
-		if ((phase === "dormant" || record.host.currentQuotaSuspension()) && !record.host.currentProjection()) {
+		if ((phase === "dormant" || record.host.currentRunSuspension()) && !record.host.currentProjection()) {
 			return this.#prepareAgentViewTarget(record);
 		}
 		const liveTarget = await record.host.lane.run(() => {
@@ -1561,7 +1561,7 @@ export class WorkflowCoordinator {
 	async #ensureExecution(agentId: string): Promise<void> {
 		this.#assertAdmissionOpen();
 		const record = this.#requireAgent(agentId);
-		if (record.host.quotaSuspensionBlocksExecution()) throw new Error("quota_suspended: explicit resume is required");
+		if (record.host.runSuspensionBlocksExecution()) throw new Error("run_suspended: explicit resume is required");
 		if (this.#executionPermits.has(agentId)) return;
 		const run = record.host.observe();
 		if (run.phase !== "live" || run.attention === "input_required") return;
@@ -1580,9 +1580,9 @@ export class WorkflowCoordinator {
 			this.#operationalIncidents.deliveryProgressChanged();
 		});
 		if (!permit) return;
-		if (record.host.quotaSuspensionBlocksExecution()) {
+		if (record.host.runSuspensionBlocksExecution()) {
 			permit.release();
-			throw new Error("quota_suspended: execution admission was suspended");
+			throw new Error("run_suspended: execution admission was suspended");
 		}
 		if (this.#shuttingDown) {
 			permit.release();

@@ -19,11 +19,16 @@ import type {
 import type { SerialLane } from "./serial-lane.ts";
 import type { QuotaEvidence } from "./quota-evidence.ts";
 
-export type AgentQuotaSuspension = Readonly<{
-	reason: "provider_quota";
-	evidence: QuotaEvidence;
-}>;
-export type QuotaSuspendedNativeInput = Readonly<{ steering: readonly string[]; followUp: readonly string[] }>;
+export type AgentRunSuspension =
+	| Readonly<{
+		reason: "provider_quota";
+		evidence: QuotaEvidence;
+	}>
+	| Readonly<{
+		reason: "runtime_error";
+		evidence: AgentRunFailure;
+	}>;
+export type SuspendedNativeInput = Readonly<{ steering: readonly string[]; followUp: readonly string[] }>;
 
 export type RunRetentionReason =
 	| "owner_host_binding"
@@ -44,7 +49,7 @@ export type LiveRunState = Readonly<{
 	phase: "starting" | "live" | "ending";
 	work?: "active" | "settled";
 	attention: "none" | "input_required" | "agent_wait";
-	suspension?: AgentQuotaSuspension;
+	suspension?: AgentRunSuspension;
 	retentionReasons: readonly AgentRetention[];
 }>;
 export type DormantRunState = Readonly<{
@@ -184,10 +189,10 @@ export interface AgentRuntimeHost {
 	isInterrupting(): boolean;
 	currentInterruptionHold(): RunResumptionHandle | undefined;
 	currentResumptionHold(): RunResumptionHandle | undefined;
-	currentQuotaSuspension(): AgentQuotaSuspension | undefined;
-	quotaSuspensionBlocksExecution(): boolean;
-	prepareQuotaResumptionInLane(options?: { humanInputPending: boolean }): Promise<void>;
-	setQuotaSuspensionHandler(handler: (suspension: AgentQuotaSuspension | undefined, handle: AgentRunHandle, nativeInput?: QuotaSuspendedNativeInput) => void): void;
+	currentRunSuspension(): AgentRunSuspension | undefined;
+	runSuspensionBlocksExecution(): boolean;
+	prepareSuspensionResumptionInLane(options?: { humanInputPending: boolean }): Promise<void>;
+	setRunSuspensionHandler(handler: (suspension: AgentRunSuspension | undefined, handle: AgentRunHandle, nativeInput?: SuspendedNativeInput) => void): void;
 	isCurrentResumptionHold(hold: RunResumptionHandle): boolean;
 	beginIsolatedResumptionInLane(hold: RunResumptionHandle): boolean;
 	commitIsolatedResumptionInLane(hold: RunResumptionHandle): boolean;

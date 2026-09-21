@@ -60,7 +60,7 @@ The native status call and collapsed result identify the Agent as `label · comp
 
 Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. A child-local Turn Compaction Gateway cancels threshold compaction requested after a Run only when no raw Pi continuation is queued. The child releases normally and recomputes the same configured threshold before its next idle native prompt or Owner Delivery. Manual compaction and overflow recovery remain Pi-native. The gateway owns only preparation and input commitment, never the model cycle, and creates no durable pending state or Runtime retention.
 
-If Pi's configured native behavior ultimately ends the exact Run unexpectedly, the runtime retains a Run Failure Report, even when no Answer Obligation remains. It captures the observed error and stage, exact Agent and Run, affected work, and recovery findings or explicit uncertainty. Startup errors observed by the host do not require a child-side error transcript entry. Successfully recovered transient errors, ongoing provider recovery, deliberate termination, and recognized quota suspension are not Run Failures.
+If Pi's configured native behavior ultimately ends the exact Run unexpectedly while its Runtime is still usable, the runtime retains that exact Run as a [Run suspension](#run-suspension): the observed error and stage stay visible in the Agent status, and no Runtime Report or Moderator is produced. If the Runtime is already unavailable — a child process quit or transport loss — the exact Run cannot continue in place, so it ends as a terminal Run Failure and keeps the existing report and bounded moderation path. Startup errors observed by the host likewise remain terminal Run Failures and do not require a child-side error transcript entry. Successfully recovered transient errors, ongoing provider recovery, and deliberate termination are neither. A terminal Run Failure captures the observed error and stage, exact Agent and Run, affected work, and recovery findings or explicit uncertainty.
 
 The Run's own cancellation signal owns classification. Pi reports a request setup that its abort signal abandoned as a model error message carrying the abort reason, so an Owner Run stopped through native abort — Escape, Ctrl+C, or an extension `ctx.abort()` — can end on a `stopReason: "error"` assistant message. The in-process Owner Runtime classifies any such message as `aborted` once that exact Run's signal is aborted: a Run whose cancellation is requested is a deliberate stop, never an unexpected terminal failure, and a successor Run is admitted by ordinary input.
 
@@ -68,28 +68,35 @@ Required upstream improvement: Pi's `lazyStream` request-setup failure path publ
 
 An unresolved Answer Obligation still determines eligibility for ordinary Run Failure moderation; reporting does not broaden that policy. Reports use the Owner's existing read/unread, copy, and retained history surfaces. Marking read acknowledges the notification only: it does not clear live failure handling, settle Requests, or initiate recovery. See [Operational Incident moderation](operational-incident-moderation.md) for report grouping and recovery findings.
 
-## Quota suspension
+## Run suspension
 
-A terminal, evidence-backed quota error displays **Suspended · Usage limit reached** after Pi's configured native retry/fallback has finished. It retains the exact Run instead of failing it or starting a Moderator. Suspension publishes no Runtime Report: the Agent status retains provider/model and the exact diagnostic as `run.suspension.evidence`, shown in the Agent selector's Run detail, and a reset time appears only when the provider supplied it. Observing that status does not resume execution.
+An unexpected terminal error stops the exact Run as a suspension after Pi's configured native retry/fallback has finished. Suspension retains the Run instead of failing it or starting a Moderator, and it publishes no Runtime Report: the Agent status carries `run.suspension`, shown in the agent dock and selector and detailed in the selector's Run detail. Observing that status does not resume execution.
 
-Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Agent Messages, heartbeat scheduling, and Workflow continuation cannot release it. A new human message in the selected Agent's editor is deliberate resumption, using that message as the resumption instructions. Suspended children relinquish execution capacity so unrelated children can progress. Quota-blocked work and its genuinely blocked dependency path do not generate obligation reminders, stall/deadlock moderation, or Moderator replacements; unrelated incidents remain eligible.
+Two reasons share this contract:
 
-Restore quota or deliberately select an available model/account, then explicitly resume:
+- **`provider_quota`** — evidence-backed exhausted quota, displayed as **Suspended · Usage limit reached**, with the retained provider/model evidence and the provider-supplied reset time when available.
+- **`runtime_error`** — any other terminal error from a still-usable Runtime, displayed as **Suspended · Runtime error**, with the observed failure stage, error, and provenance.
+
+The exception itself stays visible in the Agent transcript; the suspension adds the stop, not a second copy of the error. A Runtime that was already unavailable is not suspended; it ends as a terminal Run Failure instead.
+
+Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Agent Messages, heartbeat scheduling, and Workflow continuation cannot release it. A new human message in the selected Agent's editor is deliberate resumption, using that message as the resumption instructions. Suspended children relinquish execution capacity so unrelated children can progress. Suspended work and its genuinely blocked dependency path do not generate obligation reminders, stall/deadlock moderation, or Moderator replacements; unrelated incidents remain eligible.
+
+Address the underlying stop (restore quota, select an available model/account, or correct the failing condition), then explicitly resume:
 
 - A supervisor uses `agent_control` with `operation: "resume"`, the child Agent ID, and resumption instructions.
-- The human sends a message in the Owner's or selected child's editor. There is no separate quota-resume command, and Agent controls do not gain authority over the Owner.
+- The human sends a message in the Owner's or selected child's editor. There is no separate resume command, and Agent controls do not gain authority over the Owner.
 
 Human intent uses Pi's trusted `interactive` input provenance; queued follow-ups, extension `sendUserMessage`, and RPC input cannot resume the Run. Direct noninteractive native input is consumed before generation while suspended; ordinary coordination Messages remain queued with their original identities. This is not an authentication boundary: SDK callers must label their source truthfully (`session.prompt()` defaults to interactive).
 
 Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. Explicit termination ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
 
-If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota establishes a new suspension, and another terminal error follows ordinary failure handling. An aborted attempt before confirmation retains the original stop rather than inventing a human Interruption Hold.
+If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota or another terminal error establishes a new suspension of the matching reason, and a non-error end follows ordinary settlement. An aborted attempt before confirmation retains the original stop rather than inventing a human Interruption Hold.
 
-A stop is process-local. It is not a durable Run state: when the host process ends, the stop ends with it and the Agent recovers as ordinary dormant work. The suppression described above belongs to the live stop, so after host loss reminder, heartbeat, and deadlock or stall moderation treat the affected path as ordinary unfinished work again. Recovery itself does not resume work, and a later explicit admission may start a successor Run; while quota remains exhausted, that attempt re-suspends on the same provider evidence without producing model output. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
+A stop is process-local. It is not a durable Run state: when the host process ends, the stop ends with it and the Agent recovers as ordinary dormant work. The suppression described above belongs to the live stop, so after host loss reminder, heartbeat, and deadlock or stall moderation treat the affected path as ordinary unfinished work again. Recovery itself does not resume work, and a later explicit admission may start a successor Run; while the underlying condition persists, that attempt stops again on the same evidence without producing model output. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
 
-### Provider evidence and upstream limitation
+### Provider quota evidence and upstream limitation
 
-The classifier accepts retained `usage_limit_reached` / `insufficient_quota` JSON error codes or types, including Pi's bare HTTP-status and OpenAI/Azure formatter envelopes. It also recognizes the exact observed Codex diagnostic `Codex error: The usage limit has been reached` and Codex's exact code-only variants. An explicit unrelated code takes precedence over prose. Generic HTTP 429, `rate_limit_exceeded`, arbitrary text containing “limit”, and ambiguous friendly usage-limit wording are not quota evidence. Temporary throttling stays on Pi's native recovery path; unknown terminal errors remain ordinary failures.
+The classifier accepts retained `usage_limit_reached` / `insufficient_quota` JSON error codes or types, including Pi's bare HTTP-status and OpenAI/Azure formatter envelopes. It also recognizes the exact observed Codex diagnostic `Codex error: The usage limit has been reached` and Codex's exact code-only variants. An explicit unrelated code takes precedence over prose. Generic HTTP 429, `rate_limit_exceeded`, arbitrary text containing “limit”, and ambiguous friendly usage-limit wording are not quota evidence. Temporary throttling stays on Pi's native recovery path; unrecognized terminal errors stop as `runtime_error` suspensions instead of being guessed as quota.
 
 The installed Pi provider exposes `AssistantMessage.errorMessage`, not the original structured provider error. Codex streaming errors construct a `CodexApiError` with code/payload, but error formatting discards those fields. The HTTP formatter also conflates quota, temporary throttling, and other 429 responses into friendly text. This package cannot recover facts already discarded upstream.
 
@@ -122,7 +129,7 @@ Interruption resolves the target's exact current Run inside its serialized lane.
 The receipt disposition is:
 
 - `held` when this invocation established the Hold.
-- `already_held` when the exact current Run already has a Hold.
+- `already_held` when the exact current Run already has a Hold or is already stopped by a [Run suspension](#run-suspension); a suspended Run is never converted into an editor-resumable Hold.
 - `not_running` when no controllable current Run can be held.
 
 While held, ordinary Messages, Requests, Answers, and Cancellations may remain admitted in the bounded recipient scheduler. They still consume ordinary capacity, but cannot commit Delivery, invoke the model, or clear the Hold. Native queued input cleared for safe interruption is retained for the exact Run and restored only after an explicit isolated resumption turn.
@@ -139,7 +146,7 @@ An authorized supervisor resumes through a model-visible Message:
 }
 ```
 
-Each held Agent has one reserved Supervisory Resume slot outside its ordinary Message capacity. The resume Delivery commits alone, clears only the exact Hold to which it was admitted, and receives one isolated model turn before the ordinary coordination backlog can proceed. A successful receipt returns the source-derived `messageId` with `messageStatus: "sent"`, matching other asynchronously admitted Messages. A rejected receipt reports `not_held`, `resume_slot_occupied`, or `target_unavailable`.
+Each held or suspended Agent has one reserved Supervisory Resume slot outside its ordinary Message capacity. The resume Delivery commits alone, clears only the exact stop against which it was admitted, and receives one isolated model turn before the ordinary coordination backlog can proceed. A successful receipt returns the source-derived `messageId` with `messageStatus: "sent"`, matching other asynchronously admitted Messages. A rejected receipt reports `not_held`, `resume_slot_occupied`, or `target_unavailable`.
 
 A resume that loses its bound Hold before Delivery becomes an ordinary Steer Message. It remains useful direction, but cannot clear a later Hold. Owner `workflow_resume({})` recovers successfully committed undelivered resume Messages under this same rule; a live reserved resume still coalesces in its existing isolated slot.
 
