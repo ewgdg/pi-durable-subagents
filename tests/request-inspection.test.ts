@@ -90,13 +90,17 @@ test("inspection rejects incoming evidence for a different responder", () => {
 	assert.throws(() => h.evidence.inspectRequest(h.other.record, request.requestMessageId), /invariant_violation/);
 });
 
-test("a committed Cancellation resolves the incoming obligation and keeps the Request inspectable", () => {
+// docs/agent-messaging.md: "Answer commitment or Cancellation Delivery removes the
+// corresponding entry." The requester's own commitment is not Delivery, so the
+// incoming obligation stands until the Cancellation reaches the responder.
+test("Cancellation Delivery resolves the incoming obligation and keeps the Request inspectable", () => {
 	const h = history();
 	const request = h.request("Cancel this work", "Instructions that remain inspectable.");
 	const source = h.call(h.author, { operation: "cancel", requestMessageId: request.requestMessageId, reason: "No longer needed." },
 		pointer => ({ messageId: deriveMessageIdentity(pointer), targetAgentId: "recipient", messageStatus: "sent" }));
-	assert.deepEqual(h.evidence.openIncomingRequests(h.recipient.record), { requests: [] },
-		"the requester's committed Cancellation alone resolves the incoming obligation");
+	assert.deepEqual(h.evidence.openIncomingRequests(h.recipient.record), { requests: [{
+		requestMessageId: request.requestMessageId, requesterAgentId: "author", title: request.title,
+	}] }, "only Delivery, not the requester's commitment, resolves the incoming obligation");
 	h.deliver(h.recipient, { source, projection: { kind: "request_cancellation", cancellationId: deriveMessageIdentity(source),
 		requestMessageId: request.requestMessageId, fromAgentId: "author", reason: "No longer needed." } });
 	assert.deepEqual(h.evidence.openIncomingRequests(h.recipient.record), { requests: [] });

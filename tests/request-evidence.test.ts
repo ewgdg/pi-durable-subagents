@@ -427,7 +427,11 @@ function record(
 	};
 }
 
-test("a committed Cancellation resolves a responder that never received it", () => {
+// docs/agent-messaging.md: "Answer commitment or Cancellation Delivery removes the
+// corresponding entry." The two sides of a cancellation are therefore asymmetric:
+// the requester's own commitment withdraws its dependency, while the responder's
+// duty ends only when the Cancellation reaches it.
+test("an undelivered Cancellation keeps the responder's obligation open", () => {
 	const history = requestHistory();
 	const requestId = history.request();
 	const source = {
@@ -466,8 +470,64 @@ test("a committed Cancellation resolves a responder that never received it", () 
 		const evidence = new RequestEvidence(history.agents);
 		assert.deepEqual(
 			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			[requestId],
+			"the responder cannot learn of a withdrawal it never received",
+		);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 			[],
-			"the requester's withdrawal ends the responder's duty without Delivery",
+			"the requester's own commitment withdraws its dependency without Delivery",
+		);
+	}
+});
+
+test("a Cancellation delivered to the responder discharges the duty on both sides", () => {
+	const history = requestHistory();
+	const requestId = history.request();
+	const entryId = history.requester.manager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "cancel", requestMessageId: requestId, reason: "Withdrawn" },
+				{ id: "cancel-delivered" },
+			),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const source = { agentId: history.requester.record.identity.agentId, entryId, toolCallId: "cancel-delivered" };
+	history.requester.manager.appendMessage({
+		role: "toolResult",
+		toolCallId: source.toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Committed." }],
+		details: {
+			messageId: deriveMessageIdentity(source),
+			targetAgentId: history.responder.record.identity.agentId,
+			messageStatus: "sent",
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+	appendEvidenceDelivery(history.responder, { source, projection: {
+		kind: "request_cancellation",
+		cancellationId: deriveMessageIdentity(source),
+		requestMessageId: requestId,
+		fromAgentId: history.requester.record.identity.agentId,
+		reason: "Withdrawn",
+	} });
+	for (const replay of [false, true]) {
+		if (replay) for (const participant of [history.requester, history.responder]) {
+			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
+		}
+		const evidence = new RequestEvidence(history.agents);
+		assert.deepEqual(
+			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			[],
+			"the delivered withdrawal removes the responder's entry",
+		);
+		assert.deepEqual(
+			evidence.openIncomingRequests(history.responder.record).requests,
+			[],
 		);
 		assert.deepEqual(
 			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,

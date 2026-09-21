@@ -684,10 +684,23 @@ export class RequestEvidence {
 			if (incoming) {
 				if (!this.#inspectRequestDelivery(incoming, agent).deliveryEvidence) continue;
 				const resolution = this.#inspectResolution(incoming);
-				// The requester's committed Cancellation is the withdrawal itself; delivery is
-				// notification only. Requiring Delivery here stranded the duty forever on a
-				// responder that went dormant, suspended, or terminated before it landed.
-				owed = !resolution.answer && !resolution.cancellation;
+				// A responder can only learn of a withdrawal through Delivery, so a canonical
+				// Cancellation leaves this obligation open until it lands here
+				// (docs/agent-messaging.md: "Answer commitment or Cancellation Delivery
+				// removes the corresponding entry"). The requester's own accounting is the
+				// other half of the split: its committed Cancellation withdraws its own
+				// `awaiting` entry without Delivery, because that is its own decision.
+				// A delivered but non-canonical Cancellation never discharges the duty either:
+				// Delivery proves notification, never authoring.
+				const withdrawal = resolution.cancellation;
+				const deliveredWithdrawal =
+					withdrawal !== undefined &&
+					inspectMessageDelivery({
+						recipientAgentId: agent.identity.agentId,
+						transcript,
+						message: withdrawal,
+					}).deliveryEvidence !== undefined;
+				owed = !resolution.answer && !deliveredWithdrawal;
 			} else {
 				validateDeliveredMessageEvidence(delivery);
 				const cancelled = this.isLocalCancellationDelivered(agent, requestId);
