@@ -356,16 +356,25 @@ export class RequestEvidence {
 
 	/**
 	 * A Creation Request holds the incoming Request slot until it is answered or
-	 * withdrawn: the child's activation contract comes before ordinary Requests.
+	 * withdrawn: the child's activation contract comes before ordinary Requests,
+	 * so nothing may overtake it while the child has not yielded yet.
 	 * Delivered ordinary Requests are attention, not exclusive ownership, so later
 	 * Requests (including Steer Requests) may still reach the same responder.
+	 *
+	 * A responder parked in Agent Wait has already yielded for inbound work; the
+	 * activation contract can no longer be overtaken, and the slot must not
+	 * withhold attention from the Requests that park is waiting for
+	 * (docs/agent-messaging.md: a Deferred Request preempts the parked Wait with
+	 * one Request in live admission order regardless of Request ancestry).
 	 */
 	isIncomingRequestBlocked(responder: AgentRecord, requestId: string): boolean {
 		const foreground = this.obligationFrames(responder).at(-1);
 		// The Request already occupying the slot may be redelivered (retry) or
 		// cancelled; neither competes with itself.
 		if (!foreground || foreground.requestId === requestId) return false;
-		return this.#findCreationRequest(foreground.requestId) !== undefined;
+		if (this.#findCreationRequest(foreground.requestId) === undefined) return false;
+		const run = responder.host.observe();
+		return !(run.phase === "live" && run.attention === "agent_wait");
 	}
 
 	openIncomingRequests(agent: AgentRecord): OpenIncomingRequestList {
