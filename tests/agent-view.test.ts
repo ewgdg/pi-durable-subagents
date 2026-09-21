@@ -598,6 +598,9 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 
 	const activeView = await owner.openAgentView(agentId);
 	assert.ok(activeView);
+	// A durable view is a screen consumer: reading this child's parsed presentation
+	// requires the same observation the view surface holds while it is mounted.
+	await activeView.projection().screenView.begin();
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
 		childProcessSessionStarts(entries, agentId).length === 2
 	);

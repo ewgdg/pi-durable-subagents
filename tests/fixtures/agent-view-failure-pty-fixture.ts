@@ -158,6 +158,12 @@ async function finishInteractiveFailure(): Promise<void> {
 			throw new Error(`Expected one bounded Owner process-exit diagnostic; received ${JSON.stringify(host.services.diagnostics)}`);
 		}
 	}
+	if (failureKind === "initialization") {
+		// The restored baseline only stays on screen until the Owner's delivery-failure
+		// notice lands. Announce restoration after that cascade, like the input and
+		// render kinds do, so the assertion reads a settled Owner screen.
+		await waitForDiagnostic((message) => message.startsWith("Agent view failed: "));
+	}
 	await finishRestoredFailure();
 }
 
