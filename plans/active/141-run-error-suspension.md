@@ -52,7 +52,14 @@ Focused runtime/coordination/presentation suites plus typecheck. Cover: no repor
 
 ## Open items
 
-- A selected child's own dock renders `failed` for a suspended Run while the Owner-side status is correct (`live` + `runtime_error`). The child-process snapshot carries `failed: true` together with the suspension, so `selectedAgentWorkStatus` prefers the failure label. Needs a decision: carry the stop into the child-side status, or let a suspension outrank a stale failure flag.
+- Resolved: a selected child's own dock rendered `failed` for a suspended Run because the
+  child-side mirror reports its native `agent_end` outcome while the supervisor retains the
+  Run as a suspension. `selectedAgentWorkStatus` now lets a retained stop outrank a stale
+  native failure flag (the two are mutually exclusive in the supervisor), covered by a new
+  `selected-agent-status` case plus a restored child-side dock assertion in `agent-view` and
+  the real-PTY evidence `PTY Failure Worker · Suspended · Runtime error`.
 - Moderator-failure *Report* findings can no longer be produced by a provider error, so the cold-linkage assertions that depended on them now assert the stop instead. The still-valid linkage path (transport death, Run-start failure) keeps coverage in `operational-incidents`.
 - Only focused suites were run; the full process and conformance suites were not.
+- The fullscreen PTY `run` fixture now waits for the stop, terminates it explicitly, and keeps
+  the durable-Dormant-Agent assertions unchanged (test renamed to `terminally stopped`).
 - Branch `feat/141-run-error-suspension` is rebased on `70f9afa`; later `main` commits may need another rebase before integration.
