@@ -62,7 +62,7 @@ test("same-version preflight names incompatible exclusion constraints without ex
 	const schema = { ...ChildProcessBootstrapSchema, properties: { ...ChildProcessBootstrapSchema.properties, excludedTools: { type: "string", const: "SECRET-SCHEMA-VALUE" } } };
 	await writeFile(path, `export const AGENT_CONTROL_PROTOCOL_VERSION = ${AGENT_CONTROL_PROTOCOL_VERSION}; export const ChildProcessBootstrapSchema = ${JSON.stringify(schema)};`);
 	await assert.rejects(new ChildLaunchContractGuard(pathToFileURL(path)).assertCompatible(), (error: Error) => {
-		assert.match(error.message, /schema_drift: the installed extension provides child launch contract version 9, this host loaded version 9; fields the installed contract requires and this host lacks: none; fields defined differently: excludedTools/);
+		assert.match(error.message, /schema_drift: the installed extension provides child launch contract version 10, this host loaded version 10; fields the installed contract requires and this host lacks: none; fields defined differently: excludedTools/);
 		assert.doesNotMatch(error.message, /SECRET-SCHEMA-VALUE/);
 		return true;
 	});

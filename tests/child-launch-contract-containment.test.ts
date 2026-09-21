@@ -149,7 +149,7 @@ test("incompatible shared pending-delivery admission creates no Runs or Moderato
 		await assert.rejects(factory.prepareModeratorRun({ agentId: `moderator-${attempt}` }), /control_bootstrap_(protocol_mismatch|schema_drift)/);
 	}
 	assert.equal(started, 0);
-	assert.equal(ended, 0, "preflight failure is not an exact Run failure");
+	assert.equal(ended, 3, "preflight failure ends the exact admitted Run");
 	assert.equal(await readFile(sessionPath, "utf8"), evidence);
 	// The low-level entry also checks before allocating listeners, artifacts or a PTY.
 	await assert.rejects(PiChildProcessRuntime.launch({} as StartPiChildProcessRuntimeOptions), /protocol_mismatch/);
@@ -172,8 +172,8 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 	};
 	for (const [content, expected, remedy] of [
 		// This error is authored inside the child, so a contract disagreement must name the Owner host it needs.
-		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 9, the received bootstrap descriptor is version 7/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
-		[JSON.stringify({ ...legacy, protocolVersion: 9 }), /schema_drift.*missing descriptor fields: excludedTools/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
+		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 10, the received bootstrap descriptor is version 7/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
+		[JSON.stringify({ ...legacy, protocolVersion: 10 }), /schema_drift.*missing descriptor fields: excludedTools/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
 		// A handoff defect involves no host-wide block, so it asks for a relaunch instead.
 		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/, /^control_bootstrap_invalid: descriptor could not be read as JSON\. Relaunch this Agent/],
 	] as const) {
