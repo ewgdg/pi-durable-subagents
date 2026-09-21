@@ -1744,15 +1744,26 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	);
 
 	releaseFailure();
-	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
-	await waitForCondition(() =>
-		/Failing Worker.*failed/.test(stripTerminalSequences(view.render(80).join("\n")))
-	);
+	// An unexpected terminal error retains the exact Run as a stop: the view stays
+	// open on the same Agent, the exception stays in its transcript, and the Run only
+	// ends through explicit termination.
+	await waitForCondition(async () => (await currentRunState(host, agentId)).suspension?.reason === "runtime_error");
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(host.runtime.session, ownerSession);
-	const dormantRendered = stripTerminalSequences(view.render(80).join("\n"));
-	assert.match(dormantRendered, /Failing Worker.*failed/);
-	assert.match(dormantRendered, /viewed exact Run failed terminally/);
+	await waitForCondition(() => {
+		const frame = stripTerminalSequences(view.render(80).join("\n"));
+		return frame.includes("viewed exact Run failed terminally") &&
+			frame.includes("Error: deterministic viewed Run failure");
+	});
+	// Explicit termination still reaches the durable Dormant Agent without closing the view.
+	const stoppedTerminated = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-stopped-viewed-failure-worker",
+		{ operation: "terminate", agentId },
+	);
+	assert.equal((stoppedTerminated.details as { disposition: string }).disposition, "terminated");
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 
 	await host.session.prompt("Confirm the Owner input loop still runs.");
 	await host.session.waitForIdle();
@@ -1817,10 +1828,8 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 	const agentId = (spawn.details as { agentId: string }).agentId;
 	const opened = await openSelectedAgentView(host, agentId);
 	releaseInitialFailure();
-	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
-	await waitForCondition(() =>
-		stripTerminalSequences(opened.view.render(80).join("\n")).includes("failed")
-	);
+	// The terminal error retains the Run as a stop; each typed input resumes it.
+	await waitForCondition(async () => (await currentRunState(host, agentId)).suspension?.reason === "runtime_error");
 
 	for (const input of successorInputs) {
 		const startsBeforeSuccessor = childProcessSessionStarts(
@@ -1840,11 +1849,10 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 		await successorStarted;
 		assert.equal(await currentRunPhase(host, agentId), "live");
 		releaseSuccessorResponse();
-		await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
-		await waitForCondition(() => {
-			const frame = stripTerminalSequences(opened.view.render(80).join("\n"));
-			return frame.includes("failed") && frame.includes(input);
-		});
+		await waitForCondition(() =>
+			stripTerminalSequences(opened.view.render(80).join("\n")).includes(input)
+		);
+		await waitForCondition(async () => (await currentRunState(host, agentId)).suspension?.reason === "runtime_error");
 		assert.equal(
 			childProcessSessionStarts(
 				await readProcessAgentViewEvidence(probe.evidencePath),
@@ -1951,10 +1959,17 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	const opened = await openSelectedAgentView(host, agentId);
 	view = opened.view;
 	releaseInitialFailure();
-	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
-	await waitForCondition(() =>
-		stripTerminalSequences(view.render(80).join("\n")).includes("failed")
+	// The stop retains the Run, so the ordinary Message below needs the Agent dormant
+	// again: explicit termination is what ends a stopped Run.
+	await waitForCondition(async () => (await currentRunState(host, agentId)).suspension?.reason === "runtime_error");
+	const stoppedTermination = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-stopped-viewed-successor",
+		{ operation: "terminate", agentId },
 	);
+	assert.equal((stoppedTermination.details as { disposition: string }).disposition, "terminated");
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 
 	const sent = await executeAndCommitRegisteredTool(
 		host.session,
@@ -2156,7 +2171,7 @@ async function currentRunPhase(host: TestOwnerHost, agentId: string): Promise<st
 async function currentRunState(
 	host: TestOwnerHost,
 	agentId: string,
-): Promise<{ phase: string; work?: string }> {
+): Promise<{ phase: string; work?: string; suspension?: { reason: string } }> {
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const status = await observe.execute(
@@ -2166,7 +2181,9 @@ async function currentRunState(
 		undefined,
 		host.session.extensionRunner.createContext(),
 	);
-	return (status.details as { run: { phase: string; work?: string } }).run;
+	return (status.details as {
+		run: { phase: string; work?: string; suspension?: { reason: string } };
+	}).run;
 }
 
 async function childEntries(host: TestOwnerHost, agentId: string) {

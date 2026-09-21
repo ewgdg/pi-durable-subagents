@@ -979,25 +979,38 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 	assert.doesNotMatch(recoveredPrompt, /Changed Moderator rules\./);
 	reopened.model.setResponses([fauxAssistantMessage("Cold Moderator failed", { stopReason: "error", errorMessage: "400 cold Moderator original failure" })]);
 	await executeTool(reopened, "agent_message", "fail-recovered-moderator", { operation: "send", targetAgent: moderator.agentId, content: "Fail this recovered Run." });
-	const reports = reportStore(reopened);
-	await waitForCondition(async () => reports.history().length === 1);
-	assert.match(reports.history()[0]!.report.uncertainty, /cold committed Moderator Input/);
-	assert.match(reports.history()[0]!.findings![0]!.summary, /400 cold Moderator original failure/);
-	assert.equal(await countModeratorSessions(directory), 1, "cold failure does not reconstruct automatic handling");
+	// A recovered Moderator's terminal error retains its exact Run as a stop: the cold
+	// committed Input links no failure, publishes no Report, and stages no replacement.
+	await waitForCondition(async () => {
+		const result = await observe.execute(
+			"observe-stopped-recovered-moderator",
+			{ operation: "status", agentId: moderator.agentId },
+			undefined,
+			undefined,
+			reopened.session.extensionRunner.createContext(),
+		);
+		const run = (result.details as {
+			run: { phase: string; suspension?: { reason: string; evidence: { error: string } } };
+		}).run;
+		return run.phase === "live" && run.suspension?.reason === "runtime_error" &&
+			run.suspension.evidence.error === "400 cold Moderator original failure";
+	});
+	assert.deepEqual(reportStore(reopened).history(), [], "a stopped Run publishes no Report");
+	assert.equal(await countModeratorSessions(directory), 1, "a stopped Run reconstructs no automatic handling");
 	await reopened.runtime.dispose();
 });
 
-test("host loss removes exhausted Operational Attention and attempt handling", async (t) => {
+test("host loss removes a stopped Moderator Run and attempt handling", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const terminalModeratorFailure = fauxAssistantMessage(
-		"This Moderator attempt fails terminally.",
+	const terminalModeratorStop = fauxAssistantMessage(
+		"This Moderator attempt stops terminally.",
 		{
 			stopReason: "error",
-			errorMessage: "400 invalid_request_error: deterministic exhausted Moderator failure",
+			errorMessage: "400 invalid_request_error: deterministic Moderator stop",
 		},
 	);
 	host.model.setResponses([
@@ -1005,16 +1018,15 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		...Array.from(
 			{
-				length:
-					2 * (host.services.settingsManager.getRetrySettings().maxRetries + 2),
+				length: 2 * (host.services.settingsManager.getRetrySettings().maxRetries + 2),
 			},
-			() => terminalModeratorFailure,
+			() => terminalModeratorStop,
 		),
 	]);
 	const affected = await executeTool(
 		host,
 		"agent_spawn",
-		"spawn-exhausted-attention-before-reopen",
+		"spawn-stopped-moderator-before-reopen",
 		{
 			title: "Fixture request",
 			request: "Settle while still owing this Creation Request.",
@@ -1022,55 +1034,39 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		},
 	) as { agentId: string };
 	const directory = workflowSessionDirectory(host);
+	const moderatorRun = async (owner: TestOwnerHost, agentId: string) => {
+		const tool = owner.session.getToolDefinition("agent_observe");
+		assert.ok(tool);
+		const result = await tool.execute(
+			`observe-moderator-run-${agentId}-${Date.now()}`,
+			{ operation: "status", agentId },
+			undefined,
+			undefined,
+			owner.session.extensionRunner.createContext(),
+		);
+		return (result.details as {
+			run: { phase: string; suspension?: { reason: string; evidence: { error: string } } };
+		}).run;
+	};
+	const moderator = await waitForModeratorSession(directory);
+	// The handling Moderator stops instead of consuming a bounded attempt: the incident
+	// stays retained with no replacement, no Report, and no Owner attention.
 	await waitForCondition(async () => {
-		const sessions = await SessionManager.list(host.cwd, directory);
-		const failedModerators = sessions.filter(({ path }) => {
-			const entries = SessionManager.open(path).getEntries();
-			const tail = entries.at(-1);
-			return entries[0]?.type === "custom_message" &&
-				entries[0].customType === "agent-coordination.moderator-input" &&
-				tail?.type === "message" &&
-				tail.message.role === "assistant" &&
-				tail.message.stopReason === "error";
-		});
-		return failedModerators.length === 2;
-	});
-	const observe = host.session.getToolDefinition("agent_observe");
-	assert.ok(observe);
-	const failedModeratorIds = (await SessionManager.list(host.cwd, directory)).flatMap(
-		({ path }) => {
-			const session = SessionManager.open(path);
-			const entries = session.getEntries();
-			const tail = entries.at(-1);
-			return entries[0]?.type === "custom_message" &&
-				entries[0].customType === "agent-coordination.moderator-input" &&
-				tail?.type === "message" && tail.message.role === "assistant" &&
-				tail.message.stopReason === "error"
-				? [session.getSessionId()]
-				: [];
-		},
-	);
-	await waitForCondition(async () => {
-		for (const agentId of failedModeratorIds) {
-			const result = await observe.execute(
-				`observe-failed-moderator-${agentId}`,
-				{ operation: "status", agentId },
-				undefined,
-				undefined,
-				host.session.extensionRunner.createContext(),
-			);
-			if ((result.details as { run: { phase: string } }).run.phase !== "dormant") {
-				return false;
-			}
+		try {
+			const run = await moderatorRun(host, moderator.agentId);
+			return run.phase === "live" && run.suspension?.reason === "runtime_error" &&
+				run.suspension.evidence.error === "400 invalid_request_error: deterministic Moderator stop";
+		} catch {
+			// The session file can exist before the coordinator admits the Agent.
+			return false;
 		}
-		return true;
 	});
-	const reports = reportStore(host);
-	const retained = reports.history()[0]!;
-	assert.equal(reports.history().length, 1);
-	assert.equal(retained.findings?.filter(finding => finding.key.startsWith("moderator-failure:")).length, 2);
-	assert.ok(retained.report.symptom.includes(affected.agentId));
-	reports.setRead(retained.report.reportId, true);
+	assert.equal(await countModeratorSessions(directory), 1, "a stop stages no replacement");
+	assert.deepEqual(reportStore(host).history(), []);
+	const stoppedAgents = await openAgentsSurface(host);
+	assert.doesNotMatch(stoppedAgents.surface.render(80).join("\n"), /ATTENTION 1/);
+	stoppedAgents.surface.handleInput?.("\x1b");
+	await stoppedAgents.command;
 
 	const ownerSessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(ownerSessionFile);
@@ -1078,23 +1074,47 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 	const reopened = await reopenOwner(t, host, ownerSessionFile, {
 		implicitModeratorResponses: false,
 	});
+	// A stop is process-local: the recovered Moderator is dormant, no handling or
+	// attention is reconstructed, and the Affected Agent keeps its obligation.
+	await waitForCondition(async () => {
+		try {
+			return (await moderatorRun(reopened, moderator.agentId)).phase === "dormant";
+		} catch {
+			return false;
+		}
+	});
 	const reopenedAgents = await openAgentsSurface(reopened);
 	assert.doesNotMatch(reopenedAgents.surface.render(80).join("\n"), /ATTENTION 1/);
 	assert.doesNotMatch(reopenedAgents.surface.render(80).join("\n"), /Operational incident unresolved/);
 	reopenedAgents.surface.handleInput?.("\x1b");
 	await reopenedAgents.command;
-	const reopenedReports = reportStore(reopened);
-	assert.deepEqual(reopenedReports.history(), reports.history());
-	reopened.model.setResponses([fauxAssistantMessage("Recovered attempt fails", { stopReason: "error", errorMessage: "400 recovered Moderator attempt failed" })]);
-	await executeTool(reopened, "agent_message", "fail-cold-exhausted-moderator", { operation: "send", targetAgent: failedModeratorIds[0]!, content: "Try the recovered Moderator Run." });
-	await waitForCondition(async () => reopenedReports.history()[0]?.findings?.some(finding => finding.summary.includes("400 recovered Moderator attempt failed")) ?? false);
-	assert.equal(reopenedReports.history().length, 1, "cold attempt is grouped into original retained incident");
-	assert.deepEqual(reopenedReports.history()[0]?.report, retained.report);
-	assert.equal(reopenedReports.history()[0]?.readAt, undefined, "new cold-recovered failure restores attention on the same report");
-	assert.equal(await countModeratorSessions(directory), 2, "no reconstructed replacement budget");
+	assert.deepEqual(reportStore(reopened).history(), []);
+	assert.equal(await countModeratorSessions(directory), 1, "no reconstructed handling or replacement budget");
+	assert.ok(affected.agentId.length > 0);
+	reopened.model.setResponses([
+		fauxAssistantMessage("Recovered Moderator stops again", {
+			stopReason: "error",
+			errorMessage: "400 recovered Moderator stop",
+		}),
+	]);
+	await executeTool(reopened, "agent_message", "stop-cold-recovered-moderator", {
+		operation: "send",
+		targetAgent: moderator.agentId,
+		content: "Try the recovered Moderator Run.",
+	});
+	await waitForCondition(async () => {
+		try {
+			const run = await moderatorRun(reopened, moderator.agentId);
+			return run.phase === "live" && run.suspension?.reason === "runtime_error" &&
+				run.suspension.evidence.error === "400 recovered Moderator stop";
+		} catch {
+			return false;
+		}
+	});
+	assert.deepEqual(reportStore(reopened).history(), [], "a repeated stop publishes no Report either");
+	assert.equal(await countModeratorSessions(directory), 1, "a repeated stop stages no replacement");
 	await reopened.runtime.dispose();
 });
-
 function reportStore(host: TestOwnerHost): ModeratorReportStore {
 	return new ModeratorReportStore({ transcript: transcriptFromSessionManager(host.session.sessionManager), appendCustomEntry: (type, data) => host.session.sessionManager.appendCustomEntry(type, data) });
 }

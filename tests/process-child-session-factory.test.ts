@@ -640,20 +640,13 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	await writeFile(childSettingsPath, `${JSON.stringify({ theme: "dark" })}\n`);
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	let moderatorProviderRequests = 0;
-	// The two turns this test pins later from durable transcript evidence.
-	const failedAttemptReply = "First committed Moderator attempt fails.";
+	let moderatorTurns = 0;
+	// The replacement's turns, pinned later from durable transcript evidence.
 	const replacementSettlementReply = "Linked replacement Moderator process settled.";
 	broker.setResponses(Array.from({ length: 6 }, () => (context) => {
 		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
-			moderatorProviderRequests += 1;
-			if (moderatorProviderRequests === 1) {
-				return fauxAssistantMessage(failedAttemptReply, {
-					stopReason: "error",
-					errorMessage: "deterministic committed Moderator process failure",
-				});
-			}
-			if (moderatorProviderRequests === 2) {
+			moderatorTurns += 1;
+			if (moderatorTurns === 1) {
 				return fauxAssistantMessage(
 					fauxToolCall("moderator_control", {
 						operation: "resolve",
@@ -665,13 +658,18 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			}
 			return fauxAssistantMessage(replacementSettlementReply);
 		}
-		return fauxAssistantMessage("Answer-obligated ordinary process fails.", {
-			stopReason: "error",
-			errorMessage: "deterministic ordinary process failure",
-		});
+		return fauxAssistantMessage("Settled without answering the Creation Request.");
 	}));
+	let moderatorRunStarts = 0;
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-durable-subagents>",
+		incidentBoundaryHooks: {
+			// A handling Moderator's provider error now suspends it, so the bounded
+			// attempt needs a committed Run Failure: fail the first attempt's Run start.
+			beforeModeratorRunStart() {
+				return ++moderatorRunStarts === 1 ? "confirmed_failure" : undefined;
+			},
+		},
 	});
 	let replacementPid: number | undefined;
 	try {
@@ -788,12 +786,15 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			"child Pi settings must use the same Agent directory as its Owner Runtime",
 		);
 		await view.close();
-		// Durable transcripts pin the three expected Moderator turns instead of a global
+		// Durable transcripts pin the replacement's turns instead of a global
 		// provider-request count: the proxied `moderator_control` resolve is blocked, so
 		// coordination legitimately delivers a later obligation reminder whose extra turn
 		// can land at any moment and would race any exact count.
-		const [failedAttemptTurn] = moderatorAssistantTurns(failedAttemptTranscriptPath);
-		assert.deepEqual(failedAttemptTurn, { texts: [failedAttemptReply], toolCallIds: [] });
+		assert.deepEqual(
+			moderatorAssistantTurns(failedAttemptTranscriptPath),
+			[],
+			"an attempt that fails at its Run start records no assistant turn",
+		);
 		const [replacementToolTurn, replacementSettlementTurn] =
 			moderatorAssistantTurns(replacementTranscriptPath);
 		assert.deepEqual(replacementToolTurn, {
