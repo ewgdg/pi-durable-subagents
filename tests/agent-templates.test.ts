@@ -623,7 +623,8 @@ test("model fields use a Template candidate pair, explicit values, or parent inh
 		systemPromptMode: "append" as const, loadContextFiles: true, systemPrompt: "",
 	};
 	// An explicit model id takes no part of the candidate pair, so the parent thinking
-	// level is the only remaining default for that field.
+	// level is the only remaining default for that field. A new Spawn call cannot send
+	// this shape; it is how a selection recorded before the pair rule still resolves.
 	const cases: Array<[AgentSpawnConfigurationInput["model"], string, string, string]> = [
 		[undefined, "template", "high", "low"],
 		[{}, "template", "high", "low"],

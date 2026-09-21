@@ -341,16 +341,19 @@ const agentSpawnConfigurationParameters = Type.Object(
 		model: Type.Optional(
 			Type.Object(
 				{
-					id: Type.Optional(Type.Union([
+					id: Type.Union([
 						Type.String({ pattern: "^[^/]+/.+$" }),
 						Type.Literal("inherit"),
-					], { description: 'Omit to use the selected Template model, else the parent model. "inherit" always uses the parent model.' })),
-					thinking: Type.Optional(Type.Union([
+					], { description: 'The child model as provider/model, or "inherit" for the parent model.' }),
+					thinking: Type.Union([
 						RuntimeThinkingSchema,
 						Type.Literal("inherit"),
-					], { description: 'Omit to use the Template candidate thinking level when model.id is also omitted, else the parent thinking level; a supplied model.id discards the candidate thinking level, which describes that candidate model. "inherit" always uses the parent thinking level. A resolved level is clamped to what the selected model can run.' })),
+					], { description: 'The child thinking level, or "inherit" for the parent thinking level. Pi resolves a level the selected model cannot run to its nearest supported level.' }),
 				},
-				{ additionalProperties: false },
+				{
+					additionalProperties: false,
+					description: "One atomic model selection: give id and thinking together, or omit config.model to accept the Template candidate pair or the parent pair.",
+				},
 			),
 		),
 		cwd: Type.Optional(Type.String({ minLength: 1 })),

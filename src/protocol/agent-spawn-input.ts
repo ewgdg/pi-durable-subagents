@@ -117,6 +117,12 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	};
 }
 
+/**
+ * Structural validation of one recorded Spawn call. The tool and control schemas
+ * require an atomic id/thinking pair for new calls; this parse stays lenient because
+ * it also reads calls recorded before that rule, which resolve through the Runtime
+ * fallbacks and must keep working across cold-host recovery and replay.
+ */
 function validateModel(value: unknown): NonNullable<AgentSpawnConfigurationInput["model"]> {
 	if (!isRecord(value)) {
 		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn config.model must be an object");

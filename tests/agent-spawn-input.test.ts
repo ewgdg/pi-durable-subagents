@@ -141,10 +141,18 @@ test("Agent Spawn validates model overrides with explicit inheritance", () => {
 	);
 });
 
-test("Agent Spawn schema and validation accept independently omitted model fields", () => {
+test("Agent Spawn requires one atomic model pair while recorded half-pairs keep resolving", () => {
+	for (const model of [{ id: "provider/model", thinking: "high" }, { id: "inherit", thinking: "inherit" }]) {
+		const input = { title: "Fixture request", request: "Use selected values.", config: { model } };
+		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
+		assert.deepEqual(validateAgentSpawnInput(input), input);
+	}
+	// The tool and control schemas reject a half-pair, which would otherwise let an
+	// availability change between Runtime preparations move the level to another model.
 	for (const model of [{}, { id: "provider/model" }, { thinking: "high" }, { id: "inherit" }, { thinking: "inherit" }]) {
 		const input = { title: "Fixture request", request: "Use selected defaults.", config: { model } };
-		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
+		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), false);
+		// A call recorded before the pair rule still parses for recovery and replay.
 		assert.deepEqual(validateAgentSpawnInput(input), input);
 	}
 	for (const model of [{ id: "invalid" }, { thinking: "invalid" }, { extra: true }, { id: null }, { thinking: null }]) {
