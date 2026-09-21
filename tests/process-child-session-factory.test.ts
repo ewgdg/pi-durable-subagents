@@ -752,6 +752,9 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 
 		const view = await owner.openAgentView(replacement.status.agentId);
 		assert.ok(view);
+		// A durable view is a screen consumer: reading this child's parsed presentation
+		// requires the same observation the view surface holds while it is mounted.
+		await view.projection().screenView.begin();
 		await waitFor(() => view.projection().presentation.render(80)
 			.map(stripTerminalSequences)
 			.join("\n")
