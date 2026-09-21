@@ -133,7 +133,15 @@ type OperationalIncidentHandling = {
 	creationStage?: string;
 	trigger?: ModeratorTrigger;
 	previousAttempt?: EntryPointer;
+	pendingFailureFindings?: PendingModeratorFailure[];
 };
+
+type PendingModeratorFailure = Readonly<{
+	incidentKey: string;
+	reportInput: ReportToUserInput;
+	diagnostic: EntryPointer;
+	finding: ReportFindingInput;
+}>;
 
 export type OperationalIncidentAttention = Readonly<{
 	summary?: string;
@@ -351,28 +359,69 @@ export class OperationalIncidentCoordinator {
 	#recordModeratorFailure(snapshot: IncidentReportContext, moderator: AgentRecord, handle?: AgentRunHandle, failure?: AgentRunFailure): void {
 		const key = `moderator-failure:${moderator.identity.agentId}:${handle?.sequence ?? "startup-not-admitted"}`;
 		if (this.#reportedFailures.has(key)) return;
+		const handling = this.#handlingByKey.get(snapshot.key);
 		const evidence = statusOf(moderator).primaryEvidence;
 		const facts = `Moderator ${moderator.identity.metadata.label} (${moderator.identity.agentId}), ${handle ? `Run ${handle.sequence}` : "startup attempt; no Run admitted"}.\n${this.#failureText(failure)}`;
 		const diagnostic = this.#retainDiagnostic(new Error(facts));
+		const reportInput: ReportToUserInput = {
+			symptom: `Moderator handling failed for original incident: ${snapshot.kind}.\nAffected Agents: ${snapshot.affectedAgentIds.join(", ")}`,
+			suspectedDefect: facts,
+			uncertainty: `The original incident remains distinct from failed Moderator attempts. Root cause and recovery are not established.${snapshot.coldRecovery ? " Incident identity comes from cold committed Moderator Input; its qualifying Requests may be a bounded subset and live handling was not reconstructed." : ""}`,
+			recoveryActions: "Runtime retains each failed Moderator attempt under this incident and applies the existing bounded attempt policy.",
+			recoveryOutcome: "Recovery unknown at publication; later observations are linked findings, not changes to this report.",
+			evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`, `Affected Requests: ${JSON.stringify(snapshot.requestIds)}`, ...snapshot.inspectedThrough.map(pointer => `Original incident evidence: ${JSON.stringify(pointer)}`)],
+		};
+		// Run sequences restart with a cold Host; the retained diagnostic distinguishes
+		// those observations while the in-memory key deduplicates repeated callbacks.
+		const finding: ReportFindingInput = { key: `${key}:${diagnostic.entryId}`, summary: `${facts}${snapshot.coldRecovery ? "\nCold-recovered Moderator: original incident linked from committed Input only. Live recovery state and outcome are unknown; no automatic replacement was scheduled." : ""}`, evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`, `Moderator transcript: ${evidence.transcriptPath ?? "unavailable"}`, `Inspected through: ${JSON.stringify(evidence.inspectedThrough)}`, `Affected Requests: ${JSON.stringify(snapshot.requestIds)}`] };
+		// One continuous incident keeps one acknowledgeable Report. While a replacement
+		// attempt is still available and the condition persists, retain the observation:
+		// the attempt that actually ends moderation (its successor committing, exhaustion,
+		// or the moderation-unavailable Report) supplies the incident's report identity.
+		// Publishing here would claim that identity ahead of the ending observation.
+		if (
+			handling !== undefined &&
+			snapshot.snapshot === handling.snapshot &&
+			handling.committedAttemptCount < MAX_AUTOMATIC_MODERATOR_ATTEMPTS &&
+			this.#conditionRemains(handling.snapshot)
+		) {
+			(handling.pendingFailureFindings ??= []).push({ incidentKey: snapshot.incidentKey, reportInput, diagnostic, finding });
+			this.#onAttentionChanged();
+			this.#reportedFailures.add(key);
+			return;
+		}
+		if (handling !== undefined && snapshot.snapshot === handling.snapshot) this.#flushModeratorFailureFindings(handling);
 		let source = snapshot.snapshot ? this.#reportSourcesBySnapshot.get(snapshot.snapshot) : this.#reportSources.get(snapshot.key);
 		if (!source) {
-			this.#publishRuntimeReport({
-				symptom: `Moderator handling failed for original incident: ${snapshot.kind}.\nAffected Agents: ${snapshot.affectedAgentIds.join(", ")}`,
-				suspectedDefect: facts,
-				uncertainty: `The original incident remains distinct from failed Moderator attempts. Root cause and recovery are not established.${snapshot.coldRecovery ? " Incident identity comes from cold committed Moderator Input; its qualifying Requests may be a bounded subset and live handling was not reconstructed." : ""}`,
-				recoveryActions: "Runtime retains each failed Moderator attempt under this incident and applies the existing bounded attempt policy.",
-				recoveryOutcome: "Recovery unknown at publication; later observations are linked findings, not changes to this report.",
-				evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`, `Affected Requests: ${JSON.stringify(snapshot.requestIds)}`, ...snapshot.inspectedThrough.map(pointer => `Original incident evidence: ${JSON.stringify(pointer)}`)],
-			}, diagnostic, snapshot.incidentKey);
+			this.#publishRuntimeReport(reportInput, diagnostic, snapshot.incidentKey);
 			source = diagnostic;
 			if (snapshot.snapshot) this.#reportSourcesBySnapshot.set(snapshot.snapshot, diagnostic);
 			if (!snapshot.snapshot || this.#handlingByKey.get(snapshot.key)?.snapshot === snapshot.snapshot) this.#reportSources.set(snapshot.key, diagnostic);
 		}
-		// Run sequences restart with a cold Host; the retained diagnostic distinguishes
-		// those observations while the in-memory key deduplicates repeated callbacks.
-		this.#appendRuntimeReportFinding(source, { key: `${key}:${diagnostic.entryId}`, summary: `${facts}${snapshot.coldRecovery ? "\nCold-recovered Moderator: original incident linked from committed Input only. Live recovery state and outcome are unknown; no automatic replacement was scheduled." : ""}`, evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`, `Moderator transcript: ${evidence.transcriptPath ?? "unavailable"}`, `Inspected through: ${JSON.stringify(evidence.inspectedThrough)}`, `Affected Requests: ${JSON.stringify(snapshot.requestIds)}`] });
+		this.#appendRuntimeReportFinding(source, finding);
 		this.#onAttentionChanged();
 		this.#reportedFailures.add(key);
+	}
+
+	/**
+	 * Publish retained failed-attempt observations once the incident has a Report.
+	 * The first retained observation supplies that Report when nothing else has.
+	 */
+	#flushModeratorFailureFindings(handling: OperationalIncidentHandling): void {
+		const pending = handling.pendingFailureFindings;
+		if (!pending?.length) return;
+		handling.pendingFailureFindings = [];
+		let source = this.#reportSources.get(handling.snapshot.key);
+		for (const item of pending) {
+			if (!source) {
+				this.#publishRuntimeReport(item.reportInput, item.diagnostic, item.incidentKey);
+				source = item.diagnostic;
+				this.#reportSourcesBySnapshot.set(handling.snapshot, item.diagnostic);
+				this.#reportSources.set(handling.snapshot.key, item.diagnostic);
+			}
+			this.#appendRuntimeReportFinding(source, item.finding);
+		}
+		this.#onAttentionChanged();
 	}
 
 	#appendFinding(conditionKey: string, finding: ReportFindingInput): void {
@@ -649,6 +698,9 @@ export class OperationalIncidentCoordinator {
 				this.#reportSourcesBySnapshot.set(handling.snapshot, diagnostic);
 			}
 		}
+		// A creation fault is the moderation-unavailable Report this incident keeps;
+		// retained failed-attempt observations belong under it, not under a second one.
+		if (handling) this.#flushModeratorFailureFindings(handling);
 		this.#faultAttention.set(key, attention);
 		this.#presentation.present(key, attention);
 		this.#onAttentionChanged();
@@ -885,6 +937,9 @@ export class OperationalIncidentCoordinator {
 		handling.moderatorAgentId = agentId;
 		handling.committedAttemptCount += 1;
 		this.#attemptByModeratorAgentId.set(agentId, handling.snapshot);
+		// A committed successor seals the previous attempt's failure observations:
+		// the incident's Report exists now, so retained findings can be linked to it.
+		this.#flushModeratorFailureFindings(handling);
 
 		handling.creationStage = "Moderator record integration";
 		const moderator = this.#sessionFactory.createModeratorRecord({
@@ -1409,6 +1464,9 @@ export class OperationalIncidentCoordinator {
 	#releaseHandling(key: string): void {
 		const handling = this.#handlingByKey.get(key);
 		if (!handling) return;
+		// Clearance ends the episode: retained failed-attempt observations must reach
+		// their Report before the source mapping is dropped.
+		this.#flushModeratorFailureFindings(handling);
 		this.#appendFinding(key, { key: "condition-cleared", summary: "Original operational condition is no longer eligible for this handling, or Moderator handling was explicitly resolved. This does not establish that all Requests were answered or that underlying failure was repaired.", evidence: [`Original incident: ${handling.snapshot.kind}`, `Affected Requests: ${JSON.stringify(handling.snapshot.requestIds)}`] });
 		this.#handlingByKey.delete(key);
 		// Request-set keys can recur after activity clears a Stall. Keep the old
