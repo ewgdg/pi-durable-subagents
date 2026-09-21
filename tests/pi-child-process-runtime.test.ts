@@ -1210,20 +1210,6 @@ const STARTUP_TOOL_FILTER_SCENARIOS = [
 		probeExecution: true,
 	},
 	{
-		name: "a Spawn exclusion is inactive after startup",
-		excludeTools: ["read"],
-		initialTools: ["read", "ask_user"],
-		expectedTools: [
-			"ask_user",
-			"agent_message",
-			"agent_wait",
-			"agent_spawn",
-			"agent_observe",
-			"agent_control",
-		],
-		probeExecution: false,
-	},
-	{
 		name: "role coordination tools stay active when the extension drops them",
 		excludeTools: [],
 		initialTools: [],

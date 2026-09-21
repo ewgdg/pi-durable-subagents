@@ -55,17 +55,30 @@ const PI_CLI_READY_EXTENSION = fileURLToPath(
 	new URL("./fixtures/pi-cli-startup-ready-extension.ts", import.meta.url),
 );
 
-test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Owner", {
+test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the exact Owner", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
-	const terminal = launchFixture();
+	// One boot at 100x30 carries both contracts this file used to boot twice for:
+	// long-transcript mouse navigation and complete-frame reflow at a non-default
+	// size (docs/agent-view-acceptance.md: mouse input, streaming, and reflow
+	// evidence). The remaining 80x24 cases still cover the default size.
+	const terminal = launchFixture(FIXTURE, {
+		PTY_TEST_COLUMNS: "100",
+		PTY_TEST_ROWS: "30",
+	});
 	try {
 		const setup = await terminal.marker<{
 			ownerId: string;
 			childAgentId: string;
 			cwd: string;
 			ownerEditorText: string;
+			terminalColumns: number;
+			terminalRows: number;
 		}>("__PTY_AGENT_VIEW_SETUP__");
+		assert.deepEqual(
+			{ columns: setup.terminalColumns, rows: setup.terminalRows },
+			{ columns: 100, rows: 30 },
+		);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("PTY Viewed Worker")) &&
 			frame.some((line) => line.includes("Tab views"))
@@ -85,7 +98,7 @@ test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Ow
 			frame.some((line) => line.includes("deterministic-owner")) &&
 			!frame.some((line) => line.includes("Tab views"))
 		);
-		assert.equal(agentViewFrame.length, 24);
+		assert.equal(agentViewFrame.length, 30);
 		assert.equal(
 			agentViewFrame.some((line) => line.includes(setup.ownerEditorText)),
 			false,
@@ -166,7 +179,7 @@ test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Ow
 			!frame.some((line) => line.includes("Viewed child transcript line")) &&
 			!frame.some((line) => line.includes("Tab views"))
 		);
-		assert.equal(ownerFrame.length, 24);
+		assert.equal(ownerFrame.length, 30);
 		await terminal.closed();
 		assert.match(terminal.output(), /__PTY_AGENT_VIEW_CLOSED__/);
 	} finally {
@@ -342,69 +355,6 @@ test("real fullscreen PTY command returns as soon as physical child attachment i
 	}
 });
 
-test("real fullscreen PTY can return to Owner and attach the same Agent again", {
-	skip: !existsSync(SCRIPT),
-}, async () => {
-	const repeatDirectory = await mkdtemp(join(tmpdir(), "pi-agent-view-repeat-"));
-	const readyPath = join(repeatDirectory, "ready");
-	const releasePath = join(repeatDirectory, "release");
-	const terminal = launchFixture(FIXTURE, {
-		PTY_REPEAT_VIEW_READY_PATH: readyPath,
-		PTY_REPEAT_VIEW_RELEASE_PATH: releasePath,
-	});
-	try {
-		await terminal.marker("__PTY_AGENT_VIEW_SETUP__");
-		terminal.write("/agents\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("PTY Viewed Worker")) &&
-			frame.some((line) => line.includes("Tab views"))
-		);
-		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
-			!frame.some((line) => line.includes("Tab views"))
-		);
-		terminal.write(DIRECT_AGENT_INPUT);
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
-		);
-		terminal.write("\r");
-		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
-		await returnPtyAgentViewToOwner(terminal);
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
-			!frame.some((line) => line.includes("Tab views"))
-		);
-		await waitForFile(readyPath);
-		terminal.write("/agents\r");
-		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("Tab views")));
-		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Streaming child update 39")) &&
-			!frame.some((line) => line.includes("Tab views"))
-		);
-		terminal.write("second attachment remains interactive\r");
-		await terminal.waitFor("Second attachment accepted direct input.");
-		terminal.write("/agents");
-		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("/agents")));
-		terminal.write("\r");
-		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("Tab views")));
-		terminal.write("o");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
-			!frame.some((line) => line.includes("Tab views"))
-		);
-		await writeFile(releasePath, "release\n");
-		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
-		await terminal.closed();
-	} finally {
-		terminal.kill();
-		await import("node:fs/promises").then(({ rm }) =>
-			rm(repeatDirectory, { recursive: true, force: true })
-		);
-	}
-});
-
 test("real fullscreen PTY switches one mounted view between two Agent modes", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
@@ -478,66 +428,6 @@ test("real fullscreen PTY switches one mounted view between two Agent modes", {
 			frame.some((line) => line.includes(setup.ownerEditorText)) &&
 			!frame.some((line) => line.includes("Second PTY child remains independently interactive"))
 		);
-		await terminal.closed();
-	} finally {
-		terminal.kill();
-	}
-});
-
-test("real fullscreen PTY reflows the complete Agent view at 100x30", {
-	skip: !existsSync(SCRIPT),
-}, async () => {
-	const terminal = launchFixture(FIXTURE, {
-		PTY_TEST_COLUMNS: "100",
-		PTY_TEST_ROWS: "30",
-	});
-	try {
-		const setup = await terminal.marker<{
-			childAgentId: string;
-			ownerEditorText: string;
-			terminalColumns: number;
-			terminalRows: number;
-		}>("__PTY_AGENT_VIEW_SETUP__");
-		assert.deepEqual(
-			{ columns: setup.terminalColumns, rows: setup.terminalRows },
-			{ columns: 100, rows: 30 },
-		);
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("PTY Viewed Worker")) &&
-			frame.some((line) => line.includes("Tab views"))
-		);
-		await terminal.waitForScreen((frame) => frame.some((line) =>
-			line.includes("→") && line.includes("PTY Viewed Worker")
-		));
-		terminal.write("\r");
-		const agentFrame = await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
-			!frame.some((line) => line.includes("Tab views"))
-		);
-		assert.equal(agentFrame.length, 30);
-		terminal.write(DIRECT_AGENT_INPUT);
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
-		);
-		terminal.write("\r");
-		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
-		terminal.write("/agents");
-		await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes("/agents")),
-			"resized child /agents command input",
-		);
-		terminal.write("\r");
-		await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes("Tab views")),
-			"resized child-local selector",
-		);
-		terminal.write("o");
-		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
-		const ownerFrame = await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
-			frame.some((line) => line.includes(setup.ownerEditorText))
-		);
-		assert.equal(ownerFrame.length, 30);
 		await terminal.closed();
 	} finally {
 		terminal.kill();

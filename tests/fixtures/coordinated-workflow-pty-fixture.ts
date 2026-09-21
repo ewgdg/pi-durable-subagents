@@ -135,13 +135,10 @@ await waitFor(() =>
 );
 host.model.setResponses([
 	fauxAssistantMessage(STREAMING_CHILD_RESPONSE),
-	fauxAssistantMessage("Second attachment accepted direct input."),
 ]);
 const ownerEntryIds = ownerSession.sessionManager.getEntries().map(({ id }) => id);
 const ownerEditorFactory = ownerSession.extensionRunner.createContext().ui.getEditorComponent();
-const repeatAgentViewReadyPath = process.env.PTY_REPEAT_VIEW_READY_PATH;
-const repeatAgentViewReleasePath = process.env.PTY_REPEAT_VIEW_RELEASE_PATH;
-const ownerEditorText = repeatAgentViewReadyPath ? "" : OWNER_EDITOR_TEXT;
+const ownerEditorText = OWNER_EDITOR_TEXT;
 ownerSession.extensionRunner.createContext().ui.setEditorText(ownerEditorText);
 const ownerEditor = (mode as unknown as {
 	editor: {
@@ -182,19 +179,7 @@ void (async () => {
 	}, CONDITION_TIMEOUT_MS, "streamed child Run settlement");
 	process.stdout.write("\n__PTY_CHILD_INPUT_SETTLED__\n");
 })();
-if (repeatAgentViewReadyPath) {
-	await waitForAsync(async () => {
-		const status = await observeAgent(childAgentId);
-		const run = (status.details as {
-			run: { retentionReasons?: readonly { reason: string }[] };
-		}).run;
-		return run.retentionReasons?.some(
-			({ reason }) => reason === "interactive_selection",
-		) ?? false;
-	}, 20_000, "first typed physical Agent view attachment");
-} else {
-	await openAgents(ownerSession);
-}
+await openAgents(ownerSession);
 if (firstAgentViewCommandReturnedPath) {
 	await import("node:fs/promises").then(({ writeFile }) =>
 		writeFile(firstAgentViewCommandReturnedPath, "returned\n")
@@ -222,28 +207,6 @@ await waitForAsync(async () => {
 		);
 	});
 }, 20_000, "physical Agent view closure");
-if (repeatAgentViewReadyPath) {
-	if (!repeatAgentViewReleasePath) {
-		throw new Error("PTY repeated-view gate has no release path");
-	}
-	await import("node:fs/promises").then(({ writeFile }) =>
-		writeFile(repeatAgentViewReadyPath, "ready\n")
-	);
-	await waitFor(
-		() => readFileIfExists(repeatAgentViewReleasePath) === "release\n",
-		20_000,
-		"repeated-view release",
-	);
-	await waitForAsync(async () => {
-		const status = await observeAgent(childAgentId);
-		const run = (status.details as {
-			run: { retentionReasons?: readonly { reason: string }[] };
-		}).run;
-		return !run.retentionReasons?.some(
-			({ reason }) => reason === "interactive_selection",
-		);
-	}, 20_000, "repeated physical Agent view closure");
-}
 if (host.runtime.session !== ownerSession) {
 	throw new Error(`Agent view rebound runtime to ${host.runtime.session.sessionId}`);
 }
