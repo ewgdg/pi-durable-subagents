@@ -412,7 +412,7 @@ test("primary Owner input preempts Agent Wait before the next model turn", {
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_spawn",
-					{ request: requestMarker },
+						{ title: "Fixture request", request: requestMarker },
 					{ id: spawnCallId },
 				),
 				{ stopReason: "toolUse" },
@@ -572,7 +572,7 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 				return fauxAssistantMessage(
 					fauxToolCall(
 						"agent_spawn",
-						{ request },
+							{ title: "Fixture request", request },
 						{ id: "spawn-owner-parked-request" },
 					),
 					{ stopReason: "toolUse" },
@@ -592,8 +592,12 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 		"No independent work remains in this turn.",
 	));
 	assert.equal(host.session.isIdle, false);
-	assert.equal(compactionStarts, 0);
 	assert.deepEqual(lifecycle, ["agent_end"]);
+	// Pi compacts between tool execution and the next assistant response in the
+	// same run (pi-coding-agent CHANGELOG 0.84.4, #6879), so this run may already
+	// have compacted before it parked. The parked boundary is what must not start
+	// another turn: the count stays frozen until the Answer releases it.
+	const compactionsBeforeParking = compactionStarts;
 
 	await host.session.sendCustomMessage({
 		customType: "owner-parking-next-turn-probe",
@@ -602,6 +606,7 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 	}, { triggerTurn: true, deliverAs: "nextTurn" });
 	await new Promise<void>((resolve) => setTimeout(resolve, 20));
 	assert.deepEqual(lifecycle, ["agent_end"]);
+	assert.equal(compactionStarts, compactionsBeforeParking);
 
 	releaseAnswer();
 	await withTimeout(prompt, 5_000, "Owner did not resume after Answer Delivery");
@@ -667,7 +672,7 @@ test("native custom input wakes a parked working Owner and remains in model cont
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_spawn",
-					{ request: requestMarker },
+						{ title: "Fixture request", request: requestMarker },
 					{ id: "spawn-native-custom-wake" },
 				),
 				{ stopReason: "toolUse" },

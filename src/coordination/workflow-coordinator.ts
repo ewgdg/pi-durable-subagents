@@ -532,6 +532,10 @@ export class WorkflowCoordinator {
 	async initialize(): Promise<void> {
 		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
 		await this.#messages.refreshTranscriptFacts();
+		let recoveredQuestions = 0;
+		for (const record of this.#agents.values()) {
+			recoveredQuestions += this.#humanRequests.recoverPendingRequests(record.identity.agentId);
+		}
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
 	}
 
@@ -1402,12 +1406,16 @@ export class WorkflowCoordinator {
 		await active.record.host.lane.run(async () => {
 			if (this.#activeAgentView !== active) return;
 			this.#activeAgentView = undefined;
+			// A closed selection cannot hold interactive retention for any projection:
+			// there is only one active view, and it is this one. Gating the removal on
+			// the attached projection used to leak the retention whenever that
+			// projection had already been replaced (Run fence, resumption, disposal),
+			// which then made the record permanently ineligible for Deadlock and other
+			// incident inspection that treats a live selection as external progress.
+			active.record.host.removeRetentionReason("interactive_selection");
 			if (
 				active.record.host.currentProjection() === active.attachment.projection()
-			) {
-				active.record.host.removeRetentionReason("interactive_selection");
-				requestRunRelease = true;
-			}
+			) requestRunRelease = true;
 			active.attachment.settleClosed();
 		});
 		if (requestRunRelease) {

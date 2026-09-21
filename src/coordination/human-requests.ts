@@ -13,9 +13,11 @@ import {
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
-
-const INTERRUPTED_MESSAGE = "Human request interrupted before an answer was provided.";
-const FENCED_MESSAGE = "Human request ended because its Agent Run is no longer available.";
+import { discoverOpenHumanRequests } from "./human-request-recovery.ts";
+import {
+	HUMAN_REQUEST_FENCED_MESSAGE as FENCED_MESSAGE,
+	HUMAN_REQUEST_INTERRUPTED_MESSAGE as INTERRUPTED_MESSAGE,
+} from "./human-request-messages.ts";
 const INTERACTIVE_EDITOR_REQUIRED_MESSAGE =
 	"Human Request requires an interactive Agent editor.";
 const IMAGE_ANSWER_UNSUPPORTED_MESSAGE =
@@ -34,6 +36,11 @@ type PendingHumanRequest = {
 	reject(error: Error): void;
 	removeAbortListener(): void;
 };
+
+type RecoveredHumanRequest = Readonly<{
+	request: HumanRequest;
+	record: AgentRecord;
+}>;
 
 export type HumanAttentionItem = Readonly<{
 	requestId: string;
@@ -74,6 +81,11 @@ export class HumanRequestCoordinator {
 	readonly #beginHumanResultCommit: (source: ToolCallPointer) => void;
 	readonly #onAttentionChanged: () => void;
 	readonly #pendingByRequestId = new Map<string, PendingHumanRequest>();
+	// Recovered Requests have no live Run promise behind them: the child that
+	// committed the call may be Dormant after a cold reload, and an Answer is
+	// admitted through ordinary native input instead. They exist so attention
+	// and Human-Answer routing agree with the committed transcript evidence.
+	readonly #recoveredByRequestId = new Map<string, RecoveredHumanRequest>();
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
@@ -274,36 +286,81 @@ export class HumanRequestCoordinator {
 			}
 			this.#complete(pending);
 		}
+		for (const recovered of [...this.#recoveredByRequestId.values()]) {
+			if (recovered.request.requesterAgentId !== callerAgentId) continue;
+			const inspection = inspectCommittedHumanRequestResult({
+				request: recovered.request,
+				transcript: recovered.record.transcript.inspect(),
+			});
+			if (inspection.state === "pending") continue;
+			this.#recoveredByRequestId.delete(recovered.request.requestId);
+			this.#onAttentionChanged();
+		}
 	}
 
 	attentionItems(callerAgentId: string): readonly HumanAttentionItem[] {
 		const caller = this.#requireAgent(callerAgentId);
-		return [...this.#pendingByRequestId.values()]
-			.filter((pending) => {
-				const itemAgentId = pending.request.requesterAgentId;
-				if (callerAgentId === this.#ownerIdentity.agentId) return true;
-				if (itemAgentId === callerAgentId) return true;
-				return this.#agents.get(itemAgentId)?.identity.directSpawnerAgentId ===
-					caller.identity.agentId;
-			})
-			.map((pending) => ({
+		return [
+			...[...this.#pendingByRequestId.values()].map((pending) => ({
 				requestId: pending.request.requestId,
 				agentId: pending.request.requesterAgentId,
 				agentLabel: pending.record.identity.metadata.label,
 				question: pending.request.question,
-			}));
+			})),
+			...[...this.#recoveredByRequestId.values()].map((recovered) => ({
+				requestId: recovered.request.requestId,
+				agentId: recovered.request.requesterAgentId,
+				agentLabel: recovered.record.identity.metadata.label,
+				question: recovered.request.question,
+			})),
+		]
+			.filter((item) => {
+				const itemAgentId = item.agentId;
+				if (callerAgentId === this.#ownerIdentity.agentId) return true;
+				if (itemAgentId === callerAgentId) return true;
+				return this.#agents.get(itemAgentId)?.identity.directSpawnerAgentId ===
+					caller.identity.agentId;
+			});
+	}
+
+	/**
+	 * Re-admit committed Human Requests that have no committed result. Cold
+	 * recovery rebuilds every Agent from its physical transcript, so pending
+	 * questions authored by a previous host generation must be rebuilt from the
+	 * same evidence instead of being reported as none.
+	 */
+	recoverPendingRequests(callerAgentId: string): number {
+		const record = this.#requireAgent(callerAgentId);
+		let recovered = 0;
+		for (const request of discoverOpenHumanRequests({
+			agentId: callerAgentId,
+			transcript: record.transcript.inspect(),
+		})) {
+			if (this.#pendingByRequestId.has(request.requestId)) continue;
+			if (this.#recoveredByRequestId.has(request.requestId)) continue;
+			if (this.#pendingForAgent(callerAgentId)) continue;
+			this.#recoveredByRequestId.set(request.requestId, { request, record });
+			recovered += 1;
+		}
+		if (recovered > 0) this.#onAttentionChanged();
+		return recovered;
 	}
 
 	// Fenced calls may remain until their native error result commits, but they
 	// no longer accept an Answer and must not keep human-input presentation active.
 	hasPendingQuestions(): boolean {
-		return [...this.#pendingByRequestId.values()].some(({ phase }) => phase !== "fenced");
+		return this.#recoveredByRequestId.size > 0 ||
+			[...this.#pendingByRequestId.values()].some(({ phase }) => phase !== "fenced");
 	}
 
 	hasPendingRequest(agentId: string, requestId?: string): boolean {
 		const pending = this.#pendingForAgent(agentId);
-		return pending !== undefined && (
+		if (pending !== undefined && (
 			requestId === undefined || pending.request.requestId === requestId
+		)) return true;
+		return [...this.#recoveredByRequestId.values()].some((recovered) =>
+			recovered.request.requesterAgentId === agentId &&
+			(requestId === undefined || recovered.request.requestId === requestId)
 		);
 	}
 
