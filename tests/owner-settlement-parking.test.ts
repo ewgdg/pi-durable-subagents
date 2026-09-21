@@ -1,4 +1,4 @@
-import { latestRequestFromContext } from "./support/model-requests.ts";
+import { hasDeliveredRequest, latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -33,7 +33,7 @@ for (const explicitWait of [false, true]) {
 		});
 		const routeResponse = async (context: Context) => {
 			const serialized = JSON.stringify(context.messages);
-			if (serialized.includes("requestMessageId") && !serialized.includes("spawn-needs-human")) {
+			if (hasDeliveredRequest(context) && !serialized.includes("spawn-needs-human")) {
 				await childGate;
 				return fauxAssistantMessage(fauxToolCall("ask_user", {
 					question: "Which option should I use?",
@@ -71,6 +71,7 @@ for (const explicitWait of [false, true]) {
 		assert.deepEqual(lifecycle, ["agent_settled"]);
 		assert.match(ownerDockText(host), /Which option should I use/);
 		await host.session.reload();
+		await waitUntil(() => attentionEvents.length >= 3);
 		assert.deepEqual(attentionEvents, [
 			{ active: true, label: "An agent needs your input" },
 			{ active: false },
@@ -101,7 +102,7 @@ for (const independentFinishesFirst of [false, true]) {
 		host.session.subscribe((event) => { if (event.type === "agent_settled") lifecycle.push(event.type); });
 		const routeResponse = async (context: Context) => {
 			const serialized = JSON.stringify(context.messages);
-			const child = serialized.includes("requestMessageId") && !serialized.includes("spawn-progress-parent");
+			const child = hasDeliveredRequest(context) && !serialized.includes("spawn-progress-parent");
 			if (child && serialized.includes("INDEPENDENT_PROGRESS_WORK")) {
 				independentStarted = true;
 				await independentGate;
@@ -181,7 +182,7 @@ test("Owner stays active through terminal child failure and Moderator recovery, 
 				{ id: "recovery-needs-human" }), { stopReason: "toolUse" });
 		}
 		const serialized = JSON.stringify(context.messages);
-		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-to-fail")) {
+		if (hasDeliveredRequest(context) && !serialized.includes("spawn-to-fail")) {
 			await childGate;
 			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 invalid_request_error: deterministic child failure" });
 		}
@@ -212,7 +213,7 @@ test("terminating the last progressing child releases Owner parking without an A
 	t.after(releaseChild);
 	const routeResponse = async (context: Context) => {
 		const serialized = JSON.stringify(context.messages);
-		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-to-terminate")) {
+		if (hasDeliveredRequest(context) && !serialized.includes("spawn-to-terminate")) {
 			await gate;
 			return fauxAssistantMessage("Unused after termination.");
 		}
@@ -250,7 +251,7 @@ test("Owner stays parked while a supervisory resumed child executes in isolation
 	let agentId = "";
 	const routeResponse = async (context: Context) => {
 		const serialized = JSON.stringify(context.messages);
-		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-to-resume")) {
+		if (hasDeliveredRequest(context) && !serialized.includes("spawn-to-resume")) {
 			if (!serialized.includes("Continue isolated work.")) {
 				childStarted = true;
 				await initialGate;
@@ -302,7 +303,7 @@ test("Owner parks for ordinary background work even after every Request was answ
 	let working = false;
 	const routeResponse = async (context: Context) => {
 		const serialized = JSON.stringify(context.messages);
-		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-message-worker")) {
+		if (hasDeliveredRequest(context) && !serialized.includes("spawn-message-worker")) {
 			if (serialized.includes("ORDINARY_BACKGROUND_WORK")) {
 				working = true;
 				await gate;
@@ -372,7 +373,7 @@ test("primary Owner input preempts Agent Wait before the next model turn", {
 	const routeResponse = async (context: Context) => {
 		const serialized = JSON.stringify(context.messages);
 		const isResponder = serialized.includes(requestMarker) &&
-			serialized.includes("requestMessageId") &&
+			hasDeliveredRequest(context) &&
 			!serialized.includes(spawnCallId);
 		if (isResponder) {
 			if (serialized.includes(answerCallId)) {
@@ -550,7 +551,7 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 		}
 		if (
 			serialized.includes(requestMarker) &&
-			serialized.includes("requestMessageId") &&
+			hasDeliveredRequest(context) &&
 			!serialized.includes("spawn-owner-parked-request")
 		) {
 			if (!serialized.includes(answerCallId)) {
@@ -646,7 +647,7 @@ test("native custom input wakes a parked working Owner and remains in model cont
 		const serialized = JSON.stringify(context.messages);
 		if (
 			serialized.includes(requestMarker) &&
-			serialized.includes("requestMessageId") &&
+			hasDeliveredRequest(context) &&
 			!serialized.includes("spawn-native-custom-wake")
 		) {
 			if (!serialized.includes("answer-native-custom-wake")) {

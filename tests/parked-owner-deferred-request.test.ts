@@ -3,7 +3,7 @@ import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall, type Context, type JsonObject } from "@earendil-works/pi-ai";
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
-import { latestRequestFromContext } from "./support/model-requests.ts";
+import { hasDeliveredRequest, latestRequestFromContext } from "./support/model-requests.ts";
 
 test("a child Deferred clarification wakes a passively parked Owner", { timeout: 10_000 }, async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
@@ -19,7 +19,7 @@ test("a child Deferred clarification wakes a passively parked Owner", { timeout:
 		const serialized = JSON.stringify(context.messages);
 		const tool = (name: string, args: Record<string, unknown>, id: string) =>
 			fauxAssistantMessage(fauxToolCall(name, args as JsonObject, { id }), { stopReason: "toolUse" });
-		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-clarifier")) {
+		if (hasDeliveredRequest(context) && !serialized.includes("spawn-clarifier")) {
 			const creation = latestRequestFromContext(context);
 			if (serialized.includes("USE_BLUE")) return tool("agent_message", {
 				operation: "answer", requestId: creation.requestMessageId, answer: "CHILD_FINISHED",
