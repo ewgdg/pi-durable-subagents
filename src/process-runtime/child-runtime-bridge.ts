@@ -196,7 +196,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		const sequence = current?.nativeInputIdentity.current();
 		if (!current || sequence === undefined) return;
 		if (!current.currentRunId) {
-			current.currentRunId = `native-run-${++current.nativeRunSequence}`;
+			current.currentRunId = nativeRunId(++current.nativeRunSequence);
 			current.latestRunId = current.currentRunId;
 			current.currentRunOutcome = "completed";
 		}
@@ -796,7 +796,7 @@ async function handleOwnerRequest(
 		case "queue.clear": {
 			const cleared = await binding.turnCompaction.admit(() =>
 				sequenceQueueIntention(state, () => {
-					requireCurrentOrLatestRun(state, request.payload.runId);
+					requireReportedRun(state, request.payload.runId);
 					return binding.quotaQueue.clear();
 				})
 			);
@@ -805,7 +805,12 @@ async function handleOwnerRequest(
 		case "run.interrupt": {
 			binding.reminderAdmission.cancel();
 			const accepted = await sequenceQueueIntention(state, async () => {
-				if (!requireCurrentOrLatestRun(state, request.payload.runId)) return false;
+				requireReportedRun(state, request.payload.runId);
+				// This revalidation runs immediately before mutation. A successor cycle
+				// that started while this request waited in the queue is the Agent's
+				// active generation too, and interrupting active generation is exactly
+				// what the Owner asked for; only a cycle the child never reported is drift.
+				if (state.currentRunId === undefined) return false;
 				await binding.runtime.session.abort();
 				return true;
 			});
@@ -971,7 +976,7 @@ async function reportRuntimeLifecycle(
 	if (event.type === "agent_start") {
 		activity.setScopeFailed(false);
 		// Only actual Pi execution owns transport cycle identity; Delivery admission does not.
-		state.currentRunId ??= `native-run-${++state.nativeRunSequence}`;
+		state.currentRunId ??= nativeRunId(++state.nativeRunSequence);
 		state.latestRunId = state.currentRunId;
 		await state.channel.sendEvent("agent.start", {
 			runId: state.currentRunId,
@@ -1021,14 +1026,41 @@ async function reportRuntimeLifecycle(
 	if (state.currentRunId === runId) state.currentRunId = undefined;
 }
 
-function requireCurrentOrLatestRun(state: ChildControlState, runId: string): boolean {
-	const expectedRunId = state.currentRunId ?? state.latestRunId;
-	if (runId !== expectedRunId) {
+// Transport execution-cycle identity is child-reported and is separate from durable
+// Agent Run sequences. The child owns the format so the assignment sites and the
+// request validation below cannot drift apart.
+const NATIVE_RUN_ID_PREFIX = "native-run-";
+
+function nativeRunId(sequence: number): string {
+	return `${NATIVE_RUN_ID_PREFIX}${sequence}`;
+}
+
+function reportedRunSequence(runId: string): number | undefined {
+	if (!runId.startsWith(NATIVE_RUN_ID_PREFIX)) return undefined;
+	const digits = runId.slice(NATIVE_RUN_ID_PREFIX.length);
+	if (!/^[1-9]\d*$/.test(digits)) return undefined;
+	const sequence = Number(digits);
+	return Number.isSafeInteger(sequence) ? sequence : undefined;
+}
+
+/**
+ * A run-scoped Owner request must name a cycle this child actually reported, so an
+ * Owner whose identity drifted out of this child's history still fails loudly.
+ *
+ * It must not additionally require that the cycle is still the current or latest
+ * one. A Delivery admission the Owner cancels can still commit its own turn while
+ * the request waits in the queue, which legitimately advances the cycle between the
+ * Owner's dispatch and this mutation boundary. That is ordinary concurrency, not
+ * identity drift, and docs/run-supervision.md forbids faulting a successor cycle
+ * for it. The check stays immediately before the mutation.
+ */
+function requireReportedRun(state: ChildControlState, runId: string): void {
+	const sequence = reportedRunSequence(runId);
+	if (sequence === undefined || sequence > state.nativeRunSequence) {
 		throw new Error(
-			`stale_run: ${runId} does not target the current or latest child Run`,
+			`stale_run: ${runId} does not name a child Run this Agent reported`,
 		);
 	}
-	return state.currentRunId === runId;
 }
 
 function sequenceQueueIntention<T>(
