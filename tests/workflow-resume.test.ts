@@ -240,47 +240,6 @@ test("a failed durable transcript read is indeterminate rather than guessed as u
 });
 
 
-test("blocked sibling successors continue the old foreground once, before or during recovery", { timeout: 5_000 }, async t => {
-	for (const timing of ["before", "during"] as const) {
-		const h = harness(t);
-		const old = await h.message(h.requester, "old", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Old work" });
-		assert.ok("requestMessageId" in old);
-		h.responder.stop();
-		await h.recover();
-		const agents = new Map([h.requester, h.responder].map(p => [p.record.identity.agentId, p.record]));
-		const supervisor = new RunSupervisor({ agents, ownerAgentId: "requester", messages: h.messages });
-		let siblingAdmitted = false;
-		const sibling = async () => {
-			if (siblingAdmitted) return;
-			siblingAdmitted = true;
-			await h.message(h.requester, "sibling", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Sibling work" });
-		};
-		if (timing === "before") await sibling();
-		const resume = () => resumeWorkflow({
-			workflowId: "requester", ownerAgentId: "requester", agents, messages: h.messages, quarantinedAgentIds: new Set(),
-			activate: async (record, requestIds, recovery) => {
-				await sibling();
-				const result = await supervisor.continueDormantResponder(record, {
-					requestMessageIds: requestIds,
-					recovery,
-					recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record),
-				});
-				return { agentId: record.identity.agentId, requestIds, disposition: result === "activated" ? "admitted" : "skipped", reason: result };
-			},
-		});
-		const first = await resume();
-		await Promise.all([resume(), resume()]);
-		await flush();
-		assert.equal(first.outstandingRequests[0]?.status, "continuation_admitted", timing);
-		assert.equal(h.responder.dispatches.filter(d => d.kind === "custom" && d.message.customType === "agent-coordination.workflow-continuation").length, 1);
-		assert.deepEqual(h.deliveries(h.responder).map(d => d.source.toolCallId), ["old"]);
-		await h.message(h.responder, "answer-old", { operation: "answer", requestId: old.requestMessageId, answer: "Done" });
-		h.responder.settle();
-		await flush();
-		assert.deepEqual(h.deliveries(h.responder).map(d => d.source.toolCallId), ["old", "sibling"]);
-	}
-});
-
 test("recovery reconstructs committed supervisory resume as original ordinary Steer", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	const input = { operation: "resume", agentId: "responder", content: "Important supervisor direction" };

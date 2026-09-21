@@ -19,6 +19,7 @@ import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
+import type { WorkflowResumeReceipt } from "../src/protocol/workflow-resume.ts";
 import {
 	executeRegisteredTool,
 	openAgentsSurface,
@@ -1207,9 +1208,9 @@ test(`workflow_resume reactivates ${nested ? "nested" : "delivered"} unanswered 
 		recoveredContext = JSON.stringify(context.messages);
 		return fauxAssistantMessage(fauxToolCall("ask_user", { question: "Keep recovery live." }, { id: "pause-recovered" }), { stopReason: "toolUse" });
 	}]);
-	const receipt = await executeTool(reopened, "workflow_resume", "resume-workflow", {}) as { activations: Array<{ agentId: string; disposition: string; requestIds: string[] }> };
-	assert.ok(receipt.activations.some(item => item.agentId === spawned.agentId && item.disposition === "admitted"));
-	if (nestedRequestId) assert.equal(receipt.activations.find(item => item.agentId === spawned.agentId)?.requestIds.at(-1), nestedRequestId);
+	const receipt = await executeTool(reopened, "workflow_resume", "resume-workflow", {}) as WorkflowResumeReceipt;
+	assert.ok(receipt.outstandingRequests.some(item => item.targetAgentId === spawned.agentId && item.status === "continuation_admitted"));
+	if (nestedRequestId) assert.equal(receipt.outstandingRequests.find(item => item.requestMessageId === nestedRequestId)?.status, "continuation_admitted");
 	await waitForCondition(async () => recoveredContext.length > 0);
 	assert.match(recoveredContext, /Owner.*continu/i);
 	assert.match(recoveredContext, /side effects/i);
@@ -1260,15 +1261,22 @@ for (const boundary of ["before_request_delivery", "after_answer_commitment"] as
 		}
 		const reopened = await reopenOwner(t, host, ownerFile, { implicitModeratorResponses: false });
 		reopened.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Recovered." }, { id: "hold-boundary-recovered" }), { stopReason: "toolUse" })]);
-		const result = await executeTool(reopened, "workflow_resume", "boundary-resume", {}) as { deliveries: Array<{ messageId: string; kind: string; disposition: string }>; activations: unknown[] };
-		assert.equal(result.activations.length, 0);
-		assert.ok(result.deliveries.some(item => item.kind === (boundary === "before_request_delivery" ? "request" : "answer") && item.disposition === "scheduled"));
+		const result = await executeTool(reopened, "workflow_resume", "boundary-resume", {}) as WorkflowResumeReceipt;
+		if (boundary === "before_request_delivery") {
+			assert.deepEqual(result.outstandingRequests, [{
+				requestMessageId: spawned.requestMessageId,
+				targetAgentId: spawned.agentId,
+				status: "delivery_scheduled",
+			}]);
+		} else {
+			assert.deepEqual(result.outstandingRequests, []);
+		}
 		const recipientFile = boundary === "before_request_delivery" ? file : ownerFile;
 		await waitForTranscriptEntry(recipientFile, entry => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery");
 		await executeTool(reopened, "workflow_resume", "boundary-resume-again", {});
 		const deliveries = SessionManager.open(recipientFile).getEntries().filter(entry => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery");
 		assert.equal(deliveries.length, 1);
-		assert.match(JSON.stringify(deliveries), new RegExp(spawned.requestMessageId.replace(/[.*+?^${}()|[\]\\]/g, "\\async function createUnboundTestOwnerHost(")));
+		assert.ok(JSON.stringify(deliveries).includes(spawned.requestMessageId));
 		if (boundary === "after_answer_commitment") {
 			const tool = reopened.session.getToolDefinition("agent_observe")!;
 			const status = await tool.execute("completed-responder", { operation: "status", agentId: spawned.agentId }, undefined, undefined, reopened.session.extensionRunner.createContext());
