@@ -112,6 +112,9 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	#starting = false;
 	#startingHandle: AgentRunHandle | undefined;
 	#passivePreparation = false;
+	// A bound but not admitted Runtime whose startup readiness still settles outside
+	// the Agent lane, so lane work can run while startup UI is pending.
+	#preparedReadiness: BoundAgentRuntime | undefined;
 	#startingCancellationRequested = false;
 	#pendingInitializationTermination: RuntimeInitializationTermination | undefined;
 	#runStartsClosed = false;
@@ -350,7 +353,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		error: unknown,
 	): Promise<boolean> {
 		const run = this.#runtime;
-		if (!this.#starting || !run || run.runtime.projection !== projection) return false;
+		// An admitted startup holds the lane; a prepared-but-unready Runtime settles
+		// its readiness off-lane. Both are still cancellable initialization.
+		if ((!this.#starting && !this.#preparedReadiness) || !run) return false;
+		if (run.runtime.projection !== projection) return false;
 		const cancellation = run.runtime.projection.cancelInitialization(error);
 		if (!cancellation) return false;
 		this.#startingCancellationRequested = true;
@@ -718,6 +724,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		let startedRun: StartedAgentRuntime | undefined;
 		let readiness: Promise<void> | undefined;
 		let readinessObserved = false;
+		let releasedLane = false;
 		try {
 			startedRun = await this.#startSession();
 			readiness = startedRun.ready ?? Promise.resolve();
@@ -750,55 +757,29 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			}
 			if (admitRun) {
 				await this.#runStartedHandler?.(this.#runtime!.handle);
+			} else {
+				// A passive preparation publishes its projection before the Runtime is
+				// ready so the human can settle startup UI such as a session_start
+				// dialog. Holding the Agent lane across that wait would queue the Run
+				// admission this very input triggers behind the modal only that input can
+				// settle. Release the lane; this preparation keeps its own settlement, so
+				// a startup failure still reaches the caller that started it.
+				this.#preparedReadiness = this.#runtime!;
+				releasedLane = this.lane.releaseCurrent();
 			}
 			await readiness;
+			this.#preparedReadiness = undefined;
 			readinessObserved = true;
 			return startedRun.runtime;
 		} catch (error) {
-			const cleanupErrors: unknown[] = [error];
-			if (startedRun && readiness && !readinessObserved) {
-				const cancellation = requireRuntimeProjection(startedRun.runtime)
-					.cancelInitialization(error);
-				const results = await Promise.allSettled([
-					...(cancellation ? [cancellation] : []),
-					readiness,
-				]);
-				readinessObserved = true;
-				for (const result of results) {
-					if (
-						result.status === "rejected" &&
-						!cleanupErrors.includes(result.reason)
-					) cleanupErrors.push(result.reason);
-				}
+			const context = { startedRun, readiness, readinessObserved, admitRun };
+			// A released lane lets other operations run while this preparation settled,
+			// so failure classification re-enters the lane instead of racing them.
+			if (releasedLane) {
+				releasedLane = false;
+				return await this.lane.run(() => this.#classifyFailedStartInLane(error, context));
 			}
-			const endCause = this.#startingCancellationRequested
-				? "termination" as const
-				: "failure" as const;
-			const failure = startupFailure(error);
-			if (this.#runtime && this.#startingHandle && !this.#runtime.admitted) {
-				this.#runtime.handle = this.#startingHandle;
-				this.#runtime.admitted = true;
-				this.#startingHandle = undefined;
-			}
-			if (!this.#runtime && this.#startingHandle) {
-				const handle = this.#startingHandle;
-				this.#startingHandle = undefined;
-				this.#starting = false;
-				this.#clearRunScopedState();
-				this.#notifyStateChanged();
-				this.#notifyEnded(handle, endCause, endCause === "failure" ? failure : undefined);
-			}
-			cleanupErrors.push(...await this.#discardFailedStart(endCause, failure));
-			this.#clearRunScopedState();
-			if (cleanupErrors.length > 1) {
-				throw new AggregateError(
-					cleanupErrors,
-					admitRun
-						? "Agent Run startup cleanup failed"
-						: "Agent runtime preparation cleanup failed",
-				);
-			}
-			throw error;
+			return await this.#classifyFailedStartInLane(error, context);
 		} finally {
 			this.#startingHandle = undefined;
 			if (this.#starting) {
@@ -807,6 +788,68 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 				this.#notifyStateChanged();
 			}
 		}
+	}
+
+	/**
+	 * Classify a failed startup or preparation. Runs inside the Agent lane so it
+	 * cannot race lane work that proceeded while readiness settled outside it.
+	 */
+	async #classifyFailedStartInLane(
+		error: unknown,
+		context: Readonly<{
+			startedRun: StartedAgentRuntime | undefined;
+			readiness: Promise<void> | undefined;
+			readinessObserved: boolean;
+			admitRun: boolean;
+		}>,
+	): Promise<never> {
+		const { startedRun, readiness, admitRun } = context;
+		let readinessObserved = context.readinessObserved;
+		this.#preparedReadiness = undefined;
+		const cleanupErrors: unknown[] = [error];
+		if (startedRun && readiness && !readinessObserved) {
+			const cancellation = requireRuntimeProjection(startedRun.runtime)
+				.cancelInitialization(error);
+			const results = await Promise.allSettled([
+				...(cancellation ? [cancellation] : []),
+				readiness,
+			]);
+			readinessObserved = true;
+			for (const result of results) {
+				if (
+					result.status === "rejected" &&
+					!cleanupErrors.includes(result.reason)
+				) cleanupErrors.push(result.reason);
+			}
+		}
+		const endCause = this.#startingCancellationRequested
+			? "termination" as const
+			: "failure" as const;
+		const failure = startupFailure(error);
+		if (this.#runtime && this.#startingHandle && !this.#runtime.admitted) {
+			this.#runtime.handle = this.#startingHandle;
+			this.#runtime.admitted = true;
+			this.#startingHandle = undefined;
+		}
+		if (!this.#runtime && this.#startingHandle) {
+			const handle = this.#startingHandle;
+			this.#startingHandle = undefined;
+			this.#starting = false;
+			this.#clearRunScopedState();
+			this.#notifyStateChanged();
+			this.#notifyEnded(handle, endCause, endCause === "failure" ? failure : undefined);
+		}
+		cleanupErrors.push(...await this.#discardFailedStart(endCause, failure));
+		this.#clearRunScopedState();
+		if (cleanupErrors.length > 1) {
+			throw new AggregateError(
+				cleanupErrors,
+				admitRun
+					? "Agent Run startup cleanup failed"
+					: "Agent runtime preparation cleanup failed",
+			);
+		}
+		throw error;
 	}
 
 	async #admitPreparedRun(run: BoundAgentRuntime): Promise<void> {
@@ -1007,6 +1050,9 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		if (
 			this.#starting ||
 			this.#ending ||
+			// Startup still owns this exact Runtime; disposing it mid-launch would
+			// abandon the settled readiness classification.
+			this.#preparedReadiness !== undefined ||
 			this.#runtimeOwnership === "native-host" ||
 			this.#retentionReasons.size > 0
 		) {
@@ -1146,6 +1192,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#requestRelationships.clear();
 		this.#startingCancellationRequested = false;
 		this.#passivePreparation = false;
+		this.#preparedReadiness = undefined;
 		this.#inputRequired = undefined;
 		this.#agentWait = undefined;
 		this.#interruptionHold = undefined;
