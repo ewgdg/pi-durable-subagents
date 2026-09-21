@@ -5102,6 +5102,19 @@ function retentionCount(
 	return run.retentionReasons.find((retention) => retention.reason === reason)?.count ?? 0;
 }
 
+// Durable evidence a case observes can lag the commit that produces it: a Coordinate
+// Delivery, a responder lane, and a model turn all sit in between. A fixed iteration
+// count of 500 polls made that lag a hard 5 s wall-clock cap, which a busy host overshoots
+// while the behaviour under test is intact. Wait on the evidence itself, with a budget that
+// absorbs that lag but keeps a genuinely stuck host well inside the file's 120 s budget,
+// and name what was still missing when the budget expires.
+const EVIDENCE_WAIT_BUDGET_MS = 10_000;
+const EVIDENCE_POLL_INTERVAL_MS = 10;
+
+function delay(milliseconds: number): Promise<void> {
+	return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
 async function waitForChildSessionFile(
 	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
 	childId: string,
@@ -5111,42 +5124,54 @@ async function waitForChildSessionFile(
 		"pi-durable-subagents",
 		host.session.sessionId,
 	);
-	for (let attempt = 0; attempt < 500; attempt += 1) {
+	const deadline = Date.now() + EVIDENCE_WAIT_BUDGET_MS;
+	for (;;) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
 		const child = sessions.find(({ id }) => id === childId);
 		if (child) return child.path;
-		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+		if (Date.now() >= deadline) {
+			throw new Error(`Child Pi session file was not created within ${EVIDENCE_WAIT_BUDGET_MS} ms`);
+		}
+		await delay(EVIDENCE_POLL_INTERVAL_MS);
 	}
-	throw new Error("Child Pi session file was not created");
 }
 
 async function waitForEntry(
 	sessionFile: string,
 	predicate: (entry: ReturnType<SessionManager["getEntries"]>[number]) => boolean,
 ) {
-	for (let attempt = 0; attempt < 500; attempt += 1) {
+	const deadline = Date.now() + EVIDENCE_WAIT_BUDGET_MS;
+	for (;;) {
 		const entries = SessionManager.open(sessionFile).getEntries();
 		if (entries.some(predicate)) return entries;
-		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+		if (Date.now() >= deadline) {
+			throw new Error(`Expected child transcript entry did not commit within ${EVIDENCE_WAIT_BUDGET_MS} ms`);
+		}
+		await delay(EVIDENCE_POLL_INTERVAL_MS);
 	}
-	throw new Error("Expected child transcript entry did not commit");
 }
 
 async function waitForCondition(predicate: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 500; attempt += 1) {
+	const deadline = Date.now() + EVIDENCE_WAIT_BUDGET_MS;
+	for (;;) {
 		if (predicate()) return;
-		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+		if (Date.now() >= deadline) {
+			throw new Error(`Expected condition was not reached within ${EVIDENCE_WAIT_BUDGET_MS} ms`);
+		}
+		await delay(EVIDENCE_POLL_INTERVAL_MS);
 	}
-	throw new Error("Expected condition was not reached");
 }
 
+// A preemption makes the parked Run settle, but the settle still crosses a Delivery, a
+// lane, and a model turn. Bound it by the evidence budget rather than a two-second guess,
+// which a busy host can miss while the behaviour under test is intact.
 async function settleBeforeTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
 	let timeout: NodeJS.Timeout | undefined;
 	try {
 		return await Promise.race([
 			promise,
 			new Promise<never>((_resolve, reject) => {
-				timeout = setTimeout(() => reject(new Error(message)), 2_000);
+				timeout = setTimeout(() => reject(new Error(message)), EVIDENCE_WAIT_BUDGET_MS);
 			}),
 		]);
 	} finally {
