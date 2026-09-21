@@ -24,11 +24,14 @@ export function selectedAgentWorkStatus(
 	failed: boolean,
 	compacting = false,
 ): AgentWorkStatus {
-	if (failed) return { kind: "failed" };
 	if (run.phase === "starting") return { kind: "starting" };
 	if (run.phase === "ending") return { kind: "ending" };
 	if (run.phase === "dormant") return { kind: "dormant" };
+	// A retained stop means the exact Run did not fail: the supervisor establishes a
+	// suspension instead of marking the Run failed, so a stale native failure flag
+	// (e.g. the child-side mirror's agent_end outcome) must not outrank it.
 	if (run.suspension) return { kind: "suspended", suspension: run.suspension };
+	if (failed) return { kind: "failed" };
 	if (compacting) return { kind: "compacting" };
 	if (run.attention === "input_required") {
 		return { kind: "waiting", reason: "human input" };

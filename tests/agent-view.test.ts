@@ -1755,6 +1755,11 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		return frame.includes("viewed exact Run failed terminally") &&
 			frame.includes("Error: deterministic viewed Run failure");
 	});
+	// The selected view renders the retained stop, not a failure: the child-side
+	// scope line outranks its stale native agent_end outcome.
+	await waitForCondition(() =>
+		/Failing Worker.*Suspended · Runtime error/.test(stripTerminalSequences(view.render(80).join("\n")))
+	);
 	// Explicit termination still reaches the durable Dormant Agent without closing the view.
 	const stoppedTerminated = await executeAndCommitRegisteredTool(
 		host.session,

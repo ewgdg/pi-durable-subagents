@@ -36,6 +36,20 @@ test("a retained Run stop stays visible despite pending work or compaction", () 
 	assert.match(formatSelectedAgentIdentity({ ...identity, status: errorStatus }, theme), /<warning>Suspended · Runtime error<\/warning>/);
 });
 
+test("a retained Run stop outranks a stale native failure flag", () => {
+	// The supervisor establishes a suspension instead of marking the Run failed, but
+	// the child-side mirror still reports its native agent_end outcome. The retained
+	// stop must stay visible until the Run genuinely ends.
+	const suspension = { reason: "runtime_error" as const, evidence: { stage: "model", error: "400 terminal provider error", provenance: "pi-child-hosted-runtime" } };
+	assert.deepEqual(selectedAgentWorkStatus({
+		phase: "live", work: "settled", attention: "none", retentionReasons: [],
+		suspension,
+	}, true), { kind: "suspended", suspension });
+	assert.deepEqual(selectedAgentWorkStatus({
+		phase: "live", work: "settled", attention: "none", retentionReasons: [],
+	}, true), { kind: "failed" });
+});
+
 test("selected Agent identity gives every work status its specified theme role", () => {
 	const cases = [
 		{ status: { kind: "active" as const }, role: "success", label: "active" },
