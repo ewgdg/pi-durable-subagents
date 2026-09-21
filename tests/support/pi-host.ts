@@ -392,6 +392,9 @@ function createTestUi(): TestUi {
 		fg: (_color: string, text: string) => text,
 		bg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
+		// The selector repaints an action label after a style reset with its theme's
+		// background sequence, so an unstyleable test theme still owes that API.
+		getBgAnsi: () => "",
 	} as unknown as Theme;
 	const custom: ExtensionUIContext["custom"] = <T>(factory: (
 		tui: TUI,

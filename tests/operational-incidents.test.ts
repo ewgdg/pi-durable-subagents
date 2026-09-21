@@ -5,6 +5,7 @@ import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import { obligationStack } from "../src/protocol/obligation-focus.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -49,6 +50,7 @@ import {
 	returnAgentViewToOwner,
 } from "./support/agent-session.ts";
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
+import { waitForPhysicalDisplayContent } from "./support/physical-test-display.ts";
 import {
 	EXECUTION_GATE_RELEASE_PATH_VARIABLE,
 	EXECUTION_GATE_STARTED_PATH_VARIABLE,
@@ -207,7 +209,15 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	assert.equal((await findModerators(host)).length, 1);
 	const ownerSession = host.runtime.session;
 	const liveView = await openLiveAgentView(host, moderator.id);
-	const liveRendered = stripTerminalSequences(liveView.view.render(80).join("\n"));
+	// This host renders through a physical test display, whose xterm parses stdout
+	// asynchronously: read the delivered frame only after that parse, or the
+	// assertion observes the empty grid that preceded the write.
+	const liveRendered = stripTerminalSequences(await waitForPhysicalDisplayContent(
+		liveView.view,
+		(rendered) =>
+			rendered.includes("agent-coordination.moderator-input") &&
+			rendered.includes("(coordination-test) deterministic-owner"),
+	));
 	assert.match(liveRendered, /agent-coordination\.moderator-input/);
 	assert.match(liveRendered, /\(coordination-test\) deterministic-owner/);
 	assert.equal(host.runtime.session, ownerSession);
@@ -235,12 +245,20 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	);
 	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
 	const dormantView = await openDormantAgentView(host, moderator.id);
-	await waitForCondition(() =>
-		stripTerminalSequences(dormantView.view.render(80).join("\n")).includes("Moderator")
+	// The dormant re-attachment replays the complete Moderator transcript, so a fresh
+	// viewport shows its tail while the Moderator Input sits at the top. Pi's
+	// fullscreen transcript viewport scrolls with Page Up/Page Down and Home/End
+	// (docs/agent-selector.md:96), so return to the boundary this assertion names
+	// instead of reading the tail the display happens to hold.
+	await waitForPhysicalDisplayContent(
+		dormantView.view,
+		(rendered) => rendered.includes("Moderator"),
 	);
-	const dormantRendered = stripTerminalSequences(
-		dormantView.view.render(80).join("\n"),
-	);
+	dormantView.view.handleInput?.("\x1b[H");
+	const dormantRendered = stripTerminalSequences(await waitForPhysicalDisplayContent(
+		dormantView.view,
+		(rendered) => rendered.includes("agent-coordination.moderator-input"),
+	));
 	assert.match(dormantRendered, /agent-coordination\.moderator-input/);
 	assert.equal((await observeStatus(host, moderator.id)).run.phase, "dormant");
 	assert.equal(host.runtime.session, ownerSession);
@@ -468,6 +486,10 @@ test("an overdue root call starts a Moderator outside full child capacity", asyn
 		/Keep the Creation Request open/,
 	);
 	assert.equal(await owner.openAgentView(moderator.id), undefined);
+	// A hidden child bypasses background parsing (docs/child-ui-context.md), and
+	// parsing follows screen consumers since 9acb31e: a test that reads this
+	// projection must hold the same observation the mounted view surface takes.
+	await agentView.projection().screenView.begin();
 	assert.match(
 		stripTerminalSequences(
 			agentView.projection().presentation.render(240).join("\n"),
@@ -1905,7 +1927,13 @@ assert.equal(target.messageStatus, "not_sent");
 });
 
 test("a closed settled Request cycle creates one normalized Dependency Deadlock Moderator", async (t) => {
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+	// Production always registers the startup hook, so an idle custom delivery can be
+	// returned for its own empty extension-origin kickoff prompt. Without it the
+	// admission correctly rejects the delivery as custom_startup_not_started, which
+	// made released Steer deliveries look like a scheduler defect.
+	const host = await createUnboundTestOwnerHost(t, (pi) => {
+		registerSessionStartup(pi);
+	}, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -2531,11 +2559,29 @@ test("a terminal Moderator Run failure creates one linked replacement", async (t
 
 test("an unopenable failed Dormant Moderator falls back to a read-only post-mortem view", async (t) => {
 	initTheme("dark", false);
+	// A Template is selected from current trusted discovery only at creation, and its
+	// rules are captured atomically in the child Identity or Moderator Input
+	// (docs/owner-workflow.md:84, cb47e58). Discovery is cached for the Workflow Owner
+	// once its coordinator starts, so this Moderator can only capture the preset its
+	// later Runtime preparation re-resolves while the Template already exists here.
+	const agentDir = await mkdtemp(join(tmpdir(), "pi-moderator-post-mortem-"));
+	const templateDirectory = join(agentDir, "agents");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(join(templateDirectory, "moderator.md"), [
+		"---",
+		"name: moderator",
+		"models:",
+		"  - id: coordination-test/deterministic-owner",
+		"    thinking: low",
+		"---",
+		"Moderator context",
+	].join("\n"));
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
+		agentDir,
 	});
 	const routeFailure = (context: Context) => {
 		if (!getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
@@ -2566,17 +2612,12 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 	const failedModeratorId = moderatorPreviousAttempt(replacement.path)?.agentId;
 	assert.ok(failedModeratorId);
 
-	const templateDirectory = join(host.services.agentDir, "agents");
-	await mkdir(templateDirectory, { recursive: true });
-	await writeFile(join(templateDirectory, "moderator.md"), [
-		"---",
-		"name: moderator",
-		"models:",
-		"  - id: missing-process-provider/missing-process-model",
-		"    thinking: low",
-		"---",
-		"Moderator context",
-	].join("\n"));
+	// A Template is selected from current trusted discovery only at creation and its
+	// rules are captured atomically in the child Identity or Moderator Input
+	// (docs/owner-workflow.md:84, cb47e58). Withdrawing the model this Moderator
+	// captured therefore makes its later Runtime preparation unresolvable while the
+	// Template it was created under stays untouched.
+	host.services.modelRuntime.unregisterProvider("coordination-test");
 
 	const ownerSession = host.runtime.session;
 	const opened = await openDormantAgentView(host, failedModeratorId);

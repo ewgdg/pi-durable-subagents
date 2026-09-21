@@ -1671,6 +1671,11 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	host.deferCleanup(() => {
 		releaseFailure();
 	});
+	// Answering the Creation Request ends its model/tool loop and settles the Run,
+	// so the committed Answer is this Agent's durable readiness evidence
+	// (docs/run-supervision.md) and the fixture must reuse that text as the readiness
+	// the wait below observes, exactly as creationAnswerResponses does.
+	const readyText = "The viewed Agent is ready for a selected failure trigger.";
 	const routeResponse = async (context: Context) => {
 		const messages = JSON.stringify(context.messages);
 		if (messages.includes("Trigger the selected Agent Run failure.")) {
@@ -1682,14 +1687,14 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 			});
 		}
 		if (messages.includes('"toolCallId":"answer-viewed-failure-creation-request"')) {
-			return fauxAssistantMessage("The viewed Agent is ready for a selected failure trigger.");
+			return fauxAssistantMessage(readyText);
 		}
 		const requestId = creationRequestIdFromContext(context);
 		if (requestId) {
 			return fauxAssistantMessage(
 				fauxToolCall("agent_message", {
 					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
-					answer: "The viewed Agent accepted its Creation Request.",
+					answer: readyText,
 				}, { id: "answer-viewed-failure-creation-request" }),
 				{ stopReason: "toolUse" },
 			);
@@ -1713,13 +1718,17 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 			"The viewed Agent is ready for a selected failure trigger.",
 		)
 	);
+	// Answering the Creation Request ends its model/tool loop and settles the Run
+	// (docs/run-supervision.md), so this Agent is already Dormant before termination;
+	// an already-Dormant receipt reports `not_running` (docs/run-supervision.md:163).
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	const terminated = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
 		"terminate-ready-viewed-failure-worker",
 		{ operation: "terminate", agentId },
 	);
-	assert.equal((terminated.details as { disposition: string }).disposition, "terminated");
+	assert.equal((terminated.details as { disposition: string }).disposition, "not_running");
 	const ownerSession = host.runtime.session;
 	const { command, view } = await openDormantAgentView(host, agentId);
 	await waitForCondition(() =>

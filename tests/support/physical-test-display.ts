@@ -1,6 +1,31 @@
 import xtermHeadless from "@xterm/headless";
 import type { Component } from "@earendil-works/pi-tui";
 
+const DISPLAY_PARSE_TIMEOUT_MS = 5_000;
+const DISPLAY_PARSE_POLL_INTERVAL_MS = 1;
+
+/**
+ * xterm parses written bytes asynchronously, so a frame the production stdout
+ * boundary has already flushed is still invisible to `view.render` until a later
+ * task drains it. A test that asserts on this display's projection must wait for
+ * that parse instead of reading the frame that preceded the write.
+ */
+export async function waitForPhysicalDisplayContent(
+	view: Pick<Component, "render">,
+	hasContent: (rendered: string) => boolean,
+	width = 80,
+): Promise<string> {
+	const deadline = Date.now() + DISPLAY_PARSE_TIMEOUT_MS;
+	while (true) {
+		const rendered = view.render(width).join("\n");
+		if (hasContent(rendered)) return rendered;
+		if (Date.now() >= deadline) {
+			throw new Error("Physical test display did not render the expected content");
+		}
+		await new Promise((resolve) => setTimeout(resolve, DISPLAY_PARSE_POLL_INTERVAL_MS));
+	}
+}
+
 export type PhysicalTestDisplay = Readonly<{
 	view: Component;
 	active(): boolean;
