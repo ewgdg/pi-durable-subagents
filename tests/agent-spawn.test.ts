@@ -62,7 +62,7 @@ test("another Agent spawns and delivers a Creation Request before an invalid Mes
 			message.role === "toolResult" && message.toolCallId === leafSpawnCallId
 		);
 		if (receivedParentRequest && !spawnedLeaf) {
-			return fauxAssistantMessage(fauxToolCall("agent_spawn", { request }, {
+			return fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Leaf validation request", request }, {
 				id: leafSpawnCallId,
 			}), { stopReason: "toolUse" });
 		}
@@ -95,7 +95,7 @@ test("another Agent spawns and delivers a Creation Request before an invalid Mes
 			entry.type === "message" && entry.message.role === "toolResult" &&
 			entry.message.toolCallId === invalidCallId
 		), false);
-		const result = await executeRegisteredTool(host.session, "agent_spawn", "spawn-during-validation", { request: parentRequest });
+		const result = await executeRegisteredTool(host.session, "agent_spawn", "spawn-during-validation", { title: "Parent validation request", request: parentRequest });
 		const receipt = result.details as AgentSpawnReceipt;
 		assert.ok(receipt.spawnStatus === "created" && receipt.messageStatus === "sent");
 		parentId = receipt.agentId;

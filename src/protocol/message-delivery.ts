@@ -1,7 +1,7 @@
 import { CoordinationRecordValidationError } from "./record-validation.ts";
 import { readCoordinationRecord } from "./replay-rejection.ts";
 import { MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE, MODERATOR_REPORT_FINDING_CUSTOM_TYPE } from "./moderator-report.ts";
-import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
+import { AGENT_IDENTITY_CUSTOM_TYPE, OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
@@ -81,6 +81,8 @@ export type DeliveredMessageEvidence = Readonly<{
 	source: ToolCallPointer;
 	projection: ModelVisibleMessage;
 	deliveryEvidence: EntryPointer;
+	/** A child's Creation Request Delivery: its source is the Identity spawn source. */
+	isCreationRequest?: true;
 }>;
 
 export function createMessageDelivery(
@@ -166,10 +168,51 @@ export function validateDeliveredMessageEvidence(
 		delivery.projection.fromAgentId !== delivery.source.agentId ||
 		projectionIdentity(delivery.projection) !== deriveMessageIdentity(delivery.source)
 	) {
+		// The Creation Request's canonical inspector reports it by request, so a
+		// forged Creation Request Delivery must not surface as a generic Message.
 		throw new ProtocolInvariantError(
-			"Message Delivery projection identity differs from its source",
+			delivery.isCreationRequest
+				? `Creation Request ${deriveMessageIdentity(delivery.source)} Delivery differs from its source`
+				: "Message Delivery projection identity differs from its source",
 		);
 	}
+}
+
+/**
+ * A child's own Identity names the Agent Spawn call that is its Creation Request
+ * source. That Identity bootstraps its own scope, so it is not in the scope
+ * buckets and is read from the transcript directly.
+ */
+function currentCreationRequestSourceKey(
+	transcript: TranscriptInspection,
+	recipientAgentId: string,
+): string | undefined {
+	const state = indexedState(transcript);
+	return state.memo(
+		currentCreationRequestSourceKey,
+		recipientAgentId,
+		transcript.entries.length,
+		() => {
+			const identity = transcript.entries.findLast(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === AGENT_IDENTITY_CUSTOM_TYPE &&
+					isRecord(entry.data) &&
+					entry.data.agentId === recipientAgentId,
+			);
+			if (identity?.type !== "custom" || !isRecord(identity.data)) return undefined;
+			const spawnSource = identity.data.spawnSource;
+			if (!isRecord(spawnSource)) return undefined;
+			const { agentId, entryId, toolCallId } = spawnSource;
+			if (
+				typeof agentId !== "string" ||
+				typeof entryId !== "string" ||
+				typeof toolCallId !== "string"
+			)
+				return undefined;
+			return toolCallPointerKey({ agentId, entryId, toolCallId });
+		},
+	);
 }
 
 function readMessageDeliveries(options: {
@@ -189,6 +232,10 @@ function readMessageDeliveries(options: {
 	if (!tail) {
 		throw new ProtocolInvariantError(`Agent ${recipientAgentId} has no transcript entries`);
 	}
+	const creationRequestSourceKey = currentCreationRequestSourceKey(
+		transcript,
+		recipientAgentId,
+	);
 	const facts = indexedState(transcript).project(
 		readMessageDeliveries,
 		recipientAgentId,
@@ -238,6 +285,9 @@ function readMessageDeliveries(options: {
 						source,
 						projection,
 						deliveryEvidence: { agentId: recipientAgentId, entryId: entry.id },
+						...(creationRequestSourceKey === toolCallPointerKey(source)
+							? { isCreationRequest: true as const }
+							: {}),
 					});
 				}
 			}
