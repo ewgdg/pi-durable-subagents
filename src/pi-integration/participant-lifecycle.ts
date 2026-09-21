@@ -12,6 +12,7 @@ import type {
 	InputEvent,
 	InputEventResult,
 	MessageEndEvent,
+	TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
 export type ParticipantHumanInput = Readonly<{
@@ -160,22 +161,19 @@ export function registerParticipantLifecycle(
 	);
 	// Pi awaits turn_end only after the complete issued tool batch and before it
 	// constructs the next model context, making this the Steer freeze boundary.
-	let answeredLastTurn = false;
-	// Native queued input can run after a terminating Answer in the same execution.
-	// Only the last turn can still need a runtime-supplied continuation.
+	let answerDelivered = false;
+	// Native queued input can run after an Answer in the same execution, and a
+	// committed `agent_wait` aggregate delivers its Answers mid-loop rather than
+	// ending it. Either way the execution owes one runtime-supplied continuation,
+	// so the flag survives the intervening generations a Wait's own follow-up turn
+	// causes and is consumed once, at agent_end.
 	pi.on("turn_end", async (event) => {
-		answeredLastTurn = event.toolResults.some(result => {
-			const details = result.details as Record<string, unknown> | undefined;
-			return result.toolName === "agent_message" && !result.isError &&
-				typeof details?.requestMessageId === "string" && typeof details?.messageId === "string" &&
-				(typeof details?.messageStatus === "string" ||
-					(details?.disposition === "committed" && details.delivery === "omitted"));
-		});
+		if (event.toolResults.some(deliveredAnswer)) answerDelivered = true;
 		await handlers.safeBoundaryReached();
 	});
 	pi.on("agent_end", async (_event, ctx) => {
-		if (answeredLastTurn) {
-			answeredLastTurn = false;
+		if (answerDelivered) {
+			answerDelivered = false;
 			const frames = currentFrames(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
 			// Answer ends its model/tool loop. Offer remaining work once, unless native
 			// input already provides a continuation; never choose the next task or spin at settlement.
@@ -183,6 +181,25 @@ export function registerParticipantLifecycle(
 		}
 		await handlers.executionEnded();
 	});
+}
+
+/**
+ * A turn result that proves an Answer reached its requester. A terminating
+ * `agent_message` commitment carries its receipt, while a committed `agent_wait`
+ * aggregate is itself the requester-side Delivery proof for each Answer it
+ * returns; `answer_already_delivered` only repeats prior proof.
+ */
+function deliveredAnswer(result: TurnEndEvent["toolResults"][number]): boolean {
+	if (result.isError) return false;
+	const details = result.details as Record<string, unknown> | undefined;
+	if (result.toolName === "agent_message") {
+		return typeof details?.requestMessageId === "string" && typeof details?.messageId === "string" &&
+			(typeof details?.messageStatus === "string" ||
+				(details?.disposition === "committed" && details.delivery === "omitted"));
+	}
+	if (result.toolName !== "agent_wait") return false;
+	return Array.isArray(details?.answers) && details.answers.some(answer =>
+		(answer as Record<string, unknown> | null | undefined)?.disposition === "answer_delivered");
 }
 
 function requestPresentation(frames: readonly ObligationFrame[]) {
