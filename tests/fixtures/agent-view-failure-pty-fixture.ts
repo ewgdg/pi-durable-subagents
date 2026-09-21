@@ -122,8 +122,18 @@ async function finishInteractiveFailure(): Promise<void> {
 			() => readFileText(childTranscriptPath!).includes("trigger selected Run failure"),
 			20_000,
 		);
+		// The terminal error retains the exact Run as a stop; the selected view only reaches
+		// its durable Dormant Agent through explicit termination.
+		await waitForAgentSuspension(childAgentId as string);
+		await executeCommittedTool(
+			ownerSession,
+			appendToolSource(ownerSession, "agent_control", "pty-terminate-stopped-run", {
+				operation: "terminate",
+				agentId: childAgentId,
+			}),
+		);
 		await waitForAgentPhase(childAgentId as string, "dormant");
-		process.stdout.write("\n__PTY_SELECTED_RUN_FAILED__\n");
+		process.stdout.write("\n__PTY_SELECTED_RUN_STOPPED__\n");
 		await waitForEvidenceCondition(() =>
 			ownerSession.extensionRunner.createContext().ui.getEditorText()
 				.endsWith("Owner input confirms selected Run closure")
@@ -198,6 +208,24 @@ async function waitForAgentPhase(agentId: string, phase: string): Promise<void> 
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error(`PTY Agent ${agentId} did not enter ${phase}`);
+}
+
+async function waitForAgentSuspension(agentId: string): Promise<void> {
+	const observe = ownerSession.getToolDefinition("agent_observe");
+	if (!observe) throw new Error("PTY agent_observe is unavailable");
+	const deadline = Date.now() + 20_000;
+	while (Date.now() < deadline) {
+		const status = await observe.execute(
+			`observe-suspension-${agentId}`,
+			{ operation: "status", agentId },
+			undefined,
+			undefined,
+			ownerSession.extensionRunner.createContext(),
+		);
+		if ((status.details as { run: { suspension?: { reason: string } } }).run.suspension?.reason === "runtime_error") return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`PTY Agent ${agentId} did not stop its Run`);
 }
 
 async function waitForDiagnostic(

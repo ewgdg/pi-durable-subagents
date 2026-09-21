@@ -257,7 +257,7 @@ test("real fullscreen PTY closes a failed Agent runtime initialization and resto
 	}
 });
 
-test("real fullscreen PTY keeps a terminally failed selected Run in its Agent view", {
+test("real fullscreen PTY keeps a terminally stopped selected Run in its Agent view", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
 	const terminal = launchFixture(FAILURE_FIXTURE, {
@@ -284,7 +284,7 @@ test("real fullscreen PTY keeps a terminally failed selected Run in its Agent vi
 			frame.some((line) => line.includes("trigger selected Run failure"))
 		);
 		terminal.write("\r");
-		await terminal.waitFor("__PTY_SELECTED_RUN_FAILED__");
+		await terminal.waitFor("__PTY_SELECTED_RUN_STOPPED__");
 		await openDormantAgentSelector(terminal, "PTY Failure Worker");
 		terminal.write("o");
 		await terminal.waitForScreen((frame) =>
