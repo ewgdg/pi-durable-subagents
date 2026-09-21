@@ -141,7 +141,7 @@ export class SessionStartupAdmission {
 						if (success) this.#checkpoint(invocation);
 					} finally { this.#release(invocation); }
 				},
-				}), this.#waitsForPreparation(options?.source));
+				}), this.#queuesWhilePreparing(options?.source));
 		};
 		// Keep this forwarding function in place under wrappers installed after
 		// binding. Re-wrapping the outer method on reload would skip those wrappers
@@ -299,19 +299,27 @@ export class SessionStartupAdmission {
 	}
 
 	/**
-	 * Extension-emitted native input arrives inside the submission that emitted it:
-	 * a command handler or `session_start` hook runs during the input hook chain of
-	 * that very prompt. Refusing it would drop the work the extension asked to start
-	 * (docs/child-ui-context.md: extension-emitted user input activates work normally).
-	 * The input keeps its turn behind an ordinary native preparation instead.
+	 * A submission that arrives while another preparation is in flight waits behind
+	 * it instead of being refused whenever its own caller is not waiting for that
+	 * exact preparation:
+	 * - A native interactive submission is the human's own standalone submission,
+	 *   so a primary Enter queues behind the current preparation. Refusing it would
+	 *   drop the entered text entirely: Pi's async editor-submit callback swallows
+	 *   the rejection.
+	 * - Extension-emitted native input arrives inside the submission that emitted it:
+	 *   a command handler or `session_start` hook runs during the input hook chain of
+	 *   that very prompt. Refusing it would drop the work the extension asked to start
+	 *   (docs/child-ui-context.md: extension-emitted user input activates work normally).
 	 *
-	 * Three cases keep the busy guard: a protocol-owned custom startup, whose kickoff
-	 * must own the Run it prepares the transcript for; the internal empty kickoff
-	 * prompt that custom startup itself submits; and a runtime-forwarded native input,
-	 * whose caller waits for that exact preparation to hand the submission over.
+	 * Three cases keep the busy guard, because their caller does wait for that exact
+	 * preparation: a protocol-owned custom startup, whose kickoff must own the Run it
+	 * prepares the transcript for; the internal empty kickoff prompt that custom
+	 * startup itself submits; and a runtime-forwarded native input, whose caller hands
+	 * its exact submission over. A preparation retained from a retired generation also
+	 * refuses competing input, since nothing may interleave with it.
 	 */
-	#waitsForPreparation(source: string | undefined): boolean {
-		if (source !== "extension") return false;
+	#queuesWhilePreparing(source: string | undefined): boolean {
+		if (source !== "extension") return this.#owner !== undefined && !this.#owner.custom;
 		// The empty kickoff prompt a custom startup submits must claim its own Run.
 		const kickoff = this.#kickoffs.getStore();
 		if (kickoff && !kickoff.invocation) return false;
@@ -325,7 +333,7 @@ export class SessionStartupAdmission {
 		return this.#invocations.getStore() === owner;
 	}
 
-	/** Queued extension input starts its own Run once the current preparation releases. */
+	/** Queued input starts its own Run once the current preparation releases. */
 	async #queuePrompt(operation: () => Promise<void>): Promise<void> {
 		while (this.whenAvailable) {
 			await waitForStartupRelease(this.whenAvailable, this.signal);
