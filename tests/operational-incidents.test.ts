@@ -216,10 +216,12 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		liveView.view,
 		(rendered) =>
 			rendered.includes("agent-coordination.moderator-input") &&
-			rendered.includes("(coordination-test) deterministic-owner"),
+			// The status bar renders the bare model id; only a provider-qualified line
+			// elsewhere would carry the provider prefix.
+			rendered.includes("deterministic-owner"),
 	));
 	assert.match(liveRendered, /agent-coordination\.moderator-input/);
-	assert.match(liveRendered, /\(coordination-test\) deterministic-owner/);
+	assert.match(liveRendered, /deterministic-owner/);
 	assert.equal(host.runtime.session, ownerSession);
 	host.model.setResponses([
 		fauxAssistantMessage("The Moderator received direct native editor input."),

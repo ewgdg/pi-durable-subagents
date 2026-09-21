@@ -872,7 +872,11 @@ test("confirmed post-Identity Delivery admission failure keeps the child and Req
 	await harness.shutdown();
 });
 
-test("a pre-dispatch invariant failure releases the child and its Creation Request remains retryable", { timeout: 5_000 }, async (t) => {
+// This case boots a real child and retries its Creation Request, so a loaded host can
+// exceed a tight bound: an idle child boot is ~0.4 s but has been measured at 31 s
+// under contention. Bound the case generously; the runner's own per-file budget still
+// applies.
+test("a pre-dispatch invariant failure releases the child and its Creation Request remains retryable", { timeout: 30_000 }, async (t) => {
 	let failDispatch = true;
 	const harness = await createCoordinatorHarness(t, {}, undefined, {
 		scheduleDeliveryDispatch: (_context, dispatch) => {
