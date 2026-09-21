@@ -556,69 +556,8 @@ test("an overdue root call starts a Moderator outside full child capacity", asyn
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("an unknown tool name in the committed batch keeps that batch under review", async (t) => {
+test("an unregistered tool name beside a parked parallel root call keeps that batch under review", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-unknown-name-"));
-	const toolStartedPath = join(cwd, "execution-gate.started");
-	const toolReleasePath = join(cwd, "execution-gate.released");
-	const executionGateExtensionPath = join(cwd, "execution-gate-tool.mjs");
-	await writeFile(
-		executionGateExtensionPath,
-		renderProcessExecutionGateExtension(toolStartedPath, toolReleasePath),
-		"utf8",
-	);
-	t.after(() => writeFile(toolReleasePath, "released", "utf8"));
-	const clock = new ControllableOperationReviewClock();
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
-		persistent: true,
-		processVisibleModel: true,
-		implicitModeratorResponses: false,
-		cwd,
-		additionalExtensionPaths: [
-			executionGateExtensionPath,
-		],
-	});
-	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-durable-subagents>",
-		workflowPolicy: new WorkflowPolicyStore(
-			parseWorkflowPolicy(
-				'{"maxConcurrentAgentRuns":1,"operationReviewIntervalMs":1000}',
-			),
-		),
-		operationReviewClock: clock,
-	});
-	const owner = coordinator.forAgent(identity.agentId);
-	host.model.setResponses([
-		// One committed batch: an invented name ahead of a sequential call that parks.
-		// The invented name names no tool and carries no execution mode, so it must
-		// leave the call beside it under review.
-		fauxAssistantMessage([
-			fauxToolCall("code", { code: "text('invented tool name')" }, { id: "unknown-batch-call" }),
-			fauxToolCall("execution_gate", {}, { id: "overdue-root-call" }),
-		], { stopReason: "toolUse" }),
-		fauxAssistantMessage("The parked call beside the invented name was reviewed."),
-	]);
-
-	const child = await spawnFromView(
-		host.session,
-		owner,
-		"spawn-unknown-batch-name",
-		"Keep the Creation Request open while one root call remains unresolved.",
-	);
-	await waitForCondition(async () => fileExists(toolStartedPath));
-	clock.advanceBy(1_000);
-	await coordinator.forAgent(child.agentId).reachSafeBoundary();
-
-	const moderator = await waitForModeratorKind(host, "operation_review");
-	assert.equal(await fileExists(toolReleasePath), false);
-	assert.equal(moderatorTriggerKind(moderator.path), "operation_review");
-	await writeFile(toolReleasePath, "released", "utf8");
-	await coordinator.shutdown(async () => host.runtime.dispose());
-});
-
-test("a parked parallel root call is reviewed from execution admission", async (t) => {
-	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-parallel-"));
 	const toolStartedPath = join(cwd, "execution-gate.started");
 	const toolReleasePath = join(cwd, "execution-gate.released");
 	const executionGateExtensionPath = join(cwd, "execution-gate-tool.mjs");
@@ -651,19 +590,22 @@ test("a parked parallel root call is reviewed from execution admission", async (
 	});
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
-		// Pi holds the whole Run on this parallel batch, so a parked call is owed the
-		// same review as any other unresolved root call.
-		fauxAssistantMessage(
-			fauxToolCall("execution_gate", {}, { id: "parked-parallel-call" }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The parked parallel call was reviewed."),
+		// One committed batch: an invented name ahead of a parallel call that parks.
+		// The invented name names no tool and carries no execution mode, so it must
+		// leave the call beside it under review; Pi holds the whole Run on the batch,
+		// so a parallel parked call is still reviewed from execution admission
+		// (docs/operational-incident-moderation.md:17).
+		fauxAssistantMessage([
+			fauxToolCall("code", { code: "text('invented tool name')" }, { id: "unknown-batch-call" }),
+			fauxToolCall("execution_gate", {}, { id: "overdue-root-call" }),
+		], { stopReason: "toolUse" }),
+		fauxAssistantMessage("The parked call beside the invented name was reviewed."),
 	]);
 
 	const child = await spawnFromView(
 		host.session,
 		owner,
-		"spawn-parallel-parked-call",
+		"spawn-unknown-batch-name",
 		"Keep the Creation Request open while one root call remains unresolved.",
 	);
 	await waitForCondition(async () => fileExists(toolStartedPath));
@@ -1941,172 +1883,7 @@ assert.equal(target.messageStatus, "not_sent");
 	await waitForModeratorForAgent(host!, affected.agentId);
 });
 
-test("a closed settled Request cycle creates one normalized Dependency Deadlock Moderator", async (t) => {
-	// Production always registers the startup hook, so an idle custom delivery can be
-	// returned for its own empty extension-origin kickoff prompt. Without it the
-	// admission correctly rejects the delivery as custom_startup_not_started, which
-	// made released Steer deliveries look like a scheduler defect.
-	const host = await createUnboundTestOwnerHost(t, (pi) => {
-		registerSessionStartup(pi);
-	}, {
-		persistent: true,
-		processVisibleModel: true,
-		implicitModeratorResponses: false,
-	});
-	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	let rejectedCreationDeliveries = 0;
-	let coordinator!: WorkflowCoordinator;
-	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-durable-subagents>",
-		spawnBoundaryHooks: {
-			beforeDeliveryAdmission() {
-				if (rejectedCreationDeliveries >= 2) return;
-				rejectedCreationDeliveries += 1;
-				return "confirmed_failure";
-			},
-		},
-	});
-	const owner = coordinator.forAgent(identity.agentId);
-	try {
-		const first = await spawnFromView(
-			host.session,
-			owner,
-			"spawn-first-deadlock-agent",
-			"Start the first cycle participant.",
-		);
-		const second = await spawnFromView(
-			host.session,
-			owner,
-			"spawn-second-deadlock-agent",
-			"Wait for my Answer while I wait for yours.",
-		);
-		assert.equal(first.messageStatus, "not_sent");
-		assert.equal(second.messageStatus, "not_sent");
-
-		const rootsReady = new Set<string>();
-	let releaseRoots!: () => void;
-	const bothRoots = new Promise<void>(resolve => { releaseRoots = resolve; });
-	t.after(releaseRoots);
-	const routeCycle = async (context: Context) => {
-			if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
-				return fauxAssistantMessage("I will inspect the closed Request cycle.");
-			}
-			const messages = JSON.stringify(context.messages);
-			const latestUser = JSON.stringify(
-				[...context.messages].reverse().find(({ role }) => role === "user"),
-			);
-		if (latestUser.includes("Start the first cycle participant.")) rootsReady.add("first");
-		if (latestUser.includes("Wait for my Answer while I wait for yours.")) rootsReady.add("second");
-		if (rootsReady.size === 2) releaseRoots();
-		await bothRoots;
-
-			if (
-				latestUser.includes("Start the first cycle participant.") &&
-				!messages.includes('"id":"request-first-to-second"')
-			) {
-				return fauxAssistantMessage(
-					fauxToolCall(
-						"agent_message",
-						{
-							title: "Fixture request",
-							operation: "request",
-							targetAgent: second.agentId,
-							question: "Wait for my Answer while I wait for yours.",
-						},
-						{ id: "request-first-to-second" },
-					),
-					{ stopReason: "toolUse" },
-				);
-			}
-			if (
-				latestUser.includes("Wait for my Answer while I wait for yours.") &&
-				!messages.includes('"id":"request-second-to-first"')
-			) {
-				return fauxAssistantMessage(
-					fauxToolCall(
-						"agent_message",
-						{
-							title: "Fixture request",
-							operation: "request",
-							targetAgent: first.agentId,
-							question: "Return an Answer only after my dependency resolves.",
-						},
-						{ id: "request-second-to-first" },
-					),
-					{ stopReason: "toolUse" },
-				);
-			}
-			return fauxAssistantMessage("I am settled while the internal Request remains unresolved.");
-		};
-		host.model.setResponses(Array.from({ length: 24 }, () => routeCycle));
-		await retryRequestFromView(host.session, owner, "deliver-first-root", first.requestMessageId);
-		await retryRequestFromView(host.session, owner, "deliver-second-root", second.requestMessageId);
-		const expectedAgentIds = [first.agentId, second.agentId].sort();
-		await waitForCondition(() => expectedAgentIds.every((agentId) => {
-			const run = owner.status(agentId).run;
-			return run.phase === "live" && run.work === "settled" &&
-				run.retentionReasons.length > 0 &&
-				run.retentionReasons.every(
-					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer" || reason === "pending_delivery",
-				);
-		}));
-		for (const agentId of expectedAgentIds) {
-			const run = owner.status(agentId).run;
-			assert.equal(run.phase, "live");
-			assert.equal(
-				run.retentionReasons.every(
-					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer" || reason === "pending_delivery",
-				),
-				true,
-			);
-		}
-
-		const moderator = await waitForModeratorKind(host, "dependency_deadlock");
-		await owner.reachSafeBoundary();
-		assert.deepEqual(
-			(await findModerators(host)).map(({ path }) => moderatorTriggerKind(path)),
-			["dependency_deadlock"],
-		);
-		const inputEntry = SessionManager.open(moderator.path).getEntries().find(
-			(entry) =>
-				entry.type === "custom_message" &&
-				entry.customType === "agent-coordination.moderator-input",
-		);
-		assert.ok(inputEntry?.type === "custom_message" && typeof inputEntry.content === "string");
-		const input = JSON.parse(inputEntry.content) as {
-			trigger: {
-				kind: string;
-				agentIds: string[];
-				requests: { total: number; sources: unknown[] };
-			};
-			inspectedThrough: Array<{ agentId: string; entryId: string }>;
-		};
-		assert.equal(input.trigger.kind, "dependency_deadlock");
-		assert.deepEqual(input.trigger.agentIds, expectedAgentIds);
-		assert.equal(input.trigger.requests.total, 2);
-		assert.equal(input.trigger.requests.sources.length, 2);
-		assert.deepEqual(
-			input.inspectedThrough.map(({ agentId }) => agentId),
-			expectedAgentIds,
-		);
-		for (const agentId of expectedAgentIds) {
-			const run = owner.status(agentId).run;
-			assert.equal(run.phase, "live");
-			assert.equal("work" in run && run.work, "settled");
-			assert.equal(
-				run.retentionReasons.every(
-					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer" || reason === "pending_delivery",
-				),
-				true,
-			);
-		}
-	} finally {
-		await coordinator.shutdown(async () => host.runtime.dispose());
-	}
-});
-
-test("an active member prevents a closed Request cycle from becoming a Deadlock", async (t) => {
+test("a closed Request cycle is one normalized Deadlock Moderator only once no member can progress", async (t) => {
 	const executionGate = await createProcessExecutionGate("active-cycle");
 	let gateReleased = false;
 	let coordinator: WorkflowCoordinator | undefined;
@@ -2237,7 +2014,48 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 
 	gateReleased = true;
 	await executionGate.release();
-	await waitForModeratorKind(host, "dependency_deadlock");
+	const moderator = await waitForModeratorKind(host, "dependency_deadlock");
+	await owner.reachSafeBoundary();
+	// The closed component is one normalized condition: one Moderator for the whole
+	// sorted Agent/Request identity set (docs/operational-incident-moderation.md:11,27,65).
+	const expectedAgentIds = [first.agentId, second.agentId].sort();
+	assert.deepEqual(
+		(await findModerators(host)).map(({ path }) => moderatorTriggerKind(path)),
+		["dependency_deadlock"],
+	);
+	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.moderator-input",
+	);
+	assert.ok(inputEntry?.type === "custom_message" && typeof inputEntry.content === "string");
+	const input = JSON.parse(inputEntry.content) as {
+		trigger: {
+			kind: string;
+			agentIds: string[];
+			requests: { total: number; sources: unknown[] };
+		};
+		inspectedThrough: Array<{ agentId: string; entryId: string }>;
+	};
+	assert.equal(input.trigger.kind, "dependency_deadlock");
+	assert.deepEqual(input.trigger.agentIds, expectedAgentIds);
+	assert.equal(input.trigger.requests.total, 2);
+	assert.equal(input.trigger.requests.sources.length, 2);
+	assert.deepEqual(
+		input.inspectedThrough.map(({ agentId }) => agentId),
+		expectedAgentIds,
+	);
+	for (const agentId of expectedAgentIds) {
+		const run = owner.status(agentId).run;
+		assert.equal(run.phase, "live");
+		assert.equal("work" in run && run.work, "settled");
+		assert.equal(
+			run.retentionReasons.every(
+				({ reason }) => reason === "answer_owed" || reason === "awaiting_answer" || reason === "pending_delivery",
+			),
+			true,
+		);
+	}
 });
 
 test("input, Human attention, selection, and Hold prevent a blocked Request-cycle Deadlock", async (t) => {
