@@ -32,6 +32,7 @@ type ScheduledDeliveryBase = Readonly<{
 	isReady?(): boolean;
 	afterCommit?(): void;
 	isIncomingRequest?: boolean;
+	isCreationRequest?: boolean;
 	preemptsAgentWait?: boolean;
 	isDeliveryBlocked?(): boolean;
 	suppressesAfterCommitMessageId?: string;
@@ -586,6 +587,10 @@ export class MessageDeliveryScheduler {
 		for (const delivery of pending.values()) {
 			if (
 				"deliveryItem" in delivery &&
+				// The Creation Request that defines a participant is not ordinary queued
+				// work; counting it would spend a capacity slot before the Owner can send
+				// that participant anything at all.
+				!delivery.isCreationRequest &&
 				!delivery.inspectProof() &&
 				!delivery.isSuppressed?.()
 			) count += 1;
@@ -640,9 +645,11 @@ export class MessageDeliveryScheduler {
 		handle: AgentRunHandle,
 		settlement: AgentRunSettlement,
 	): Promise<void> {
-		if (record.host.observe().suspension) {
-			// Quota interrupted this delivery turn, not its admitted Messages. Keep
-			// unproven work queued rather than translating it into terminal failure.
+		const observed = record.host.observe();
+		if (observed.suspension) {
+			// Quota or an explicit human interruption ended this delivery turn, not the
+			// admitted Messages. Keep unproven work queued: a held Run is resumable, so
+			// discarding its scheduling would lose work the Hold never released.
 			this.#removeProvenDeliveriesInLane(record);
 			this.#activeDeferredByAgent.delete(record.identity.agentId);
 			this.#activeWaitPreemptionByAgent.delete(record.identity.agentId);

@@ -1,3 +1,4 @@
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { scheduleDeliveryFailureNotice } from "./delivery-failure-notifications.ts";
 import { findAuthoredSupervisoryResumeMessages } from "../protocol/run-control.ts";
 import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
@@ -283,8 +284,8 @@ export class MessageCoordinator {
 		this.#deliveryScheduler.integrate(record);
 	}
 
-	async refreshTranscriptFacts(): Promise<void> {
-		for (const record of this.#agents.values()) await this.#requestEvidence.refreshRelationshipsFor(record);
+	async refreshTranscriptFacts(): Promise<ReadonlyMap<AgentRecord, TranscriptInspection>> {
+		return this.#requestEvidence.refreshRelationships();
 	}
 
 	requestSources(requestIds: readonly string[]): readonly ToolCallPointer[] {
@@ -639,6 +640,7 @@ export class MessageCoordinator {
 		return {
 			messageId: requestId,
 			deliveryMode: "deferred",
+			isCreationRequest: true,
 			deliveryItem: createCreationRequestDeliveryItem({
 				requestId,
 				fromAgentId,
