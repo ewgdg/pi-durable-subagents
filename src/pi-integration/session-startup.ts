@@ -44,6 +44,10 @@ type Invocation = {
 	// A runtime-forwarded native input asks for this submission's handoff just before
 	// it submits its prompt, so a mismatched forward must not become later extension work.
 	handoffRequested: boolean;
+	// Pi accepted this submission into its own steering/follow-up queue instead of
+	// starting a Run of its own, so the admission has no Run left to fence.
+	queuedSubmission: boolean;
+	pendingAtEntry: number;
 	released: Promise<void>;
 	release: () => void;
 };
@@ -130,6 +134,7 @@ export class SessionStartupAdmission {
 					const invocation = this.#invocations.getStore()!;
 					try {
 						if (this.#disposed) return;
+						if (success) this.#markQueuedSubmission(invocation);
 						if (success) this.#checkpoint(invocation);
 						options?.preflightResult?.(success);
 						if (this.#disposed) return;
@@ -344,7 +349,9 @@ export class SessionStartupAdmission {
 			checkpoint: () => this.#checkpoint(invocation),
 			cancellation: this.signal,
 			cancelled: false, finished: false, started: false, beforeStartReached: false,
-			inputHandedOff: false, handoffRequested: false, released, release,
+			inputHandedOff: false, handoffRequested: false,
+			queuedSubmission: false, pendingAtEntry: this.#session.pendingMessageCount,
+			released, release,
 		};
 		// Nested calls inherit async context; only the first exact prompt may claim it.
 		if (pending && !pending.invocation) {
@@ -362,8 +369,13 @@ export class SessionStartupAdmission {
 	}
 
 	#checkpoint(invocation: Invocation): void {
-		if (this.#disposed || invocation.cancelled) throw new Error("startup_admission_cancelled");
-		invocation.cancellation.throwIfAborted();
+		if (this.#disposed) throw new Error("startup_admission_cancelled");
+		// A submission Pi already queued is Pi's own input to deliver or discard; a
+		// cancelled preparation cannot recall it, and this invocation owns no Run to fence.
+		if (!invocation.queuedSubmission) {
+			if (invocation.cancelled) throw new Error("startup_admission_cancelled");
+			invocation.cancellation.throwIfAborted();
+		}
 		if (invocation.inputHandedOff && invocation.beforeStartReached) {
 			throw new Error("startup_input_handoff_not_handled");
 		}
@@ -371,6 +383,15 @@ export class SessionStartupAdmission {
 		if (invocation.custom && !invocation.custom.injected) {
 			throw new Error("custom_startup_not_started: kickoff input was handled before delivery preparation");
 		}
+	}
+
+	/** Record that Pi took this submission into its own queue instead of starting a Run. */
+	#markQueuedSubmission(invocation: Invocation): void {
+		// A reached start hook means Pi already began this submission's own Run, so any
+		// later queue growth belongs to another input. Pi queues native steering and
+		// follow-up inside the submission it accepts instead of starting that Run.
+		if (invocation.beforeStartReached) return;
+		invocation.queuedSubmission ||= this.#session.pendingMessageCount > invocation.pendingAtEntry;
 	}
 
 	#release(invocation: Invocation): void {

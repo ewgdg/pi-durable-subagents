@@ -3242,7 +3242,10 @@ async function createIncidentBoundaryHarness(
 	} = {},
 	options: Partial<ConstructorParameters<typeof WorkflowCoordinator>[2]> = {},
 ) {
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+	// Production always registers the startup hook, so an idle custom delivery can be
+	// returned for its own empty extension-origin kickoff prompt. Without it the
+	// admission correctly rejects the delivery as custom_startup_not_started.
+	const host = await createUnboundTestOwnerHost(t, (pi) => { registerSessionStartup(pi); }, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,

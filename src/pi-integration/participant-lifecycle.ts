@@ -68,10 +68,9 @@ export function registerParticipantLifecycle(
 	// custom Delivery turns, queued continuations, and automatic retries.
 	pi.on("agent_start", async (_event, ctx) => {
 		const agentId = ctx.sessionManager.getSessionId();
-		const local = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), agentId);
 		// Freeze candidates before the coordinator await: a newer Delivery must
 		// not be suppressed by an earlier cross-process obligation snapshot.
-		const localRequestIds = local.map(frame => frame.requestId);
+		const localRequestIds = freezeLocalRequestIds(ctx.sessionManager, agentId);
 		const frames = await handlers.executionStarted();
 		const owed = new Set(frames.map(frame => frame.requestId));
 		// The coordinator can verify requester-side Answer proof before the local
@@ -200,6 +199,24 @@ function deliveredAnswer(result: TurnEndEvent["toolResults"][number]): boolean {
 	if (result.toolName !== "agent_wait") return false;
 	return Array.isArray(details?.answers) && details.answers.some(answer =>
 		(answer as Record<string, unknown> | null | undefined)?.disposition === "answer_delivered");
+}
+
+/**
+ * Local attention candidates frozen for one execution. The Owner's admission stays
+ * authoritative for durable obligation, so a transcript this Run cannot inspect yet
+ * (an Agent whose Identity entry has not committed) yields no candidates instead of
+ * suppressing the execution intention the Owner is waiting to admit.
+ */
+function freezeLocalRequestIds(
+	sessionManager: ExtensionContext["sessionManager"],
+	agentId: string,
+): string[] {
+	try {
+		return obligationStack(transcriptFromSessionManager(sessionManager).inspect(), agentId)
+			.map(frame => frame.requestId);
+	} catch {
+		return [];
+	}
 }
 
 function requestPresentation(frames: readonly ObligationFrame[]) {
