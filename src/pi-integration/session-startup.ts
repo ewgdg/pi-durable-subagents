@@ -41,6 +41,9 @@ type Invocation = {
 	started: boolean;
 	beforeStartReached: boolean;
 	inputHandedOff: boolean;
+	// A runtime-forwarded native input asks for this submission's handoff just before
+	// it submits its prompt, so a mismatched forward must not become later extension work.
+	handoffRequested: boolean;
 	released: Promise<void>;
 	release: () => void;
 };
@@ -133,7 +136,7 @@ export class SessionStartupAdmission {
 						if (success) this.#checkpoint(invocation);
 					} finally { this.#release(invocation); }
 				},
-			}));
+				}), this.#waitsForPreparation(options?.source));
 		};
 		// Keep this forwarding function in place under wrappers installed after
 		// binding. Re-wrapping the outer method on reload would skip those wrappers
@@ -227,6 +230,7 @@ export class SessionStartupAdmission {
 	/** Only the terminal input handler may transfer its exact, now-handled submission. */
 	captureInputHandoff(): (() => void) | undefined {
 		const invocation = this.#invocations.getStore();
+		if (invocation) invocation.handoffRequested = true;
 		if (!invocation || invocation.custom || invocation.beforeStartReached || this.#owner !== invocation) return;
 		return () => {
 			this.#checkpoint(invocation);
@@ -289,8 +293,48 @@ export class SessionStartupAdmission {
 		return { completion, preflight };
 	}
 
-	async #prompt(operation: () => Promise<void>): Promise<void> {
-		if (this.whenAvailable) throw new StartupPreparationBusyError(this.whenAvailable);
+	/**
+	 * Extension-emitted native input arrives inside the submission that emitted it:
+	 * a command handler or `session_start` hook runs during the input hook chain of
+	 * that very prompt. Refusing it would drop the work the extension asked to start
+	 * (docs/child-ui-context.md: extension-emitted user input activates work normally).
+	 * The input keeps its turn behind an ordinary native preparation instead.
+	 *
+	 * Three cases keep the busy guard: a protocol-owned custom startup, whose kickoff
+	 * must own the Run it prepares the transcript for; the internal empty kickoff
+	 * prompt that custom startup itself submits; and a runtime-forwarded native input,
+	 * whose caller waits for that exact preparation to hand the submission over.
+	 */
+	#waitsForPreparation(source: string | undefined): boolean {
+		if (source !== "extension") return false;
+		// The empty kickoff prompt a custom startup submits must claim its own Run.
+		const kickoff = this.#kickoffs.getStore();
+		if (kickoff && !kickoff.invocation) return false;
+		const owner = this.#owner;
+		// A protocol-owned custom startup keeps the guard for every other input.
+		if (!owner || owner.custom) return false;
+		if (owner.handoffRequested) return false;
+		// Only input emitted from inside the preparing submission itself keeps its
+		// turn. A durable delivery lane dispatches outside this provenance and must
+		// still be refused, because its caller waits for that exact preparation.
+		return this.#invocations.getStore() === owner;
+	}
+
+	/** Queued extension input starts its own Run once the current preparation releases. */
+	async #queuePrompt(operation: () => Promise<void>): Promise<void> {
+		while (this.whenAvailable) {
+			await waitForStartupRelease(this.whenAvailable, this.signal);
+			// A disposed generation must not admit work through its retained wrappers.
+			if (this.#disposed) throw new Error("startup_admission_cancelled");
+		}
+		return this.#prompt(operation);
+	}
+
+	async #prompt(operation: () => Promise<void>, queueable = false): Promise<void> {
+		if (this.whenAvailable) {
+			if (queueable) return this.#queuePrompt(operation);
+			throw new StartupPreparationBusyError(this.whenAvailable);
+		}
 		let release!: () => void;
 		const released = new Promise<void>(resolve => { release = resolve; });
 		const pending = this.#kickoffs.getStore();
@@ -300,7 +344,7 @@ export class SessionStartupAdmission {
 			checkpoint: () => this.#checkpoint(invocation),
 			cancellation: this.signal,
 			cancelled: false, finished: false, started: false, beforeStartReached: false,
-			inputHandedOff: false, released, release,
+			inputHandedOff: false, handoffRequested: false, released, release,
 		};
 		// Nested calls inherit async context; only the first exact prompt may claim it.
 		if (pending && !pending.invocation) {
