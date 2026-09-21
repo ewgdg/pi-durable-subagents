@@ -1199,22 +1199,29 @@ export class MessageDeliveryScheduler {
 	}
 
 	hasProgress(record: AgentRecord): boolean {
-		const activeDeferred = this.#activeDeferredByAgent.get(record.identity.agentId);
-		// A proven Delivery may still own its native prompt while agent_wait parks it.
-		// Keep that reservation for serialization, not as an external progress source.
-		if (this.#activeModeratorReminderByAgent.has(record.identity.agentId) ||
+		const agentId = record.identity.agentId;
+		const activeDeferred = this.#activeDeferredByAgent.get(agentId);
+		// Transcript proof ends Delivery progress. A proven Delivery may still own its
+		// native prompt and keep its reservation for serialization, and a proven queued
+		// item may linger until the next drain, but neither is an external progress
+		// source that can exclude the Agent from Dependency Deadlock handling.
+		// (docs/operational-incident-moderation.md, Delivery Stall.)
+		const isUnproven = (delivery: ScheduledDelivery | undefined) =>
+			delivery !== undefined && !delivery.inspectProof();
+		if (this.#activeModeratorReminderByAgent.has(agentId) ||
 			(activeDeferred !== undefined && activeDeferred.deliveries.some(delivery =>
-				!activeDeferred.committedMessageIds.has(delivery.messageId))) ||
-			this.#activeWaitPreemptionByAgent.has(record.identity.agentId) ||
-			this.#reservedResumeByAgent.has(record.identity.agentId) ||
-			this.#activeResumeByAgent.has(record.identity.agentId) ||
+				!activeDeferred.committedMessageIds.has(delivery.messageId) && !delivery.inspectProof())) ||
+			this.#activeWaitPreemptionByAgent.get(agentId)?.deliveries.some(delivery => !delivery.inspectProof()) ||
+			isUnproven(this.#reservedResumeByAgent.get(agentId)?.delivery) ||
+			isUnproven(this.#activeResumeByAgent.get(agentId)?.delivery) ||
 			this.#hasUnprovenFrozenBatch(record)) return true;
-		const pending = this.#pendingByAgent.get(record.identity.agentId);
+		const pending = this.#pendingByAgent.get(agentId);
 		if (!pending) return false;
 		const run = record.host.observe();
 		return this.#eligibleDeliveries(pending).some(delivery =>
-			this.#isDeliveryBoundary(record) ||
-			(run.phase === "live" && run.attention === "agent_wait" && (delivery.isIncomingRequest || delivery.preemptsAgentWait))
+			!delivery.inspectProof() &&
+			(this.#isDeliveryBoundary(record) ||
+				(run.phase === "live" && run.attention === "agent_wait" && (delivery.isIncomingRequest || delivery.preemptsAgentWait)))
 		);
 	}
 
