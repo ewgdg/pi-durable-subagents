@@ -56,5 +56,8 @@
     "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
     "yaml": "^2.9.0"
+  },
+  "allowScripts": {
+    "node-pty": true
   }
 }

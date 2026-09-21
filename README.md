@@ -34,6 +34,8 @@ Install directly from the Git repository:
 pi install git:github.com/ewgdg/pi-durable-subagents
 ```
 
+Attached-terminal support uses the `node-pty` native addon, which the package approves in `allowScripts` so that npm 12 and later run its install-time build. On platforms without a `node-pty` prebuild (Linux), that build needs a C++ toolchain.
+
 ## Usage
 
 Start an interactive Pi TUI:
