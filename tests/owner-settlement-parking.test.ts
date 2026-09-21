@@ -591,8 +591,19 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 	await waitUntil(() => ownerAssistantTexts(host).includes(
 		"No independent work remains in this turn.",
 	));
+	// The assistant text above is persisted at message_end, which strictly precedes
+	// the run's agent_end emission, so waiting on the text alone can read the lifecycle
+	// hook before agent_end is recorded. Pin the turn boundary on the lifecycle event
+	// itself, bounded, so a miss reports what the hook did observe.
+	await waitUntil(
+		() => lifecycle.includes("agent_end"),
+		() => `Owner run never reached agent_end while parked: lifecycle=[${lifecycle.join(", ")}] streaming=${host.session.isStreaming} idle=${host.session.isIdle}`,
+	);
 	assert.equal(host.session.isIdle, false);
-	assert.deepEqual(lifecycle, ["agent_end"]);
+	// The parked run stays open until the Answer reaches an active queue, and the
+	// parker only leaves at that boundary, so while parked no extra turn and no
+	// settlement can appear here.
+	assert.deepEqual(lifecycle, ["agent_end"], "a parked run must not start another turn or settle before its Answer arrives");
 	// Pi compacts between tool execution and the next assistant response in the
 	// same run (pi-coding-agent CHANGELOG 0.84.4, #6879), so this run may already
 	// have compacted before it parked. The parked boundary is what must not start
@@ -692,8 +703,14 @@ test("native custom input wakes a parked working Owner and remains in model cont
 	await waitUntil(() => ownerAssistantTexts(host).includes(
 		"The Owner is parked with background work outstanding.",
 	));
+	// Same parked boundary as the Creation Request case: the assistant text is
+	// readable before agent_end, so the lifecycle event is the evidence to wait on.
+	await waitUntil(
+		() => lifecycle.includes("agent_end"),
+		() => `Owner run never reached agent_end while parked: lifecycle=[${lifecycle.join(", ")}] streaming=${host.session.isStreaming} idle=${host.session.isIdle}`,
+	);
 	assert.equal(host.session.isIdle, false);
-	assert.deepEqual(lifecycle, ["agent_end"]);
+	assert.deepEqual(lifecycle, ["agent_end"], "a parked run must not start another turn or settle before its Answer arrives");
 
 	await host.session.sendCustomMessage({
 		customType: "owner-parking-native-custom-wake",
@@ -750,10 +767,13 @@ async function withTimeout(
 	}
 }
 
-async function waitUntil(predicate: () => boolean): Promise<void> {
+async function waitUntil(
+	predicate: () => boolean,
+	describeFailure?: () => string,
+): Promise<void> {
 	for (let attempt = 0; attempt < 500; attempt += 1) {
 		if (predicate()) return;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
-	throw new Error("Expected Owner parking condition was not reached");
+	throw new Error(describeFailure?.() ?? "Expected Owner parking condition was not reached");
 }
