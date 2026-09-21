@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,67 @@ const TEST_TIMEOUT_MS = 30_000;
 const CHILD_EXTENSION = fileURLToPath(
 	new URL("./fixtures/process-runtime-child-extension.ts", import.meta.url),
 );
+
+/**
+ * The child owns its runtime default surface: Pi's own default tools, the fixture
+ * extension's registered tool, and the role coordination tools the bridge always
+ * keeps active. Nothing here comes from a parent selection.
+ */
+const CHILD_DEFAULT_TOOL_SURFACE = [
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"agent_message",
+	"agent_wait",
+	"agent_spawn",
+	"agent_observe",
+	"agent_control",
+	"ask_user",
+	"runtime_sequential_probe",
+] as const;
+
+/**
+ * A child transcript is indexed by the Identity its Owner commits before launch
+ * (src/coordination/spawning.ts). A directly started child needs that same entry,
+ * or the bridge cannot bind the child's session to its own Identity.
+ */
+async function writeChildSession(options: {
+	sessionPath: string;
+	sessionId: string;
+	cwd: string;
+	workflowId: string;
+	directSpawnerAgentId: string;
+	label: string;
+}): Promise<void> {
+	const timestamp = new Date().toISOString();
+	await writeFile(options.sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: options.sessionId,
+		timestamp,
+		cwd: options.cwd,
+	})}\n`, { mode: 0o600 });
+	await appendFile(options.sessionPath, `${JSON.stringify({
+		type: "custom",
+		id: "child-identity",
+		parentId: null,
+		timestamp,
+		customType: "agent-coordination.identity",
+		data: {
+			agentId: options.sessionId,
+			workflowId: options.workflowId,
+			directSpawnerAgentId: options.directSpawnerAgentId,
+			creationPreset: null,
+			spawnSource: {
+				agentId: options.directSpawnerAgentId,
+				entryId: "spawn-entry",
+				toolCallId: "spawn-call",
+			},
+			metadata: { label: options.label },
+		},
+	})}\n`);
+}
 
 test("real Pi CLI resolves unset Moderator thinking from the shared Pi default", {
 	timeout: TEST_TIMEOUT_MS,
@@ -100,13 +161,14 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	await mkdir(cwd, { recursive: true });
 	await mkdir(sessionDirectory, { recursive: true });
 	const sessionPath = join(sessionDirectory, "child.jsonl");
-	await writeFile(sessionPath, `${JSON.stringify({
-		type: "session",
-		version: 3,
-		id: expectedSessionId,
-		timestamp: new Date().toISOString(),
+	await writeChildSession({
+		sessionPath,
+		sessionId: expectedSessionId,
 		cwd,
-	})}\n`, { mode: 0o600 });
+		workflowId: "process-runtime-test-workflow",
+		directSpawnerAgentId: "process-runtime-test-owner",
+		label: "Runtime bridge child",
+	});
 
 	const lifecycle: string[] = [];
 	const ownerIntentions: unknown[] = [];
@@ -188,7 +250,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			tools: CHILD_DEFAULT_TOOL_SURFACE,
 			skills: [],
 			skillSources: [],
 			extensions: [CHILD_EXTENSION],
@@ -1454,22 +1516,7 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			runtimeDirectory: root,
 		});
 		const systemPromptPath = join(dirname(runtime.bootstrapPath), "system-prompt.md");
-		// The child owns its runtime default surface: Pi's own default tools, the
-		// fixture extension's registered tool, and the role coordination tools the
-		// bridge always keeps active. Nothing here comes from a parent selection.
-		const expectedTools = [
-			"read",
-			"bash",
-			"edit",
-			"write",
-			"agent_message",
-			"agent_wait",
-			"agent_spawn",
-			"agent_observe",
-			"agent_control",
-			"ask_user",
-			"runtime_sequential_probe",
-		];
+		const expectedTools = CHILD_DEFAULT_TOOL_SURFACE;
 		const snapshot = runtime.snapshot;
 		assert.deepEqual(snapshot, {
 			cwd,
@@ -1509,13 +1556,14 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 	await mkdir(cwd, { recursive: true });
 	await mkdir(sessionDirectory, { recursive: true });
 	const sessionPath = join(sessionDirectory, "child.jsonl");
-	await writeFile(sessionPath, `${JSON.stringify({
-		type: "session",
-		version: 3,
-		id: expectedSessionId,
-		timestamp: new Date().toISOString(),
+	await writeChildSession({
+		sessionPath,
+		sessionId: expectedSessionId,
 		cwd,
-	})}\n`, { mode: 0o600 });
+		workflowId: "process-coordination-workflow",
+		directSpawnerAgentId: "owner-agent",
+		label: "Coordination child",
+	});
 	const ownerCalls: unknown[] = [];
 	const observeReceipt = {
 		agentId,
