@@ -328,6 +328,11 @@ async function startMockLlamaRouter(): Promise<{
 	let completionSequence = 0;
 	const server = createServer((request, response) => {
 		request.resume();
+		if (request.url?.startsWith("/props")) {
+			response.setHeader("content-type", "application/json");
+			response.end(JSON.stringify({ models_autoload: false }));
+			return;
+		}
 		if (request.url === "/models") {
 			response.setHeader("content-type", "application/json");
 			response.end(JSON.stringify({

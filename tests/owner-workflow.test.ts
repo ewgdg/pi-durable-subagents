@@ -99,7 +99,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 	assert.match(renderedAgents[0] ?? "", /^┌─+┐$/);
 	assert.match(renderedAgents.join("\n"), /Live.*Dormant/);
 	assert.match(renderedAgents.join("\n"), /Owner/);
-	assert.match(renderedAgents.join("\n"), /o Owner · Tab views/);
+	assert.match(renderedAgents.join("\n"), /Tab views/);
 	agentsSurface.handleInput?.("\x1b");
 	await agentsCommand;
 

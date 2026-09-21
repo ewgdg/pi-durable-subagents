@@ -323,7 +323,7 @@ test("each execution presents titled open Requests without repeating bodies or s
 	assert.deepEqual(presentation.details, { requests: frames.map(({ requestId, requesterAgentId, title }) => ({
 		requestMessageId: requestId, requesterAgentId, title,
 	})) });
-	assert.match(presentation.content, /Choose/);
+	assert.match(presentation.content, /Outstanding Requests/);
 	assert.match(presentation.content, /Complete storage/);
 	assert.match(presentation.content, /Review integration/);
 	assert.doesNotMatch(presentation.content, /Finish A|Consider B/);
@@ -343,7 +343,7 @@ for (const pending of [false, true]) test(`Answer offers one neutral continuatio
 	assert.equal(pi.messages.length, pending ? 0 : 1);
 	if (!pending) {
 		assert.equal(pi.messages[0]!.options?.triggerTurn, true);
-		assert.match(String(pi.messages[0]!.message.content), /Choose/);
+		assert.match(String(pi.messages[0]!.message.content), /Outstanding Requests/);
 	}
 	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
 	assert.equal(pi.messages.length, pending ? 0 : 1, "settling with outstanding work must not spin");

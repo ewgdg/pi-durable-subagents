@@ -1,3 +1,4 @@
+import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -647,7 +648,7 @@ test("native subscription failure rolls back the already-created projection and 
 });
 
 test("Runtime Host confirms user and custom Delivery transcript commits", async (t) => {
-	const ownerHost = await createTestOwnerHost(t, () => undefined, { persistent: true });
+	const ownerHost = await createTestOwnerHost(t, registerSessionStartup, { persistent: true });
 	ownerHost.model.setResponses([
 		fauxAssistantMessage("User Delivery completed."),
 		fauxAssistantMessage("Custom Delivery completed."),

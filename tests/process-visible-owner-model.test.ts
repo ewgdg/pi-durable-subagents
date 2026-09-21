@@ -50,7 +50,7 @@ test("opt-in Owner model calls use the retained file-backed broker until runtime
 	host.model.setResponses([
 		(context, options, state, requestModel) => {
 			configuredCalls += 1;
-			assert.deepEqual(context, ordinaryContext);
+			assert.deepEqual(context, { messages: [{ role: "system", content: "Owner proxy evidence", timestamp: 0 }, ...ordinaryContext.messages] });
 			assert.ok(options?.signal instanceof AbortSignal);
 			assert.equal(state.callCount, 2);
 			assert.equal(requestModel.provider, PROVIDER_ID);

@@ -46,6 +46,8 @@ for (const ownerAnswered of [false, true]) {
 				observe: () => ({ phase: "live", work: "settled", attention: "agent_wait", retentionReasons }),
 				currentRunFailed: () => false,
 				hasRetentionReason: (reason: string) => retentionReasons.some(item => item.reason === reason),
+				requestRelationshipIds: () => [],
+				removeRetentionReason: () => {},
 			} as unknown as AgentRuntimeHost;
 		}
 		const workflowPolicy = new WorkflowPolicyStore();

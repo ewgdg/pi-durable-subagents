@@ -9,8 +9,10 @@ import {
 	type JsonObject,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
+import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 
 import piAgentCoordination from "../src/index.ts";
 import {
@@ -531,9 +533,10 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 		await sourceOwner.waitForIdle();
 		const forkUserEntry = sourceOwner.sessionManager.getEntries().find(
 			(entry) =>
-				entry.parentId === sourceIdentity.id &&
 				entry.type === "message" &&
-				entry.message.role === "user",
+				entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes(editorText) &&
+				sourceOwner.sessionManager.getBranch(entry.id).some((ancestor) => ancestor.id === sourceIdentity.id),
 		);
 		assert.ok(forkUserEntry);
 
@@ -639,6 +642,25 @@ for (const invalidTool of ["agent_spawn", "agent_message"] as const) {
 				assert.ok(call);
 				delete call.arguments.title;
 			}
+			const delivery = createMessageDelivery([{
+				source: { agentId: spawn.agentId, entryId: "conflicting-delivery-entry", toolCallId: "conflicting-delivery-call" },
+				projection: {
+					kind: "request", requestMessageId: "conflicting-delivery-message", fromAgentId: spawn.agentId,
+					title: "Conflicting valid delivery", question: "One source cannot have two recipient Deliveries.",
+				},
+			}]);
+			for (let copy = 0; copy < 2; copy++) {
+				records.push({
+					type: "custom_message",
+					customType: delivery.customType,
+					content: delivery.content,
+					display: delivery.display,
+					details: delivery.details,
+					id: `conflicting-delivery-${copy}`,
+					parentId: records.at(-1)?.id ?? null,
+					timestamp: new Date().toISOString(),
+				});
+			}
 			await writeFile(sourceFile, `${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
 			const sourceBytes = await readFile(sourceFile, "utf8");
 			const childBytes = await readFile(childStatus.primaryEvidence.transcriptPath, "utf8");
@@ -655,7 +677,7 @@ for (const invalidTool of ["agent_spawn", "agent_message"] as const) {
 			assert.equal(reopened.session.getActiveToolNames().includes("agent_spawn"), false);
 			const sourceEntries = structuredClone(reopened.session.sessionManager.getEntries());
 			const position = invalidTool === "agent_spawn" ? "at" : "before";
-			const context = reopened.session.sessionManager.buildSessionContext().messages;
+			const context = buildSessionContext(reopened.session.sessionManager.getBranch(selectedId)).messages;
 			const expectedContext = position === "at" ? context : context.slice(0, -1);
 
 			assert.deepEqual(await reopened.runtime.fork(selectedId, { position }), {
