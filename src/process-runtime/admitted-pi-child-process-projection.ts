@@ -41,6 +41,8 @@ export type AdmittedPiChildProjectionRuntime = Readonly<{
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	beginPhysicalTerminalAttachment(handler: (data: string) => void): Promise<() => void>;
 	beginScreenView(): Promise<void>;
+	/** Handoff note for the current viewer, when the screen handoff was bounded. */
+	screenViewDiagnostic?(): string | undefined;
 	hidePresentation(): Promise<void>;
 	pauseOutput(): void;
 	resumeOutput(): void;
@@ -80,8 +82,11 @@ export function createAdmittedPiChildProcessProjection(
 	void runtime.exited.then((exit) => {
 		if (disposed) return;
 		if (exit.exitCode !== 0 || exit.signal !== 0) {
-			failures.notify(new Error(
-				`child_runtime_unexpected_exit: code ${exit.exitCode} signal ${exit.signal}`,
+			failures.notify(withScreenViewDiagnostic(
+				new Error(
+					`child_runtime_unexpected_exit: code ${exit.exitCode} signal ${exit.signal}`,
+				),
+				runtime,
 			));
 		}
 		exits.notify();
@@ -294,6 +299,20 @@ function isDefaultStyle(style: TerminalCellStyle): boolean {
 		&& !style.invisible
 		&& !style.strikethrough
 		&& !style.overline;
+}
+
+/**
+ * Carry the viewer's own screen-handoff note into a child failure message. A bounded
+ * handoff is not itself a failure, but it explains a child view that never painted.
+ */
+function withScreenViewDiagnostic(
+	error: Error,
+	runtime: AdmittedPiChildProjectionRuntime,
+): Error {
+	const diagnostic = runtime.screenViewDiagnostic?.();
+	return diagnostic === undefined
+		? error
+		: new Error(`${error.message}\n${diagnostic}`, { cause: error });
 }
 
 class ChangeNotifications {

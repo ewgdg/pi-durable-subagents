@@ -56,6 +56,23 @@ export type TerminalProjectionFrame = Readonly<{
 
 export type PtyExit = Readonly<{ exitCode: number; signal: number }>;
 
+/**
+ * Settled outcome of a complete-frame wait.
+ * `bounded` means the child produced no DEC 2026 frame bracket inside the bound;
+ * `abandoned` means the caller released the wait before any frame arrived.
+ */
+export type CompleteFrameWaitOutcome = "complete" | "bounded" | "abandoned";
+
+export type CompleteFrameWait = Readonly<{
+	/**
+	 * Resolves `complete` when a frame bracket closed, or `bounded` when the bound
+	 * expired first. Rejects when the child's PTY fails or exits mid-handoff.
+	 */
+	outcome: Promise<CompleteFrameWaitOutcome>;
+	/** Release an unfulfilled wait so the next handoff can register its own. */
+	cancel(): void;
+}>;
+
 export type SpawnPtyTerminalProjectionOptions = Readonly<{
 	file: string;
 	arguments?: readonly string[];
@@ -77,7 +94,7 @@ export interface PtyTerminalProjection {
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	addOutputHandler(handler: (data: string) => void): () => void;
 	enterNativeTerminalMode(): Promise<void>;
-	waitForCompleteFrame(): Promise<void>;
+	waitForCompleteFrame(boundMilliseconds: number): CompleteFrameWait;
 	pauseOutput(): void;
 	resumeOutput(): void;
 	writeInput(data: string | Buffer): void;
@@ -128,8 +145,9 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	#screenConsumers = 0;
 	#terminalTransitionTail = Promise.resolve();
 	#completeFrameWaiter: Readonly<{
-		resolve(): void;
-		reject(error: unknown): void;
+		settle(outcome: CompleteFrameWaitOutcome): void;
+		fail(error: unknown): void;
+		timer: NodeJS.Timeout;
 	}> | undefined;
 	#cursorVisible = true;
 	#cursorStyle: TerminalCursorStyle = "block";
@@ -289,19 +307,51 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	}
 
 	/**
-	 * Resolve once a complete native frame has been parsed. Pi's fullscreen TUI
-	 * brackets every frame in DEC 2026 synchronized output, so its end sequence is
-	 * ordered after every cell of that frame. Register this before asking the child
-	 * to repaint; a hidden child is not rendering, so no earlier frame can satisfy it.
+	 * Observe the next complete native frame. Pi's fullscreen TUI brackets every frame
+	 * in DEC 2026 synchronized output, so its end sequence is ordered after every cell
+	 * of that frame. Register this before asking the child to repaint; a hidden child is
+	 * not rendering, so no earlier frame can satisfy it.
+	 *
+	 * The bracket orders a handoff, it is not a liveness contract: a child paused in
+	 * startup, blocked in a handler, or already exiting never emits one, so the bound
+	 * ends the wait and lets the viewer see the child's streamed output anyway.
 	 */
-	waitForCompleteFrame(): Promise<void> {
+	waitForCompleteFrame(boundMilliseconds: number): CompleteFrameWait {
 		this.#requireActive();
+		if (!Number.isSafeInteger(boundMilliseconds) || boundMilliseconds <= 0) {
+			throw new Error("invalid_complete_frame_bound");
+		}
 		if (this.#completeFrameWaiter) {
 			throw new Error("terminal_complete_frame_already_pending");
 		}
-		return new Promise<void>((resolve, reject) => {
-			this.#completeFrameWaiter = { resolve, reject };
+		let resolve!: (outcome: CompleteFrameWaitOutcome) => void;
+		let reject!: (error: unknown) => void;
+		const outcome = new Promise<CompleteFrameWaitOutcome>((settle, fail) => {
+			resolve = settle;
+			reject = fail;
 		});
+		// Only the registered waiter settles the promise, so a waiter replaced by a
+		// later handoff can never settle the newer one through a stale timer or reply.
+		const waiter = {
+			settle: (settled: CompleteFrameWaitOutcome) => {
+				if (this.#completeFrameWaiter !== waiter) return;
+				this.#completeFrameWaiter = undefined;
+				clearTimeout(waiter.timer);
+				resolve(settled);
+			},
+			fail: (error: unknown) => {
+				if (this.#completeFrameWaiter !== waiter) return;
+				this.#completeFrameWaiter = undefined;
+				clearTimeout(waiter.timer);
+				reject(error);
+			},
+			timer: setTimeout(() => waiter.settle("bounded"), boundMilliseconds),
+		};
+		this.#completeFrameWaiter = waiter;
+		return {
+			outcome,
+			cancel: () => waiter.settle("abandoned"),
+		};
 	}
 
 	pauseOutput(): void {
@@ -498,15 +548,13 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			return false;
 		}
 		const waiter = this.#completeFrameWaiter;
-		this.#completeFrameWaiter = undefined;
-		waiter?.resolve();
+		waiter?.settle("complete");
 		return false;
 	}
 
 	#rejectCompleteFrameWaiter(error: unknown): void {
 		const waiter = this.#completeFrameWaiter;
-		this.#completeFrameWaiter = undefined;
-		waiter?.reject(error);
+		waiter?.fail(error);
 	}
 
 	#notifyChange(): void {

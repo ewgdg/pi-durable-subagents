@@ -53,6 +53,17 @@ const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
 const DEFAULT_STARTUP_TIMEOUT_MILLISECONDS = 15_000;
 const DEFAULT_SHUTDOWN_GRACE_MILLISECONDS = 3_000;
+/**
+ * How long a viewer handoff waits for Pi's DEC 2026 frame bracket before showing
+ * the child anyway. The bracket orders the first published frame; a child that is
+ * paused in startup, blocked in a handler, or exiting never emits one, and a live
+ * viewer must not be held on the previous screen forever. Pi repaints a shown TUI
+ * within a frame or two, so this bound only ever fires for a child that cannot
+ * repaint at all.
+ */
+const SCREEN_VIEW_FRAME_BOUND_MILLISECONDS = 1_000;
+const SCREEN_VIEW_FRAME_TIMEOUT_DIAGNOSTIC =
+	"child_screen_frame_timeout: the child screen handoff completed without a complete native frame";
 const BRIDGE_EXTENSION_PATH = fileURLToPath(
 	new URL("./child-runtime-bridge.ts", import.meta.url),
 );
@@ -486,6 +497,10 @@ export class PiChildProcessRuntime {
 		return this.#presentation.beginScreenView();
 	}
 
+	screenViewDiagnostic(): string | undefined {
+		return this.#presentation.screenViewDiagnostic();
+	}
+
 	hidePresentation(): Promise<void> {
 		return this.#presentation.hidePresentation();
 	}
@@ -582,6 +597,7 @@ export class PiChildProcessLaunch {
 	readonly #cleanupInitialization: () => Promise<void>;
 	readonly #readiness: Promise<PiChildProcessRuntime>;
 	readonly #presentationReadiness: Promise<ChildProcessPresentation>;
+	#presentation: ChildProcessPresentation | undefined;
 	#rejectCancellation!: (error: unknown) => void;
 	#state: PiChildProcessLaunchState = { kind: "pending" };
 	#cleanupPromise: Promise<void> | undefined;
@@ -607,6 +623,10 @@ export class PiChildProcessLaunch {
 			this.#rejectCancellation = reject;
 		});
 		this.#presentationReadiness = options.preparePresentation(cancellation);
+		void this.#presentationReadiness.then(
+			(presentation) => { this.#presentation = presentation; },
+			() => undefined,
+		);
 		this.#readiness = this.#presentationReadiness.then(
 			presentation => options.initialize(presentation, cancellation),
 		).then(
@@ -667,6 +687,10 @@ export class PiChildProcessLaunch {
 
 	beginScreenView(): Promise<void> {
 		return this.#presentationReadiness.then(presentation => presentation.beginScreenView());
+	}
+
+	screenViewDiagnostic(): string | undefined {
+		return this.#presentation?.screenViewDiagnostic();
 	}
 
 	hidePresentation(): Promise<void> {
@@ -883,6 +907,7 @@ class ChildProcessPresentation {
 	#revision = 0;
 	#closed = false;
 	#releaseScreenView: (() => void) | undefined;
+	#boundedHandoff = false;
 	readonly projection: PtyTerminalProjection;
 	readonly channel: PiChildRuntimeChannel;
 
@@ -909,20 +934,24 @@ class ChildProcessPresentation {
 
 	/**
 	 * Resume the child's native screen for a viewer and observe it. Resolves once
-	 * the child's complete current frame has been parsed, so a handoff never
-	 * publishes a partially repainted screen; the hidden state resumes on hide.
+	 * the child's complete current frame has been parsed, or once the frame bound
+	 * expires: the bracket orders the first published frame, but a child that never
+	 * repaints (unsupported, paused, or exiting) must still hand its stream over.
+	 * The hidden state resumes on hide.
 	 */
 	async beginScreenView(): Promise<void> {
 		if (this.#closed || this.#releaseScreenView) return;
 		const revision = ++this.#revision;
 		const releaseScreen = this.projection.addScreenConsumer();
-		const completeFrame = this.projection.waitForCompleteFrame();
+		const frameWait = this.projection.waitForCompleteFrame(SCREEN_VIEW_FRAME_BOUND_MILLISECONDS);
 		try {
 			await this.setPresentationVisible(true);
-			await completeFrame;
+			// A bounded handoff still completes: the child's PTY output streams to the
+			// viewer either way, so the ordering barrier must never gate visibility.
+			if (await frameWait.outcome !== "complete") this.#boundedHandoff = true;
 		} catch (error) {
 			releaseScreen();
-			await completeFrame.catch(() => undefined);
+			frameWait.cancel();
 			throw error;
 		}
 		if (revision !== this.#revision || this.#closed) {
@@ -931,6 +960,14 @@ class ChildProcessPresentation {
 			return;
 		}
 		this.#releaseScreenView = releaseScreen;
+	}
+
+	/**
+	 * What a viewer should know about the last handoff. A bounded handoff is not a
+	 * failure, but it explains a child view that starts mid-frame or never paints.
+	 */
+	screenViewDiagnostic(): string | undefined {
+		return this.#boundedHandoff ? SCREEN_VIEW_FRAME_TIMEOUT_DIAGNOSTIC : undefined;
 	}
 
 	hidePresentation(): Promise<void> {
