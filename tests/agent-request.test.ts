@@ -381,59 +381,17 @@ test("an active responder rejects ordinary Message authorship to its requester w
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("ordinary Message authorship to the requester resumes after Answer commitment", async (t) => {
+test("ordinary Message authorship to the requester resumes once no obligation owes the requester", async (t) => {
+	// docs/agent-messaging.md: ordinary Messages to the requester of an unresolved
+	// obligation are rejected, and sending becomes available when no unresolved
+	// obligation owes that requester. Answer commitment and Cancellation Delivery are
+	// the two documented end conditions, so both variants run against one dormant child
+	// instead of paying a second child startup.
 	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "answer" ? "confirmed_failure" : undefined,
 	});
-	const answerCallId = "commit-answer-before-ordinary-message";
-	const sendCallId = "send-after-answer-commitment";
-	harness.host.model.setResponses([
-		(context) => fauxAssistantMessage(
-			fauxToolCall("agent_message", {
-				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
-				answer: "The curated Answer ends the active obligation.",
-			}, { id: answerCallId }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", {
-				operation: "send",
-				targetAgent: harness.host.session.sessionId,
-				content: "Independent communication is available after Answer commitment.",
-			}, { id: sendCallId }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The post-Answer Message was admitted."),
-		fauxAssistantMessage("The requester received the post-Answer Message."),
-	]);
-
-	await authorOwnerRequest(harness, "request-before-post-answer-send");
-	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
-	await waitForEntry(childSessionFile, entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === answerCallId);
-	const wakeInput = { operation: "send" as const, targetAgent: harness.childId, content: "Continue the independent communication." };
-	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", wakeInput, { id: "wake-after-answer" }), { stopReason: "toolUse" }));
-	await harness.view.message("wake-after-answer", wakeInput);
-
-	const entries = await waitForEntry(
-		childSessionFile,
-		(entry) =>
-			entry.type === "message" &&
-			entry.message.role === "toolResult" &&
-			entry.message.toolCallId === sendCallId,
-	);
-	assert.equal(
-		(requireToolResult(entries, sendCallId).message.details as { messageStatus?: string })
-			.messageStatus,
-		"sent",
-	);
-
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-});
-
-test("ordinary Message authorship to the requester resumes after Cancellation Delivery", async (t) => {
-	const harness = await createDormantChildHarness(t);
-	const sendCallId = "send-after-cancellation-delivery";
+	const cancellationSendCallId = "send-after-cancellation-delivery";
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The Request remains active until Cancellation Delivery."),
 		fauxAssistantMessage(
@@ -441,14 +399,14 @@ test("ordinary Message authorship to the requester resumes after Cancellation De
 				operation: "send",
 				targetAgent: harness.host.session.sessionId,
 				content: "Independent communication is available after Cancellation Delivery.",
-			}, { id: sendCallId }),
+			}, { id: cancellationSendCallId }),
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The post-Cancellation Message was admitted."),
 		fauxAssistantMessage("The requester received the post-Cancellation Message."),
 	]);
 
-	const request = await authorOwnerRequest(
+	const cancelled = await authorOwnerRequest(
 		harness,
 		"request-before-post-cancellation-send",
 	);
@@ -458,7 +416,7 @@ test("ordinary Message authorship to the requester resumes after Cancellation De
 	const cancelCallId = "cancel-before-ordinary-message";
 	const cancelInput = {
 		operation: "cancel" as const,
-		requestMessageId: request.requestMessageId,
+		requestMessageId: cancelled.requestMessageId,
 		reason: "End the responder obligation before unrelated communication.",
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -478,21 +436,63 @@ test("ordinary Message authorship to the requester resumes after Cancellation De
 		timestamp: Date.now(),
 	});
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
-	const entries = await waitForEntry(
+	const afterCancellation = await waitForEntry(
 		childSessionFile,
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
-			entry.message.toolCallId === sendCallId,
+			entry.message.toolCallId === cancellationSendCallId,
 	);
 	assert.equal(
-		(requireToolResult(entries, sendCallId).message.details as { messageStatus?: string })
+		(requireToolResult(afterCancellation, cancellationSendCallId).message.details as { messageStatus?: string })
+			.messageStatus,
+		"sent",
+	);
+
+	const answerCallId = "commit-answer-before-ordinary-message";
+	const answerSendCallId = "send-after-answer-commitment";
+	harness.host.model.setResponses([
+		(context) => fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
+				answer: "The curated Answer ends the active obligation.",
+			}, { id: answerCallId }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "send",
+				targetAgent: harness.host.session.sessionId,
+				content: "Independent communication is available after Answer commitment.",
+			}, { id: answerSendCallId }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The post-Answer Message was admitted."),
+		fauxAssistantMessage("The requester received the post-Answer Message."),
+	]);
+	await authorOwnerRequest(harness, "request-before-post-answer-send");
+	await waitForEntry(childSessionFile, entry =>
+		entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === answerCallId);
+	const wakeInput = { operation: "send" as const, targetAgent: harness.childId, content: "Continue the independent communication." };
+	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", wakeInput, { id: "wake-after-answer" }), { stopReason: "toolUse" }));
+	await harness.view.message("wake-after-answer", wakeInput);
+
+	const afterAnswer = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === answerSendCallId,
+	);
+	assert.equal(
+		(requireToolResult(afterAnswer, answerSendCallId).message.details as { messageStatus?: string })
 			.messageStatus,
 		"sent",
 	);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
+
 
 test("a Steer Request reaches an occupied responder and cancelling the earlier Request leaves it outstanding", async (t) => {
 	const harness = await createDormantChildHarness(t);
@@ -1467,26 +1467,30 @@ test("Agent Wait retrieves an outstanding Answer and rejects a join once none re
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Agent Wait excludes an Answer retrieved earlier in the same tool batch", async (t) => {
+test("Agent Wait fixes its outbound selection at its own call within a tool batch", async (t) => {
+	// One contract with two boundaries: an Agent Wait joins the Requests outstanding at
+	// its own call, so a retrieval earlier in the same batch consumes its Answer and a
+	// Request authored later in that batch stays outside the join. Both boundaries run
+	// against one dormant child instead of paying a second child startup.
 	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "answer" ? "confirmed_failure" : undefined,
 	});
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-retry-wait-batch");
-	const requestMessageId = await commitHarnessAnswer(
+	const retrievedRequestId = await commitHarnessAnswer(
 		harness,
 		"request-before-retry-wait-batch",
 		"answer-before-retry-wait-batch",
 		"The retry retrieves this Answer before the Wait executes.",
 	);
 	const retryToolCallId = "retry-before-wait-in-one-batch";
-	const waitToolCallId = "wait-after-retry-in-one-batch";
-	const retryInput = { operation: "retry" as const, messageId: requestMessageId };
+	const retrievedWaitToolCallId = "wait-after-retry-in-one-batch";
+	const retryInput = { operation: "retry" as const, messageId: retrievedRequestId };
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			[
 				fauxToolCall("agent_message", retryInput, { id: retryToolCallId }),
-				fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
+				fauxToolCall("agent_wait", {}, { id: retrievedWaitToolCallId }),
 			],
 			{ stopReason: "toolUse" },
 		),
@@ -1505,18 +1509,91 @@ test("Agent Wait excludes an Answer retrieved earlier in the same tool batch", a
 		isError: false,
 		timestamp: Date.now(),
 	});
-
 	await assert.rejects(
 		() => harness.view.wait(
-			waitToolCallId,
+			retrievedWaitToolCallId,
 			{},
 			new AbortController().signal,
 		),
 		/invalid_input: Agent Wait requires at least one outstanding outbound Agent Request/,
 	);
 
+	const joinedRequestInput = {
+		title: "Fixture request",
+		operation: "request" as const,
+		targetAgent: harness.childId,
+		question: "Answer the Request before the Wait boundary.",
+	};
+	const laterRequestInput = {
+		title: "Fixture request",
+		operation: "request" as const,
+		targetAgent: harness.childId,
+		question: "Remain outside the preceding Wait boundary.",
+	};
+	const joinedRequestToolCallId = "request-before-wait-boundary";
+	const boundaryWaitToolCallId = "wait-between-request-sources";
+	const laterRequestToolCallId = "request-after-wait-boundary";
+	const sourceEntryId = harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			[
+				fauxToolCall("agent_message", joinedRequestInput, { id: joinedRequestToolCallId }),
+				fauxToolCall("agent_wait", {}, { id: boundaryWaitToolCallId }),
+				fauxToolCall("agent_message", laterRequestInput, { id: laterRequestToolCallId }),
+			],
+			{ stopReason: "toolUse" },
+		),
+	);
+	const joinedRequestId = deriveMessageId({
+		agentId: harness.host.session.sessionId,
+		entryId: sourceEntryId,
+		toolCallId: joinedRequestToolCallId,
+	});
+	const boundaryAnswerCallId = "answer-before-wait-boundary";
+	harness.host.model.setResponses([
+		(context) => fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Boundary Answer." },
+				{ id: boundaryAnswerCallId },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The boundary Answer committed."),
+	]);
+	const joinedRequestReceipt = await harness.view.message(
+		joinedRequestToolCallId,
+		joinedRequestInput,
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: joinedRequestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(joinedRequestReceipt) }],
+		details: joinedRequestReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	await waitForEntry(childSessionFile, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === boundaryAnswerCallId &&
+		entry.message.isError === false
+	);
+	const boundaryResult = await harness.view.wait(
+		boundaryWaitToolCallId,
+		{},
+		new AbortController().signal,
+	);
+	assert.ok(!("disposition" in boundaryResult));
+	assert.deepEqual(
+		boundaryResult.answers.map(({ requestMessageId }) => requestMessageId),
+		[joinedRequestId],
+	);
+
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
+
 
 test("Agent Wait joins every outstanding Request in authoring order", async (t) => {
 	let releaseFirstAnswer!: () => void;
@@ -1624,91 +1701,6 @@ test("Agent Wait joins every outstanding Request in authoring order", async (t) 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Agent Wait excludes Requests authored after its call in the same tool batch", async (t) => {
-	const harness = await createDormantChildHarness(t, {
-		beforeDeliveryAdmission: ({ operation }) =>
-			operation === "answer" ? "confirmed_failure" : undefined,
-	});
-	await cancelHarnessCreationRequest(harness, "cancel-creation-before-wait-boundary");
-	const firstRequestInput = {
-		title: "Fixture request",
-		operation: "request" as const,
-		targetAgent: harness.childId,
-		question: "Answer the Request before the Wait boundary.",
-	};
-	const laterRequestInput = {
-		title: "Fixture request",
-		operation: "request" as const,
-		targetAgent: harness.childId,
-		question: "Remain outside the preceding Wait boundary.",
-	};
-	const firstRequestToolCallId = "request-before-wait-boundary";
-	const waitToolCallId = "wait-between-request-sources";
-	const laterRequestToolCallId = "request-after-wait-boundary";
-	const sourceEntryId = harness.host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			[
-				fauxToolCall("agent_message", firstRequestInput, {
-					id: firstRequestToolCallId,
-				}),
-				fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
-				fauxToolCall("agent_message", laterRequestInput, {
-					id: laterRequestToolCallId,
-				}),
-			],
-			{ stopReason: "toolUse" },
-		),
-	);
-	const firstRequestId = deriveMessageId({
-		agentId: harness.host.session.sessionId,
-		entryId: sourceEntryId,
-		toolCallId: firstRequestToolCallId,
-	});
-	harness.host.model.setResponses([
-		(context) => fauxAssistantMessage(
-			fauxToolCall(
-				"agent_message",
-				{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Boundary Answer." },
-				{ id: "answer-before-wait-boundary" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The boundary Answer committed."),
-	]);
-	const requestReceipt = await harness.view.message(
-		firstRequestToolCallId,
-		firstRequestInput,
-	);
-	harness.host.session.sessionManager.appendMessage({
-		role: "toolResult",
-		toolCallId: firstRequestToolCallId,
-		toolName: "agent_message",
-		content: [{ type: "text", text: JSON.stringify(requestReceipt) }],
-		details: requestReceipt,
-		isError: false,
-		timestamp: Date.now(),
-	});
-	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
-	await waitForEntry(childSessionFile, (entry) =>
-		entry.type === "message" &&
-		entry.message.role === "toolResult" &&
-		entry.message.toolCallId === "answer-before-wait-boundary" &&
-		entry.message.isError === false
-	);
-
-	const result = await harness.view.wait(
-		waitToolCallId,
-		{},
-		new AbortController().signal,
-	);
-	assert.ok(!("disposition" in result));
-	assert.deepEqual(
-		result.answers.map(({ requestMessageId }) => requestMessageId),
-		[firstRequestId],
-	);
-
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-});
 
 test("Agent Wait retrieval retires a queued direct Answer Delivery before it can commit", async (t) => {
 	let markAnswerDispatchHeld!: () => void;
