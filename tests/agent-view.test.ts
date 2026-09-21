@@ -42,7 +42,14 @@ import {
 	type TestOwnerHost,
 } from "./support/pi-host.ts";
 
-const SURFACE_WAIT_TIMEOUT_MS = 5_000;
+// Every wait here is gated on asynchronous coordinator work, and most of them also cross
+// a real child Pi process: its boot, its shutdown, a lane handoff, or a transcript it
+// writes. Idle those settle in milliseconds to ~0.5 s, but one child boot has been
+// measured at 31 s on a contended host, so a 5 s budget failed intact behaviour instead
+// of a stuck host. Bound the wait generously and report the state that never arrived.
+// One stalled wait still lands inside the file's PROCESS_TEST_TIMEOUT_MS budget, so the
+// diagnostic survives instead of the runner killing the whole file.
+const SURFACE_WAIT_TIMEOUT_MS = 60_000;
 const MAX_SELECTOR_NAVIGATION_STEPS = 1_000;
 const PROCESS_AGENT_VIEW_PROBE = fileURLToPath(
 	new URL("./fixtures/process-agent-view-probe-extension.ts", import.meta.url),
@@ -511,7 +518,13 @@ test("an unexpected child-process exit closes the exact selected view", async (t
 		(entry) => entry.kind === "process_exit" && entry.sessionId === agentId &&
 			entry.pid !== process.pid && entry.exitCode === 17,
 	));
-	assert.equal(host.ui.customSurfaces.length, 0);
+	// The view unmounts asynchronously once the runtime release settles, and under load
+	// the exit evidence above can land first. Wait for the same end state instead of
+	// sampling it at one instant.
+	await waitForCondition(() => host.ui.customSurfaces.length === 0, {
+		description: "The selected Agent view to unmount after its child process exits",
+		observed: () => `surfaces=${host.ui.customSurfaces.length}`,
+	});
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	assert.match(
 		JSON.stringify(host.services.diagnostics),
@@ -1536,10 +1549,21 @@ test("/agents switches the mounted durable view between independent child modes"
 	);
 	view.handleInput?.("j");
 	view.handleInput?.("\r");
-	await waitForCondition(() => {
-		const rendered = stripTerminalSequences(view.render(80).join("\n"));
-		return rendered.includes("Second Target") && !rendered.includes("Tab views");
-	});
+	// The switch lands when the coordinator's view lane hands the target over, which
+	// serializes behind that child's own work.
+	await waitForCondition(
+		() => {
+			const rendered = stripTerminalSequences(view.render(80).join("\n"));
+			return rendered.includes("Second Target") && !rendered.includes("Tab views");
+		},
+		{
+			description: "The mounted durable view switching to the second target",
+			observed: () => {
+				const rendered = stripTerminalSequences(view.render(80).join("\n"));
+				return `selectorStillOpen=${rendered.includes("Tab views")}, secondTargetRendered=${rendered.includes("Second Target")}`;
+			},
+		},
+	);
 	assert.equal(await hasRetention(host, firstAgentId, "interactive_selection"), false);
 	assert.equal(await hasRetention(host, secondAgentId, "interactive_selection"), true);
 	const secondFrame = stripTerminalSequences(view.render(80).join("\n"));
@@ -2035,7 +2059,11 @@ async function returnAgentViewToOwner(
 	view.handleInput?.("o");
 	await command;
 	// Physical selection commands finish at handoff, before returning to Owner.
-	await waitForCondition(() => host.ui.customSurfaces.length === 0);
+	// Unmounting releases the child Runtime, so this wait is bounded by that shutdown.
+	await waitForCondition(() => host.ui.customSurfaces.length === 0, {
+		description: "The Agent view to unmount on return to Owner",
+		observed: () => `surfaces=${host.ui.customSurfaces.length}`,
+	});
 }
 
 async function openDormantAgentView(
@@ -2049,8 +2077,15 @@ async function openDormantAgentView(
 	for (let attempt = 0; attempt < MAX_SELECTOR_NAVIGATION_STEPS; attempt += 1) {
 		if (focusedDetailsShowAgent(selector, agentId)) {
 			selector.handleInput?.("\r");
-			await waitForCondition(() =>
-				host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
+			// A dormant Agent's view is published only after its Runtime boots, so this
+			// wait is bounded by a child process, not by in-process state.
+			await waitForCondition(
+				() => host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector,
+				{
+					description: `The view of dormant Agent ${agentId} replacing the selector`,
+					observed: () =>
+						`surfaces=${host.ui.customSurfaces.length}, selectorStillMounted=${host.ui.customSurfaces[0] === selector}`,
+				},
 			);
 			return { command, view: host.ui.customSurfaces[0]! };
 		}
@@ -2319,12 +2354,19 @@ async function waitForProcessAgentViewEvidence(
 	path: string,
 	predicate: (entries: readonly ProcessAgentViewEvidence[]) => boolean,
 ): Promise<void> {
-	const deadline = Date.now() + 5_000;
-	while (Date.now() < deadline) {
-		if (predicate(await readProcessAgentViewEvidence(path))) return;
+	const deadline = Date.now() + SURFACE_WAIT_TIMEOUT_MS;
+	for (;;) {
+		const entries = await readProcessAgentViewEvidence(path);
+		if (predicate(entries)) return;
+		if (Date.now() >= deadline) {
+			const kinds = entries.map((entry) => entry.kind).join(", ");
+			throw new Error(
+				`Expected child process Agent-view evidence was not observed within ${SURFACE_WAIT_TIMEOUT_MS} ms` +
+					` (observed: ${kinds === "" ? "no evidence" : kinds})`,
+			);
+		}
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
-	throw new Error("Timed out waiting for child process Agent-view evidence");
 }
 
 function childProcessSessionStarts(
@@ -2358,11 +2400,29 @@ function assertProcessExited(pid: number): void {
 	);
 }
 
-async function waitForCondition(predicate: () => boolean | Promise<boolean>): Promise<void> {
+async function waitForCondition(
+	predicate: () => boolean | Promise<boolean>,
+	options: Readonly<{
+		description?: string;
+		observed?: () => string;
+	}> = {},
+): Promise<void> {
 	const deadline = Date.now() + SURFACE_WAIT_TIMEOUT_MS;
-	while (Date.now() < deadline) {
+	for (;;) {
+		// The deadline is checked after the predicate, so a slow predicate is never
+		// abandoned mid-evaluation — which is exactly what a loaded host produces.
 		if (await predicate()) return;
+		if (Date.now() >= deadline) {
+			const observed = options.observed?.();
+			// Name the wait site too: the caller frame is what a reviewer needs when a
+			// site did not pass a description.
+			const site = new Error().stack?.split("\n")[2]?.trim();
+			throw new Error(
+				`${options.description ?? "Agent view state"} was not reached within ${SURFACE_WAIT_TIMEOUT_MS} ms` +
+					(observed === undefined ? "" : ` (observed: ${observed})`) +
+					(site === undefined ? "" : ` [${site}]`),
+			);
+		}
 		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
-	throw new Error("Timed out waiting for Agent view state");
 }
