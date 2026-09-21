@@ -1,4 +1,5 @@
 import { REQUEST_ATTENTION_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
+import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
 import { summarizeRequestObligations } from "../protocol/request-inspection.ts";
 import { transcriptFromSessionManager } from "./session-manager-transcript.ts";
@@ -91,9 +92,26 @@ export function registerParticipantLifecycle(
 			marks: rejections.map(rejection => ({ reason: rejection.reason,
 				record: { ...rejection.source, kind: rejection.recordKind }, diagnostic: rejection.diagnostic })),
 		}).filter(message => message.role !== "custom" || message.customType !== REQUEST_ATTENTION_CUSTOM_TYPE);
-		return { messages: frames.length
-			? [...messages, { role: "custom" as const, ...requestPresentation(frames), timestamp: Date.now() }]
-			: messages };
+		// A fresh Delivery must stay the newest model-visible message. Pi renders
+		// custom messages as user-role content, so appending this presentation would
+		// hide the Delivery that triggered the turn and starve the model of its task.
+		if (!frames.length) return { messages };
+		const presentation = {
+			role: "custom" as const,
+			...requestPresentation(frames),
+			timestamp: Date.now(),
+		};
+		const deliveryIndex = messages.findLastIndex(message =>
+			message.role === "custom" && message.customType === MESSAGE_DELIVERY_CUSTOM_TYPE);
+		return {
+			messages: deliveryIndex < 0
+				? [...messages, presentation]
+				: [
+					...messages.slice(0, deliveryIndex),
+					presentation,
+					...messages.slice(deliveryIndex),
+				],
+		};
 	});
 	pi.on("session_before_compact", (event, ctx) => {
 		projectOwnerForkCompaction(event.preparation, transcriptFromSessionManager(ctx.sessionManager).inspect());
