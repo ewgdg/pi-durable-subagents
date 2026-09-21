@@ -61,6 +61,12 @@ export function registerParticipantLifecycle(
 	}> = {},
 ): void {
 	let reconciliation: { agentId: string; resolvedRequestIds: Set<string> } | undefined;
+	// One sticky, once-consumed continuation per execution. A committed Answer ends its
+	// model/tool loop, and a committed `agent_wait` aggregate delivers its Answers
+	// mid-loop rather than ending it; either way the execution owes one runtime-supplied
+	// continuation when it settles. The flag survives the Answer-free generations in
+	// between and is consumed at agent_end.
+	let answerDelivered = false;
 	const currentFrames = (transcript: TranscriptInspection, agentId: string) =>
 		obligationStack(transcript, agentId).filter(frame =>
 			reconciliation?.agentId !== agentId || !reconciliation.resolvedRequestIds.has(frame.requestId));
@@ -130,6 +136,10 @@ export function registerParticipantLifecycle(
 	// native result. A Run fence can still turn a submitted candidate into the one
 	// interruption result here; attention remains until later transcript proof.
 	pi.on("message_end", async (event, ctx) => {
+		// Native input reaching the model after an Answer-delivering turn is itself that
+		// continuation opportunity (docs/agent-messaging.md), and it is always consumed by
+		// a generation, so the runtime must not offer a second continuation at settlement.
+		if (event.message.role === "user") answerDelivered = false;
 		const guarded = await handlers.toolResultCommitting({
 			message: event.message,
 		});
@@ -160,12 +170,6 @@ export function registerParticipantLifecycle(
 	);
 	// Pi awaits turn_end only after the complete issued tool batch and before it
 	// constructs the next model context, making this the Steer freeze boundary.
-	let answerDelivered = false;
-	// Native queued input can run after an Answer in the same execution, and a
-	// committed `agent_wait` aggregate delivers its Answers mid-loop rather than
-	// ending it. Either way the execution owes one runtime-supplied continuation,
-	// so the flag survives the intervening generations a Wait's own follow-up turn
-	// causes and is consumed once, at agent_end.
 	pi.on("turn_end", async (event) => {
 		if (event.toolResults.some(deliveredAnswer)) answerDelivered = true;
 		await handlers.safeBoundaryReached();
