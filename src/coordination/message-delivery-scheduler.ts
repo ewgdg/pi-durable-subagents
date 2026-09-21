@@ -646,7 +646,10 @@ export class MessageDeliveryScheduler {
 		settlement: AgentRunSettlement,
 	): Promise<void> {
 		const observed = record.host.observe();
-		if (observed.suspension) {
+		if (
+			observed.suspension ||
+			observed.retentionReasons.some(({ reason }) => reason === "interruption_hold")
+		) {
 			// Quota or an explicit human interruption ended this delivery turn, not the
 			// admitted Messages. Keep unproven work queued: a held Run is resumable, so
 			// discarding its scheduling would lose work the Hold never released.
