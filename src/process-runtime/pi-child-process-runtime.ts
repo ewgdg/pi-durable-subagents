@@ -51,7 +51,15 @@ import {
 } from "./pty-terminal-projection.ts";
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
-const DEFAULT_STARTUP_TIMEOUT_MILLISECONDS = 15_000;
+/**
+ * Bound for one child startup stage on a host running the workflow alone. A contended
+ * host can stretch the same boot far past this (a measured boot under four concurrent
+ * process suites took 31.2 s and still completed), so the coordination launch path
+ * passes an explicit, host-configurable value instead of depending on this default.
+ */
+export const DEFAULT_CHILD_STARTUP_TIMEOUT_MILLISECONDS = 15_000;
+/** Stable error code for a startup stage that outlived its bound. */
+export const CHILD_RUNTIME_STARTUP_TIMEOUT_CODE = "child_runtime_startup_timeout";
 const DEFAULT_SHUTDOWN_GRACE_MILLISECONDS = 3_000;
 /**
  * How long a viewer handoff waits for Pi's DEC 2026 frame bracket before showing
@@ -367,7 +375,7 @@ export class PiChildProcessRuntime {
 				return cleanupPromise;
 			};
 			const timeoutMilliseconds = options.startupTimeoutMilliseconds
-				?? DEFAULT_STARTUP_TIMEOUT_MILLISECONDS;
+				?? DEFAULT_CHILD_STARTUP_TIMEOUT_MILLISECONDS;
 			return new PiChildProcessLaunch({
 				projection: exactProjection,
 				bootstrapPath,
@@ -868,7 +876,9 @@ async function raceStartup<T>(
 			}),
 			new Promise<never>((_resolve, reject) => {
 				timer = setTimeout(
-					() => reject(new Error(`child_runtime_startup_timeout: waiting for ${stage}`)),
+					() => reject(
+						new Error(`${CHILD_RUNTIME_STARTUP_TIMEOUT_CODE}: waiting for ${stage}`),
+					),
 					timeoutMilliseconds,
 				);
 			}),
@@ -876,6 +886,28 @@ async function raceStartup<T>(
 	} finally {
 		if (timer) clearTimeout(timer);
 	}
+}
+
+/**
+ * Whether a launch failure is a startup stage that outlived its bound. Such a failure
+ * says only that the child did not finish starting: the timed-out attempt is discarded
+ * before the error surfaces, so the Agent stays restartable and the failure carries no
+ * evidence about the work that triggered the boot. Diagnostic and cleanup wrappers
+ * rewrite the error, so the code is read back off the message chain.
+ */
+export function isChildRuntimeStartupTimeout(error: unknown): boolean {
+	const pending: unknown[] = [error];
+	const visited = new Set<unknown>();
+	while (pending.length > 0) {
+		const candidate = pending.pop();
+		if (candidate === undefined || visited.has(candidate)) continue;
+		visited.add(candidate);
+		if (!(candidate instanceof Error)) continue;
+		if (candidate.message.startsWith(`${CHILD_RUNTIME_STARTUP_TIMEOUT_CODE}:`)) return true;
+		pending.push(candidate.cause);
+		if (candidate instanceof AggregateError) pending.push(...candidate.errors);
+	}
+	return false;
 }
 
 async function withTerminalDiagnostic(

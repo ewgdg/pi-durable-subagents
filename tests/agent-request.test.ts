@@ -36,6 +36,13 @@ import {
 	type TestCleanupRegistrar,
 } from "./support/pi-host.ts";
 
+// These cases boot real children while the host is running other process suites. A
+// measured contended boot took 31.2 s and still completed, so this file raises the
+// per-stage child startup bound well above the 15 s default that fits an idle host. The
+// bound is startup detection latency, not part of any assertion here: every case below
+// still fails on the Request, Delivery, or transcript evidence it exists to check.
+process.env.PI_DURABLE_CHILD_STARTUP_TIMEOUT_MS = "45000";
+
 for (const failure of ["admission rejection", "renamed working directory"] as const) {
 	test(`definite initial Request non-admission leaves no dependency or retryable Request: ${failure}`, async (t) => {
 		const harness = await createDormantChildHarness(t, failure === "admission rejection" ? {

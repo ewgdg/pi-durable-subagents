@@ -3,6 +3,7 @@ import {
 	type AgentRecord,
 } from "./agent-record.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
+import { isChildRuntimeStartupTimeout } from "../process-runtime/pi-child-process-runtime.ts";
 import {
 	createMessageDelivery,
 	type EntryPointer,
@@ -142,6 +143,14 @@ type ReservedResume = Readonly<{
 type ActiveResume = ReservedResume & {
 	completion: Promise<void>;
 };
+
+/**
+ * Boot attempts made for one Delivery before its pre-dispatch failure is reported. The
+ * second attempt covers a startup bound that a contended host exceeded, or a transient
+ * launch fault: neither is evidence about the Delivery that triggered the boot, and the
+ * failed attempt has already been discarded, so the Agent is restartable.
+ */
+const MAXIMUM_PRE_DISPATCH_BOOT_ATTEMPTS = 2;
 
 export class MessageDeliveryScheduler {
 	readonly #progress = new Map<string, TrackedDeliveryProgress>();
@@ -367,6 +376,28 @@ export class MessageDeliveryScheduler {
 		return this.#admitInLane(record, delivery);
 	}
 
+	/**
+	 * Boots a dormant recipient for one Delivery. A startup stage that outlived its bound
+	 * proves only that the child did not finish starting, and the timed-out attempt is
+	 * discarded before the failure surfaces, so the Agent is restartable and the failure
+	 * carries no evidence about this Delivery. Re-drive the boot rather than dropping the
+	 * Delivery, which would strand the Request with no tracker. Any other failure is
+	 * reported as-is: it is the recipient that is unavailable, not a stalled boot.
+	 */
+	async #startRecipientForDelivery(record: AgentRecord): Promise<void> {
+		for (let attempt = 1; ; attempt += 1) {
+			try {
+				await record.host.startInLane(["pending_delivery"]);
+				return;
+			} catch (error) {
+				if (
+					attempt >= MAXIMUM_PRE_DISPATCH_BOOT_ATTEMPTS ||
+					!isChildRuntimeStartupTimeout(error)
+				) throw error;
+			}
+		}
+	}
+
 	async #admitInLane(
 		record: AgentRecord,
 		delivery: ScheduledDelivery,
@@ -405,7 +436,7 @@ export class MessageDeliveryScheduler {
 		}
 		if (!record.host.currentHandle()) {
 			try {
-				await record.host.startInLane(["pending_delivery"]);
+				await this.#startRecipientForDelivery(record);
 			} catch (error) {
 				this.#failDeliveryProgress(delivery, error);
 				if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);

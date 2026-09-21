@@ -22,6 +22,7 @@ import {
 	PiChildHostedRuntime,
 } from "../process-runtime/pi-child-hosted-runtime.ts";
 import {
+	DEFAULT_CHILD_STARTUP_TIMEOUT_MILLISECONDS,
 	PiChildProcessRuntime,
 	type StartPiChildProcessRuntimeOptions,
 } from "../process-runtime/pi-child-process-runtime.ts";
@@ -59,6 +60,36 @@ const COORDINATION_EXTENSION_PREFIXES = [
 	"<inline:pi-durable-subagents-activity:",
 ] as const;
 const INLINE_PUBLIC_EXTENSION_PATH = "<inline:pi-durable-subagents>";
+
+/**
+ * Host-level override for the per-stage child startup bound. Child boot takes ~0.4 s on
+ * an idle host, but a host running several workflows at once can stretch it to tens of
+ * seconds: a measured boot under four concurrent process suites took 31.2 s and still
+ * completed. The bound is detection latency for a wedged child, not a correctness
+ * property, so an operator or a test host may raise it without touching launch policy.
+ */
+const CHILD_STARTUP_TIMEOUT_ENVIRONMENT_VARIABLE = "PI_DURABLE_CHILD_STARTUP_TIMEOUT_MS";
+
+function resolveChildStartupTimeoutMilliseconds(
+	environment: NodeJS.ProcessEnv = process.env,
+): number {
+	const configured = environment[CHILD_STARTUP_TIMEOUT_ENVIRONMENT_VARIABLE];
+	if (configured === undefined || configured.length === 0) {
+		return DEFAULT_CHILD_STARTUP_TIMEOUT_MILLISECONDS;
+	}
+	if (!/^\d+$/.test(configured)) {
+		throw new Error(
+			`invalid_child_startup_timeout: ${CHILD_STARTUP_TIMEOUT_ENVIRONMENT_VARIABLE} must be a positive whole number of milliseconds`,
+		);
+	}
+	const value = Number(configured);
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new Error(
+			`invalid_child_startup_timeout: ${CHILD_STARTUP_TIMEOUT_ENVIRONMENT_VARIABLE} must be a positive whole number of milliseconds`,
+		);
+	}
+	return value;
+}
 
 type ParticipantHandlers =
 	| OwnerParticipantRequestHandlers<"ordinary">
@@ -463,6 +494,7 @@ export class ProcessChildSessionFactory {
 		// The low-level launch rechecks even when initial preparation was cached.
 		const launch = await PiChildProcessRuntime.launch({
 			launchContract: this.#launchContract,
+			startupTimeoutMilliseconds: resolveChildStartupTimeoutMilliseconds(),
 			workflowId: identity.workflowId,
 			agentId: identity.agentId,
 			role: prepared.role,
