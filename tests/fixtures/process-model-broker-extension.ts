@@ -19,7 +19,9 @@ export function renderProcessModelExtension(
 		api: options.providerId,
 		provider: options.providerId,
 		baseUrl: options.endpoint,
-		reasoning: false,
+		// The launched child resolves its thinking level against this same catalogue, so
+		// it must match the host fixture: a non-reasoning model clamps every level to off.
+		reasoning: true,
 		input: ["text", "image"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128_000,

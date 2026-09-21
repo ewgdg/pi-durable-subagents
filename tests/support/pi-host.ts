@@ -574,7 +574,9 @@ async function createTestModelRuntime(options: {
 			{
 				id: MODEL_ID,
 				name: "Deterministic Owner",
-				reasoning: false,
+				// Fixtures select explicit thinking levels for this model, and a model
+				// without reasoning support runs every level clamped to off.
+				reasoning: true,
 				input: ["text"],
 				cost: EMPTY_USAGE.cost,
 				contextWindow: 16_384,
@@ -599,7 +601,7 @@ async function createTestModelRuntime(options: {
 				{
 					id: MODEL_ID,
 					name: "Deterministic Owner",
-					reasoning: false,
+					reasoning: true,
 					input: ["text"],
 					cost: EMPTY_USAGE.cost,
 					contextWindow: 16_384,

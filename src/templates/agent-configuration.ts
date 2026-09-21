@@ -57,6 +57,8 @@ export function resolveAgentRunConfiguration(options: {
 	isModelAvailable(model: ModelReference): boolean;
 	/** Reported separately so a policy exclusion is never blamed on availability. */
 	isModelExcluded?(model: ModelReference): boolean;
+	/** Pi clamps a level its selected model cannot run; the host resolves that same level. */
+	clampThinking?(model: ModelReference, level: RuntimeThinkingLevel): RuntimeThinkingLevel;
 }): ResolvedAgentRunConfiguration {
 	const { inherited, template, overrides } = options;
 	// Exclusions accumulate: a Spawn config restricts further, it does not lift a
@@ -108,11 +110,15 @@ export function resolveAgentRunConfiguration(options: {
 			? inherited.thinking
 			: overrides?.model?.thinking ?? defaults.thinking,
 	};
+	// The child clamps an unsupported level when it starts, so the launch specification
+	// and the recorded configuration must both name the level it will really run.
+	const thinking = options.clampThinking?.(modelConfiguration.model, modelConfiguration.thinking)
+		?? modelConfiguration.thinking;
 
 	return {
 		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),
 		model: { ...modelConfiguration.model },
-		thinking: modelConfiguration.thinking,
+		thinking,
 		excludeTools,
 		excludeSkills,
 		extensions: [...configuredExtensions],

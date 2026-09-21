@@ -415,6 +415,51 @@ test("a spawn model id discards the Template pair's thinking level and needs no 
 	});
 });
 
+test("resolved thinking levels are clamped to the model the child will run", () => {
+	const inherited = {
+		cwd: "/project",
+		model: { provider: "parent", modelId: "model" },
+		thinking: "max" as const,
+		extensions: [],
+	};
+	const template = {
+		name: "paired-agent",
+		models: [{
+			model: { provider: "template", modelId: "model" },
+			thinking: "xhigh" as const,
+		}],
+		systemPromptMode: "append" as const,
+		loadContextFiles: true,
+		systemPrompt: "",
+	};
+	const clamped: Array<[string, string]> = [];
+	const base = {
+		inherited,
+		template,
+		isModelAvailable: () => true,
+		// Stands in for the selected model's capability map.
+		clampThinking: (model: { provider: string; modelId: string }, level: string) => {
+			clamped.push([model.provider, level]);
+			return level === "max" || level === "xhigh" ? "high" as const : level as "low";
+		},
+	};
+	const thinkingFor = (model: AgentSpawnConfigurationInput["model"]): string =>
+		resolveAgentRunConfiguration({ ...base, overrides: { model } }).thinking;
+
+	// The candidate pair, an explicit level, and an inherited level all describe a
+	// model, so each one is clamped against the model this child will actually run.
+	assert.equal(thinkingFor(undefined), "high");
+	assert.equal(thinkingFor({ thinking: "xhigh" }), "high");
+	assert.equal(thinkingFor({ id: "explicit/model" }), "high");
+	assert.equal(thinkingFor({ id: "explicit/model", thinking: "low" }), "low");
+	assert.deepEqual(clamped, [
+		["template", "xhigh"],
+		["template", "xhigh"],
+		["explicit", "max"],
+		["explicit", "low"],
+	]);
+});
+
 test("creates a public Template catalogue without system-prompt bodies or source paths", () => {
 	assert.deepEqual(createAgentTemplateCatalogue([
 		{

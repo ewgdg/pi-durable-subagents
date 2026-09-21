@@ -348,7 +348,7 @@ const agentSpawnConfigurationParameters = Type.Object(
 					thinking: Type.Optional(Type.Union([
 						RuntimeThinkingSchema,
 						Type.Literal("inherit"),
-					], { description: 'Omit to use the Template candidate thinking level when model.id is also omitted, else the parent thinking level; a supplied model.id discards the candidate thinking level, which describes that candidate model. "inherit" always uses the parent thinking level.' })),
+					], { description: 'Omit to use the Template candidate thinking level when model.id is also omitted, else the parent thinking level; a supplied model.id discards the candidate thinking level, which describes that candidate model. "inherit" always uses the parent thinking level. A resolved level is clamped to what the selected model can run.' })),
 				},
 				{ additionalProperties: false },
 			),

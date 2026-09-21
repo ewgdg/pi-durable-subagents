@@ -9,6 +9,7 @@ import { ChildLaunchContractGuard } from "../process-runtime/child-launch-contra
 import type { AgentRecord } from "../coordination/agent-record.ts";
 import { admitControlTransportPlatform } from "../control/control-platform.ts";
 import { transcriptFromSessionFile } from "../pi-integration/session-manager-transcript.ts";
+import { clampThinkingToModelCapability } from "../pi-integration/model-thinking-capability.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import {
@@ -16,6 +17,7 @@ import {
 	type ModeratorIdentity,
 } from "../protocol/moderator-input.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
+import type { RuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import {
 	PiChildHostedRuntime,
 } from "../process-runtime/pi-child-hosted-runtime.ts";
@@ -152,6 +154,7 @@ export class ProcessChildSessionFactory {
 			parentRuntime,
 			isModelAvailable: (model) => this.#isModelAvailable(model),
 			isModelExcluded: (model) => this.#modelExcluded(model),
+			clampThinking: (model, level) => this.#clampThinking(model, level),
 			...(template === undefined ? {} : { template }),
 		});
 	}
@@ -349,6 +352,7 @@ export class ProcessChildSessionFactory {
 			parentRuntime,
 			isModelAvailable: (model) => this.#isModelAvailable(model),
 			isModelExcluded: (model) => this.#modelExcluded(model),
+			clampThinking: (model, level) => this.#clampThinking(model, level),
 			...(template === undefined ? {} : { template }),
 			// Rejected spawn arguments provide no runtime overrides; the Identity retains its preset.
 			...(options.spawnInput?.config === undefined
@@ -509,11 +513,24 @@ export class ProcessChildSessionFactory {
 			});
 	}
 
+	#catalogueModel(model: Readonly<{ provider: string; modelId: string }>) {
+		return this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().find(
+			(candidate) => candidate.provider === model.provider && candidate.id === model.modelId,
+		);
+	}
+
 	#isModelAvailable(model: Readonly<{ provider: string; modelId: string }>): boolean {
-		return !this.#modelExcluded(model)
-			&& this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().some(
-				(candidate) => candidate.provider === model.provider && candidate.id === model.modelId,
-			);
+		return !this.#modelExcluded(model) && this.#catalogueModel(model) !== undefined;
+	}
+
+	#clampThinking(
+		model: Readonly<{ provider: string; modelId: string }>,
+		level: RuntimeThinkingLevel,
+	): RuntimeThinkingLevel {
+		const candidate = this.#catalogueModel(model);
+		// A model missing from the catalogue leaves the level unresolved: availability
+		// already failed for it, and inventing a capability map would hide that.
+		return candidate === undefined ? level : clampThinkingToModelCapability(candidate, level);
 	}
 
 	#modelExcluded(model: Readonly<{ provider: string; modelId: string }>): boolean {

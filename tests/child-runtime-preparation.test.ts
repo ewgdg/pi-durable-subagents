@@ -5,7 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
+import { clampThinkingToModelCapability } from "../src/pi-integration/model-thinking-capability.ts";
+import type {
+	ModelReference,
+	RuntimeThinkingLevel,
+} from "../src/protocol/runtime-configuration.ts";
 import { prepareChildRuntime } from "../src/runtime/child-runtime-preparation.ts";
 
 test("resolves one process-safe ordinary child creation preparation without evaluating inherited extensions", async () => {
@@ -302,4 +308,59 @@ test("accumulates Template and Spawn exclusions without inheriting the parent su
 		assert.deepEqual(preparation.configuration.excludeTools, ["bash", "read"]);
 		assert.deepEqual(preparation.configuration.excludeSkills, ["research"]);
 	}
+});
+
+test("preparation resolves the thinking level the child's own model can run", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "child-run-thinking-"));
+	const agentDir = join(cwd, "agent");
+	new ProjectTrustStore(agentDir).set(cwd, true);
+	// google/gemini-3.8-flash declares low, medium, and high only.
+	const flash: Model<Api> = {
+		id: "gemini-3.8-flash",
+		name: "Gemini 3.8 Flash",
+		api: "google-generative-ai",
+		provider: "google",
+		baseUrl: "https://example.invalid/v1beta",
+		reasoning: true,
+		thinkingLevelMap: {
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: null,
+			max: null,
+		},
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_048_576,
+		maxTokens: 65_536,
+	};
+	const options = {
+		agentId: "thinking-child",
+		agentDir,
+		parentRuntime: {
+			configuration: {
+				cwd,
+				model: { provider: "deepseek", modelId: "deepseek-flash" },
+				thinking: "max" as const,
+				extensions: [],
+			},
+			projectTrusted: false,
+		},
+		clampThinking: (_model: ModelReference, level: RuntimeThinkingLevel) =>
+			clampThinkingToModelCapability(flash, level),
+	};
+	// The launch specification names the level the child will really run, so a selected
+	// model never launches with another model's level.
+	const ordinary = await prepareChildRuntime({
+		...options,
+		role: "ordinary",
+		overrides: { model: { id: "google/gemini-3.8-flash" } },
+	});
+	assert.equal(ordinary.configuration.thinking, "high");
+
+	// A Moderator without a model selection still leaves the level to Pi.
+	const moderator = await prepareChildRuntime({ ...options, role: "moderator" });
+	assert.equal(moderator.configuration.thinking, undefined);
 });
