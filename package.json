@@ -33,7 +33,8 @@
     "test:fast": "node tests/support/run-test-suite.ts fast",
     "test:process": "node tests/support/run-test-suite.ts process",
     "test:conformance": "node tests/support/run-test-suite.ts conformance",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "demo:repair": "npx tsx tests/support/run-repair-demo.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

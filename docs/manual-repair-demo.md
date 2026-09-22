@@ -13,13 +13,10 @@
 
 ## B. Live, broken Owner session (preadmission entry)
 
-Materialize a tempfile broken session with the smoke test (duplicate valid Owner Deliveries fail admission). Nothing is committed; the test prints the absolute path plus the exact launch command:
+One command builds a tempfile broken session and replaces itself with
+interactive pi on it (current checkout code; -ne blocks the stale copy):
 
-    node --test tests/repair-broken-session-smoke.test.ts
-
-Then launch pi with the printed path (loads current checkout code; -ne blocks the stale installed copy):
-
-    pi --session PRINTED_PATH -ne -e REPO/src/index.ts
+    npm run demo:repair
 
 Expected: blockage widget plus /agents diagnostics hint, session file untouched. /agents diagnostics offers manual repair; press r (or run /agents repair REASON from the failed surface) to host the Moderator. Same freeze, confirm, commit, idle, and switch flow as healthy; failed-admission data kept.
 
