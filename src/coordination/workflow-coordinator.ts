@@ -127,8 +127,11 @@ import type {
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
 import type { ManualRepairFailureEvidence, ManualRepairReceipt } from "./manual-repair.ts";
+import type { RepairedOwnerSelectorEntry, RepairOwnerSnapshot } from "./manual-repair.ts";
+import { buildRepairedOwnerEntry, readRepairOwnerSnapshot } from "./manual-repair.ts";
 import {
   approveRepairReplace,
+  openRepairedOwnerIdle,
   commitRepairReplace as commitRepairReplaceBackend,
   createRepairApprovalLedger,
   freezeRepairTargets as freezeRepairTargetsBackend,
@@ -138,6 +141,7 @@ import {
   type RepairCommitResult,
   type RepairFrozenSnapshot,
   type RepairReplaceApproval,
+  type RepairedOwnerIdle,
 } from "./repair-commit.ts";
 import { preadmissionRepairBackupRoot, preadmissionRepairJournalDir } from "./preadmission-repair.ts";
 
@@ -149,6 +153,12 @@ export type AgentRosterStatus = AgentStatus & Readonly<{
 	queuedInputCount: number;
 }>;
 
+export type RepairedOwnerAdmissionResult = Readonly<{
+	ownerId: string;
+	snapshot: RepairOwnerSnapshot;
+	idle: RepairedOwnerIdle;
+	freshMarker: Readonly<{ at: string }>;
+}>;
 const DEFAULT_AGENT_SEARCH_LIMIT = 20;
 const MAX_AGENT_SEARCH_LIMIT = 50;
 export type {
@@ -208,6 +218,14 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	 * approval. Owner or trigger-bound Moderator. Single-use per trigger.
 	 */
 	commitRepairReplace(repairedBySource: Readonly<Record<string, string>>, attemptId?: string, drafts?: unknown): Promise<RepairCommitResult>;
+	// Explicit repaired-Owner selector entry for repair context with zero live Owner records.
+	// Never a fabricated live record. Snapshot-only pre-commit, admission-pending post-commit.
+	repairedOwnerEntry(): RepairedOwnerSelectorEntry | undefined;
+	// Genuine fresh admission from repaired transcript on disk. Joins old repair host first.
+	// Owner or trigger-bound Moderator. Snapshot-only refuses. Failure keeps committed data.
+	admitRepairedOwner(drafts?: unknown): Promise<RepairedOwnerAdmissionResult>;
+	// Enforce idle-until-human-message hold on a freshly admitted Owner. Owner only. No auto turn.
+	adoptRepairedOwnerIdleHold(drafts?: unknown): RepairedOwnerIdle;
 	selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
@@ -322,7 +340,7 @@ export class WorkflowCoordinator {
 	#pendingRepairTrigger: Readonly<{ moderatorAgentId: string; approver: string }> | undefined;
 	#preadmissionRepairFailure: ManualRepairFailureEvidence | undefined;
 	#repairLedger: RepairApprovalLedger | undefined;
-	#repairedOwnerIdleHold: Readonly<{ ownerId: string }> | undefined;
+	#repairedOwnerIdleHold: Readonly<{ ownerId: string; drafts?: unknown }> | undefined;
 	#preadmissionRepairOnly = false;
 	#shutdownPromise: Promise<void> | undefined;
 	readonly #shutdownController = new AbortController();
@@ -841,9 +859,73 @@ export class WorkflowCoordinator {
 		// new human message. beginExecution refuses while the hold is set;
 		// handleHumanInput clears it on the next human message.
 		if (result.disposition === "committed" || result.disposition === "joined-committed" || result.disposition === "committed-admission-failed") {
-			this.#repairedOwnerIdleHold = { ownerId };
+			this.#repairedOwnerIdleHold = drafts === undefined ? { ownerId } : { ownerId, drafts };
 		}
 		return result;
+	}
+	// Explicit repaired-Owner entry. Never a fabricated live record. Post-commit hold means admission-pending.
+	// Pre-commit trigger or preadmission repair host means snapshot-only. Otherwise no entry.
+	#repairedOwnerEntry(): RepairedOwnerSelectorEntry | undefined {
+		const ownerId = this.#ownerIdentity.agentId;
+		const workflowId = this.#ownerIdentity.workflowId;
+		const transcriptPath = this.#operationalIncidents.manualRepairTranscriptPath() ?? this.#preadmissionRepairFailure?.transcriptPath ?? this.#agents.get(ownerId)?.transcript.inspect().transcriptPath ?? undefined;
+		if (this.#repairedOwnerIdleHold) {
+			return buildRepairedOwnerEntry({ ownerId, workflowId, transcriptPath, stage: "admission-pending" });
+		}
+		if (this.#pendingRepairTrigger || this.#preadmissionRepairOnly) {
+			return buildRepairedOwnerEntry({ ownerId, workflowId, transcriptPath, stage: "snapshot-only" });
+		}
+		return undefined;
+	}
+	// Enforce idle hold on a freshly admitted Owner. Owner only. No turn without human message. Drafts preserved.
+	#adoptRepairedOwnerIdleHoldForOwner(callerAgentId: string, drafts?: unknown): RepairedOwnerIdle {
+		this.#assertAdmissionOpen();
+		if (callerAgentId !== this.#ownerIdentity.agentId) {
+			throw new Error("wrong_participant: manual repair is Owner only");
+		}
+		const ownerId = this.#ownerIdentity.agentId;
+		this.#repairedOwnerIdleHold = drafts === undefined ? { ownerId } : { ownerId, drafts };
+		if (drafts === undefined) {
+			return openRepairedOwnerIdle(ownerId);
+		}
+		return openRepairedOwnerIdle(ownerId, { drafts });
+	}
+	// Genuine fresh admission from repaired transcript on disk. Never reuse retired coordinator state.
+	// Join old repair host first, then fresh disk read, then idle hold. No auto resume. Drafts preserved.
+	// Failure keeps committed data plus journal intact and stays in repair context. Never rollback.
+	async #admitRepairedOwnerForOwner(callerAgentId: string, drafts?: unknown): Promise<RepairedOwnerAdmissionResult> {
+		this.#assertAdmissionOpen();
+		const ownerId = this.#ownerIdentity.agentId;
+		const trigger = this.#pendingRepairTrigger;
+		const isOwner = callerAgentId === ownerId;
+		const isTriggerModerator = this.#operationalIncidents.isManualRepairModerator(callerAgentId) && trigger?.moderatorAgentId === callerAgentId;
+		if (!isOwner && !isTriggerModerator) {
+			throw new Error("wrong_participant: repair admission needs the Owner or the trigger-bound repair Moderator");
+		}
+		const entry = this.#repairedOwnerEntry();
+		if (!entry) {
+			throw new Error("unavailable: no repaired Owner entry in repair context");
+		}
+		if (entry.stage !== "admission-pending") {
+			throw new Error("snapshot-only: commit repair before admission of the repaired Owner");
+		}
+		if (!entry.transcriptPath) {
+			throw new Error("evidence_unavailable: repaired Owner entry has no transcript path");
+		}
+		const active = this.#activeAgentView;
+		if (active) {
+			await this.#closeActiveAgentViewInLane(active);
+		}
+		const snapshot = await readRepairOwnerSnapshot(entry.transcriptPath);
+		if (snapshot.agentId !== entry.ownerId || snapshot.workflowId !== entry.workflowId) {
+			throw new Error("evidence_unavailable: repaired transcript identity does not match verified Owner identity");
+		}
+		const priorDrafts = this.#repairedOwnerIdleHold?.drafts;
+		const effectiveDrafts = drafts === undefined ? priorDrafts : drafts;
+		this.#repairedOwnerIdleHold = effectiveDrafts === undefined ? { ownerId: entry.ownerId } : { ownerId: entry.ownerId, drafts: effectiveDrafts };
+		const idle = effectiveDrafts === undefined ? openRepairedOwnerIdle(entry.ownerId) : openRepairedOwnerIdle(entry.ownerId, { drafts: effectiveDrafts });
+		const freshMarker = Object.freeze({ at: new Date().toISOString() });
+		return { ownerId: entry.ownerId, snapshot, idle, freshMarker };
 	}
 	modelPolicy(): ModelPolicySnapshot {
 		return {
@@ -1115,6 +1197,9 @@ export class WorkflowCoordinator {
 			cancelRepairTrigger: () => this.#cancelRepairTriggerForOwner(agentId),
 			commitRepairReplace: (repairedBySource, attemptId, drafts) =>
 				this.#commitRepairReplaceForOwner(agentId, repairedBySource, attemptId, drafts),
+			repairedOwnerEntry: () => this.#repairedOwnerEntry(),
+			admitRepairedOwner: (drafts) => this.#admitRepairedOwnerForOwner(agentId, drafts),
+			adoptRepairedOwnerIdleHold: (drafts) => this.#adoptRepairedOwnerIdleHoldForOwner(agentId, drafts),
 		selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
 				this.#assertAdmissionOpen();

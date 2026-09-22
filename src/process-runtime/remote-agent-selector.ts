@@ -73,6 +73,7 @@ export function createAgentSelectorSnapshot(
 		humanAttention: [...view.humanAttention()],
 		operationalAttention: [...view.operationalAttention()],
 		reports: [...view.reportHistory()],
+		...(typeof (view as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? { repairedOwner: (view as unknown as { repairedOwnerEntry: () => RemoteAgentSelectorSnapshot['repairedOwner'] }).repairedOwnerEntry() ?? undefined } : {}),
 	};
 }
 
@@ -106,6 +107,11 @@ export function createAgentSelectionSession(
 			// Selecting the mounted participant only closes the selector. Do not
 			// reacquire its presentation, which could replace the live attachment.
 			if (action.kind === "select_agent" && action.agentId === selectedAgentId) return;
+			const repairedOwnerId = typeof (view as unknown as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? (view as unknown as { repairedOwnerEntry: () => { ownerId: string } | undefined }).repairedOwnerEntry()?.ownerId : undefined;
+			if (action.kind === "select_agent" && repairedOwnerId && action.agentId === repairedOwnerId) {
+				await (view as unknown as { admitRepairedOwner: (drafts?: unknown) => Promise<unknown> }).admitRepairedOwner();
+				return;
+			}
 			const selection = await view.openAgentPresentation(action.agentId);
 			if (selection.kind === "post_mortem") postMortemAgentView = selection;
 			else preparedAgentView = selection.view;
@@ -243,6 +249,14 @@ export function registerRemoteAgentsCommand(
 				const owner = [...snapshot.live, ...snapshot.dormant].find(
 					(status) => status.agentId === status.workflowId,
 				);
+				const repaired = (snapshot as unknown as { repairedOwner?: { ownerId: string } }).repairedOwner;
+				if (!owner && repaired) {
+					await presentation.select({
+						kind: "select_agent",
+						agentId: repaired.ownerId,
+					});
+					return;
+				}
 				if (!owner) throw new Error("Agent selector roster has no Owner");
 				await presentation.select({
 					kind: "select_agent",

@@ -146,6 +146,58 @@ export function assertRepairTargetAdmitted(
 	);
 }
 
+// Explicit repaired-Owner selector entry for repair context with zero live Owner records.
+// Never a fabricated live AgentRecord. Carries verified Owner identity plus repaired transcript path plus explicit stage.
+// Snapshot-only is pre-commit read-only evidence. Admission-pending is post-commit eligible for fresh admission from disk.
+export type RepairedOwnerStage = "snapshot-only" | "admission-pending";
+export type RepairedOwnerSelectorEntry = Readonly<{
+	ownerId: string;
+	workflowId: string;
+	transcriptPath?: string;
+	stage: RepairedOwnerStage;
+	label: string;
+}>;
+export function buildRepairedOwnerEntry(options: Readonly<{
+	ownerId: string;
+	workflowId: string;
+	transcriptPath?: string;
+	stage: RepairedOwnerStage;
+	label?: string;
+}>): RepairedOwnerSelectorEntry {
+	const ownerId = (options as { ownerId?: unknown }).ownerId;
+	const workflowId = (options as { workflowId?: unknown }).workflowId;
+	const stage = (options as { stage?: unknown }).stage;
+	if (typeof ownerId !== "string" || ownerId.length === 0) {
+		throw new Error("invalid_input: repaired Owner entry needs a verified owner id");
+	}
+	if (typeof workflowId !== "string" || workflowId.length === 0) {
+		throw new Error("invalid_input: repaired Owner entry needs a verified workflow id");
+	}
+	if (stage !== "snapshot-only" && stage !== "admission-pending") {
+		throw new Error("invalid_input: repaired Owner stage must be snapshot-only or admission-pending");
+	}
+	const transcriptPath = (options as { transcriptPath?: unknown }).transcriptPath;
+	if (transcriptPath !== undefined && (typeof transcriptPath !== "string" || transcriptPath.length === 0)) {
+		throw new Error("invalid_input: repaired Owner transcript path must be a non-empty string when present");
+	}
+	const label = (options as { label?: unknown }).label;
+	const resolvedLabel = label === undefined ? "Owner" : label;
+	if (typeof resolvedLabel !== "string" || resolvedLabel.length === 0) {
+		throw new Error("invalid_input: repaired Owner label must be non-empty text");
+	}
+	return Object.freeze({
+		ownerId,
+		workflowId,
+		transcriptPath,
+		stage,
+		label: resolvedLabel,
+	});
+}
+export function describeRepairedOwnerEntry(entry: RepairedOwnerSelectorEntry): string {
+	const stage = entry.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
+	const path = entry.transcriptPath ?? "transcript path unavailable";
+	return entry.label + " (" + stage + ") : " + path;
+}
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

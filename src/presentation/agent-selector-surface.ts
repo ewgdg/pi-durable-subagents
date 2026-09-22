@@ -20,6 +20,7 @@ import {
 import type { ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
+import type { RepairedOwnerSelectorEntry } from "../coordination/manual-repair.ts";
 import type { HumanAttentionItem } from "../coordination/human-requests.ts";
 import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
 import type { AgentRunSuspension } from "../runtime/agent-runtime-supervisor.ts";
@@ -83,7 +84,7 @@ export type AgentSelectorOptions = Readonly<{
 	live: readonly AgentRosterStatus[];
 	dormant: readonly AgentRosterStatus[];
 	selectedAgentId: string;
-	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention" | "reports">) => void): () => void;
+	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention" | "reports" | "repairedOwner">) => void): () => void;
 	reports?: readonly ReportHistoryItem[];
 	setReportRead?(reportId: string, read: boolean): Promise<readonly ReportHistoryItem[]> | readonly ReportHistoryItem[];
 	humanAttention?: readonly HumanAttentionItem[];
@@ -93,11 +94,13 @@ export type AgentSelectorOptions = Readonly<{
 		tui: TUI,
 	): Promise<void> | void;
 	onSelectionError?(error: unknown): void;
+ repairedOwner?: RepairedOwnerSelectorEntry;
 }>;
 
 type AgentSelectorItem = SelectItem & Readonly<{
 	status?: AgentRosterStatus;
 	kind: "decide" | "attention" | "owner" | "agent";
+	repairedOwner?: RepairedOwnerSelectorEntry;
 	childControl?: string;
 	action?: AgentSelectorAction;
 	detailLines?: readonly string[];
@@ -173,7 +176,7 @@ class AgentSelectorSurface implements Component {
 		this.#done = done;
 		this.#options = options;
 		this.#partitionRoster();
-		const owner = this.#ownerStatus();
+		const ownerId = this.#effectiveOwnerId();
 		const selectedLive = this.#liveTree.find(
 			({ agentId }) => agentId === options.selectedAgentId,
 		);
@@ -181,12 +184,12 @@ class AgentSelectorSurface implements Component {
 			({ agentId }) => agentId === options.selectedAgentId,
 		);
 		this.#activeTab = selectedDormant ? "dormant" : "live";
-		this.#scopeAgentId = selectedLive?.agentId === owner.agentId
-			? owner.agentId
-			: selectedLive?.directSpawnerAgentId ?? owner.agentId;
+		this.#scopeAgentId = selectedLive?.agentId === ownerId
+			? ownerId
+			: selectedLive?.directSpawnerAgentId ?? ownerId;
 		this.#selectedValueByTab = {
 			live: this.#attentionItems()[0]?.value ?? (
-				selectedLive?.agentId !== owner.agentId ? selectedLive?.agentId : undefined
+				selectedLive?.agentId !== ownerId ? selectedLive?.agentId : undefined
 			),
 			dormant: selectedDormant?.agentId ?? this.#dormantRoster[0]?.agentId,
 		};
@@ -216,7 +219,7 @@ class AgentSelectorSurface implements Component {
 		if (matchesKey(data, "o")) {
 			void this.#completeSelection({
 				kind: "select_agent",
-				agentId: this.#ownerStatus().agentId,
+				agentId: this.#effectiveOwnerId(),
 			}, false);
 			return;
 		}
@@ -624,7 +627,7 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#liveChildren(agentId: string): AgentRosterStatus[] {
-		const ownerId = this.#ownerStatus().agentId;
+		const ownerId = this.#effectiveOwnerId();
 		// Root browsing also includes live Moderators without a direct Spawner.
 		return this.#liveTree.filter((status) =>
 			status.agentId !== ownerId &&
@@ -739,7 +742,14 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#ownerIdentityId(): string | undefined {
-		return this.#ownerCandidate()?.agentId;
+		return this.#ownerCandidate()?.agentId ?? this.#options.repairedOwner?.ownerId;
+	}
+	#effectiveOwnerId(): string {
+		const live = this.#ownerCandidate()?.agentId;
+		if (live) return live;
+		const repaired = this.#options.repairedOwner?.ownerId;
+		if (repaired) return repaired;
+		throw new Error("Agent selector roster has no Owner");
 	}
 
 	/** The Owner exists in the roster whatever its Run phase: a stopped Owner Run is Dormant, not absent. */
@@ -756,12 +766,30 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#ownerItem(): AgentSelectorItem {
-		return {
-			value: this.#ownerStatus().agentId,
-			label: "Owner",
-			kind: "owner",
-			action: { kind: "select_agent", agentId: this.#ownerStatus().agentId },
-		};
+		const live = this.#ownerCandidate();
+		if (live) {
+			return {
+				value: live.agentId,
+				label: "Owner",
+				kind: "owner",
+				action: { kind: "select_agent", agentId: live.agentId },
+			};
+		}
+		const repaired = this.#options.repairedOwner;
+		if (repaired) {
+			const stage = repaired.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
+			const path = repaired.transcriptPath ?? "transcript path unavailable";
+			return {
+				value: repaired.ownerId,
+				label: "Owner (" + stage + ")",
+				description: path,
+				kind: "owner",
+				repairedOwner: repaired,
+				action: { kind: "select_agent", agentId: repaired.ownerId },
+				detailLines: ["", "Owner " + repaired.ownerId, "Stage: " + stage, "Transcript: " + path, "Verified identity, never a live record"],
+			};
+		}
+		throw new Error("Agent selector roster has no Owner");
 	}
 
 	#maximumRosterScrollOffset(): number {
@@ -904,22 +932,22 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#browseRoot(): void {
-		if (this.#scopeAgentId === this.#ownerStatus().agentId) return;
-		const owner = this.#ownerStatus();
+		const ownerId = this.#effectiveOwnerId();
+		if (this.#scopeAgentId === ownerId) return;
 		let ancestor = [...this.#options.live, ...this.#options.dormant].find(
 			({ agentId }) => agentId === this.#scopeAgentId,
 		);
-		while (ancestor?.directSpawnerAgentId && ancestor.directSpawnerAgentId !== owner.agentId) {
+		while (ancestor?.directSpawnerAgentId && ancestor.directSpawnerAgentId !== ownerId) {
 			const parentId = ancestor.directSpawnerAgentId;
 			ancestor = [...this.#options.live, ...this.#options.dormant].find(
 				({ agentId }) => agentId === parentId,
 			);
 		}
-		this.#scopeAgentId = owner.agentId;
+		this.#scopeAgentId = ownerId;
 		const rootAgents = this.#liveItems().filter(({ kind }) => kind === "agent");
 		// Root browsing targets an Agent, not the higher-priority Attention Inbox.
 		this.#selectedValueByTab.live = rootAgents.find(({ value }) => value === ancestor?.agentId)?.value
-			?? rootAgents[0]?.value ?? owner.agentId;
+			?? rootAgents[0]?.value ?? ownerId;
 		this.#list = this.#createList();
 	}
 
@@ -934,24 +962,24 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#zoomOut(): void {
-		const owner = this.#ownerStatus();
-		if (this.#scopeAgentId === owner.agentId) return;
+		const ownerId = this.#effectiveOwnerId();
+		if (this.#scopeAgentId === ownerId) return;
 		const previousScope = this.#scopeAgentId;
 		const scope = [...this.#options.live, ...this.#options.dormant].find(
 			({ agentId }) => agentId === previousScope,
 		);
-		this.#scopeAgentId = scope?.directSpawnerAgentId ?? owner.agentId;
+		this.#scopeAgentId = scope?.directSpawnerAgentId ?? ownerId;
 		this.#selectedValueByTab.live = previousScope;
 		this.#list = this.#createList();
 	}
 
 	#scopeTitle(width: number): SelectorLine {
 		const allStatuses = [...this.#options.live, ...this.#options.dormant];
-		const owner = this.#ownerStatus();
+		const ownerId = this.#effectiveOwnerId();
 		const ancestors: AgentRosterStatus[] = [];
 		const scope = allStatuses.find(({ agentId }) => agentId === this.#scopeAgentId);
 		let current = scope;
-		while (current && current.agentId !== owner.agentId) {
+		while (current && current.agentId !== ownerId) {
 			ancestors.unshift(current);
 			current = allStatuses.find(
 				({ agentId }) => agentId === current?.directSpawnerAgentId,
@@ -978,7 +1006,7 @@ class AgentSelectorSurface implements Component {
 					: scope
 						? {
 							kind: "ancestor" as const,
-							agentId: scope.directSpawnerAgentId ?? owner.agentId,
+							agentId: scope.directSpawnerAgentId ?? ownerId,
 							childId: scope.agentId,
 						}
 						: undefined;
@@ -1006,13 +1034,17 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#renderOwnerFooter(): SelectorLine {
-		const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(this.#ownerStatus().agentId, "Owner")}`) + this.#theme.fg("dim", " [o]");
+		const liveOwner = this.#ownerCandidate();
+		const repairedFooter = this.#options.repairedOwner;
+		const footerOwnerId = liveOwner?.agentId ?? repairedFooter?.ownerId ?? this.#effectiveOwnerId();
+		const footerLabel = liveOwner ? "Owner" : repairedFooter ? "Owner (" + (repairedFooter.stage === "admission-pending" ? "admission-pending" : "snapshot-only") + ")" : "Owner";
+		const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(footerOwnerId, footerLabel)}`) + this.#theme.fg("dim", " [o]");
 		const pending = this.#items[this.#selectedIndex]?.kind === "owner"
 			? this.#selectionSpinnerItem?.description : undefined;
 		return {
 			text: text + (pending ? this.#theme.fg("dim", ` ${pending}`) : ""),
 			regions: [{ start: 0, end: visibleWidth(text), text,
-				action: { kind: "open", value: this.#ownerStatus().agentId } }],
+				action: { kind: "open", value: footerOwnerId } }],
 		};
 	}
 

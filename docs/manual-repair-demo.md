@@ -8,7 +8,7 @@
 4. As Moderator, diagnose from installed package source (read-only evidence, never live broken Owner traversal), fix isolated copies with ordinary tools, then `repair_validate` (advisory only, grants zero authority).
 5. `repair_freeze` under the current trigger authority (snapshot-only, no writes; auto-mints the trigger approval bound to the exact snapshot; re-freeze replaces pending).
 6. `repair_commit` under the same trigger authority (backend gates: drift recheck, validation re-run, backup+seal+journal; single-use per trigger; second commit without a fresh trigger is refused).
-7. `moderator_control resolve` sends handling to Dormant, history retained. Repaired Owner reopens idle until a new human message; user returns via `/agents` (`/agents owner`).
+7. `moderator_control resolve` sends handling to Dormant, history retained. Repaired Owner reopens idle until a new human message. User returns via `/agents`, which opens with Moderator plus repaired-Owner as admission-pending backed by verified identity plus repaired transcript path, never a fake live record. Selecting the repaired-Owner entry performs genuine fresh admission from repaired transcript on disk after joining the old repair host, with drafts preserved and no auto-resume, then opens Owner idle with human-only hold and no turn without a new human message. This explicit navigation is what admission waits for, still no auto-admit on commit. Failed admission keeps committed data plus journal intact, shows a truthful admission error in place, and stays in repair context with diagnostics available. Never rollback, never strand without menu. `/agents owner` attempts the same admission directly, then opens the menu so failure never strands.
 8. Esc or a new human message aborts the in-flight commit step only (no partial apply) and preserves trigger authority; retry in the same attempt succeeds WITHOUT a fresh trigger after fresh drift + validation rechecks. Only commit success (single-use), explicit repair cancel, `moderator_control resolve`/Dormant, or supersession by a fresh trigger clears the trigger authority. A commit that races arrived input observes it via the fresh recheck, never via a cleared flag.
 
 ## B. Live, broken Owner session (preadmission entry)
@@ -32,8 +32,8 @@ Do not use print mode against the materialized file (it appends conversation); r
   the repair host runs no automatic incident inspection, reminders, or
   Moderator creation. Diagnosis reads installed package source and frozen copies only
   (readRepairOwnerSnapshot, repair_validate on frozen paths).
-- The repair Moderator's /agents switcher shows only itself; spawn, message,
-  wait, control, and resume stay repair-only refused.
+- The repair Moderator's /agents switcher shows itself plus explicit repaired-Owner entry with verified identity plus transcript path plus stage, never a fake live record and never other agents. Pre-commit Owner entry is snapshot-only. Post-commit is admission-pending. Spawn, message,
+  wait, control, and resume stay repair-only refused. Dormant same-identity moderator rediscovery stays as today. Filtered repair roster resurrects no other agents.
 - Approval is the `/agents repair` trigger receipt (owner-session-trigger provenance,
   bound to the exact snapshot, single commit per trigger; Esc/human-message aborts the
   step only and preserves authority, while explicit cancel, `moderator_control resolve`/

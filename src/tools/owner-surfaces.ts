@@ -162,6 +162,81 @@ async function swapRepairViaTransientOverlay(
   return prepareAndBindRepairModerator(view, moderatorAgentId, { ownerTui, requestShutdown, startPhysical });
 }
 
+async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: HumanPresentationCoordinatorView): Promise<void> {
+ const buildRepairSnapshot = () => {
+ const roster = view.selectionRoster();
+ const repaired = view.repairedOwnerEntry();
+ const isModeratorRow = (status: { agentId: string; workflowId: string }) => status.agentId !== status.workflowId;
+ const liveMods = [...roster.live].filter(isModeratorRow);
+ const dormantMods = [...roster.dormant].filter(isModeratorRow);
+ const mountedId = view.status().agentId;
+ const selectedId = liveMods[0]?.agentId ?? dormantMods[0]?.agentId ?? repaired?.ownerId ?? mountedId;
+ return { liveMods, dormantMods, repaired, mountedId, selectedId };
+ };
+ const initial = buildRepairSnapshot();
+ const selection = createAgentSelectionSession(view, initial.mountedId);
+ let reopen = true;
+ while (reopen) {
+ reopen = false;
+ const current = buildRepairSnapshot();
+ const action = await openAgentSelectorSurface(ui, {
+ live: [...current.liveMods],
+ dormant: [...current.dormantMods],
+ selectedAgentId: current.selectedId,
+ repairedOwner: current.repaired ?? undefined,
+ humanAttention: [...view.humanAttention()],
+ operationalAttention: [...view.operationalAttention()],
+ reports: [...view.reportHistory()],
+ setReportRead(reportId, read) {
+ view.setReportRead(reportId, read);
+ return view.reportHistory();
+ },
+ addChangeHandler: (handler) => view.addAgentActivityChangeHandler(() => {
+ const next = buildRepairSnapshot();
+ handler({ live: [...next.liveMods], dormant: [...next.dormantMods], repairedOwner: next.repaired ?? undefined, humanAttention: [...view.humanAttention()], operationalAttention: [...view.operationalAttention()], reports: [...view.reportHistory()] });
+ }),
+ prepareSelection: async (act) => {
+ if (act.kind === "open_report") return;
+ const repairedId = current.repaired?.ownerId;
+ if (act.kind === "select_agent" && repairedId && act.agentId === repairedId) {
+ await view.admitRepairedOwner();
+ return;
+ }
+ await selection.prepare(act);
+ },
+ onSelectionError(error) {
+ ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
+ },
+ });
+ if (!action) return;
+ if (action.kind === "open_report") {
+ reopen = true;
+ continue;
+ }
+ if (action.kind === "decide") {
+ try {
+ await selection.complete(action);
+ } catch (error) {
+ ui.notify("Human Request selection failed: " + (error instanceof Error ? error.message : String(error)), "error");
+ return;
+ }
+ continue;
+ }
+ const repairedId = current.repaired?.ownerId;
+ if (repairedId && action.agentId === repairedId) {
+ const entry = view.repairedOwnerEntry();
+ const stage = entry?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
+ ui.notify("Repaired Owner " + stage + " acknowledged idle until human message: " + repairedId, "info");
+ return;
+ }
+ const prepared = selection.preparedView();
+ if (prepared) {
+ await openAgentViewSurface(ui, prepared, { requestShutdown: () => undefined });
+ return;
+ }
+ return;
+ }
+}
 export function registerAgentsCommand(
 	pi: ExtensionAPI,
 	resolveView: () => HumanPresentationCoordinatorView,
@@ -252,6 +327,26 @@ export function registerAgentsCommand(
 						}
 					} catch (error) {
 						ctx.ui.notify("Repair failed: " + (error instanceof Error ? error.message : String(error)), "error");
+					}
+					return;
+				}
+				if (preadmissionRepair) {
+					if (ctx.mode !== "tui") return;
+					const host = preadmissionRepair();
+					if (mode === "owner") {
+						try {
+							await host.admitRepairedOwner();
+							const entry = host.repairedOwnerEntry();
+							const stage = entry?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
+							ctx.ui.notify("Repaired Owner " + stage + " acknowledged idle until human message: " + (entry?.ownerId ?? host.status().agentId), "info");
+						} catch (error) {
+							ctx.ui.notify("Repaired Owner admission failed: " + (error instanceof Error ? error.message : String(error)), "error");
+						}
+					}
+					try {
+						await openPreadmissionRepairSelector(ctx.ui, host);
+					} catch (error) {
+						ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
 					}
 					return;
 				}

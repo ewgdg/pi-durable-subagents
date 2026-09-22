@@ -753,6 +753,13 @@ export const AgentSelectorSnapshotSchema = closed({
 	humanAttention: Type.Array(HumanAttentionItemSchema, { uniqueItems: true }),
 	operationalAttention: Type.Array(OperationalIncidentAttentionSchema, { uniqueItems: true }),
 	reports: Type.Array(ReportHistoryItemSchema),
+ repairedOwner: Type.Optional(closed({
+ ownerId: NonEmptyStringSchema,
+ workflowId: NonEmptyStringSchema,
+ transcriptPath: Type.Optional(NonEmptyStringSchema),
+ stage: Type.Union([Type.Literal("snapshot-only"), Type.Literal("admission-pending")]),
+ label: NonEmptyStringSchema,
+ })),
 });
 type DeepReadonly<T> = T extends readonly []
 	? readonly []
