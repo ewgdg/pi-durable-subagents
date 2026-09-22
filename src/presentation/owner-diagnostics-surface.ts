@@ -41,7 +41,7 @@ export function openOwnerDiagnostics(
 	failure?: OwnerRecoveryError,
 	options?: Readonly<{
 		/** Manual repair entry from the admission-failed surface. Manual only, no watcher. */
-		onRepair?: () => void | Promise<void>;
+		onRepair?: (ownerTui: TUI) => void | Promise<void>;
 		/** Esc through the real input path revokes a pending repair approval via the persisted ledger. */
 		onEsc?: () => void | Promise<void>;
 	}>,
@@ -117,7 +117,7 @@ class OwnerDiagnosticsSurface implements Component {
 	readonly theme: Theme;
 	readonly failure: OwnerRecoveryError | undefined;
 	readonly done: () => void;
-	readonly onRepair: (() => void | Promise<void>) | undefined;
+	readonly onRepair: ((ownerTui: TUI) => void | Promise<void>) | undefined;
 	readonly onEsc: (() => void | Promise<void>) | undefined;
 	readonly #body = new Text("", 0, 0);
 	#technical = false;
@@ -127,7 +127,7 @@ class OwnerDiagnosticsSurface implements Component {
 
 	constructor(tui: TUI, theme: Theme, failure: OwnerRecoveryError | undefined,
 		done: () => void,
-		options?: Readonly<{ onRepair?: () => void | Promise<void>; onEsc?: () => void | Promise<void> }>) {
+		options?: Readonly<{ onRepair?: (ownerTui: TUI) => void | Promise<void>; onEsc?: () => void | Promise<void> }>) {
 		this.tui = tui;
 		this.theme = theme;
 		this.failure = failure;
@@ -162,7 +162,7 @@ class OwnerDiagnosticsSurface implements Component {
 		if (matchesKey(data, Key.escape) || matchesKey(data, "q")) { if (matchesKey(data, Key.escape) && this.onEsc) void this.onEsc(); this.done(); return; }
 		if (matchesKey(data, "r") && this.onRepair) {
 			try {
-				const result = this.onRepair!();
+				const result = this.onRepair!(this.tui);
 				if (result instanceof Promise) {
 					void result.then(
 						() => this.done(),

@@ -1,7 +1,7 @@
 import { copyToClipboard } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { openModeratorReportSurface } from "../presentation/moderator-report-surface.ts";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 import type {
 	HumanPresentationCoordinatorView,
@@ -63,14 +63,105 @@ export function deactivateOwnerAgentTools(pi: ExtensionAPI): void {
 	);
 }
 
-async function switchToRepairModerator(
-	view: HumanPresentationCoordinatorView,
-	moderatorAgentId: string,
-): Promise<void> {
-	const selection = createAgentSelectionSession(view, view.status().agentId);
-	const action = { kind: "select_agent" as const, agentId: moderatorAgentId };
-	await selection.prepare(action);
-	await selection.complete(action);
+
+export type RepairSurfaceDeps = Readonly<{
+  startRepairSurface?: typeof startPhysicalAgentViewSurface;
+}>;
+
+async function prepareAndBindRepairModerator(
+  view: HumanPresentationCoordinatorView,
+  moderatorAgentId: string,
+  opts: Readonly<{
+    ownerTui: TUI;
+    requestShutdown: () => void;
+    startPhysical?: typeof startPhysicalAgentViewSurface;
+  }>
+): Promise<PhysicalAgentViewSurface | undefined> {
+  const selection = createAgentSelectionSession(view, view.status().agentId);
+  const action = { kind: "select_agent" as const, agentId: moderatorAgentId };
+  await selection.prepare(action);
+  if (selection.postMortemView()) {
+    throw new Error("Repair view failed: Moderator unavailable for live view");
+  }
+  const preparedView = selection.preparedView();
+  if (!preparedView) {
+    return undefined;
+  }
+  let surface: PhysicalAgentViewSurface | undefined;
+  try {
+    surface = (opts.startPhysical ?? startPhysicalAgentViewSurface)(preparedView, {
+      ownerTui: opts.ownerTui,
+      requestShutdown: opts.requestShutdown,
+    });
+  } catch (error) {
+    await preparedView.close().catch(() => undefined);
+    throw error;
+  }
+  if (!surface) {
+    await preparedView.close().catch(() => undefined);
+    throw new Error("Repair view failed: physical terminal unavailable");
+  }
+  let unbind: (() => void) | undefined;
+  try {
+    unbind = view.bindPhysicalAgentSurface(surface);
+  } catch (error) {
+    try {
+      surface.close();
+    } catch {
+    }
+    await surface.closed.catch(() => undefined);
+    throw error;
+  }
+  void surface.closed.finally(() => {
+    try {
+      if (unbind) unbind();
+    } catch {
+    }
+  });
+  try {
+    await surface.ready;
+  } catch (error) {
+    try {
+      surface.close();
+    } catch {
+    }
+    await surface.closed.catch(() => undefined);
+    throw error;
+  }
+  return surface;
+}
+
+async function captureRepairOwnerTui(
+  ui: ExtensionUIContext
+): Promise<TUI> {
+  let captured: TUI | undefined;
+  await ui.custom<void>((tui, _theme, _keys, done) => {
+    captured = tui;
+    done(undefined);
+    return {
+      render: () => [],
+      invalidate: () => undefined,
+      handleInput: () => undefined,
+    } as unknown as Component;
+  }, {
+    overlay: true,
+    overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
+  });
+  if (!captured) {
+    throw new Error("Repair view failed: owner TUI unavailable");
+  }
+  return captured;
+}
+
+async function swapRepairViaTransientOverlay(
+  ui: ExtensionUIContext,
+  view: HumanPresentationCoordinatorView,
+  moderatorAgentId: string,
+  requestShutdown: () => void,
+  startPhysical?: typeof startPhysicalAgentViewSurface
+): Promise<PhysicalAgentViewSurface | undefined> {
+  const ownerTui = await captureRepairOwnerTui(ui);
+  return prepareAndBindRepairModerator(view, moderatorAgentId, { ownerTui, requestShutdown, startPhysical });
 }
 
 export function registerAgentsCommand(
@@ -81,6 +172,7 @@ export function registerAgentsCommand(
 	admittedOwnerView?: () => OrdinaryAgentCoordinatorView,
 	/** Preadmission repair host for admission-failed Owner sessions. Manual only. */
 	preadmissionRepair?: () => HumanPresentationCoordinatorView,
+  repairDeps?: RepairSurfaceDeps,
 ): void {
 	const admissionFailure = ownerAdmission === "admitted" ? undefined : ownerAdmission;
 	pi.registerCommand("agents", {
@@ -100,7 +192,7 @@ export function registerAgentsCommand(
 				const ownerHost = admissionFailure ? undefined : admittedOwnerView?.();
 				const activeHost = repairHost ?? ownerHost;
 				await openOwnerDiagnostics(ctx.ui, admissionFailure, {
-					onRepair: activeHost ? async () => {
+          onRepair: activeHost ? async (ownerTui: TUI) => {
             let receipt;
             try {
               receipt = await activeHost.requestManualRepair(validateManualRepairReason(undefined));
@@ -110,7 +202,16 @@ export function registerAgentsCommand(
             }
             ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
             try {
-              await switchToRepairModerator(activeHost, receipt.moderatorAgentId);
+              const surface = await prepareAndBindRepairModerator(activeHost, receipt.moderatorAgentId, {
+                ownerTui,
+                requestShutdown: () => ctx.shutdown(),
+                startPhysical: repairDeps?.startRepairSurface,
+              });
+              if (surface) {
+                void surface.closed.catch((error) => {
+                  ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
+                });
+              }
             } catch (error) {
               ctx.ui.notify("Repair view failed: " + (error instanceof Error ? error.message : String(error)), "error");
               throw error;
@@ -141,7 +242,12 @@ export function registerAgentsCommand(
 							const receipt = await host.requestManualRepair(validateManualRepairReason(parseAgentsRepairReason(args)));
 							ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
 							try {
-							  await switchToRepairModerator(host, receipt.moderatorAgentId);
+                            const surface = await swapRepairViaTransientOverlay(ctx.ui, host, receipt.moderatorAgentId, () => ctx.shutdown(), repairDeps?.startRepairSurface);
+                            if (surface) {
+                              void surface.closed.catch((error) => {
+                                ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
+                              });
+                            }
 							} catch (error) {
 							  ctx.ui.notify("Repair view failed: " + (error instanceof Error ? error.message : String(error)), "error");
 							}
@@ -186,7 +292,17 @@ export function registerAgentsCommand(
 					"info",
 				);
 				try {
-					await switchToRepairModerator(repairView, receipt.moderatorAgentId);
+                    const ownerTui = await captureRepairOwnerTui(ctx.ui);
+                    const surface = await prepareAndBindRepairModerator(repairView, receipt.moderatorAgentId, {
+                      ownerTui,
+                      requestShutdown: () => ctx.shutdown(),
+                      startPhysical: repairDeps?.startRepairSurface,
+                    });
+                    if (surface) {
+                      void surface.closed.catch((error) => {
+                        ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
+                      });
+                    }
 				} catch (error) {
 					ctx.ui.notify(
 						"Repair view failed: " + (error instanceof Error ? error.message : String(error)),
