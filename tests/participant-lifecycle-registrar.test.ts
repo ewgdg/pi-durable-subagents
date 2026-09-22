@@ -153,11 +153,15 @@ test("locally committed omitted-Delivery Answer offers remaining work once", asy
 		toolName: "agent_message", details: { messageId: "answer", requestMessageId: "finished",
 			disposition: "committed", delivery: "omitted", reason: "request_source_unavailable" },
 	}] }, context);
-	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
-	assert.equal(pi.messages.length, 1);
-	assert.match(String(pi.messages[0]!.message.content), /Remaining work/);
-	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
-	assert.equal(pi.messages.length, 1);
+	const continuation = await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context) as {
+		entries?: Array<{ content?: unknown }>; continue?: boolean;
+	} | undefined;
+	assert.equal(continuation?.continue, true);
+	assert.equal(continuation?.entries?.length, 1);
+	assert.match(JSON.stringify(continuation?.entries?.[0]), /Remaining work/);
+	assert.equal(pi.messages.length, 0, "settlement continuation is a boundary result, not a queued message");
+	assert.equal(await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context), undefined);
+	assert.equal(pi.messages.length, 0);
 });
 
 test("lifecycle Request presentation preserves recovery without becoming Delivery evidence", { timeout: 5_000 }, async () => {
@@ -167,9 +171,6 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 	const frame = appendRequestDelivery(sessionManager, { requesterAgentId: "requester", title: "Finish current work", question: "Finish this Request." });
 	const pi = new CapturedExtensionApi();
 	pi.api.appendEntry = (customType, data) => { sessionManager.appendCustomEntry(customType, data); };
-	pi.api.sendMessage = (message) => {
-		sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
-	};
 	registerParticipantLifecycle(pi.api, lifecycleHandlers({
 		async executionStarted() { return [frame]; },
 	}));
@@ -179,6 +180,15 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 	await pi.emit("turn_end", { type: "turn_end", toolResults: [{ ...toolResultMessage,
 		toolName: "agent_message", details: { messageId: "answer", requestMessageId: "finished", messageStatus: "sent" },
 	}] }, context);
+	// Simulate Pi committing the settlement boundary drafts, as _commitBoundaryDrafts does.
+	const continuation = await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context) as {
+		entries?: Array<{ type: string; customType?: string; content?: string; display?: boolean; details?: unknown; targetId?: string; replacement?: null }>; continue?: boolean;
+	} | undefined;
+	assert.equal(continuation?.continue, true);
+	for (const draft of continuation?.entries ?? []) {
+		if (draft.type === "custom_message") sessionManager.appendCustomMessageEntry(draft.customType!, draft.content!, draft.display!, draft.details);
+		else if (draft.type === "context_edit") sessionManager.appendContextEdit(draft.targetId!, draft.replacement ?? null);
+	}
 	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
 	const presentation = sessionManager.getLeafEntry();
 	assert.equal(presentation?.type, "custom_message");
@@ -191,6 +201,7 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 });
 
 const lifecycleEventNames = [
+	"agent_before_settle",
 	"agent_end",
 	"agent_start",
 	"context",
@@ -289,6 +300,11 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		message: toolResultMessage,
 		toolResults: [toolResultMessage],
 	}, context);
+	// turn_end is lane-free; lane reconciliation now runs at agent_before_settle.
+	await pi.emit("agent_before_settle", {
+		type: "agent_before_settle",
+		context: { canContinue: true },
+	}, context);
 	await pi.emit("agent_end", {
 		type: "agent_end",
 		messages: [toolResultMessage],
@@ -339,14 +355,19 @@ for (const pending of [false, true]) test(`Answer offers one neutral continuatio
 		messageId: "answer-b", requestMessageId: "request-b", messageStatus: "sent",
 	} };
 	await pi.emit("turn_end", { type: "turn_end", toolResults: [answer] }, context);
-	await pi.emit("agent_end", { type: "agent_end", messages: [answer] }, context);
-	assert.equal(pi.messages.length, pending ? 0 : 1);
-	if (!pending) {
-		assert.equal(pi.messages[0]!.options?.triggerTurn, true);
-		assert.match(String(pi.messages[0]!.message.content), /Outstanding Requests/);
+	const continuation = await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context) as {
+		entries?: Array<{ content?: unknown }>; continue?: boolean;
+	} | undefined;
+	if (pending) {
+		assert.equal(continuation, undefined, "native input already provides the continuation");
+	} else {
+		assert.equal(continuation?.continue, true);
+		assert.equal(continuation?.entries?.length, 1);
+		assert.match(JSON.stringify(continuation?.entries?.[0]), /Outstanding Requests/);
 	}
-	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
-	assert.equal(pi.messages.length, pending ? 0 : 1, "settling with outstanding work must not spin");
+	assert.equal(pi.messages.length, 0, "settlement continuation is a boundary result, not a queued message");
+	assert.equal(await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context), undefined,
+		"settling with outstanding work must not spin");
 });
 
 test("the final Answer does not manufacture a summary continuation", async () => {
@@ -357,7 +378,7 @@ test("the final Answer does not manufacture a summary continuation", async () =>
 		messageId: "last-answer", requestMessageId: "last-request", messageStatus: "sent",
 	} };
 	await pi.emit("turn_end", { type: "turn_end", toolResults: [answer] }, context);
-	await pi.emit("agent_end", { type: "agent_end", messages: [answer] }, context);
+	assert.equal(await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context), undefined);
 	assert.deepEqual(pi.messages, []);
 });
 
@@ -401,6 +422,10 @@ test("ordinary and Moderator extensions preserve local lifecycle operation order
 				turnIndex: 0,
 				message: toolResultMessage,
 				toolResults: [toolResultMessage],
+			}, context);
+			await pi.emit("agent_before_settle", {
+				type: "agent_before_settle",
+				context: { canContinue: true },
 			}, context);
 			await pi.emit("agent_end", {
 				type: "agent_end",
@@ -554,13 +579,11 @@ test("participant lifecycle registrar preserves fail-fast handler errors", async
 			},
 		],
 		[
-			"turn_end",
+			"agent_before_settle",
 			"safeBoundaryReached",
 			{
-				type: "turn_end",
-				turnIndex: 0,
-				message: toolResultMessage,
-				toolResults: [toolResultMessage],
+				type: "agent_before_settle",
+				context: { canContinue: true },
 			},
 		],
 		[

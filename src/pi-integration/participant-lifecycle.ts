@@ -12,6 +12,7 @@ import type {
 	InputEvent,
 	InputEventResult,
 	MessageEndEvent,
+	SessionBoundaryDraft,
 	TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
@@ -63,9 +64,9 @@ export function registerParticipantLifecycle(
 	let reconciliation: { agentId: string; resolvedRequestIds: Set<string> } | undefined;
 	// One sticky, once-consumed continuation per execution. A committed Answer ends its
 	// model/tool loop, and a committed `agent_wait` aggregate delivers its Answers
-	// mid-loop rather than ending it; either way the execution owes one runtime-supplied
+	// mid-loop rather than ending it; either way the execution owes one boundary-supplied
 	// continuation when it settles. The flag survives the Answer-free generations in
-	// between and is consumed at agent_end.
+	// between and is consumed at agent_before_settle.
 	let answerDelivered = false;
 	const currentFrames = (transcript: TranscriptInspection, agentId: string) =>
 		obligationStack(transcript, agentId).filter(frame =>
@@ -168,20 +169,46 @@ export function registerParticipantLifecycle(
 			toolName: event.toolName,
 		})
 	);
-	// Pi awaits turn_end only after the complete issued tool batch and before it
-	// constructs the next model context, making this the Steer freeze boundary.
-	pi.on("turn_end", async (event) => {
+	// turn_end stays synchronous and lane-free: it only records Answer delivery and
+	// returns append-only drafts. Awaiting lane-admitting coordination here would
+	// deadlock Run disposal while it waits for the same turn to settle
+	// (see src/coordination/messages.ts). Lane reconciliation runs at
+	// agent_before_settle instead, after Pi drains its queues.
+	pi.on("turn_end", (event, ctx) => {
 		if (event.toolResults.some(deliveredAnswer)) answerDelivered = true;
-		await handlers.safeBoundaryReached();
+		const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
+		const frames = currentFrames(transcript, ctx.sessionManager.getSessionId());
+		const hides = resolvedAttentionEdits(transcript, frames, false);
+		return hides.length ? { entries: hides } : undefined;
 	});
-	pi.on("agent_end", async (_event, ctx) => {
-		if (answerDelivered) {
-			answerDelivered = false;
-			const frames = currentFrames(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
-			// Answer ends its model/tool loop. Offer remaining work once, unless native
-			// input already provides a continuation; never choose the next task or spin at settlement.
-			if (frames.length && !ctx.hasPendingMessages()) presentRequests(pi, frames, true);
+	// agent_before_settle fires after Pi drains queues and before settlement; a
+	// returned continue:true requests one next provider request when canContinue.
+	// This replaces the former agent_end + sendMessage(steer, triggerTurn) loop.
+	pi.on("agent_before_settle", async (event, ctx) => {
+		await handlers.safeBoundaryReached();
+		if (!answerDelivered) return undefined;
+		answerDelivered = false;
+		const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
+		const frames = currentFrames(transcript, ctx.sessionManager.getSessionId());
+		// Answer ends its model/tool loop. Offer remaining work once, unless native
+		// input already provides a continuation; never choose the next task or spin at settlement.
+		if (!frames.length || ctx.hasPendingMessages()) {
+			const hides = resolvedAttentionEdits(transcript, frames, false);
+			return hides.length ? { entries: hides } : undefined;
 		}
+		const entries: SessionBoundaryDraft[] = [
+			...resolvedAttentionEdits(transcript, frames, true),
+			{ type: "custom_message", ...requestPresentation(frames) },
+		];
+		if (!event.context.canContinue) {
+			// A continuation request would be invalid here; keep the committed
+			// snapshot so the next native input resumes with full attention.
+			ctx.ui.notify("Remaining work retained without continuation: the model reached its turn limit.", "warning");
+			return { entries };
+		}
+		return { entries, continue: true };
+	});
+	pi.on("agent_end", async () => {
 		await handlers.executionEnded();
 	});
 }
@@ -236,8 +263,24 @@ function requestPresentation(frames: readonly ObligationFrame[]) {
 	};
 }
 
-function presentRequests(pi: ExtensionAPI, frames: readonly ObligationFrame[], triggerTurn: boolean): void {
-	pi.sendMessage(requestPresentation(frames), { deliverAs: "steer", triggerTurn });
+/** Append-only hides for committed attention snapshots this execution supersedes. */
+function resolvedAttentionEdits(
+	transcript: TranscriptInspection,
+	frames: readonly ObligationFrame[],
+	supersedeAll: boolean,
+): SessionBoundaryDraft[] {
+	const owed = new Set(frames.map(frame => frame.requestId));
+	const edits: SessionBoundaryDraft[] = [];
+	for (const entry of transcript.entries) {
+		if (entry.type !== "custom_message" || entry.customType !== REQUEST_ATTENTION_CUSTOM_TYPE) continue;
+		const requests = (entry.details as { requests?: readonly { requestMessageId?: unknown }[] } | undefined)?.requests;
+		if (!Array.isArray(requests)) continue;
+		const resolved = requests.every(request => typeof request.requestMessageId !== "string" || !owed.has(request.requestMessageId));
+		// A fresh snapshot replaces earlier ones even when work is still owed;
+		// otherwise only fully resolved snapshots may leave model context.
+		if (supersedeAll || resolved) edits.push({ type: "context_edit", targetId: entry.id, replacement: null });
+	}
+	return edits;
 }
 
 export function registerParticipantInputLifecycle(
