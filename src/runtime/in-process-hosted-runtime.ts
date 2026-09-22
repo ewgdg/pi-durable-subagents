@@ -243,9 +243,15 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 				rejectCommit(error);
 			}
 		});
+		// Turn-level entry IDs are not visible on the AgentSession event surface,
+		// so precise proof means gating message_end on fresh transcript entries:
+		// an unrelated concurrent message must not confirm this delivery.
+		const committedEntryCount = () => this.#session.sessionManager.getEntries().length;
+		const entriesBeforeDispatch = committedEntryCount();
 		const unsubscribe = this.#session.subscribe((event) => {
 			if (
 				event.type === "message_end" &&
+				committedEntryCount() > entriesBeforeDispatch &&
 				(
 					(delivery.kind === "custom" && event.message.role === "custom") ||
 					(delivery.kind === "user" && event.message.role === "user")
