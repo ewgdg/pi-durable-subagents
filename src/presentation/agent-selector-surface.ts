@@ -217,6 +217,11 @@ class AgentSelectorSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, "o")) {
+			// Snapshot-only Owner is non-selectable: silent no-op (no selection,
+			// no error). Live Owner and admission-pending stay selectable.
+			if (this.#isSnapshotOnlyOwnerDisabled()) {
+				return;
+			}
 			void this.#completeSelection({
 				kind: "select_agent",
 				agentId: this.#effectiveOwnerId(),
@@ -759,6 +764,14 @@ class AgentSelectorSurface implements Component {
 		);
 	}
 
+	/** Snapshot-only with no live Owner is non-selectable: no O shortcut, no footer action, no Enter action. */
+	#isSnapshotOnlyOwnerDisabled(): boolean {
+		if (this.#ownerCandidate()) return false;
+		const repaired = this.#options.repairedOwner;
+		if (!repaired) return false;
+		return repaired.stage !== "admission-pending";
+	}
+
 	#ownerStatus(): AgentRosterStatus {
 		const owner = this.#ownerCandidate();
 		if (!owner) throw new Error("Agent selector roster has no Owner");
@@ -781,8 +794,9 @@ class AgentSelectorSurface implements Component {
 			const path = repaired.transcriptPath ?? "transcript path unavailable";
 			if (stage !== "admission-pending") {
 				// Pre-commit entry is disabled by construction: informational row, no selection
-				// action, so Enter never dismisses the selector. The repair-prepare layers refuse
-				// explicit picks (including the O shortcut) with the same explanatory reason.
+				// action, so Enter never dismisses the selector. The O shortcut and
+				// footer are likewise non-selectable (silent no-op), and the
+				// repair-prepare layers silently ignore explicit picks.
 				return {
 					value: repaired.ownerId,
 					label: "Owner (snapshot-only, available after repair completes)",
@@ -1049,6 +1063,14 @@ class AgentSelectorSurface implements Component {
 	#renderOwnerFooter(): SelectorLine {
 		const liveOwner = this.#ownerCandidate();
 		const repairedFooter = this.#options.repairedOwner;
+		// Snapshot-only with no live Owner is non-selectable: greyed with no
+		// clickable region (no O shortcut, no footer action, no Enter action).
+		if (!liveOwner && repairedFooter && repairedFooter.stage !== "admission-pending") {
+			const disabledOwnerId = repairedFooter.ownerId;
+			const disabledLabel = "Owner (snapshot-only)";
+			const disabledText = this.#theme.fg("dim", "Go to " + this.#participantLabel(disabledOwnerId, disabledLabel)) + this.#theme.fg("dim", " [o]");
+			return { text: disabledText, regions: [] };
+		}
 		const footerOwnerId = liveOwner?.agentId ?? repairedFooter?.ownerId ?? this.#effectiveOwnerId();
 		const footerLabel = liveOwner ? "Owner" : repairedFooter ? "Owner (" + (repairedFooter.stage === "admission-pending" ? "admission-pending" : "snapshot-only") + ")" : "Owner";
 		const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(footerOwnerId, footerLabel)}`) + this.#theme.fg("dim", " [o]");

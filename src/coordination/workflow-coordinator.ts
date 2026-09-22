@@ -893,7 +893,10 @@ export class WorkflowCoordinator {
 		const ownerId = this.#ownerIdentity.agentId;
 		const workflowId = this.#ownerIdentity.workflowId;
 		const transcriptPath = this.#operationalIncidents.manualRepairTranscriptPath() ?? this.#preadmissionRepairFailure?.transcriptPath ?? this.#agents.get(ownerId)?.transcript.inspect().transcriptPath ?? undefined;
-		if (this.#repairedOwnerIdleHold) {
+		// Post-commit only: a stale idle hold from a previous commit must not
+		// promote a fresh pre-commit trigger to pending. Pending requires idle
+		// hold with no pending trigger and no pending approval.
+		if (this.#repairedOwnerIdleHold && !this.#pendingRepairTrigger && !this.#pendingRepairApproval) {
 			return buildRepairedOwnerEntry({ ownerId, workflowId, transcriptPath, stage: "admission-pending" });
 		}
 		if (this.#pendingRepairTrigger || this.#preadmissionRepairOnly) {
@@ -1231,6 +1234,10 @@ export class WorkflowCoordinator {
 					// Fresh trigger starts a new repair cycle: clear admission-completed
 					// suppression so snapshot-only then admission-pending show again.
 					this.#repairedOwnerAdmitted = false;
+					// Fresh cycle starts pre-commit snapshot-only: clear any stale
+					// idle hold from a previous commit so the fresh trigger does not
+					// read as post-commit pending.
+					this.#repairedOwnerIdleHold = undefined;
 				}
 				return receipt;
 			},

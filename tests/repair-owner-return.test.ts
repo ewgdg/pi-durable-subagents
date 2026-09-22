@@ -30,15 +30,22 @@ test("selector opens pre-commit snapshot-only with zero live Owner", async () =>
  const ownerId = "owner-1";
  const repaired = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "snapshot-only" });
  assert.equal(repaired.stage, "snapshot-only");
+ const prepareCalls: unknown[] = [];
+ const errors: unknown[] = [];
  const harness = selectorHarness();
- const selection = openAgentSelectorSurface(harness.ui, { live: [rosterStatus(moderatorId, ownerId, "live")], dormant: [], selectedAgentId: moderatorId, repairedOwner: repaired });
+ const ESC = String.fromCharCode(27);
+ const selection = openAgentSelectorSurface(harness.ui, { live: [rosterStatus(moderatorId, ownerId, "live")], dormant: [], selectedAgentId: moderatorId, repairedOwner: repaired, prepareSelection: (action: unknown) => { prepareCalls.push(action); }, onSelectionError: (error: unknown) => { errors.push(error); } });
  await Promise.resolve();
  await Promise.resolve();
  const component = harness.getComponent();
  assert.ok(component);
  component.handleInput("o");
- const action = await selection;
- assert.deepEqual(action, { kind: "select_agent", agentId: ownerId });
+ await Promise.resolve();
+ await Promise.resolve();
+ assert.deepEqual(prepareCalls, []);
+ assert.deepEqual(errors, []);
+ component.handleInput(ESC);
+ assert.equal(await selection, undefined);
 });
 test("selector opens post-commit admission-pending with zero live Owner", async () => {
  const moderatorId = "moderator-1";

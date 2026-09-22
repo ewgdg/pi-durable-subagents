@@ -222,7 +222,10 @@ async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: Huma
  await view.admitRepairedOwner();
  return;
  }
- throw new Error("unavailable: repaired Owner is available after repair completes");
+ // Snapshot-only is an impossible pick: the UI never offers it as
+ // selectable, so explicit picks are silently ignored (no admit, no
+ // routing, no error).
+ return;
  }
  await selection.prepare(act);
  },

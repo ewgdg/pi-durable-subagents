@@ -1,6 +1,6 @@
-// Item 3: the /agents switcher stays available in repair context but hides the
-// broken Owner and every other agent. Red test: the selector snapshot served
-// to the repair Moderator contains exactly itself.
+// Repair scope with prefer-live: while a repaired entry is present the switcher
+// hides the broken Owner and other agents (Moderator only); once the entry is
+// suppressed post-admission the live/dormant Owner returns so the menu opens.
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -48,13 +48,25 @@ function stubView(): HumanPresentationCoordinatorView {
   } as unknown as HumanPresentationCoordinatorView;
 }
 
-test("repair filter keeps only the repair Moderator", () => {
-  const filtered = filterRepairModeratorSelectorSnapshot(fullSnapshot(), "moderator-1");
+test("repair filter keeps only the repair Moderator while repaired entry present", () => {
+  const pending = { ...fullSnapshot(), repairedOwner: { ownerId: "owner-1", workflowId: "owner-1", stage: "admission-pending", label: "Owner" } } as unknown as RemoteAgentSelectorSnapshot;
+  const filtered = filterRepairModeratorSelectorSnapshot(pending, "moderator-1");
   assert.deepEqual(
     [...filtered.live.map((status: { agentId: string }) => status.agentId), ...filtered.dormant.map((status: { agentId: string }) => status.agentId)],
     ["moderator-1"],
   );
   assert.equal(filtered.selectedAgentId, "moderator-1");
+});
+
+test("repair filter prefers live Owner once repaired entry suppressed", () => {
+  const filtered = filterRepairModeratorSelectorSnapshot(fullSnapshot(), "moderator-1");
+  assert.deepEqual(
+    [...filtered.live.map((status: { agentId: string }) => status.agentId), ...filtered.dormant.map((status: { agentId: string }) => status.agentId)],
+    ["moderator-1", "owner-1"],
+  );
+  assert.equal(filtered.selectedAgentId, "moderator-1");
+  // Other agents stay hidden.
+  assert.ok(![...filtered.live, ...filtered.dormant].some((status: { agentId: string }) => status.agentId === "child-1"));
 });
 
 test("presentation boundary serves the filtered snapshot to the repair Moderator", async () => {
@@ -63,7 +75,8 @@ test("presentation boundary serves the filtered snapshot to the repair Moderator
   });
   const snapshot = await handlers.snapshot();
   const visible = [...snapshot.live, ...snapshot.dormant].map((status: { agentId: string }) => status.agentId);
-  assert.deepEqual(visible, ["moderator-1"]);
+  // No repaired entry in the stub: prefer-live includes the Owner so the menu opens.
+  assert.deepEqual(visible, ["moderator-1", "owner-1"]);
 });
 
 test("presentation boundary without repair context still serves the full roster", async () => {

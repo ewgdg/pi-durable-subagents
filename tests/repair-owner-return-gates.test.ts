@@ -87,30 +87,27 @@ child.appendMessage(fauxAssistantMessage("Persist snap-child"));
  const entry = owner.repairedOwnerEntry();
  assert.ok(entry);
  assert.equal(entry.stage, "snapshot-only");
-// Disabled by construction: the selector refuses the pick with an explanatory reason.
-// No admission attempt, no snapshot reader, and never the commit-demanding error.
-let refusal = "";
-try {
+// Disabled by construction: snapshot-only prepare is a silent no-op.
+// No admission attempt, no snapshot routing, no error toast.
+let routed = false;
+let admitAttempted = false;
 const disabledView: any = {
 status: () => ({ agentId: identity.agentId }),
 repairedOwnerEntry: () => entry,
-admitRepairedOwner: (...args: unknown[]) => (owner as any).admitRepairedOwner(...args),
-openAgentPresentation: async () => { throw new Error("disabled pre-commit entry must not route to live presentation"); },
+admitRepairedOwner: async (...args: unknown[]) => { admitAttempted = true; return (owner as any).admitRepairedOwner(...args); },
+openAgentPresentation: async () => { routed = true; throw new Error("disabled pre-commit entry must not route to live presentation"); },
 humanAttention: () => [],
 };
 const navigatingModerator = "moderator-gate-snap-1";
 const disabledSession = createAgentSelectionSession(disabledView, navigatingModerator);
 await disabledSession.prepare({ kind: "select_agent", agentId: identity.agentId });
-} catch (error) {
-refusal = error instanceof Error ? error.message : String(error);
-}
-assert.match(refusal, /available after repair completes/);
-assert.doesNotMatch(refusal, /snapshot-only/);
+assert.equal(routed, false);
+assert.equal(admitAttempted, false);
 // Backend guard stays for direct misuse; UI flows never reach it.
  await assert.rejects(owner.admitRepairedOwner(), /snapshot-only/);
  await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("selector refuses snapshot-only and admits admission-pending", async () => {
+test("selector silently ignores snapshot-only and admits admission-pending", async () => {
  const ownerId = "owner-gate-1";
  const moderatorId = "moderator-gate-1";
  const snapshotOnly = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "snapshot-only" });
@@ -122,9 +119,12 @@ admitRepairedOwner: async () => { admitCalled = true; throw new Error("disabled 
  openAgentPresentation: async () => { throw new Error("must not route snapshot-only to live presentation"); },
  humanAttention: () => [],
  };
- const snapshotSession = createAgentSelectionSession(snapshotView, moderatorId);
-await assert.rejects(snapshotSession.prepare({ kind: "select_agent", agentId: ownerId }), /available after repair completes/);
+let snapshotRouted = false;
+const snapshotRoutedView: any = { ...snapshotView, openAgentPresentation: async () => { snapshotRouted = true; throw new Error("must not route snapshot-only to live presentation"); } };
+const snapshotSilentSession = createAgentSelectionSession(snapshotRoutedView, moderatorId);
+await snapshotSilentSession.prepare({ kind: "select_agent", agentId: ownerId });
  assert.equal(admitCalled, false);
+ assert.equal(snapshotRouted, false);
  const admissionPending = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "admission-pending" });
  let admitCalled2 = false;
  const admitView: any = {
