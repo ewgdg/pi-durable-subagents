@@ -106,6 +106,30 @@ function latestCommittedMatch(
 	return latest;
 }
 
+/** Prefer the exact source entry, else the latest commit on the active branch. */
+export function selectCurrentCommittedEntry(
+	transcript: TranscriptInspection,
+	candidates: ReadonlyArray<{ entryId: string }>,
+	preferredEntryId?: string,
+): string | undefined {
+	if (preferredEntryId !== undefined) {
+		const exact = candidates.find((candidate) => candidate.entryId === preferredEntryId);
+		if (exact) return exact.entryId;
+	}
+	if (candidates.length === 0) return undefined;
+	const positions = indexedState(transcript).positions;
+	const onBranch = new Set(transcript.activeBranch.map((entry) => entry.id));
+	const branched = candidates.filter((candidate) => onBranch.has(candidate.entryId));
+	const pool = branched.length > 0 ? branched : [...candidates];
+	let latest = pool[0]!;
+	for (const candidate of pool.slice(1)) {
+		if ((positions.get(candidate.entryId) ?? -1) > (positions.get(latest.entryId) ?? -1)) {
+			latest = candidate;
+		}
+	}
+	return latest.entryId;
+}
+
 export function compareCommittedToolCallOrder(
 	transcript: TranscriptInspection,
 	left: ToolCallPointer,

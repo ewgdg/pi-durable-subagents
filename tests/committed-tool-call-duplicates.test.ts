@@ -5,7 +5,8 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
-import { resolveCommittedToolCall } from "../src/protocol/identities.ts";
+import { callerRequestTitle } from "../src/protocol/agent-wait.ts";
+import { deriveMessageIdentity, resolveCommittedToolCall } from "../src/protocol/identities.ts";
 
 function sessionWithDuplicateExecCall(): {
 	manager: SessionManager;
@@ -65,4 +66,20 @@ test("a tool call committed under another name still fails", () => {
 			}),
 		/not agent_message/,
 	);
+});
+
+test("a reused request call id resolves its title from the source entry", () => {
+	const agentId = "agent-duplicate-request";
+	const manager = SessionManager.inMemory("/workflow", { id: agentId });
+	manager.appendCustomEntry("agent-coordination.identity", { agentId });
+	const firstEntryId = manager.appendMessage(
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Original title", request: "Do the work." }, { id: "call_req" })),
+	);
+	// A retried turn reuses the same native id for an unrelated tool.
+	manager.appendMessage(
+		fauxAssistantMessage(fauxToolCall("exec", { command: "echo reuse" }, { id: "call_req" })),
+	);
+	const transcript = transcriptFromSessionManager(manager).inspect();
+	const requestMessageId = deriveMessageIdentity({ agentId, entryId: firstEntryId, toolCallId: "call_req" });
+	assert.equal(callerRequestTitle({ agentId, transcript, requestMessageId }), "Original title");
 });

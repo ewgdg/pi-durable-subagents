@@ -12,6 +12,7 @@ import {
 	deriveMessageIdentity,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
+	selectCurrentCommittedEntry,
 	type ToolCallPointer,
 } from "./identities.ts";
 
@@ -222,10 +223,15 @@ export function callerRequestTitle(options: {
 	const source = requireCallerRequestSource(options);
 	const calls = coordinationEntries(options.transcript, options.agentId, `call:${source.toolCallId}`)
 		.flatMap(entry => entry.type === "message" && entry.message.role === "assistant"
-			? entry.message.content.filter(part => part.type === "toolCall" && part.id === source.toolCallId)
+			? entry.message.content
+				.filter(part => part.type === "toolCall" && part.id === source.toolCallId)
+				.map(part => ({ entryId: entry.id, part }))
 			: []);
-	const call = calls[0];
-	if (calls.length !== 1 || call?.type !== "toolCall" ||
+	// The title belongs to the entry this Request was derived from. A reused
+	// native id must not invalidate it; fall back to the latest commit.
+	const entryId = selectCurrentCommittedEntry(options.transcript, calls, source.entryId);
+	const call = calls.find(candidate => candidate.entryId === entryId)?.part;
+	if (call?.type !== "toolCall" ||
 		typeof call.arguments.title !== "string" || !call.arguments.title.trim()) {
 		throw new ProtocolInvariantError("Answer receipt Request source has an invalid title");
 	}
