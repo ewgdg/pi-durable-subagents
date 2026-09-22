@@ -204,6 +204,8 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	 * and idle-until-human-message reopen. Uses the pending Owner approval.
 	 */
 	commitRepairReplace(repairedBySource: Readonly<Record<string, string>>, attemptId?: string, drafts?: unknown): Promise<RepairCommitResult>;
+	/** Sealed CLI commit for repair-commit. Exact frozen bytes only. */
+	commitRepairReplaceSealed(snapshotId: string, attemptId?: string): Promise<RepairCommitResult>;
 	selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
@@ -603,6 +605,12 @@ export class WorkflowCoordinator {
 		}
 	}
 
+	#assertNotPreadmissionRepairOnly(operation: string): void {
+		if (this.#preadmissionRepairOnly) {
+			throw new Error("repair_only: " + operation + " is unavailable in the preadmission repair host");
+		}
+	}
+
 	#repairWorkflowDirectory(): string {
 		return this.#sessionFactory.workflowSessionDirectory();
 	}
@@ -613,6 +621,12 @@ export class WorkflowCoordinator {
 
 	#repairBackupRoot(): string {
 		return preadmissionRepairBackupRoot(this.#repairWorkflowDirectory());
+	}
+
+	preadmissionRepairWorkflowDirectory(): string {
+		// Exposed so the preadmission entry can assert its evidence
+		// workflowDirectory equals the live coordinator host directories.
+		return this.#repairWorkflowDirectory();
 	}
 
 	#ensureRepairLedger(): RepairApprovalLedger {
@@ -656,29 +670,44 @@ export class WorkflowCoordinator {
 			ownerId,
 			provenance: "owner-session-confirm",
 		});
+		if (this.#pendingRepairApproval) {
+			throw new Error("pending_approval: a repair approval is already pending; revoke it with Esc or a new human message before confirming again");
+		}
 		const ledger = this.#ensureRepairLedger();
 		// Merge persisted revocations/consumptions so a restart still refuses.
+		// Only a missing ledger is benign here; corrupt ledgers and other IO
+		// failures rethrow now so confirm never mints approval over unreadable state.
 		try {
 			const persisted = await loadRepairApprovalLedger(this.#repairJournalDir());
 			for (const id of persisted.consumed) ledger.consumed.add(id);
 			for (const id of persisted.revoked) ledger.revoked.add(id);
-		} catch {
-			// Missing ledger means no persisted revocations; other IO errors throw below on commit.
+		} catch (error) {
+			if (error && typeof error === "object" && "code" in (error as object) && (error as { code?: string }).code === "ENOENT") {
+				// Missing ledger means no persisted revocations.
+			} else {
+				throw error;
+			}
 		}
 		this.#pendingRepairApproval = approval;
 		return approval;
 	}
 
 	/**
-	 * Real input-path revocation for Esc + new human message. Revokes the
-	 * pending approvalId through the persisted ledger store; never auto-retries.
-	 * No-op when no approval is pending.
+	 * Owner/human-input-path revocation for Esc + new human message. Owner only:
+	 * the caller must be the Owner view; the general human-input path in
+	 * #handleHumanInput covers any-participant messages separately.
+	 * Revokes the pending approvalId through the persisted ledger store;
+	 * persist failures propagate to the caller (diagnostics surfaces them);
+	 * never auto-retries. No-op when no approval is pending.
 	 */
 	async #notifyRepairHumanInputForOwner(callerAgentId: string, kind: "esc" | "human-message"): Promise<void> {
 		this.#assertAdmissionOpen();
-		// Any participant human input revokes a pending Owner approval: Esc and
-		// new messages are human holds, not model authority. Owner check is for
-		// the approval itself, not the input source.
+		if (callerAgentId !== this.#ownerIdentity.agentId) {
+			throw new Error("wrong_participant: manual repair is Owner only");
+		}
+		// Owner/human-input path only: Esc and new Owner messages are human holds,
+		// not model authority. Any-participant message revocation lives in
+		// #handleHumanInput, not here.
 		const pending = this.#pendingRepairApproval;
 		if (!pending) return;
 		const ledger = this.#ensureRepairLedger();
@@ -731,10 +760,32 @@ export class WorkflowCoordinator {
 		// Enforce idle-until-human-message hold by the host: no turn without a
 		// new human message. beginExecution refuses while the hold is set;
 		// handleHumanInput clears it on the next human message.
-		if (result.disposition === "committed" || result.disposition === "joined-committed") {
+		if (result.disposition === "committed" || result.disposition === "joined-committed" || result.disposition === "committed-admission-failed") {
 			this.#repairedOwnerIdleHold = { ownerId };
 		}
 		return result;
+	}
+
+	async #commitRepairReplaceSealedForOwner(callerAgentId: string, snapshotId: string, attemptId?: string): Promise<RepairCommitResult> {
+		this.#assertRepairAvailable(callerAgentId);
+		const pending = this.#pendingRepairApproval;
+		if (!pending) {
+			throw new Error("unauthorized: no pending repair approval; confirm the exact snapshot first");
+		}
+		if (pending.snapshotId !== snapshotId) {
+			throw new Error("stale_approval: repair-commit snapshot " + snapshotId + " does not match pending approval snapshot " + pending.snapshotId + "; confirm the exact snapshot first");
+		}
+		const snapshot = this.#repairSnapshots.get(snapshotId);
+		if (!snapshot) {
+			throw new Error("stale_approval: pending repair snapshot is unavailable; freeze targets first");
+		}
+		// Sealed CLI commit: exact frozen bytes only (source-to-source).
+		// Staged byte repairs go through commitRepairReplace with externally
+		// validated copies; the gate-first backend still refuses drift/replay
+		// failures with no writes.
+		const sealed: Record<string, string> = {};
+		for (const entry of snapshot.entries) sealed[entry.source] = entry.source;
+		return this.#commitRepairReplaceForOwner(callerAgentId, sealed, attemptId, undefined);
 	}
 
 	modelPolicy(): ModelPolicySnapshot {
@@ -783,6 +834,7 @@ export class WorkflowCoordinator {
 			resumeWorkflow: (toolCallId) => this.#resumeWorkflow(agentId, toolCallId),
 			spawn: (toolCallId, input) => {
 				this.#assertAdmissionOpen();
+				this.#assertNotPreadmissionRepairOnly("spawn");
 				const spawning = this.#spawner.spawn(agentId, toolCallId, input);
 				this.#pendingSpawns.add(spawning);
 				void spawning.finally(() => this.#pendingSpawns.delete(spawning)).catch(() => undefined);
@@ -798,6 +850,7 @@ export class WorkflowCoordinator {
 	async #resumeWorkflow(agentId: string, toolCallId: string): Promise<WorkflowResumeReceipt> {
 		if (agentId !== this.#ownerIdentity.agentId) throw new Error("wrong_participant: workflow_resume is Owner only");
 		this.#assertAdmissionOpen();
+		this.#assertNotPreadmissionRepairOnly("workflow_resume");
 		const committed = resolveCommittedToolCall({
 			agentId, transcript: this.#requireAgent(agentId).transcript.inspect(), toolCallId, toolName: "workflow_resume",
 		});
@@ -907,14 +960,17 @@ export class WorkflowCoordinator {
 			inspectRequest: (requestId) => this.#messages.inspectRequest(agentId, requestId),
 			message: (toolCallId, input) => {
 				this.#assertAdmissionOpen();
+				this.#assertNotPreadmissionRepairOnly("message");
 				return this.#messages.execute(agentId, toolCallId, input);
 			},
 			wait: (toolCallId, input, signal, onProgress) => {
 				this.#assertAdmissionOpen();
+				this.#assertNotPreadmissionRepairOnly("wait");
 				return this.#agentWaits.wait(agentId, toolCallId, input, signal, onProgress);
 			},
 			control: (toolCallId, input) => {
 				this.#assertAdmissionOpen();
+				this.#assertNotPreadmissionRepairOnly("control");
 				return this.#runSupervisor.execute(agentId, toolCallId, input);
 			},
 			resumeFromHuman: (text, images, submissionSequence) => {
@@ -936,6 +992,8 @@ export class WorkflowCoordinator {
 			notifyRepairHumanInput: (kind) => this.#notifyRepairHumanInputForOwner(agentId, kind),
 			commitRepairReplace: (repairedBySource, attemptId, drafts) =>
 				this.#commitRepairReplaceForOwner(agentId, repairedBySource, attemptId, drafts),
+			commitRepairReplaceSealed: (snapshotId, attemptId) =>
+				this.#commitRepairReplaceSealedForOwner(agentId, snapshotId, attemptId),
 		selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
 				this.#assertAdmissionOpen();
@@ -1833,26 +1891,12 @@ export class WorkflowCoordinator {
 		images: readonly ImageContent[] | undefined,
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition> {
-		// Real input-path revocation: any new human message revokes a pending
-		// repair approval through the persisted ledger; never auto-retries.
-		// Idle hold releases only on a new human message.
+		// Real input-path revocation: only an admissible new human message revokes
+		// a pending repair approval and releases the repaired idle hold.
+		// Fenced/stale submissions return discarded with no side effects:
+		// a discarded duplicate keeps the hold so beginExecution still refuses.
 		const pending = this.#pendingRepairApproval;
 		const revokeAndContinue = async (): Promise<HumanInputDisposition> => {
-			if (pending) {
-				try {
-					await revokeRepairApprovalPersisted(this.#repairJournalDir(), this.#ensureRepairLedger(), pending.approvalId, "human-message");
-				} catch {
-					// Journal dir may not exist yet when approval was never persisted;
-					// in-memory revoke still holds via the ledger set.
-					this.#ensureRepairLedger().revoked.add(pending.approvalId);
-				}
-				if (this.#pendingRepairApproval?.approvalId === pending.approvalId) {
-					this.#pendingRepairApproval = undefined;
-				}
-			}
-			if (this.#repairedOwnerIdleHold && agentId === this.#repairedOwnerIdleHold.ownerId) {
-				this.#repairedOwnerIdleHold = undefined;
-			}
 			const record = this.#requireAgent(agentId);
 			let inputSubmission: ProjectionInputSubmission | undefined;
 			try {
@@ -1861,10 +1905,28 @@ export class WorkflowCoordinator {
 			} catch {
 				return "discarded";
 			}
+			const releaseHoldAndRevoke = async (): Promise<void> => {
+				if (pending) {
+					try {
+						await revokeRepairApprovalPersisted(this.#repairJournalDir(), this.#ensureRepairLedger(), pending.approvalId, "human-message");
+					} catch {
+						// Journal dir may not exist yet when approval was never persisted;
+						// in-memory revoke still holds via the ledger set.
+						this.#ensureRepairLedger().revoked.add(pending.approvalId);
+					}
+					if (this.#pendingRepairApproval?.approvalId === pending.approvalId) {
+						this.#pendingRepairApproval = undefined;
+					}
+				}
+				if (this.#repairedOwnerIdleHold && agentId === this.#repairedOwnerIdleHold.ownerId) {
+					this.#repairedOwnerIdleHold = undefined;
+				}
+			};
 			if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
+				await releaseHoldAndRevoke();
 				return "submitted";
 			}
-			return this.#agentViewLane.run(async () => {
+			const disposition = await this.#agentViewLane.run(async () => {
 				const active = this.#activeAgentView;
 				if (!active || active.record.identity.agentId !== agentId) {
 					return await this.#runSupervisor.resumeFromHuman(agentId, text, images, submissionSequence)
@@ -1901,6 +1963,10 @@ export class WorkflowCoordinator {
 					return "submitted";
 				});
 			});
+			if (disposition !== "discarded") {
+				await releaseHoldAndRevoke();
+			}
+			return disposition;
 		};
 		return revokeAndContinue();
 	}

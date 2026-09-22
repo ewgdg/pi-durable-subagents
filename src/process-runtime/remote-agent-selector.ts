@@ -30,9 +30,10 @@ const AGENTS_OWNER_ARGUMENT = "owner";
 const AGENTS_REPAIR_ARGUMENT = "repair";
 const AGENTS_REPAIR_CONFIRM_ARGUMENT = "repair-confirm";
 const AGENTS_REPAIR_FREEZE_ARGUMENT = "repair-freeze";
-export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner|repair|repair-confirm <snapshotId>|repair-freeze]";
+const AGENTS_REPAIR_COMMIT_ARGUMENT = "repair-commit";
+export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner|repair|repair-confirm <snapshotId>|repair-freeze|repair-commit <snapshotId>]";
 
-type AgentsCommandMode = "selector" | "owner" | "repair" | "repair-confirm" | "repair-freeze";
+type AgentsCommandMode = "selector" | "owner" | "repair" | "repair-confirm" | "repair-freeze" | "repair-commit";
 
 export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
 	const argument = args.trim();
@@ -40,8 +41,16 @@ export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
 	if (argument === AGENTS_OWNER_ARGUMENT) return "owner";
 	if (argument === AGENTS_REPAIR_CONFIRM_ARGUMENT || argument.startsWith(AGENTS_REPAIR_CONFIRM_ARGUMENT + " ")) return "repair-confirm";
 	if (argument === AGENTS_REPAIR_FREEZE_ARGUMENT || argument.startsWith(AGENTS_REPAIR_FREEZE_ARGUMENT + " ")) return "repair-freeze";
+	if (argument === AGENTS_REPAIR_COMMIT_ARGUMENT || argument.startsWith(AGENTS_REPAIR_COMMIT_ARGUMENT + " ")) return "repair-commit";
 	if (argument === AGENTS_REPAIR_ARGUMENT || argument.startsWith(`${AGENTS_REPAIR_ARGUMENT} `)) return "repair";
 	throw new Error(AGENTS_COMMAND_USAGE);
+}
+
+/** Snapshot id after /agents repair-commit; throws usage on missing id. */
+export function parseAgentsRepairCommitSnapshotId(args: string): string {
+	const rest = args.trim().slice(AGENTS_REPAIR_COMMIT_ARGUMENT.length).trim();
+	if (rest.length === 0 || rest.indexOf(String.fromCharCode(0)) !== -1 || /\s/.test(rest)) throw new Error(AGENTS_COMMAND_USAGE);
+	return rest;
 }
 
 /** Snapshot id after /agents repair-confirm; throws usage on missing id. */
@@ -72,6 +81,9 @@ export function getAgentsArgumentCompletions(argumentPrefix: string, options?: R
 	}
 	if (options?.includeRepair && AGENTS_REPAIR_FREEZE_ARGUMENT.startsWith(argumentPrefix.trim())) {
 		completions.push({ value: AGENTS_REPAIR_FREEZE_ARGUMENT, label: AGENTS_REPAIR_FREEZE_ARGUMENT });
+	}
+	if (options?.includeRepair && AGENTS_REPAIR_COMMIT_ARGUMENT.startsWith(argumentPrefix.trim())) {
+		completions.push({ value: AGENTS_REPAIR_COMMIT_ARGUMENT, label: AGENTS_REPAIR_COMMIT_ARGUMENT });
 	}
 	return completions.length > 0 ? completions : null;
 }

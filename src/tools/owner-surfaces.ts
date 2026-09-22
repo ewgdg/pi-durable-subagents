@@ -21,6 +21,7 @@ import {
 	createAgentSelectorSnapshot,
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
+	parseAgentsRepairCommitSnapshotId,
 	parseAgentsRepairConfirmSnapshotId,
 	parseAgentsRepairReason,
 } from "../process-runtime/remote-agent-selector.ts";
@@ -90,7 +91,7 @@ export function registerAgentsCommand(
 				const activeHost = repairHost ?? ownerHost;
 				await openOwnerDiagnostics(ctx.ui, admissionFailure, {
 					onRepair: activeHost ? () => activeHost.requestManualRepair(validateManualRepairReason(undefined)).then((receipt) => { ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info"); }).catch((error) => { ctx.ui.notify("Repair Moderator failed: " + (error instanceof Error ? error.message : String(error)), "error"); }) : undefined,
-					onEsc: activeHost ? () => activeHost.notifyRepairHumanInput("esc").catch(() => undefined) : undefined,
+					onEsc: activeHost ? () => activeHost.notifyRepairHumanInput("esc").catch((error) => { ctx.ui.notify("Repair revoke failed: " + (error instanceof Error ? error.message : String(error)), "error"); }) : undefined,
 				});
 				return;
 			}
@@ -108,7 +109,7 @@ export function registerAgentsCommand(
 			}
 			if (admissionFailure) {
 				const mode = (() => { try { return parseAgentsCommandArgument(args); } catch { return "selector"; } })();
-				if ((mode === "repair" || mode === "repair-confirm" || mode === "repair-freeze") && preadmissionRepair) {
+				if ((mode === "repair" || mode === "repair-confirm" || mode === "repair-freeze" || mode === "repair-commit") && preadmissionRepair) {
 					const host = preadmissionRepair();
 					try {
 						if (mode === "repair") {
@@ -117,6 +118,9 @@ export function registerAgentsCommand(
 						} else if (mode === "repair-freeze") {
 							const snap = await host.freezeRepairSnapshot();
 							ctx.ui.notify("Repair snapshot: " + snap.snapshotId + " (" + String(snap.entries.length) + " targets)", "info");
+						} else if (mode === "repair-commit") {
+							const result = await host.commitRepairReplaceSealed(parseAgentsRepairCommitSnapshotId(args));
+							ctx.ui.notify("Repair commit " + result.disposition + " (snapshot " + result.snapshotId + "); Owner idle until a new human message.", "info");
 						} else {
 							const approval = await host.confirmRepairReplace(parseAgentsRepairConfirmSnapshotId(args));
 							ctx.ui.notify("Repair approval: " + approval.approvalId + " for snapshot " + approval.snapshotId, "info");
@@ -168,6 +172,16 @@ export function registerAgentsCommand(
 					ctx.ui.notify("Repair approval: " + approval.approvalId + " for snapshot " + approval.snapshotId, "info");
 				} catch (error) {
 					ctx.ui.notify("Repair confirm failed: " + (error instanceof Error ? error.message : String(error)), "error");
+				}
+				return;
+			}
+			if (commandMode === "repair-commit") {
+				const repairView = resolveView();
+				try {
+					const result = await repairView.commitRepairReplaceSealed(parseAgentsRepairCommitSnapshotId(args));
+					ctx.ui.notify("Repair commit " + result.disposition + " (snapshot " + result.snapshotId + "); Owner idle until a new human message.", "info");
+				} catch (error) {
+					ctx.ui.notify("Repair commit failed: " + (error instanceof Error ? error.message : String(error)), "error");
 				}
 				return;
 			}

@@ -52,7 +52,7 @@ export async function initializeOwnerWorkflow(options: {
 	bridge: InteractiveHostBridge;
 	entryModulePath: string;
 	event: SessionStartEvent;
-	onOwnerIdentified(): void;
+	onOwnerIdentified(identifiedOwnerId: string): void;
 }): Promise<() => OrdinaryAgentCoordinatorView> {
 	const { pi, ctx, bridge, entryModulePath, event } = options;
 	const { runtime } = await bridge.capture(
@@ -83,7 +83,7 @@ export async function initializeOwnerWorkflow(options: {
 	});
 	// Role identification is sufficient for an independent native fork, even if
 	// current-scope coordination evidence fails the admission that follows.
-	options.onOwnerIdentified();
+	options.onOwnerIdentified(identity.agentId);
 	await captureOwnerForkProvenance(runtime.session.sessionManager);
 	const recoveredWorkflow = await discoverColdWorkflow({
 		ownerIdentity: identity,

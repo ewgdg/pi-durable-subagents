@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, readFile, readdir, stat, writeFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, stat, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -17,7 +17,7 @@ import { approveRepairReplace, createRepairApprovalLedger, commitRepairReplace, 
 import { assertRepairArtifactDirOutsideWorkflow } from "../src/coordination/repair-commit.ts";
 import { inspectFrozenBackup, listFrozenRepairTargets, sha256File } from "../src/coordination/repair-freeze.ts";
 import { workflowSessionDirectory } from "../src/runtime/workflow-session-directory.ts";
-import { parseAgentsCommandArgument, parseAgentsRepairConfirmSnapshotId } from "../src/process-runtime/remote-agent-selector.ts";
+import { parseAgentsCommandArgument, parseAgentsRepairCommitSnapshotId, parseAgentsRepairConfirmSnapshotId } from "../src/process-runtime/remote-agent-selector.ts";
 async function makeWorkflow(prefix: string) {
   const root = await mkdtemp(join(tmpdir(), prefix));
   const owner = SessionManager.create(root, root);
@@ -59,6 +59,10 @@ test("agents repair-confirm parsing binds the exact snapshot id", async () => {
   assert.equal(parseAgentsCommandArgument("repair-confirm abc123"), "repair-confirm");
   assert.equal(parseAgentsCommandArgument("repair-freeze"), "repair-freeze");
   assert.equal(parseAgentsRepairConfirmSnapshotId("repair-confirm abc123"), "abc123");
+  assert.equal(parseAgentsCommandArgument("repair-commit abc123"), "repair-commit");
+  assert.equal(parseAgentsRepairCommitSnapshotId("repair-commit abc123"), "abc123");
+  assert.throws(() => parseAgentsRepairCommitSnapshotId("repair-commit"), /Usage/);
+  assert.throws(() => parseAgentsRepairCommitSnapshotId("repair-commit a b"), /Usage/);
   assert.throws(() => parseAgentsRepairConfirmSnapshotId("repair-confirm"), /Usage/);
   assert.throws(() => parseAgentsRepairConfirmSnapshotId("repair-confirm a b"), /Usage/);
 });
@@ -177,6 +181,9 @@ test("Esc revokes pending approval through the persisted ledger, no auto-retry",
   let message = "";
   try { await owner.commitRepairReplace({ [snapshot.entries[0].source as string]: snapshot.entries[0].source as string }, "attempt-esc-1"); } catch (error) { message = error instanceof Error ? error.message : String(error); }
   assert.ok(message.indexOf("revoked") !== -1 || message.indexOf("no pending") !== -1);
+  const ledgerRaw = await readFile(join(preadmissionRepairJournalDir(workflowDir), REPAIR_LEDGER_FILENAME), "utf8");
+  const ledgerOnDisk = JSON.parse(ledgerRaw) as { revoked: string[] };
+  assert.ok(ledgerOnDisk.revoked.indexOf(approval.approvalId) !== -1);
   const fresh = await owner.confirmRepairReplace(snapshot.snapshotId);
   assert.ok(fresh.approvalId !== approval.approvalId);
   await coordinator.shutdown(async () => host.runtime.dispose());
@@ -202,9 +209,24 @@ test("new human message revokes pending approval and releases idle hold", async 
   let message = "";
   try { await owner.commitRepairReplace({ [snapshot.entries[0].source as string]: snapshot.entries[0].source as string }, "attempt-hm-1"); } catch (error) { message = error instanceof Error ? error.message : String(error); }
   assert.ok(message.indexOf("no pending") !== -1 || message.indexOf("revoked") !== -1);
+  const hmScratch = await mkdtemp(join(tmpdir(), "repair-wire-hm-scratch-"));
+  const hmSnapshot = await owner.freezeRepairSnapshot();
+  await owner.confirmRepairReplace(hmSnapshot.snapshotId);
+  const hmRepaired: Record<string, string> = {};
+  for (const entry of hmSnapshot.entries) {
+    const rp = join(hmScratch, basename(entry.source).replace(".jsonl", ".repaired.jsonl"));
+    await copyFile(entry.source, rp);
+    SessionManager.open(rp).appendMessage(fauxAssistantMessage("Human-message idle repair."));
+    hmRepaired[entry.source] = rp;
+  }
+  const hmResult = await owner.commitRepairReplace(hmRepaired, "attempt-hm-2");
+  assert.ok(hmResult.disposition === "committed" || hmResult.disposition === "joined-committed");
+  await assert.rejects(owner.beginExecution(), /idle_until_human_message/);
+  await owner.resumeFromHuman("human takes over after repair", undefined);
+  await owner.beginExecution();
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("second trigger while live joins, after Dormant creates fresh", async () => {
+test("second trigger join-or-fresh disposition (mock sessionFactory, disposition-only)", async () => {
   const { OperationalIncidentCoordinator } = await import("../src/coordination/operational-incidents.ts");
   const { WorkflowPolicyStore } = await import("../src/policy/workflow-policy.ts");
   const { resolveModeratorAgentMetadata } = await import("../src/protocol/agent-metadata.ts");
@@ -301,6 +323,16 @@ test("broken fixture to idle reopen with switch preserves drafts, no auto-resume
   assert.equal(result.idle.draftsPreserved, true);
   assert.deepEqual(result.idle.drafts, drafts);
   assert.equal(result.idle.turnWithoutHumanMessage, false);
+  await assert.rejects(preOwner.beginExecution(), /idle_until_human_message/);
+  await assert.rejects(coordinator.forModerator(moderatorId).confirmRepairReplace(snapshot.snapshotId), /wrong_participant/);
+  const sealedSnap = await preOwner.freezeRepairSnapshot();
+  await preOwner.confirmRepairReplace(sealedSnap.snapshotId);
+  const sealedResult = await preOwner.commitRepairReplaceSealed(sealedSnap.snapshotId, "attempt-full-sealed-1");
+  assert.ok(sealedResult.disposition === "committed" || sealedResult.disposition === "joined-committed");
+  assert.equal(sealedResult.snapshotId, sealedSnap.snapshotId);
+  assert.equal(sealedResult.idle.idle, true);
+  await preOwner.resumeFromHuman("human takes over after repair", undefined);
+  await preOwner.beginExecution();
   const ownerStatus = preOwner.status();
   const modStatus = coordinator.forModerator(moderatorId).status();
   assert.ok(ownerStatus.agentId !== modStatus.agentId);
@@ -316,5 +348,125 @@ test("broken fixture to idle reopen with switch preserves drafts, no auto-resume
   const sel2 = await preOwner.openAgentPresentation(identity.agentId);
   assert.equal(sel2.kind, "selected");
   assert.equal(await readFile(modPath, "utf8"), beforeSwitch);
+  await coordinator.shutdown(async () => host.runtime.dispose());
+});
+test("live two-trigger join on a real coordinator shares one Moderator and one repair transcript", async (t) => {
+  let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
+  const identity = adoptOrValidateOwnerIdentity(host.runtime);
+  const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
+  owner = coordinator.forAgent(identity.agentId);
+  await bindTestOwnerHost(host, "tui");
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding.")]);
+  const first = await owner.requestManualRepair("live join first");
+  assert.equal(first.disposition, "created");
+  const second = await owner.requestManualRepair("live join second");
+  assert.deepEqual(second, { disposition: "joined", moderatorAgentId: first.moderatorAgentId });
+  const modStatus = coordinator.forModerator(first.moderatorAgentId).status();
+  assert.ok(modStatus.run.phase === "live" || modStatus.run.phase === "starting");
+  assert.ok(modStatus.run.retentionReasons.some((entry) => entry.reason === "moderator_handling"));
+  const repairDir = repairSessionDirectory(host.session.sessionManager.getSessionDir(), identity.workflowId);
+  assert.equal((await readdir(repairDir)).length, 1);
+  await coordinator.shutdown(async () => host.runtime.dispose());
+});
+test("preadmission repair host refuses non-repair coordination at the coordinator level", async (t) => {
+  let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const identity = adoptOrValidateOwnerIdentity(host.runtime);
+  const { WorkflowCoordinator: WC } = await import("../src/coordination/workflow-coordinator.ts");
+  const coordinator = new WC(host.runtime, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
+  await coordinator.initializePreadmissionRepair();
+  const preOwner = coordinator.forAgent(identity.agentId);
+  assert.throws(() => preOwner.spawn("tool-spawn-repair-only", {} as never), /repair_only/);
+  assert.throws(() => preOwner.message("tool-message-repair-only", {} as never), /repair_only/);
+  assert.throws(() => preOwner.wait("tool-wait-repair-only", {} as never, undefined, undefined), /repair_only/);
+  assert.throws(() => preOwner.control("tool-control-repair-only", {} as never), /repair_only/);
+  await assert.rejects(preOwner.resumeWorkflow("tool-resume-repair-only"), /repair_only/);
+  const ownerMgr = host.session.sessionManager;
+  const toolId = "spawn-wire-gate-a";
+  const entryId = ownerMgr.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "gate-child", request: "Work", label: "gate-child" }, { id: toolId })));
+  const workflowDir = workflowSessionDirectory(ownerMgr.getSessionDir(), identity.workflowId);
+  const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
+  child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "gate-child" } });
+  child.appendMessage(fauxAssistantMessage("Persist gate-child"));
+  const snapshot = await preOwner.freezeRepairSnapshot();
+  assert.ok(Array.isArray(snapshot.entries));
+  await coordinator.shutdown(async () => undefined);
+  await host.runtime.dispose();
+});
+test("confirm while pending refuses until Esc revokes", async (t) => {
+  let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const identity = adoptOrValidateOwnerIdentity(host.runtime);
+  const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
+  owner = coordinator.forAgent(identity.agentId);
+  await bindTestOwnerHost(host, "tui");
+  const ownerMgr = host.session.sessionManager;
+  const toolId = "spawn-wire-pending-a";
+  const entryId = ownerMgr.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "pending-child", request: "Work", label: "pending-child" }, { id: toolId })));
+  const workflowDir = workflowSessionDirectory(ownerMgr.getSessionDir(), identity.workflowId);
+  const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
+  child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "pending-child" } });
+  child.appendMessage(fauxAssistantMessage("Persist pending-child"));
+  const snapshot = await owner.freezeRepairSnapshot();
+  const first = await owner.confirmRepairReplace(snapshot.snapshotId);
+  await assert.rejects(owner.confirmRepairReplace(snapshot.snapshotId), /pending_approval/);
+  await owner.notifyRepairHumanInput("esc");
+  const second = await owner.confirmRepairReplace(snapshot.snapshotId);
+  assert.ok(second.approvalId !== first.approvalId);
+  await coordinator.shutdown(async () => host.runtime.dispose());
+});
+test("corrupt persisted ledger makes confirm rethrow instead of minting approval", async (t) => {
+  let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const identity = adoptOrValidateOwnerIdentity(host.runtime);
+  const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
+  owner = coordinator.forAgent(identity.agentId);
+  await bindTestOwnerHost(host, "tui");
+  const ownerMgr = host.session.sessionManager;
+  const toolId = "spawn-wire-corrupt-a";
+  const entryId = ownerMgr.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "corrupt-child", request: "Work", label: "corrupt-child" }, { id: toolId })));
+  const workflowDir = workflowSessionDirectory(ownerMgr.getSessionDir(), identity.workflowId);
+  const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
+  child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "corrupt-child" } });
+  child.appendMessage(fauxAssistantMessage("Persist corrupt-child"));
+  const snapshot = await owner.freezeRepairSnapshot();
+  const journalDir = preadmissionRepairJournalDir(workflowDir);
+  await mkdir(journalDir, { recursive: true });
+  await writeFile(join(journalDir, REPAIR_LEDGER_FILENAME), "not-json{{", "utf8");
+  await assert.rejects(owner.confirmRepairReplace(snapshot.snapshotId));
+  await coordinator.shutdown(async () => host.runtime.dispose());
+});
+test("discarded duplicate input keeps the repaired idle hold", async (t) => {
+  let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const identity = adoptOrValidateOwnerIdentity(host.runtime);
+  const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
+  owner = coordinator.forAgent(identity.agentId);
+  await bindTestOwnerHost(host, "tui");
+  const ownerMgr = host.session.sessionManager;
+  const toolId = "spawn-wire-discarded-a";
+  const entryId = ownerMgr.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "discarded-child", request: "Work", label: "discarded-child" }, { id: toolId })));
+  const workflowDir = workflowSessionDirectory(ownerMgr.getSessionDir(), identity.workflowId);
+  const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
+  child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "discarded-child" } });
+  child.appendMessage(fauxAssistantMessage("Persist discarded-child"));
+  const snapshot = await owner.freezeRepairSnapshot();
+  await owner.confirmRepairReplace(snapshot.snapshotId);
+  const scratch = await mkdtemp(join(tmpdir(), "repair-wire-discarded-scratch-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of snapshot.entries) {
+    const rp = join(scratch, basename(entry.source) + ".repaired.jsonl");
+    await copyFile(entry.source, rp);
+    SessionManager.open(rp).appendMessage(fauxAssistantMessage("Discarded-hold repair."));
+    repaired[entry.source] = rp;
+  }
+  const result = await owner.commitRepairReplace(repaired, "attempt-discarded-hold-1");
+  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
+  await assert.rejects(owner.beginExecution(), /idle_until_human_message/);
+  assert.equal(await owner.resumeFromHuman("stale duplicate", undefined, 999999), "discarded");
+  await assert.rejects(owner.beginExecution(), /idle_until_human_message/);
+  await owner.resumeFromHuman("human takes over", undefined);
+  await owner.beginExecution();
   await coordinator.shutdown(async () => host.runtime.dispose());
 });

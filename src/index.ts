@@ -9,8 +9,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
-import { WorkflowCoordinator } from "./coordination/workflow-coordinator.ts";
-import { capturePreadmissionRepairEvidence } from "./coordination/preadmission-repair.ts";
+import { preadmissionFailureNotice, setupPreadmissionRepairHost } from "./bootstrap/preadmission-host.ts";
+import type { WorkflowCoordinator } from "./coordination/workflow-coordinator.ts";
 import { OwnerRecoveryError } from "./bootstrap/owner-recovery-error.ts";
 import { ProtocolInvariantError } from "./protocol/identities.ts";
 import { showOwnerBlockage } from "./presentation/owner-diagnostics-surface.ts";
@@ -53,6 +53,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	type OwnerAdmissionState = "pending" | "admitted" | "failed";
 	let ownerAdmissionState: OwnerAdmissionState = "pending";
 	let ownerIdentified = false;
+	let identifiedOwnerId: string | undefined;
 	let settleOwnerAdmission: () => void = () => {};
 	const ownerAdmissionSettled = new Promise<void>((resolve) => {
 		settleOwnerAdmission = resolve;
@@ -73,6 +74,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
 		ownerAdmissionState = "pending";
 		ownerIdentified = false;
+		identifiedOwnerId = undefined;
 		if (preadmissionCoordinator) { const prev = preadmissionCoordinator; preadmissionCoordinator = undefined; void prev.shutdown(async () => undefined).catch(() => undefined); }
 		deactivateOwnerAgentTools(pi);
 		try {
@@ -83,7 +85,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				bridge,
 				entryModulePath: ENTRY_MODULE_PATH,
 				event,
-				onOwnerIdentified: () => { ownerIdentified = true; },
+				onOwnerIdentified: (id) => { ownerIdentified = true; identifiedOwnerId = id; },
 			});
 			registerOwnerAgentTools(
 				pi,
@@ -106,20 +108,19 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			let resolvePreadmissionRepair: (() => import("./coordination/workflow-coordinator.ts").HumanPresentationCoordinatorView) | undefined;
 			if (ownerIdentified) {
 				try {
-					const captured = await bridge.capture(ctx.sessionManager as import("@earendil-works/pi-coding-agent").AgentSession["sessionManager"], ctx.ui);
-					const runtime = captured.runtime;
-					const ownerId = failure.agentId;
-					const ownerIdentity = { agentId: ownerId, workflowId: ownerId, directSpawnerAgentId: null, metadata: { label: "Owner" as const, description: "Workflow Owner" as const } };
-					const sessionDir = runtime.session.sessionManager.getSessionDir();
-					const agentDir = runtime.services.agentDir;
-					const transcriptPath = failure.transcriptPath ?? runtime.session.sessionManager.getSessionFile() ?? undefined;
-					capturePreadmissionRepairEvidence({ ownerIdentity, sessionDir, agentDir, transcriptPath, stage: failure.stage });
-					const coordinator = new WorkflowCoordinator(runtime, ownerIdentity, { entryModulePath: ENTRY_MODULE_PATH });
-					await coordinator.initializePreadmissionRepair();
-					preadmissionCoordinator = coordinator;
-					resolvePreadmissionRepair = () => coordinator.forAgent(ownerId);
+					const setup = await setupPreadmissionRepairHost({
+						captureRuntime: () => bridge.capture(ctx.sessionManager as import("@earendil-works/pi-coding-agent").AgentSession["sessionManager"], ctx.ui).then((captured) => captured.runtime),
+						entryModulePath: ENTRY_MODULE_PATH,
+						failure,
+						identifiedOwnerId,
+						ownerIdentified,
+					});
+					preadmissionCoordinator = setup.coordinator;
+					resolvePreadmissionRepair = setup.resolvePreadmissionRepair;
 				} catch (repairError) {
-					void repairError;
+					// Surface preadmission setup failures visibly while keeping data
+					// untouched: diagnostics stay usable with this signal.
+					ctx.ui.notify(preadmissionFailureNotice(repairError), "error");
 				}
 			}
 			// A blocked Owner has no admitted coordinator. Diagnostics stays independent
