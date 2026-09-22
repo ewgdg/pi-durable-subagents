@@ -10,23 +10,89 @@ export type RepairApprovalLedger = { consumed: Set<string>; revoked: Set<string>
 export type RepairPreCommitAudit = Readonly<{ snapshotId: string; targetCount: number; files: readonly { source: string; sha256: string }[]; warnings: readonly string[]; outOfScope: readonly string[]; diffSummary: string; backupLocation: undefined }>;
 export type RepairCommitAudit = Readonly<{ snapshotId: string; targetCount: number; files: readonly { source: string; sha256: string }[]; warnings: readonly string[]; outOfScope: readonly string[]; diffSummary: string; backupLocation: string }>;
 export type RepairedOwnerIdle = Readonly<{ ownerId: string; idle: true; idleUntil: "human-message"; humanOnlyHold: true; autoResume: false; autoViewReturn: false; draftsPreserved: true; drafts: unknown; turnWithoutHumanMessage: false }>;
-export function approveRepairReplace(options: Readonly<{ snapshotId: string; approver?: string; provenance: string }>): RepairReplaceApproval {
+/**
+ * Owner-session approval for the explicit replace path.
+ *
+ * Future construction site: the Owner-session command handler (does not exist
+ * yet). Approvals must only be constructed there with approver set to the
+ * OwnerIdentity agentId of that Owner session; the boundary check below
+ * enforces approver === ownerId. There is deliberately no default authority:
+ * a bare "owner" string would let any caller mint approval.
+ */
+export function approveRepairReplace(options: Readonly<{ snapshotId: string; approver: string; ownerId: string; provenance: string }>): RepairReplaceApproval {
   const snapshotId = (options as { snapshotId?: unknown }).snapshotId;
   const provenance = (options as { provenance?: unknown }).provenance;
   const approver = (options as { approver?: unknown }).approver;
+  const ownerId = (options as { ownerId?: unknown }).ownerId;
   if (typeof snapshotId !== "string" || snapshotId.length === 0) throw new Error("invalid_input: repair replace approval needs a frozen snapshot id");
   if (provenance !== "owner-session-confirm") throw new Error("unauthorized: repair replace needs an explicit Owner-session command (owner-session-confirm), got " + String(provenance) + "; advisory validate reports grant zero authority; model tool calls and moderator_control resolve never authorize");
-  const owner = typeof approver === "string" && approver.length > 0 ? approver : "owner";
-  return { approvalId: randomUUID(), snapshotId, approver: owner, provenance, createdAt: new Date().toISOString() };
+  if (typeof ownerId !== "string" || ownerId.length === 0) throw new Error("invalid_input: repair replace approval needs the Owner-session Owner id");
+  if (typeof approver !== "string" || approver.length === 0) throw new Error("invalid_input: repair replace approval needs an explicit approver; there is no default authority");
+  if (approver !== ownerId) throw new Error("unauthorized: repair replace approver must be the Owner-session OwnerIdentity agentId");
+  return { approvalId: randomUUID(), snapshotId, approver, provenance, createdAt: new Date().toISOString() };
 }
 export function createRepairApprovalLedger(): RepairApprovalLedger {
   return { consumed: new Set<string>(), revoked: new Set<string>() };
 }
+/**
+ * In-memory Esc/human-message revocation. There is no live Esc/human-message
+ * hookup: the replace path is an unwired backend library, so no production
+ * input path calls this. Tests and the future Owner-session command path call
+ * it directly; crash-safe callers must use revokeRepairApprovalPersisted so
+ * the revocation survives restarts via the persisted ledger next to the journal.
+ */
 export function notifyRepairHumanInputBeforeCommit(ledger: RepairApprovalLedger, approvalId: string, kind: "esc" | "human-message"): void {
   if (!ledger || !(ledger.revoked instanceof Set)) throw new Error("invalid_input: repair approval ledger is required");
   if (typeof approvalId !== "string" || approvalId.length === 0) throw new Error("invalid_input: repair approval id is required");
   if (kind !== "esc" && kind !== "human-message") throw new Error("invalid_input: repair human input must be esc or human-message");
   ledger.revoked.add(approvalId);
+}
+/** Persisted-ledger filename inside the journal dir (mode 600). */
+export const REPAIR_LEDGER_FILENAME = "repair-ledger.json";
+function repairLedgerPath(journalDir: string): string {
+  return join(journalDir, REPAIR_LEDGER_FILENAME);
+}
+function readLedgerSets(raw: unknown): { consumed: string[]; revoked: string[] } {
+  if (!raw || typeof raw !== "object") throw new Error("invalid_input: repair ledger is malformed");
+  const consumed = (raw as { consumed?: unknown }).consumed;
+  const revoked = (raw as { revoked?: unknown }).revoked;
+  if (!Array.isArray(consumed) || !consumed.every((id) => typeof id === "string")) throw new Error("invalid_input: repair ledger consumed set is malformed");
+  if (!Array.isArray(revoked) || !revoked.every((id) => typeof id === "string")) throw new Error("invalid_input: repair ledger revoked set is malformed");
+  return { consumed: consumed as string[], revoked: revoked as string[] };
+}
+/** Persist the approval ledger alongside the snapshot/journal dir (mode 600). */
+export async function persistRepairApprovalLedger(journalDir: string, ledger: RepairApprovalLedger): Promise<string> {
+  if (!isAbsolute(journalDir) || journalDir.indexOf("\0") !== -1) throw new Error("invalid_input: journal directory must be an absolute path");
+  if (!ledger || !(ledger.consumed instanceof Set) || !(ledger.revoked instanceof Set)) throw new Error("invalid_input: repair approval ledger is required");
+  await mkdir(journalDir, { recursive: true });
+  const ledgerPath = repairLedgerPath(journalDir);
+  const body = JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), consumed: [...ledger.consumed].sort(), revoked: [...ledger.revoked].sort() }, null, 2) + "\n";
+  await writeFile(ledgerPath, body, { encoding: "utf8", mode: 0o600 });
+  return ledgerPath;
+}
+/** Load the persisted ledger; a missing file means no persisted revocations. */
+export async function loadRepairApprovalLedger(journalDir: string): Promise<RepairApprovalLedger> {
+  if (!isAbsolute(journalDir) || journalDir.indexOf("\0") !== -1) throw new Error("invalid_input: journal directory must be an absolute path");
+  let raw: string;
+  try {
+    raw = await readFile(repairLedgerPath(journalDir), "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT") return createRepairApprovalLedger();
+    throw error;
+  }
+  const sets = readLedgerSets(JSON.parse(raw) as unknown);
+  return { consumed: new Set(sets.consumed), revoked: new Set(sets.revoked) };
+}
+/**
+ * Crash-safe Esc/human-message revocation: records the revocation in the
+ * in-memory ledger and persists it next to the journal so a restart still
+ * refuses the revoked approval. This is the only revocation path until the
+ * checkpoint-4 Owner-session input wiring exists; no live input hookup is
+ * faked here.
+ */
+export async function revokeRepairApprovalPersisted(journalDir: string, ledger: RepairApprovalLedger, approvalId: string, kind: "esc" | "human-message"): Promise<void> {
+  notifyRepairHumanInputBeforeCommit(ledger, approvalId, kind);
+  await persistRepairApprovalLedger(journalDir, ledger);
 }
 function resolveExpectedSnapshotId(expected: string | Readonly<{ snapshotId?: unknown }>): string {
   if (typeof expected === "string") return expected;
@@ -48,7 +114,8 @@ export async function freezeRepairTargets(workflowDirectory: string): Promise<Re
   entries.sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
   return { snapshotId: randomUUID(), createdAt: new Date().toISOString(), workflowDirectory, entries };
 }
-export async function runRepairPreCommitGate(options: Readonly<{ workflowDirectory: string; snapshot: RepairFrozenSnapshot; approval: RepairReplaceApproval; ledger?: RepairApprovalLedger; liveGate?: LiveRepairGate }>): Promise<RepairPreCommitAudit> {
+export async function runRepairPreCommitGate(options: Readonly<{ workflowDirectory: string; snapshot: RepairFrozenSnapshot; approval: RepairReplaceApproval; ledger: RepairApprovalLedger; liveGate?: LiveRepairGate }>): Promise<RepairPreCommitAudit> {
+  if (!options.ledger || !(options.ledger.consumed instanceof Set) || !(options.ledger.revoked instanceof Set)) throw new Error("invalid_input: repair approval ledger is required");
   const snapshot = options.snapshot;
   if (!snapshot || typeof snapshot.snapshotId !== "string" || !Array.isArray(snapshot.entries)) throw new Error("invalid_input: repair snapshot is required");
   assertRepairApprovalFresh(options.approval, snapshot.snapshotId, options.ledger);
@@ -81,7 +148,7 @@ export function openRepairedOwnerIdle(ownerId: string, options?: Readonly<{ draf
   if (typeof ownerId !== "string" || ownerId.length === 0) throw new Error("invalid_input: repaired Owner idle needs an owner id");
   return { ownerId, idle: true, idleUntil: "human-message", humanOnlyHold: true, autoResume: false, autoViewReturn: false, draftsPreserved: true, drafts: options ? options.drafts : undefined, turnWithoutHumanMessage: false };
 }
-export type RepairCommitHooks = Readonly<{ crashAfterJournalCommit?: boolean; admitRepaired?: () => Promise<void> | void }>;
+export type RepairCommitHooks = Readonly<{ crashAfterJournalCommit?: boolean; crashAfterApplyBeforeSeal?: boolean; admitRepaired?: () => Promise<void> | void }>;
 export type RepairCommitResult = Readonly<{ disposition: "committed" | "committed-admission-failed" | "joined-committed"; attemptId: string; snapshotId: string; generation: number; backupDir: string; manifestPath: string; files: readonly { source: string; sha256Before: string; sha256After: string }[]; committedAt: string; audit: RepairCommitAudit; idle: RepairedOwnerIdle; admissionError?: string }>;
 function generationPath(journalDir: string): string {
   return join(journalDir, "repair-generation.json");
@@ -101,9 +168,19 @@ async function readSealedGeneration(journalDir: string): Promise<number> {
     throw error;
   }
 }
+/** Journal filename segment: strict charset so attempt ids can never escape the journal dir. */
+export const REPAIR_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+/**
+ * UNWIRED BACKEND LIBRARY. commitRepairReplace has zero production callers:
+ * no live Owner path calls it in this pass. Wiring is deferred to checkpoint 4,
+ * which must enforce at wiring time: the repaired-Owner idle hold
+ * (openRepairedOwnerIdle fields), draft preservation, Runtime join/release
+ * (never auto-resume or auto view-return), and no cross-host adoption.
+ * Do not wire this to a live Owner here.
+ */
 export async function commitRepairReplace(options: Readonly<{ workflowDirectory: string; snapshot: RepairFrozenSnapshot; approval: RepairReplaceApproval; ledger: RepairApprovalLedger; liveGate?: LiveRepairGate; repairedBySource: Readonly<Record<string, string>>; backupRoot: string; journalDir: string; attemptId?: string; ownerId: string; drafts?: unknown; testHooks?: RepairCommitHooks }>): Promise<RepairCommitResult> {
   const attemptId = options.attemptId ? options.attemptId : randomUUID();
-  if (typeof attemptId !== "string" || attemptId.length === 0 || attemptId.indexOf("/") !== -1 || attemptId.indexOf(String.fromCharCode(0)) !== -1) throw new Error("invalid_input: repair attempt id must be non-empty text without path separators");
+  if (typeof attemptId !== "string" || !REPAIR_ATTEMPT_ID_PATTERN.test(attemptId)) throw new Error("invalid_input: repair attempt id must match /^[A-Za-z0-9_-]{1,128}$/ (safe journal filename segment, no path separators)");
   if (!options || !isAbsolute(options.workflowDirectory)) throw new Error("invalid_input: workflow directory must be an absolute path");
   if (!options.snapshot || typeof options.snapshot.snapshotId !== "string") throw new Error("invalid_input: repair snapshot is required");
   if (!options.approval || typeof (options.approval as { approvalId?: unknown }).approvalId !== "string") throw new Error("invalid_input: repair approval is required");
@@ -113,10 +190,23 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
   if (!isAbsolute(options.journalDir)) throw new Error("invalid_input: journal directory must be an absolute path");
   if (typeof options.ownerId !== "string" || options.ownerId.length === 0) throw new Error("invalid_input: repaired Owner idle needs an owner id");
   await mkdir(options.journalDir, { recursive: true });
+  const persistedLedger = await loadRepairApprovalLedger(options.journalDir);
+  const effectiveLedger: RepairApprovalLedger = {
+    consumed: new Set<string>([...options.ledger.consumed, ...persistedLedger.consumed]),
+    revoked: new Set<string>([...options.ledger.revoked, ...persistedLedger.revoked]),
+  };
   const journalPath = journalPathFor(options.journalDir, attemptId);
   try {
     const existingRaw = await readFile(journalPath, "utf8");
-    const existing = JSON.parse(existingRaw) as { attemptId?: unknown; snapshotId?: unknown; generation?: unknown; backupDir?: unknown; manifestPath?: unknown; files?: unknown; committedAt?: unknown; audit?: unknown };
+    const existing = JSON.parse(existingRaw) as { attemptId?: unknown; snapshotId?: unknown; approvalId?: unknown; generation?: unknown; backupDir?: unknown; manifestPath?: unknown; files?: unknown; committedAt?: unknown; audit?: unknown };
+    // Same-attempt join replays the receipt without reapplying bytes, but it
+    // must still enforce the approval checks a fresh commit would face.
+    // Consumed is the only exemption: this identical attempt consumed its own
+    // approval when it first committed.
+    if (typeof existing.snapshotId !== "string" || existing.snapshotId !== options.snapshot.snapshotId) throw new Error("stale_approval: repair journal for attempt " + attemptId + " binds to snapshot " + String(existing.snapshotId) + ", not " + options.snapshot.snapshotId);
+    if (options.approval.snapshotId !== options.snapshot.snapshotId) throw new Error("stale_approval: repair approval " + options.approval.approvalId + " binds to snapshot " + String(options.approval.snapshotId) + ", not " + options.snapshot.snapshotId);
+    if (typeof existing.approvalId !== "string" || existing.approvalId !== options.approval.approvalId) throw new Error("stale_approval: repair journal for attempt " + attemptId + " was committed under a different approval; never reuse an attempt id across approvals");
+    if (effectiveLedger.revoked.has(options.approval.approvalId)) throw new Error("revoked: repair approval " + options.approval.approvalId + " was revoked by human input before commit; never auto-retry, ask the Owner for a fresh confirm");
     const files = Array.isArray(existing.files) ? existing.files as Array<{ source: string; sha256Before: string; sha256After: string }> : [];
     const auditRaw = (existing.audit && typeof existing.audit === "object" ? existing.audit : {}) as { diffSummary?: unknown; warnings?: unknown; outOfScope?: unknown };
     const auditWarnings = Array.isArray(auditRaw.warnings) ? auditRaw.warnings as string[] : [];
@@ -125,12 +215,14 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
     const audit: RepairCommitAudit = { snapshotId: typeof existing.snapshotId === "string" ? existing.snapshotId : options.snapshot.snapshotId, targetCount: files.length, files: files.map((file) => ({ source: file.source, sha256: file.sha256After })), warnings: auditWarnings, outOfScope: auditOutOfScope, diffSummary: typeof auditRaw.diffSummary === "string" ? auditRaw.diffSummary : "joined committed repair", backupLocation: backupDir };
     return { disposition: "joined-committed", attemptId: typeof existing.attemptId === "string" ? existing.attemptId : attemptId, snapshotId: audit.snapshotId, generation: typeof existing.generation === "number" ? existing.generation : 0, backupDir, manifestPath: typeof existing.manifestPath === "string" ? existing.manifestPath : "", files, committedAt: typeof existing.committedAt === "string" ? existing.committedAt : new Date(0).toISOString(), audit, idle: openRepairedOwnerIdle(options.ownerId, { drafts: options.drafts }) };
   } catch (error) {
-    if (!error || typeof error !== "object" || !("code" in error) || (error as { code?: string }).code !== "ENOENT") {
-      if (error instanceof SyntaxError) throw error;
-      if (error && typeof error === "object" && "code" in error && (error as { code?: string }).code !== "ENOENT") throw error;
+    if (error && typeof error === "object" && "code" in error && (error as { code?: string }).code !== "ENOENT") throw error;
+    if (!error || typeof error !== "object" || !("code" in error)) {
+      // Join guards and malformed-journal SyntaxErrors carry no code: a
+      // refusal or corrupt receipt must never fall through into a fresh commit.
+      throw error;
     }
   }
-  const gate = await runRepairPreCommitGate({ workflowDirectory: options.workflowDirectory, snapshot: options.snapshot, approval: options.approval, ledger: options.ledger, liveGate: options.liveGate });
+  const gate = await runRepairPreCommitGate({ workflowDirectory: options.workflowDirectory, snapshot: options.snapshot, approval: options.approval, ledger: effectiveLedger, liveGate: options.liveGate });
   const wantedSources = options.snapshot.entries.map((entry) => entry.source).sort();
   const repairedSources = Object.keys(options.repairedBySource).sort();
   if (wantedSources.length !== repairedSources.length || wantedSources.some((source, index) => source !== repairedSources[index])) throw new Error("invalid_input: repaired set must cover exactly the frozen snapshot: wanted [" + wantedSources.join(", ") + "], got [" + repairedSources.join(", ") + "]");
@@ -146,9 +238,6 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
   }
   const backup = await backupFrozenTargets(wantedSources, options.backupRoot);
   const audit: RepairCommitAudit = { snapshotId: options.snapshot.snapshotId, targetCount: wantedSources.length, files: gate.files, warnings: repairedWarnings, outOfScope: repairedOutOfScope, diffSummary: gate.diffSummary, backupLocation: backup.backupDir };
-  const sealedBase = await readSealedGeneration(options.journalDir);
-  const generation = sealedBase + 1;
-  await writeFile(generationPath(options.journalDir), JSON.stringify({ generation, updatedAt: new Date().toISOString() }, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   const beforeBySource = new Map(options.snapshot.entries.map((entry) => [entry.source, entry.sha256]));
   const applied: Array<{ source: string; sha256Before: string; sha256After: string }> = [];
   for (const source of wantedSources) {
@@ -160,10 +249,17 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
     applied.push({ source, sha256Before: beforeBySource.get(source) as string, sha256After: actualAfter });
   }
   applied.sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
+  if (options.testHooks && options.testHooks.crashAfterApplyBeforeSeal) throw new Error("crash_simulated: apply finished, generation seal withheld for attempt " + attemptId);
+  // Seal only after backup + apply + verify: a crash during apply must leave
+  // the generation unsealed and write no journal.
+  const sealedBase = await readSealedGeneration(options.journalDir);
+  const generation = sealedBase + 1;
+  await writeFile(generationPath(options.journalDir), JSON.stringify({ generation, updatedAt: new Date().toISOString() }, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   const committedAt = new Date().toISOString();
   const journal = { version: 1, attemptId, snapshotId: options.snapshot.snapshotId, approvalId: options.approval.approvalId, approver: options.approval.approver, provenance: options.approval.provenance, generation, committedAt, workflowDirectory: options.workflowDirectory, backupDir: backup.backupDir, manifestPath: backup.manifestPath, files: applied, audit: { diffSummary: audit.diffSummary, warnings: audit.warnings, outOfScope: audit.outOfScope }, status: "committed" };
   await writeFile(journalPath, JSON.stringify(journal, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   options.ledger.consumed.add(options.approval.approvalId);
+  await persistRepairApprovalLedger(options.journalDir, options.ledger);
   if (options.testHooks && options.testHooks.crashAfterJournalCommit) throw new Error("crash_simulated: disk commit succeeded, receipt withheld for attempt " + attemptId);
   const idle = openRepairedOwnerIdle(options.ownerId, { drafts: options.drafts });
   if (options.testHooks && options.testHooks.admitRepaired) {
@@ -179,9 +275,16 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
 export async function recoverRepairCommitFromJournal(journalPath: string): Promise<Readonly<{ disposition: "committed-awaiting-admission"; attemptId: string; snapshotId: string; generation: number; backupDir: string; files: readonly { source: string; sha256Before: string; sha256After: string }[]; committedAt: string }>> {
   if (!isAbsolute(journalPath)) throw new Error("invalid_input: journal path must be an absolute path");
   const raw = await readFile(journalPath, "utf8");
-  const parsed = JSON.parse(raw) as { attemptId?: unknown; snapshotId?: unknown; generation?: unknown; backupDir?: unknown; files?: unknown; committedAt?: unknown };
+  const parsed = JSON.parse(raw) as { attemptId?: unknown; snapshotId?: unknown; generation?: unknown; backupDir?: unknown; manifestPath?: unknown; files?: unknown; committedAt?: unknown };
   if (typeof parsed.attemptId !== "string" || typeof parsed.snapshotId !== "string" || typeof parsed.generation !== "number" || typeof parsed.backupDir !== "string" || !Array.isArray(parsed.files) || typeof parsed.committedAt !== "string") throw new Error("invalid_input: repair journal is not a committed replace receipt: " + journalPath);
-  return { disposition: "committed-awaiting-admission", attemptId: parsed.attemptId, snapshotId: parsed.snapshotId, generation: parsed.generation, backupDir: parsed.backupDir, files: parsed.files as Array<{ source: string; sha256Before: string; sha256After: string }>, committedAt: parsed.committedAt };
+  if (parsed.backupDir.length === 0) throw new Error("invalid_input: repair journal has no backup dir: " + journalPath);
+  if (typeof parsed.manifestPath !== "string" || parsed.manifestPath.length === 0) throw new Error("invalid_input: repair journal has no backup manifest: " + journalPath);
+  const files = parsed.files as Array<{ source?: unknown; sha256Before?: unknown; sha256After?: unknown }>;
+  if (files.length === 0) throw new Error("invalid_input: repair journal has no committed files: " + journalPath);
+  for (const file of files) {
+    if (!file || typeof file !== "object" || typeof file.source !== "string" || file.source.length === 0 || typeof file.sha256Before !== "string" || typeof file.sha256After !== "string") throw new Error("invalid_input: repair journal file entry is malformed: " + journalPath);
+  }
+  return { disposition: "committed-awaiting-admission", attemptId: parsed.attemptId, snapshotId: parsed.snapshotId, generation: parsed.generation, backupDir: parsed.backupDir, files: files as Array<{ source: string; sha256Before: string; sha256After: string }>, committedAt: parsed.committedAt };
 }
 export const REPAIR_STOPPED_WRITER_RECOVERY_INSTRUCTIONS = [
   "Repair stopped-writer recovery: stop ALL writers before touching frozen targets.",

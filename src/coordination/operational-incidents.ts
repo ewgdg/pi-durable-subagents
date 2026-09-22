@@ -562,7 +562,15 @@ export class OperationalIncidentCoordinator {
 				moderator: bootstrap.moderator,
 			});
 		} catch (error) {
+			// Startup failure must not orphan a live Moderator: the bootstrap
+			// already integrated the record with moderator_handling retention.
+			// Release it like #releaseManualRepair (history stays on disk) so
+			// the next trigger creates exactly one fresh Moderator.
+			const orphan = bootstrap.moderator;
 			this.#manualRepair = undefined;
+			orphan.host.removeRetentionReason("moderator_handling");
+			void this.#messages.requestRelease(orphan)
+				.catch((releaseError: unknown) => this.#reportError(releaseError));
 			this.#reportError(error);
 			throw error;
 		}

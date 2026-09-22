@@ -81,6 +81,7 @@ export async function commitHostedModerator(
 	const input = request.input({ agentId });
 	request.onStage?.("Moderator bootstrap commit");
 	request.beforeBootstrapCommit?.();
+	if (dependencies.isShuttingDown()) return undefined;
 	const modelInput = createModelVisibleModeratorInput(identity, input);
 	sessionManager.appendCustomMessageEntry(
 		modelInput.customType,

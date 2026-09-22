@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, isAbsolute, join } from "node:path";
 import { isRepairManagedPath } from "./manual-repair.ts";
@@ -15,19 +15,34 @@ export async function listFrozenRepairTargets(workflowDirectory: string): Promis
   if (!isAbsolute(workflowDirectory) || workflowDirectory.includes("\0")) {
     throw new Error("invalid_input: workflow directory must be an absolute path");
   }
-  let names: string[];
+  // Recursive walk with isRepairManagedPath as the filter: the repair/
+  // namespace is excluded at any depth, so the guard is load-bearing rather
+  // than dead on a top-level listing.
+  const targets: string[] = [];
+  async function walk(directory: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (isMissingDirectory(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const full = join(directory, entry.name);
+      if (isRepairManagedPath(full, workflowDirectory)) continue;
+      if (entry.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".jsonl")) continue;
+      targets.push(full);
+    }
+  }
   try {
-    names = await readdir(workflowDirectory);
+    await walk(workflowDirectory);
   } catch (error) {
     if (isMissingDirectory(error)) return [];
     throw error;
-  }
-  const targets: string[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".jsonl")) continue;
-    const full = join(workflowDirectory, name);
-    if (isRepairManagedPath(full, workflowDirectory)) continue;
-    targets.push(full);
   }
   targets.sort();
   return targets;
@@ -51,7 +66,9 @@ export async function backupFrozenTargets(sources: readonly string[], backupRoot
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupDir = join(backupRoot, "repair-backup-" + stamp + "-" + randomUUID().slice(0, 8));
-  await mkdir(backupDir, { recursive: true });
+  await mkdir(backupDir, { recursive: true, mode: 0o700 });
+  // mkdir mode is masked by umask: enforce owner-only on the dir itself.
+  await chmod(backupDir, 0o700);
   const entries: FrozenBackupEntry[] = [];
   const seen = new Set<string>();
   for (const source of sources) {
@@ -65,6 +82,8 @@ export async function backupFrozenTargets(sources: readonly string[], backupRoot
     }
     seen.add(candidate);
     await copyFile(source, candidate);
+    // copyFile follows the source mode masked by umask: enforce owner-only.
+    await chmod(candidate, 0o600);
     const copiedHash = await sha256File(candidate);
     if (copiedHash !== hash) throw new Error("backup_failed: hash mismatch after copy: " + source);
     entries.push({ source, backupPath: candidate, sha256: hash });
@@ -76,6 +95,12 @@ export async function backupFrozenTargets(sources: readonly string[], backupRoot
   return { backupDir, manifestPath, entries };
 }
 export type FrozenRestoreEntry = Readonly<{ backupPath: string; restoredPath: string; sha256: string }>;
+/**
+ * Inspect-only restore: copies backup bytes to a caller-chosen inspect dir
+ * for human review. It never writes live workflow targets; the explicit
+ * replace path (repair-commit.ts) is the only writer. A rename to
+ * inspectFrozenBackup is deferred to checkpoint 4 (see plan).
+ */
 export async function restoreFrozenBackup(backupDir: string, restoreDir: string): Promise<Readonly<{ entries: readonly FrozenRestoreEntry[] }>> {
   if (!isAbsolute(backupDir) || !isAbsolute(restoreDir)) throw new Error("invalid_input: backup and restore dirs must be absolute");
   const manifestRaw = await readFile(join(backupDir, "manifest.json"), "utf8");
