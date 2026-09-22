@@ -508,6 +508,8 @@ export function participantCoordinatorHandlers(
 			moderatorControl: (toolCallId, input) =>
 				moderatorView().moderatorControl(toolCallId, input),
 			repairValidate: (toolCallId, input) => moderatorView().repairValidate(toolCallId, input),
+			repairFreeze: (toolCallId, input) => moderatorView().repairFreeze(toolCallId, input),
+			repairCommit: (toolCallId, input) => moderatorView().repairCommit(toolCallId, input),
 		};
 	}
 	const ordinaryView = resolveView as () => OrdinaryAgentCoordinatorView;

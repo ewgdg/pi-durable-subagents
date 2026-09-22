@@ -13,11 +13,12 @@ export type RepairedOwnerIdle = Readonly<{ ownerId: string; idle: true; idleUnti
 /**
  * Owner-session approval for the explicit replace path.
  *
- * Future construction site: the Owner-session command handler (does not exist
- * yet). Approvals must only be constructed there with approver set to the
- * OwnerIdentity agentId of that Owner session; the boundary check below
- * enforces approver === ownerId. There is deliberately no default authority:
- * a bare "owner" string would let any caller mint approval.
+ * Construction site is the coordinator freeze under trigger authority
+ * (/agents repair IS the approval: owner-session-trigger, approver === ownerId,
+ * bound to the exact snapshot). Approvals must only be constructed there with
+ * approver set to the OwnerIdentity agentId of that Owner session; the boundary
+ * check below enforces approver === ownerId. There is deliberately no default
+ * authority: a bare "owner" string would let any caller mint approval.
  */
 export function approveRepairReplace(options: Readonly<{ snapshotId: string; approver: string; ownerId: string; provenance: string }>): RepairReplaceApproval {
   const snapshotId = (options as { snapshotId?: unknown }).snapshotId;
@@ -25,7 +26,7 @@ export function approveRepairReplace(options: Readonly<{ snapshotId: string; app
   const approver = (options as { approver?: unknown }).approver;
   const ownerId = (options as { ownerId?: unknown }).ownerId;
   if (typeof snapshotId !== "string" || snapshotId.length === 0) throw new Error("invalid_input: repair replace approval needs a frozen snapshot id");
-  if (provenance !== "owner-session-confirm") throw new Error("unauthorized: repair replace needs an explicit Owner-session command (owner-session-confirm), got " + String(provenance) + "; advisory validate reports grant zero authority; model tool calls and moderator_control resolve never authorize");
+  if (provenance !== "owner-session-trigger") throw new Error("unauthorized: repair replace needs an explicit Owner-session trigger (owner-session-trigger), got " + String(provenance) + "; advisory validate reports grant zero authority; model tool calls and moderator_control resolve never authorize");
   if (typeof ownerId !== "string" || ownerId.length === 0) throw new Error("invalid_input: repair replace approval needs the Owner-session Owner id");
   if (typeof approver !== "string" || approver.length === 0) throw new Error("invalid_input: repair replace approval needs an explicit approver; there is no default authority");
   if (approver !== ownerId) throw new Error("unauthorized: repair replace approver must be the Owner-session OwnerIdentity agentId");
@@ -102,7 +103,7 @@ export function assertRepairApprovalFresh(approval: Readonly<{ approvalId?: unkn
   if (!approval || typeof approval.approvalId !== "string" || typeof approval.snapshotId !== "string") throw new Error("invalid_input: repair approval is required");
   const expectedId = resolveExpectedSnapshotId(expected);
   if (approval.snapshotId !== expectedId) throw new Error("stale_approval: repair approval " + approval.approvalId + " binds to snapshot " + String(approval.snapshotId) + ", not " + String(expectedId));
-  if (ledger && ledger.revoked && (ledger.revoked as ReadonlySet<string>).has(approval.approvalId)) throw new Error("revoked: repair approval " + approval.approvalId + " was revoked by human input before commit; never auto-retry, ask the Owner for a fresh confirm");
+  if (ledger && ledger.revoked && (ledger.revoked as ReadonlySet<string>).has(approval.approvalId)) throw new Error("revoked: repair approval " + approval.approvalId + " was revoked by human input before commit; never auto-retry, ask the Owner for a fresh /agents repair trigger");
   if (ledger && ledger.consumed && (ledger.consumed as ReadonlySet<string>).has(approval.approvalId)) throw new Error("consumed: repair approval " + approval.approvalId + " is single-use and already consumed");
 }
 export async function freezeRepairTargets(workflowDirectory: string): Promise<RepairFrozenSnapshot> {
@@ -185,9 +186,10 @@ export function assertRepairArtifactDirOutsideWorkflow(workflowDirectory: string
   }
 }
 /**
- * Explicit replace path behind Owner-session user approval. Production callers
- * must be the Owner-session confirm handler only (approver === ownerId,
- * provenance owner-session-confirm, bound to the exact snapshot id).
+ * Explicit replace path behind Owner-session trigger approval (/agents repair
+ * IS the approval). Production callers must be the coordinator freeze under
+ * trigger authority only (approver === ownerId,
+ * provenance owner-session-trigger, bound to the exact snapshot id).
  * Wiring-time enforcement: repaired-Owner idle hold (openRepairedOwnerIdle
  * fields), draft preservation, Runtime join/release (never auto-resume or
  * auto view-return), and no cross-host adoption.
@@ -222,7 +224,7 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
     if (typeof existing.snapshotId !== "string" || existing.snapshotId !== options.snapshot.snapshotId) throw new Error("stale_approval: repair journal for attempt " + attemptId + " binds to snapshot " + String(existing.snapshotId) + ", not " + options.snapshot.snapshotId);
     if (options.approval.snapshotId !== options.snapshot.snapshotId) throw new Error("stale_approval: repair approval " + options.approval.approvalId + " binds to snapshot " + String(options.approval.snapshotId) + ", not " + options.snapshot.snapshotId);
     if (typeof existing.approvalId !== "string" || existing.approvalId !== options.approval.approvalId) throw new Error("stale_approval: repair journal for attempt " + attemptId + " was committed under a different approval; never reuse an attempt id across approvals");
-    if (effectiveLedger.revoked.has(options.approval.approvalId)) throw new Error("revoked: repair approval " + options.approval.approvalId + " was revoked by human input before commit; never auto-retry, ask the Owner for a fresh confirm");
+    if (effectiveLedger.revoked.has(options.approval.approvalId)) throw new Error("revoked: repair approval " + options.approval.approvalId + " was revoked by human input before commit; never auto-retry, ask the Owner for a fresh /agents repair trigger");
     const files = Array.isArray(existing.files) ? existing.files as Array<{ source: string; sha256Before: string; sha256After: string }> : [];
     const auditRaw = (existing.audit && typeof existing.audit === "object" ? existing.audit : {}) as { diffSummary?: unknown; warnings?: unknown; outOfScope?: unknown };
     const auditWarnings = Array.isArray(auditRaw.warnings) ? auditRaw.warnings as string[] : [];

@@ -185,27 +185,20 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	primaryInputQueued(): Promise<void>;
 	/** Manual /agents repair: host a real Moderator. Owner only. */
 	requestManualRepair(reason: string): Promise<ManualRepairReceipt>;
-	/** Freeze repair targets as an immutable snapshot. Owner only, snapshot-only, no writes. */
+	/** Freeze repair targets under the current /agents repair trigger authority. Snapshot-only, no writes. Owner or trigger-bound Moderator. Auto-mints trigger approval. */
 	freezeRepairSnapshot(): Promise<RepairFrozenSnapshot>;
 	/**
-	 * Owner-session confirm handler: the ONLY production construction site for
-	 * repair replace approvals (agentId === ownerIdentity.agentId,
-	 * approver === ownerId, bound to the exact snapshot id,
-	 * provenance owner-session-confirm).
-	 */
-	confirmRepairReplace(snapshotId: string): Promise<RepairReplaceApproval>;
-	/**
 	 * Real input-path revocation for Esc + new human message. Revokes the
-	 * pending approvalId through the persisted ledger store; never auto-retries.
+	 * pending trigger approval through the persisted ledger store; never auto-retries.
+	 * Clears both pending trigger and pending approval.
 	 */
 	notifyRepairHumanInput(kind: "esc" | "human-message"): Promise<void>;
 	/**
-	 * Owner-only explicit replace commit with drift recheck, backup/seal/journal
-	 * and idle-until-human-message reopen. Uses the pending Owner approval.
+	 * Explicit replace commit under the current trigger authority with drift recheck,
+	 * backup/seal/journal and idle-until-human-message reopen. Uses the pending trigger
+	 * approval. Owner or trigger-bound Moderator. Single-use per trigger.
 	 */
 	commitRepairReplace(repairedBySource: Readonly<Record<string, string>>, attemptId?: string, drafts?: unknown): Promise<RepairCommitResult>;
-	/** Sealed CLI commit for repair-commit. Exact frozen bytes only. */
-	commitRepairReplaceSealed(snapshotId: string, attemptId?: string): Promise<RepairCommitResult>;
 	selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
@@ -283,6 +276,8 @@ export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 		input: ModeratorControlInput,
 	): Promise<ModeratorControlReceipt>;
 	repairValidate(toolCallId: string, input: Readonly<{ transcriptPaths: readonly string[] }>): Promise<import("./repair-validate.ts").RepairValidateReport>;
+	repairFreeze(toolCallId: string, input: Readonly<object>): Promise<RepairFrozenSnapshot>;
+	repairCommit(toolCallId: string, input: Readonly<{ snapshotId: string; repairedBySource: Readonly<Record<string, string>>; attemptId?: string }>): Promise<RepairCommitResult>;
 }>;
 
 export class WorkflowCoordinator {
@@ -315,6 +310,7 @@ export class WorkflowCoordinator {
 	// Checkpoint-4 manual-repair wiring: Owner-only replace path state.
 	readonly #repairSnapshots = new Map<string, RepairFrozenSnapshot>();
 	#pendingRepairApproval: RepairReplaceApproval | undefined;
+	#pendingRepairTrigger: Readonly<{ moderatorAgentId: string; approver: string }> | undefined;
 	#repairLedger: RepairApprovalLedger | undefined;
 	#repairedOwnerIdleHold: Readonly<{ ownerId: string }> | undefined;
 	#preadmissionRepairOnly = false;
@@ -650,48 +646,37 @@ export class WorkflowCoordinator {
 	}
 
 	/**
-	 * Owner-only frozen snapshot for the explicit replace path. Snapshot-only,
-	 * no writes. Pre-commit Owner target stays snapshot-only; live repair
-	 * namespace is excluded by the freeze enumeration.
+	 * Frozen snapshot under trigger authority (/agents repair IS the approval).
+	 * Snapshot-only, no writes. Owner or trigger-bound Moderator. Auto-mints the
+	 * trigger approval (owner-session-trigger, approver === ownerId, bound to the
+	 * exact snapshot). Pre-commit Owner target stays snapshot-only; live repair
+	 * namespace is excluded by the freeze enumeration. Re-freeze replaces any
+	 * prior pending approval.
 	 */
 	async #freezeRepairSnapshotForOwner(callerAgentId: string): Promise<RepairFrozenSnapshot> {
-		this.#assertRepairAvailable(callerAgentId);
+		this.#assertAdmissionOpen();
+		const ownerId = this.#ownerIdentity.agentId;
+		const trigger = this.#pendingRepairTrigger;
+		if (!trigger) {
+			throw new Error("unauthorized: no pending repair trigger; request a fresh /agents repair");
+		}
+		const isOwner = callerAgentId === ownerId;
+		const isTriggerModerator = this.#operationalIncidents.isManualRepairModerator(callerAgentId) && trigger.moderatorAgentId === callerAgentId;
+		if (!isOwner && !isTriggerModerator) {
+			throw new Error("wrong_participant: repair freeze needs the Owner or the trigger-bound repair Moderator");
+		}
 		const snapshot = await freezeRepairTargetsBackend(this.#repairWorkflowDirectory());
 		this.#repairSnapshots.set(snapshot.snapshotId, snapshot);
-		return snapshot;
-	}
-
-	/**
-	 * Owner-session confirm handler: the ONLY production construction site for
-	 * repair replace approvals. Checks agentId === ownerIdentity.agentId and
-	 * approver === ownerId, binds to the exact snapshot id, provenance
-	 * owner-session-confirm. Stores the pending approvalId for Esc/human-message
-	 * revocation through the persisted ledger.
-	 */
-	async #confirmRepairReplaceForOwner(callerAgentId: string, snapshotId: string): Promise<RepairReplaceApproval> {
-		this.#assertRepairAvailable(callerAgentId);
-		if (typeof snapshotId !== "string" || snapshotId.length === 0) {
-			throw new Error("invalid_input: repair confirm needs a frozen snapshot id");
-		}
-		const snapshot = this.#repairSnapshots.get(snapshotId);
-		if (!snapshot) {
-			throw new Error("stale_approval: unknown repair snapshot " + snapshotId + "; freeze targets first");
-		}
-		const ownerId = this.#ownerIdentity.agentId;
-		// agentId === ownerIdentity.agentId already checked; approver must equal ownerId.
 		const approval = approveRepairReplace({
 			snapshotId: snapshot.snapshotId,
 			approver: ownerId,
 			ownerId,
-			provenance: "owner-session-confirm",
+			provenance: "owner-session-trigger",
 		});
-		if (this.#pendingRepairApproval) {
-			throw new Error("pending_approval: a repair approval is already pending; revoke it with Esc or a new human message before confirming again");
-		}
 		const ledger = this.#ensureRepairLedger();
 		// Merge persisted revocations/consumptions so a restart still refuses.
 		// Only a missing ledger is benign here; corrupt ledgers and other IO
-		// failures rethrow now so confirm never mints approval over unreadable state.
+		// failures rethrow now so freeze never mints approval over unreadable state.
 		try {
 			const persisted = await loadRepairApprovalLedger(this.#repairJournalDir());
 			for (const id of persisted.consumed) ledger.consumed.add(id);
@@ -703,17 +688,18 @@ export class WorkflowCoordinator {
 				throw error;
 			}
 		}
+		// Re-freeze replaces any prior pending approval.
 		this.#pendingRepairApproval = approval;
-		return approval;
+		return snapshot;
 	}
-
 	/**
 	 * Owner/human-input-path revocation for Esc + new human message. Owner only:
 	 * the caller must be the Owner view; the general human-input path in
 	 * #handleHumanInput covers any-participant messages separately.
-	 * Revokes the pending approvalId through the persisted ledger store;
+	 * Revokes the pending trigger approval through the persisted ledger store and clears
+	 * both pending trigger and pending approval;
 	 * persist failures propagate to the caller (diagnostics surfaces them);
-	 * never auto-retries. No-op when no approval is pending.
+	 * never auto-retries. No-op when nothing is pending.
 	 */
 	async #notifyRepairHumanInputForOwner(callerAgentId: string, kind: "esc" | "human-message"): Promise<void> {
 		this.#assertAdmissionOpen();
@@ -724,18 +710,23 @@ export class WorkflowCoordinator {
 		// not model authority. Any-participant message revocation lives in
 		// #handleHumanInput, not here.
 		const pending = this.#pendingRepairApproval;
-		if (!pending) return;
-		const ledger = this.#ensureRepairLedger();
-		await revokeRepairApprovalPersisted(this.#repairJournalDir(), ledger, pending.approvalId, kind);
+		const trigger = this.#pendingRepairTrigger;
+		if (!pending && !trigger) return;
+		if (pending) {
+			const ledger = this.#ensureRepairLedger();
+			await revokeRepairApprovalPersisted(this.#repairJournalDir(), ledger, pending.approvalId, kind);
+		}
 		this.#pendingRepairApproval = undefined;
+		this.#pendingRepairTrigger = undefined;
 	}
 
 	/**
-	 * Owner-only explicit replace commit. Gate-first (no writes on failure),
-	 * drift recheck, backup/seal/journal, single-use approval, idle
-	 * reopen with drafts preserved. Enforces idle-until-human-message hold by
-	 * the host (no turn without human msg) and Runtime join/release without
-	 * cross-host adoption (each Agent keeps its own host; switch only moves
+	 * Explicit replace commit under trigger authority (/agents repair IS the approval).
+	 * Gate-first (no writes on failure), drift recheck, backup/seal/journal,
+	 * single-use approval per trigger, idle reopen with drafts preserved. Owner or
+	 * trigger-bound Moderator. Enforces idle-until-human-message hold by the host
+	 * (no turn without human msg) and Runtime join/release without cross-host
+	 * adoption (each Agent keeps its own host; switch only moves
 	 * interactive_selection retention, never adopts).
 	 */
 	async #commitRepairReplaceForOwner(
@@ -744,17 +735,23 @@ export class WorkflowCoordinator {
 		attemptId?: string,
 		drafts?: unknown,
 	): Promise<RepairCommitResult> {
-		this.#assertRepairAvailable(callerAgentId);
+		this.#assertAdmissionOpen();
+		const ownerId = this.#ownerIdentity.agentId;
+		const trigger = this.#pendingRepairTrigger;
 		const pending = this.#pendingRepairApproval;
-		if (!pending) {
-			throw new Error("unauthorized: no pending repair approval; confirm the exact snapshot first");
+		if (!trigger || !pending) {
+			throw new Error("unauthorized: no pending repair approval; request a fresh /agents repair trigger");
+		}
+		const isOwner = callerAgentId === ownerId;
+		const isTriggerModerator = this.#operationalIncidents.isManualRepairModerator(callerAgentId) && trigger.moderatorAgentId === callerAgentId;
+		if (!isOwner && !isTriggerModerator) {
+			throw new Error("wrong_participant: repair commit needs the Owner or the trigger-bound repair Moderator");
 		}
 		const snapshot = this.#repairSnapshots.get(pending.snapshotId);
 		if (!snapshot) {
 			throw new Error("stale_approval: pending repair snapshot is unavailable; freeze targets first");
 		}
 		const ledger = this.#ensureRepairLedger();
-		const ownerId = this.#ownerIdentity.agentId;
 		// Drafts preserved in respective editors: capture caller drafts (editor
 		// text) into the idle receipt; switch never clears the other editor.
 		const result = await commitRepairReplaceBackend({
@@ -769,9 +766,11 @@ export class WorkflowCoordinator {
 			ownerId,
 			...(drafts === undefined ? {} : { drafts }),
 		});
-		// Single-use: backend consumes the approval; clear pending so Esc/human
-		// input after commit has nothing to revoke.
+		// Single-use per trigger: backend consumes the approval; clear both pending
+		// trigger and pending approval so Esc/human input after commit has nothing
+		// to revoke and a second commit without a fresh trigger is refused.
 		this.#pendingRepairApproval = undefined;
+		this.#pendingRepairTrigger = undefined;
 		// Enforce idle-until-human-message hold by the host: no turn without a
 		// new human message. beginExecution refuses while the hold is set;
 		// handleHumanInput clears it on the next human message.
@@ -780,29 +779,6 @@ export class WorkflowCoordinator {
 		}
 		return result;
 	}
-
-	async #commitRepairReplaceSealedForOwner(callerAgentId: string, snapshotId: string, attemptId?: string): Promise<RepairCommitResult> {
-		this.#assertRepairAvailable(callerAgentId);
-		const pending = this.#pendingRepairApproval;
-		if (!pending) {
-			throw new Error("unauthorized: no pending repair approval; confirm the exact snapshot first");
-		}
-		if (pending.snapshotId !== snapshotId) {
-			throw new Error("stale_approval: repair-commit snapshot " + snapshotId + " does not match pending approval snapshot " + pending.snapshotId + "; confirm the exact snapshot first");
-		}
-		const snapshot = this.#repairSnapshots.get(snapshotId);
-		if (!snapshot) {
-			throw new Error("stale_approval: pending repair snapshot is unavailable; freeze targets first");
-		}
-		// Sealed CLI commit: exact frozen bytes only (source-to-source).
-		// Staged byte repairs go through commitRepairReplace with externally
-		// validated copies; the gate-first backend still refuses drift/replay
-		// failures with no writes.
-		const sealed: Record<string, string> = {};
-		for (const entry of snapshot.entries) sealed[entry.source] = entry.source;
-		return this.#commitRepairReplaceForOwner(callerAgentId, sealed, attemptId, undefined);
-	}
-
 	modelPolicy(): ModelPolicySnapshot {
 		return {
 			availableModels: this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().map(
@@ -941,6 +917,41 @@ export class WorkflowCoordinator {
 				if (!Array.isArray(provided) || provided.length === 0) throw new Error("invalid_input: repair_validate needs transcriptPaths");
 				return validateRepairFreezeAdvisory({ transcriptPaths: provided as string[], stage: "repair_validate" });
 			},
+			repairFreeze: async (toolCallId, input) => {
+				this.#assertAdmissionOpen();
+				if (!this.#operationalIncidents.isManualRepairModerator(agentId)) {
+					throw new Error("wrong_participant: repair_freeze is available only on the manual repair Moderator");
+				}
+				const record = this.#requireModerator(agentId);
+				const transcript = record.transcript.inspect();
+				const committed = resolveCommittedToolCall({ agentId, transcript, toolCallId, toolName: "repair_freeze" });
+				if (!isDeepStrictEqual(input, committed.input)) {
+					throw new Error("invariant_violation: repair_freeze input differs from its source");
+				}
+				return this.#freezeRepairSnapshotForOwner(agentId);
+			},
+			repairCommit: async (toolCallId, input) => {
+				this.#assertAdmissionOpen();
+				if (!this.#operationalIncidents.isManualRepairModerator(agentId)) {
+					throw new Error("wrong_participant: repair_commit is available only on the manual repair Moderator");
+				}
+				const record = this.#requireModerator(agentId);
+				const transcript = record.transcript.inspect();
+				const committed = resolveCommittedToolCall({ agentId, transcript, toolCallId, toolName: "repair_commit" });
+				if (!isDeepStrictEqual(input, committed.input)) {
+					throw new Error("invariant_violation: repair_commit input differs from its source");
+				}
+				const snapshotId = (input as { snapshotId?: unknown }).snapshotId;
+				const repairedBySource = (input as { repairedBySource?: unknown }).repairedBySource;
+				const attemptId = (input as { attemptId?: unknown }).attemptId;
+				if (typeof snapshotId !== "string" || snapshotId.length === 0) throw new Error("invalid_input: repair_commit needs a frozen snapshot id");
+				if (!repairedBySource || typeof repairedBySource !== "object") throw new Error("invalid_input: repair_commit needs repairedBySource");
+				if (attemptId !== undefined && (typeof attemptId !== "string" || attemptId.length === 0)) throw new Error("invalid_input: repair_commit attemptId must be a non-empty string when present");
+				const pending = this.#pendingRepairApproval;
+				if (!pending) throw new Error("unauthorized: no pending repair approval; request a fresh /agents repair trigger");
+				if (pending.snapshotId !== snapshotId) throw new Error("stale_approval: repair_commit snapshot " + snapshotId + " does not match pending approval snapshot " + pending.snapshotId + "; freeze under the current trigger first");
+				return this.#commitRepairReplaceForOwner(agentId, repairedBySource as Readonly<Record<string, string>>, attemptId as string | undefined, undefined);
+			},
 		});
 	}
 
@@ -997,18 +1008,21 @@ export class WorkflowCoordinator {
 				if (this.#requireAgent(agentId).host.currentRunSuspension()) return Promise.resolve();
 				return this.#agentWaits.preemptForHumanInput(this.#requireAgent(agentId));
 			},
-				requestManualRepair: (reason) => {
+				requestManualRepair: async (reason) => {
 				this.#assertAdmissionOpen();
 				if (agentId !== this.#ownerIdentity.agentId) throw new Error("wrong_participant: manual repair is Owner only");
-				return this.#operationalIncidents.requestManualRepair(reason);
+				const receipt = await this.#operationalIncidents.requestManualRepair(reason);
+				// Owner-session provenance at trigger time for both admitted + preadmission paths.
+				// Created captures the fresh trigger; joined keeps the existing trigger.
+				if (receipt.disposition === "created") {
+					this.#pendingRepairTrigger = { moderatorAgentId: receipt.moderatorAgentId, approver: agentId };
+				}
+				return receipt;
 			},
 			freezeRepairSnapshot: () => this.#freezeRepairSnapshotForOwner(agentId),
-			confirmRepairReplace: (snapshotId) => this.#confirmRepairReplaceForOwner(agentId, snapshotId),
 			notifyRepairHumanInput: (kind) => this.#notifyRepairHumanInputForOwner(agentId, kind),
 			commitRepairReplace: (repairedBySource, attemptId, drafts) =>
 				this.#commitRepairReplaceForOwner(agentId, repairedBySource, attemptId, drafts),
-			commitRepairReplaceSealed: (snapshotId, attemptId) =>
-				this.#commitRepairReplaceSealedForOwner(agentId, snapshotId, attemptId),
 		selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
 				this.#assertAdmissionOpen();
@@ -1907,7 +1921,8 @@ export class WorkflowCoordinator {
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition> {
 		// Real input-path revocation: only an admissible new human message revokes
-		// a pending repair approval and releases the repaired idle hold.
+		// a pending repair trigger approval and releases the repaired idle hold.
+		// Clears both pending trigger and pending approval.
 		// Fenced/stale submissions return discarded with no side effects:
 		// a discarded duplicate keeps the hold so beginExecution still refuses.
 		const pending = this.#pendingRepairApproval;
@@ -1933,6 +1948,8 @@ export class WorkflowCoordinator {
 						this.#pendingRepairApproval = undefined;
 					}
 				}
+				// Human message also clears the pending repair trigger (single-use per trigger).
+				this.#pendingRepairTrigger = undefined;
 				if (this.#repairedOwnerIdleHold && agentId === this.#repairedOwnerIdleHold.ownerId) {
 					this.#repairedOwnerIdleHold = undefined;
 				}
