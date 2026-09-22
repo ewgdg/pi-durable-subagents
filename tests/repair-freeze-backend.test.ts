@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -156,4 +156,38 @@ test("installed-src diagnosis exposes executing package source without assuming 
   }
   assert.ok((diagnosis.errorMessage as string).indexOf("boom-marker") !== -1);
   assert.ok((diagnosis.errorStack as string).indexOf("boom-marker") !== -1);
+});
+test("recursive enumeration excludes repair-managed jsonl at any depth", async () => {
+  const root = await mkdtemp(join(tmpdir(), "repair-freeze-nested-"));
+  const owner = SessionManager.create(root, root);
+  const workflowId = owner.getSessionId();
+  owner.appendCustomEntry("agent-coordination.identity", { agentId: owner.getSessionId(), workflowId, directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } });
+  const directory = workflowSessionDirectory(root, workflowId);
+  const childA = ordinaryChild(owner, workflowId, "spawn-nested-a", "child-a");
+  const repairDir = repairSessionDirectory(root, workflowId);
+  await mkdir(join(repairDir, "nested"), { recursive: true });
+  await writeFile(join(repairDir, "stray.jsonl"), "{}\n", "utf8");
+  await writeFile(join(repairDir, "nested", "deep.jsonl"), "{}\n", "utf8");
+  await mkdir(join(directory, "sub"), { recursive: true });
+  await writeFile(join(directory, "sub", "keep.jsonl"), "{}\n", "utf8");
+  assert.equal(isRepairManagedPath(join(repairDir, "nested", "deep.jsonl"), directory), true);
+  assert.equal(isRepairManagedPath(join(repairDir, "stray.jsonl"), directory), true);
+  const targets = await listFrozenRepairTargets(directory);
+  assert.ok(targets.indexOf(join(repairDir, "stray.jsonl")) === -1, "stray repair jsonl must never be a frozen target");
+  assert.ok(targets.indexOf(join(repairDir, "nested", "deep.jsonl")) === -1, "nested repair jsonl must never be a frozen target");
+  assert.ok(targets.indexOf(join(directory, "sub", "keep.jsonl")) !== -1, "recursive walk still reaches nested non-repair files");
+  assert.ok(targets.every((path) => isRepairManagedPath(path, directory) === false));
+  assert.ok(targets.indexOf(childA.getSessionFile() as string) !== -1, "original inventory stays a target");
+});
+test("backup dir and copies are owner-only", async () => {
+  const root = await mkdtemp(join(tmpdir(), "repair-freeze-perms-"));
+  const owner = SessionManager.create(root, root);
+  const workflowId = owner.getSessionId();
+  owner.appendCustomEntry("agent-coordination.identity", { agentId: owner.getSessionId(), workflowId, directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } });
+  const child = ordinaryChild(owner, workflowId, "spawn-perms", "child");
+  const backupRoot = await mkdtemp(join(tmpdir(), "repair-freeze-perms-backup-"));
+  const backup = await backupFrozenTargets([child.getSessionFile() as string], backupRoot);
+  assert.equal((await stat(backup.backupDir)).mode & 0o777, 0o700);
+  for (const entry of backup.entries) assert.equal((await stat(entry.backupPath)).mode & 0o777, 0o600);
+  assert.equal((await stat(backup.manifestPath)).mode & 0o777, 0o600);
 });
