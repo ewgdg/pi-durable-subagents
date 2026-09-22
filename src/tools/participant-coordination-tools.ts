@@ -29,6 +29,7 @@ import type {
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
+import type { RepairValidateReport } from "../coordination/repair-validate.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import { COORDINATION_HISTORY_GUIDANCE } from "../presentation/coordination-history-guidance.ts";
 import {
@@ -87,6 +88,7 @@ export const participantCoordinationToolNames = {
 		"ask_user",
 		"report_to_user",
 		"moderator_control",
+		"repair_validate",
 	],
 } as const satisfies Record<ParticipantCoordinationRole, readonly string[]>;
 
@@ -231,6 +233,7 @@ type ModeratorParticipantCoordinationToolHandler = Readonly<{
 		toolCallId: string,
 		input: ModeratorControlInput,
 	): Promise<ModeratorControlReceipt>;
+	repairValidate?(toolCallId: string, input: RepairValidateInput): Promise<RepairValidateReport>;
 }>;
 
 export type ParticipantCoordinationToolHandlers<
@@ -590,6 +593,12 @@ const reportToUserParameters = Type.Object({
 	evidence: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Exact transcript, entry, tool-call, diagnostic or other preserved evidence references." }),
 }, { additionalProperties: false });
 
+export type RepairValidateInput = Readonly<{ transcriptPaths: readonly string[] }>;
+
+const repairValidateParameters = Type.Object({
+	transcriptPaths: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+}, { additionalProperties: false });
+
 const workflowResumeParameters = Type.Object({}, { additionalProperties: false });
 
 export const participantCoordinationToolSchemas = {
@@ -602,6 +611,7 @@ export const participantCoordinationToolSchemas = {
 	ask_user: askUserParameters,
 	moderator_control: moderatorControlParameters,
 	report_to_user: reportToUserParameters,
+	repair_validate: repairValidateParameters,
 } as const;
 
 type AvailableHandlers = CommonParticipantCoordinationToolHandlers &
@@ -850,6 +860,19 @@ export function registerParticipantCoordinationTools<
 				return toolResult(
 					await availableHandlers.moderatorControl!(toolCallId, parameters),
 				);
+			},
+		});
+		pi.registerTool<typeof repairValidateParameters, RepairValidateReport>({
+			name: "repair_validate",
+			label: "Validate Repair",
+			description: "Advisory-only repair validation on frozen copies. Runs read-only inspectors and returns file/entry diagnostics plus unknowns. Edits nothing, grants no authority, seals nothing, never resolves.",
+			promptSnippet: "Advisory validate only; resolve still required.",
+			executionMode: "sequential",
+			parameters: repairValidateParameters,
+			renderCall: (args, theme) => new Text(theme.fg("toolTitle", "Validate Repair") + " " + boundedToolPreview((args.transcriptPaths ?? []).join(", ")), 0, 0),
+			renderResult: (result, _options, theme, context) => new Text(theme.fg(context.isError ? "error" : "muted", boundedToolPreview(JSON.stringify(result.details ?? result).slice(0, 240))), 0, 0),
+			async execute(toolCallId, parameters) {
+				return toolResult(await (availableHandlers as { repairValidate: (id: string, input: RepairValidateInput) => Promise<RepairValidateReport> }).repairValidate(toolCallId, parameters));
 			},
 		});
 	}

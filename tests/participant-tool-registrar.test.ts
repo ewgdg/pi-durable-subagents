@@ -89,6 +89,7 @@ const roleToolNames = {
 		"agent_wait",
 		"ask_user",
 		"moderator_control",
+		"repair_validate",
 		"report_to_user",
 	],
 	owner: [

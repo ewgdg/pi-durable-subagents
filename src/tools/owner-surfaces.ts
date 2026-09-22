@@ -332,6 +332,7 @@ export function participantCoordinatorHandlers(
 			reportToUser: (toolCallId, input) => moderatorView().reportToUser(toolCallId, input),
 			moderatorControl: (toolCallId, input) =>
 				moderatorView().moderatorControl(toolCallId, input),
+			repairValidate: (toolCallId, input) => moderatorView().repairValidate(toolCallId, input),
 		};
 	}
 	const ordinaryView = resolveView as () => OrdinaryAgentCoordinatorView;

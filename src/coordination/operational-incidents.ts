@@ -57,6 +57,7 @@ import {
 	validateManualRepairReason,
 	type ManualRepairReceipt,
 } from "./manual-repair.ts";
+import { shouldJoinLiveRepair } from "./repair-freeze.ts";
 import { detectDependencyDeadlocks } from "./dependency-deadlock.ts";
 import type { MessageCoordinator } from "./messages.ts";
 import {
@@ -522,12 +523,17 @@ export class OperationalIncidentCoordinator {
 	 * trigger, no background watcher. One live repair Moderator at a time: a
 	 * second trigger while live joins the existing one instead of duplicating it.
 	 */
+	isManualRepairModerator(agentId: string): boolean {
+		return this.#manualRepair?.moderatorAgentId === agentId;
+	}
+
 	async requestManualRepair(reason: string): Promise<ManualRepairReceipt> {
 		const validated = validateManualRepairReason(reason);
 		const existing = this.#manualRepair;
 		if (existing) {
 			const record = this.#agents.get(existing.moderatorAgentId);
-			if (record && record.host.observe().phase !== "dormant" && !record.host.currentRunFailed()) {
+			const gate = record ? { phase: record.host.observe().phase, failed: record.host.currentRunFailed(), hasRecord: true } : { phase: "dormant", failed: false, hasRecord: false };
+			if (shouldJoinLiveRepair(gate)) {
 				return { disposition: "joined", moderatorAgentId: existing.moderatorAgentId };
 			}
 			// A dormant or failed predecessor stays as retained history on disk;

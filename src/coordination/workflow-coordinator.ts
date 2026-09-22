@@ -5,6 +5,7 @@ import { ModeratorReportStore } from "./moderator-reports.ts";
 import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
+import { validateRepairFreezeAdvisory } from "./repair-validate.ts";
 import type { ObligationFrame } from "../protocol/obligation-focus.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { refreshAgentTranscripts } from "./agent-record.ts";
@@ -247,6 +248,7 @@ export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 		toolCallId: string,
 		input: ModeratorControlInput,
 	): Promise<ModeratorControlReceipt>;
+	repairValidate(toolCallId: string, input: Readonly<{ transcriptPaths: readonly string[] }>): Promise<import("./repair-validate.ts").RepairValidateReport>;
 }>;
 
 export class WorkflowCoordinator {
@@ -661,6 +663,22 @@ export class WorkflowCoordinator {
 					toolCallId,
 					input,
 				);
+			},
+			repairValidate: async (toolCallId, input) => {
+				this.#assertAdmissionOpen();
+				if (!this.#operationalIncidents.isManualRepairModerator(agentId)) {
+					throw new Error("wrong_participant: repair_validate is available only on the manual repair Moderator");
+				}
+				const record = this.#requireModerator(agentId);
+				const transcript = record.transcript.inspect();
+				const committed = resolveCommittedToolCall({ agentId, transcript, toolCallId, toolName: "repair_validate" });
+				const provided = (input as { transcriptPaths?: unknown }).transcriptPaths;
+				const committedPaths = (committed.input as { transcriptPaths?: unknown }).transcriptPaths;
+				if (!isDeepStrictEqual(provided, committedPaths)) {
+					throw new Error("invariant_violation: repair_validate input differs from its source");
+				}
+				if (!Array.isArray(provided) || provided.length === 0) throw new Error("invalid_input: repair_validate needs transcriptPaths");
+				return validateRepairFreezeAdvisory({ transcriptPaths: provided as string[], stage: "repair_validate" });
 			},
 		});
 	}
