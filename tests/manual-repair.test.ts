@@ -8,7 +8,6 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
-	parseAgentsRepairCommitSnapshotId,
 	parseAgentsRepairReason,
 } from "../src/process-runtime/remote-agent-selector.ts";
 import {
@@ -29,18 +28,15 @@ test("agents command parses the manual repair trigger", () => {
 	assert.equal(parseAgentsRepairReason("repair"), undefined);
 	assert.equal(parseAgentsRepairReason("repair check the stalled handoff"), "check the stalled handoff");
 	assert.equal(parseAgentsRepairReason("repair   trimmed   "), "trimmed");
-	assert.equal(parseAgentsCommandArgument("repair-confirm abc123"), "repair-confirm");
-	assert.equal(parseAgentsCommandArgument("repair-commit abc123"), "repair-commit");
-	assert.equal(parseAgentsRepairCommitSnapshotId("repair-commit abc123"), "abc123");
-	assert.throws(() => parseAgentsRepairCommitSnapshotId("repair-commit"), /Usage/);
-	assert.throws(() => parseAgentsRepairCommitSnapshotId("repair-commit a b"), /Usage/);
-	assert.equal(parseAgentsCommandArgument("repair-freeze"), "repair-freeze");
+	assert.throws(() => parseAgentsCommandArgument("repair-confirm abc123"), /Usage: \/agents/);
+	assert.throws(() => parseAgentsCommandArgument("repair-commit abc123"), /Usage: \/agents/);
+	assert.throws(() => parseAgentsCommandArgument("repair-freeze"), /Usage: \/agents/);
 });
 
 test("agents completions offer repair only where the Owner admits it", () => {
 	assert.equal(getAgentsArgumentCompletions("r"), null);
 	const offered = getAgentsArgumentCompletions("r", { includeRepair: true });
-	assert.deepEqual(offered, [{ value: "repair", label: "repair" }, { value: "repair-confirm", label: "repair-confirm" }, { value: "repair-freeze", label: "repair-freeze" }, { value: "repair-commit", label: "repair-commit" }]);
+	assert.deepEqual(offered, [{ value: "repair", label: "repair" }]);
 	const all = getAgentsArgumentCompletions("", { includeRepair: true });
 	assert.ok(all?.some(({ value }) => value === "owner"));
 	assert.ok(all?.some(({ value }) => value === "repair"));

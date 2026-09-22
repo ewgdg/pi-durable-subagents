@@ -21,8 +21,6 @@ import {
 	createAgentSelectorSnapshot,
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
-	parseAgentsRepairCommitSnapshotId,
-	parseAgentsRepairConfirmSnapshotId,
 	parseAgentsRepairReason,
 } from "../process-runtime/remote-agent-selector.ts";
 import { validateManualRepairReason } from "../coordination/manual-repair.ts";
@@ -235,31 +233,20 @@ export function registerAgentsCommand(
 			}
 			if (admissionFailure) {
 				const mode = (() => { try { return parseAgentsCommandArgument(args); } catch { return "selector"; } })();
-				if ((mode === "repair" || mode === "repair-confirm" || mode === "repair-freeze" || mode === "repair-commit") && preadmissionRepair) {
+				if (mode === "repair" && preadmissionRepair) {
 					const host = preadmissionRepair();
 					try {
-						if (mode === "repair") {
-							const receipt = await host.requestManualRepair(validateManualRepairReason(parseAgentsRepairReason(args)));
-							ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
-							try {
+						const receipt = await host.requestManualRepair(validateManualRepairReason(parseAgentsRepairReason(args)));
+						ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
+						try {
                             const surface = await swapRepairViaTransientOverlay(ctx.ui, host, receipt.moderatorAgentId, () => ctx.shutdown(), repairDeps?.startRepairSurface);
                             if (surface) {
                               void surface.closed.catch((error) => {
                                 ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
                               });
                             }
-							} catch (error) {
-							  ctx.ui.notify("Repair view failed: " + (error instanceof Error ? error.message : String(error)), "error");
-							}
-						} else if (mode === "repair-freeze") {
-							const snap = await host.freezeRepairSnapshot();
-							ctx.ui.notify("Repair snapshot: " + snap.snapshotId + " (" + String(snap.entries.length) + " targets)", "info");
-						} else if (mode === "repair-commit") {
-							const result = await host.commitRepairReplaceSealed(parseAgentsRepairCommitSnapshotId(args));
-							ctx.ui.notify("Repair commit " + result.disposition + " (snapshot " + result.snapshotId + "); Owner idle until a new human message.", "info");
-						} else {
-							const approval = await host.confirmRepairReplace(parseAgentsRepairConfirmSnapshotId(args));
-							ctx.ui.notify("Repair approval: " + approval.approvalId + " for snapshot " + approval.snapshotId, "info");
+						} catch (error) {
+						  ctx.ui.notify("Repair view failed: " + (error instanceof Error ? error.message : String(error)), "error");
 						}
 					} catch (error) {
 						ctx.ui.notify("Repair failed: " + (error instanceof Error ? error.message : String(error)), "error");
@@ -308,36 +295,6 @@ export function registerAgentsCommand(
 						"Repair view failed: " + (error instanceof Error ? error.message : String(error)),
 						"error",
 					);
-				}
-				return;
-			}
-			if (commandMode === "repair-freeze") {
-				const repairView = resolveView();
-				try {
-					const snap = await repairView.freezeRepairSnapshot();
-					ctx.ui.notify("Repair snapshot: " + snap.snapshotId + " (" + String(snap.entries.length) + " targets)", "info");
-				} catch (error) {
-					ctx.ui.notify("Repair freeze failed: " + (error instanceof Error ? error.message : String(error)), "error");
-				}
-				return;
-			}
-			if (commandMode === "repair-confirm") {
-				const repairView = resolveView();
-				try {
-					const approval = await repairView.confirmRepairReplace(parseAgentsRepairConfirmSnapshotId(args));
-					ctx.ui.notify("Repair approval: " + approval.approvalId + " for snapshot " + approval.snapshotId, "info");
-				} catch (error) {
-					ctx.ui.notify("Repair confirm failed: " + (error instanceof Error ? error.message : String(error)), "error");
-				}
-				return;
-			}
-			if (commandMode === "repair-commit") {
-				const repairView = resolveView();
-				try {
-					const result = await repairView.commitRepairReplaceSealed(parseAgentsRepairCommitSnapshotId(args));
-					ctx.ui.notify("Repair commit " + result.disposition + " (snapshot " + result.snapshotId + "); Owner idle until a new human message.", "info");
-				} catch (error) {
-					ctx.ui.notify("Repair commit failed: " + (error instanceof Error ? error.message : String(error)), "error");
 				}
 				return;
 			}

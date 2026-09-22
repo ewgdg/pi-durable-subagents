@@ -84,7 +84,7 @@ function summaryText(failure: OwnerRecoveryError | undefined): string {
 		"",
 		"Recovery",
 	"Manual repair: /agents repair <reason> opens a real Moderator for diagnosis first (diagnostics r uses the default reason).",
-	"Replace path (Owner only): /agents repair-freeze, then /agents repair-confirm <snapshotId>, then /agents repair-commit <snapshotId> seals the exact frozen bytes with backup/verify/journal, then the Owner stays idle until a new human message. Esc revokes a pending approval.",
+	"The Moderator diagnoses, fixes, validates, and commits under that trigger authority; the Owner stays idle until a new human message. Esc revokes a pending repair.",
 	"Unadmitted originals stay unavailable; no auto trigger, no watcher.",
 		"Native /fork preserves selected conversation in a new independent Workflow; /clone copies the active branch.",
 		"Owner role identification must have succeeded; otherwise fork is refused. Native /new remains available.",

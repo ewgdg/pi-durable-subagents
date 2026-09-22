@@ -70,11 +70,11 @@ export function capturePreadmissionRepairEvidence(options: Readonly<{
   });
 }
 
-/** Truthful manual-repair scope for diagnostics and confirm prompts. */
+/** Truthful manual-repair scope for diagnostics. */
 export function describePreadmissionRepairScope(): string {
   return [
     "Manual repair opens a real Moderator for diagnosis first.",
-    "Replace needs your explicit approval, then backup/verify, then idle reopen.",
+    "The Moderator diagnoses, fixes, validates, and commits under that trigger authority.",
     "Unadmitted originals stay unavailable; no auto trigger, no watcher.",
   ].join(" ");
 }

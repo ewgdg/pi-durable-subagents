@@ -17,7 +17,7 @@ import { approveRepairReplace, createRepairApprovalLedger, commitRepairReplace, 
 import { assertRepairArtifactDirOutsideWorkflow } from "../src/coordination/repair-commit.ts";
 import { inspectFrozenBackup, listFrozenRepairTargets, sha256File } from "../src/coordination/repair-freeze.ts";
 import { workflowSessionDirectory } from "../src/runtime/workflow-session-directory.ts";
-import { parseAgentsCommandArgument, parseAgentsRepairCommitSnapshotId, parseAgentsRepairConfirmSnapshotId } from "../src/process-runtime/remote-agent-selector.ts";
+import { parseAgentsCommandArgument } from "../src/process-runtime/remote-agent-selector.ts";
 async function makeWorkflow(prefix: string) {
   const root = await mkdtemp(join(tmpdir(), prefix));
   const owner = SessionManager.create(root, root);
@@ -55,16 +55,10 @@ test("preadmission evidence needs verified Owner identity plus native config, no
   assert.ok(backupRoot.indexOf(ctx.directory + "/") !== 0);
   assert.throws(() => assertRepairArtifactDirOutsideWorkflow(ctx.directory, ctx.directory, "backup root"), /outside/);
 });
-test("agents repair-confirm parsing binds the exact snapshot id", async () => {
-  assert.equal(parseAgentsCommandArgument("repair-confirm abc123"), "repair-confirm");
-  assert.equal(parseAgentsCommandArgument("repair-freeze"), "repair-freeze");
-  assert.equal(parseAgentsRepairConfirmSnapshotId("repair-confirm abc123"), "abc123");
-  assert.equal(parseAgentsCommandArgument("repair-commit abc123"), "repair-commit");
-  assert.equal(parseAgentsRepairCommitSnapshotId("repair-commit abc123"), "abc123");
-  assert.throws(() => parseAgentsRepairCommitSnapshotId("repair-commit"), /Usage/);
-  assert.throws(() => parseAgentsRepairCommitSnapshotId("repair-commit a b"), /Usage/);
-  assert.throws(() => parseAgentsRepairConfirmSnapshotId("repair-confirm"), /Usage/);
-  assert.throws(() => parseAgentsRepairConfirmSnapshotId("repair-confirm a b"), /Usage/);
+test("retired repair subcommands throw usage", async () => {
+  for (const args of ["repair-confirm abc123", "repair-commit abc123", "repair-freeze"]) {
+    assert.throws(() => parseAgentsCommandArgument(args), /Usage: \/agents/);
+  }
 });
 test("drift on removed targets refuses", async () => {
   const ctx = await makeWorkflow("repair-wire-drift-removed-");
