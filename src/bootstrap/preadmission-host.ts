@@ -3,6 +3,7 @@ import type { OwnerRecoveryError } from "./owner-recovery-error.ts";
 import { WorkflowCoordinator, type HumanPresentationCoordinatorView } from "../coordination/workflow-coordinator.ts";
 import { capturePreadmissionRepairEvidence, type PreadmissionRepairEvidence } from "../coordination/preadmission-repair.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
+import { readWorkflowPolicy, WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 
 /** Visible signal for preadmission setup failures; data stays untouched. */
 export function preadmissionFailureNotice(error: unknown): string {
@@ -40,7 +41,15 @@ export async function setupPreadmissionRepairHost(options: {
 	const evidence = capturePreadmissionRepairEvidence({ ownerIdentity, sessionDir, agentDir, transcriptPath, stage: options.failure.stage });
 	// Failed admission may retain cached coordination projections; rebuild fresh.
 	transcriptFromSessionManager(runtime.session.sessionManager, { fresh: true });
-	const coordinator = new WorkflowCoordinator(runtime, ownerIdentity, { entryModulePath: options.entryModulePath });
+	// The admitted host loads this same file in owner-bootstrap. Without it the
+	// repair-only host falls back to empty exclusions and the repair Moderator
+	// run can select a model the Owner explicitly banned.
+	const policyRead = await readWorkflowPolicy(evidence.agentDir);
+	if (!policyRead.ok) throw new Error(policyRead.diagnostic.message);
+	const coordinator = new WorkflowCoordinator(runtime, ownerIdentity, {
+		entryModulePath: options.entryModulePath,
+		workflowPolicy: new WorkflowPolicyStore(policyRead.snapshot),
+	});
 	await coordinator.initializePreadmissionRepair();
 	if (evidence.workflowDirectory !== coordinator.preadmissionRepairWorkflowDirectory()) {
 		await coordinator.shutdown(async () => undefined).catch(() => undefined);

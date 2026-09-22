@@ -22,6 +22,23 @@ Expected: blockage widget plus /agents diagnostics hint, session file untouched.
 
 Do not use print mode against the materialized file (it appends conversation); re-run the smoke test for a fresh tempfile instead.
 
+## D. Repair-host isolation guarantees
+
+- Model policy applies to the repair Moderator on both paths: the preadmission
+  host loads the policy file like the admitted host, and an excluded inherited
+  or template-default model is refused (never silently selected).
+- The repair Moderator's start/view/validate path never traverses live broken
+  Owner evidence: RequestEvidence traversals skip the retired Owner record, and
+  the repair host runs no automatic incident inspection, reminders, or
+  Moderator creation. Diagnosis reads frozen copies only
+  (readRepairOwnerSnapshot, repair_validate on frozen paths).
+- The repair Moderator's /agents switcher shows only itself; spawn, message,
+  wait, control, and resume stay repair-only refused.
+- Approval and commit stay explicitly human-driven through /agents
+  repair-freeze, repair-confirm, and repair-commit (Owner-session provenance,
+  exact snapshot binding, persisted-ledger revocation, no model-granted
+  authority). There is no Moderator-driven approve/commit path by design.
+
 ## C. Headless backend and wiring suites
 
     node tests/support/run-test-suite.ts fast --file=repair-freeze-backend.test.ts

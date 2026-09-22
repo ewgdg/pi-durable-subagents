@@ -446,6 +446,12 @@ export class WorkflowCoordinator {
 						resolveView,
 						agentId,
 						options.postMortemAgentPresenter,
+						// Repair context keeps the switcher available but scoped:
+						// the repair Moderator's selector snapshot shows only
+						// itself, never the broken Owner or other agents.
+						this.#operationalIncidents.isManualRepairModerator(agentId)
+							? { repairModeratorAgentId: agentId }
+							: undefined,
 					),
 				};
 			},
@@ -498,6 +504,11 @@ export class WorkflowCoordinator {
 			preemptAgentWait: (record, reserveDelivery) =>
 				this.#agentWaits.preemptForInboundRequest(record, reserveDelivery),
 			workflowPolicy: this.#workflowPolicy,
+			// Repair-host evidence scope: the retired broken Owner record stays
+			// readable for identity/status/roster, but its frozen bytes never
+			// enter RequestEvidence traversals. The predicate is read per
+			// traversal, so setting repair-only mode later still applies.
+			isEvidenceLive: (agentId) => !this.#preadmissionRepairOnly || agentId !== identity.agentId,
 		});
 		this.#agentWaits = new AgentWaitCoordinator({
 			agents: this.#agents,
@@ -561,6 +572,10 @@ export class WorkflowCoordinator {
 			operationReviewClock: options.operationReviewClock,
 			deliveryProgressClock: options.deliveryProgressClock,
 			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
+			// Repair-only host runs no automatic incident inspection, reminders,
+			// or Moderator creation: manual repair is trigger-only by design.
+			// Read per scheduling decision, so late repair-only mode still applies.
+			isRepairOnlyHost: () => this.#preadmissionRepairOnly,
 		});
 		for (const record of this.#agents.values()) this.#integrateAgent(record);
 		this.#spawner = new DefaultChildSpawner({

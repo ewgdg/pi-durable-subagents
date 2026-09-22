@@ -210,6 +210,7 @@ export class OperationalIncidentCoordinator {
 	readonly #reconciliationLane = new SerialLane();
 	#pendingReconciliation: Promise<void> | undefined;
 	#inspectionStalled = false;
+	readonly #isRepairOnlyHost: () => boolean;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
@@ -229,6 +230,13 @@ export class OperationalIncidentCoordinator {
 		operationReviewClock?: OperationReviewClock;
 		deliveryProgressClock?: OperationReviewClock;
 		onAttentionChanged?(): void;
+		/**
+		 * Repair-only host: no automatic evidence inspection, obligation
+		 * reminders, or Moderator creation. Manual repair stays trigger-only
+		 * by construction instead of by accident of a broken-evidence throw.
+		 * Direct Moderator control (resolve/renew) and attention reads stay live.
+		 */
+		isRepairOnlyHost?: () => boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
@@ -246,6 +254,7 @@ export class OperationalIncidentCoordinator {
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
+		this.#isRepairOnlyHost = options.isRepairOnlyHost ?? (() => false);
 		const reviewClock = options.operationReviewClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#operationReviews = new OperationReviewWatcher({
 			clock: {
@@ -700,6 +709,7 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#reconcileWorkflow(): Promise<void> {
+		if (this.#isRepairOnlyHost()) return Promise.resolve();
 		return this.#withModerationDeadline(async () => {
 			await this.#inspectWorkflow();
 			this.#dismissFault("moderation:evidence");
@@ -1503,6 +1513,10 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#scheduleReconciliation(): Promise<void> {
+		// Repair-only host: automatic inspection would traverse retired broken
+		// Owner evidence and invent incident handling for a workflow whose only
+		// sanctioned recovery is the human-triggered repair Moderator.
+		if (this.#isRepairOnlyHost()) return Promise.resolve();
 		// Host events often arrive in bursts. Share the pending observation and let
 		// input/timers run between scans instead of draining a long microtask queue.
 		return this.#pendingReconciliation ??= this.#reconciliationLane

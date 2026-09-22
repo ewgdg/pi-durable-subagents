@@ -173,18 +173,29 @@ export function createOwnerAgentPresentationHandlers(
 	resolveView: () => HumanPresentationCoordinatorView,
 	selectedAgentId: string,
 	postMortemPresenter?: PostMortemAgentPresenter,
+	options?: Readonly<{ repairModeratorAgentId?: string }>,
 ): OwnerParticipantPresentationHandlers {
+	const repairModeratorAgentId = options?.repairModeratorAgentId;
 	return {
 		setReportRead: async (reportId, read) => resolveView().setReportRead(reportId, read),
 		snapshot: async () => {
 			const view = resolveView();
 			// Child navigation uses the same admitted projection as Owner navigation,
 			// not a transcript refresh that could block the route back to Owner.
-			return createAgentSelectorSnapshot(view, selectedAgentId);
+			const snapshot = createAgentSelectorSnapshot(view, selectedAgentId);
+			// Repair context keeps the switcher available but hides the broken
+			// Owner and every other agent: the repair Moderator sees only
+			// itself. Diagnostics (attention, reports) stay visible.
+			return repairModeratorAgentId === undefined
+				? snapshot
+				: filterRepairModeratorSelectorSnapshot(snapshot, repairModeratorAgentId);
 		},
 		addChangeHandler(handler) {
 			return resolveView().addAgentActivityChangeHandler(() =>
-				handler(createAgentSelectorSnapshot(resolveView(), selectedAgentId))
+				handler(filterRepairSnapshotIfNeeded(
+					createAgentSelectorSnapshot(resolveView(), selectedAgentId),
+					repairModeratorAgentId,
+				))
 			);
 		},
 		async select(action, signal) {
@@ -211,6 +222,35 @@ export function createOwnerAgentPresentationHandlers(
 				: { kind: "selected" };
 		},
 	};
+}
+
+function filterRepairSnapshotIfNeeded(
+	snapshot: RemoteAgentSelectorSnapshot,
+	repairModeratorAgentId: string | undefined,
+): RemoteAgentSelectorSnapshot {
+	return repairModeratorAgentId === undefined
+		? snapshot
+		: filterRepairModeratorSelectorSnapshot(snapshot, repairModeratorAgentId);
+}
+
+/**
+ * Repair-context selector scope: the repair Moderator's switcher shows only
+ * itself, never the broken Owner or other agents. Attention and report history
+ * pass through untouched so diagnostics stay available.
+ */
+export function filterRepairModeratorSelectorSnapshot(
+	snapshot: RemoteAgentSelectorSnapshot,
+	repairModeratorAgentId: string,
+): RemoteAgentSelectorSnapshot {
+	const self = [...snapshot.live, ...snapshot.dormant].find(
+		(status) => status.agentId === repairModeratorAgentId,
+	);
+	if (!self) {
+		throw new Error(
+			"unavailable: repair Moderator " + repairModeratorAgentId + " has no admitted record in the selector snapshot",
+		);
+	}
+	return { ...snapshot, live: [self], dormant: [], selectedAgentId: repairModeratorAgentId };
 }
 
 /** Register the real child-local selector against its truthful Pi TUI context. */
