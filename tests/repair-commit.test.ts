@@ -33,7 +33,7 @@ async function makeRepairedCopy(sourcePath: string, scratchDir: string, note: st
   session.appendMessage(fauxAssistantMessage(note));
   return repairedPath;
 }
-test("replace approval needs explicit Owner-session confirm; stale snapshot refuses", async () => {
+test("replace approval needs explicit Owner-session trigger; stale snapshot refuses", async () => {
   const ctx = await makeWorkflow("repair-commit-approval-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   assert.ok(snapshot.snapshotId.length > 0);
@@ -42,8 +42,8 @@ test("replace approval needs explicit Owner-session confirm; stale snapshot refu
     assert.throws(() => approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance }), /unauthorized/);
   }
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
-  assert.equal(approval.provenance, "owner-session-confirm");
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
+  assert.equal(approval.provenance, "owner-session-trigger");
   assert.throws(() => assertRepairApprovalFresh(approval, "different-snapshot-id", ledger), /stale_approval/);
   await assert.rejects(runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot: { ...snapshot, snapshotId: "different-snapshot-id" }, approval, ledger }), /stale_approval/);
   assert.doesNotThrow(() => assertRepairApprovalFresh(approval, snapshot.snapshotId, ledger));
@@ -52,20 +52,20 @@ test("replace approval needs explicit Owner-session confirm; stale snapshot refu
   assert.equal(audit.backupLocation, undefined);
   assert.ok(audit.diffSummary.length > 0);
 });
-test("esc and human-message revoke approval with no auto-retry; fresh approval works", async () => {
+test("esc and human-message revoke approval with no auto-retry; fresh trigger approval works", async () => {
   const ctx = await makeWorkflow("repair-commit-revoke-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const escApproval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const escApproval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   notifyRepairHumanInputBeforeCommit(ledger, escApproval.approvalId, "esc");
   assert.throws(() => assertRepairApprovalFresh(escApproval, snapshot.snapshotId, ledger), /revoked/);
   assert.throws(() => assertRepairApprovalFresh(escApproval, snapshot.snapshotId, ledger), /revoked/);
   await assert.rejects(runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval: escApproval, ledger }), /revoked/);
-  const hmApproval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const hmApproval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   notifyRepairHumanInputBeforeCommit(ledger, hmApproval.approvalId, "human-message");
   assert.throws(() => assertRepairApprovalFresh(hmApproval, snapshot.snapshotId, ledger), /revoked/);
   assert.throws(() => assertRepairApprovalFresh(hmApproval, snapshot.snapshotId, ledger), /revoked/);
-  const fresh = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const fresh = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const audit = await runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval: fresh, ledger });
   assert.equal(audit.targetCount, snapshot.entries.length);
   assert.equal(audit.backupLocation, undefined);
@@ -74,20 +74,20 @@ test("drift on added and changed targets refuses; live repair appends excluded",
   const added = await makeWorkflow("repair-commit-drift-add-");
   const snapAdded = await freezeRepairTargets(added.directory);
   const ledgerAdded = createRepairApprovalLedger();
-  const approvalAdded = approveRepairReplace({ snapshotId: snapAdded.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approvalAdded = approveRepairReplace({ snapshotId: snapAdded.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   ordinaryChild(added.owner, added.workflowId, "spawn-late-child", "late-child");
   await assert.rejects(runRepairPreCommitGate({ workflowDirectory: added.directory, snapshot: snapAdded, approval: approvalAdded, ledger: ledgerAdded }), /drift/);
   const changed = await makeWorkflow("repair-commit-drift-chg-");
   const snapChanged = await freezeRepairTargets(changed.directory);
   const ledgerChanged = createRepairApprovalLedger();
-  const approvalChanged = approveRepairReplace({ snapshotId: snapChanged.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approvalChanged = approveRepairReplace({ snapshotId: snapChanged.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const opener = SessionManager.open(snapChanged.entries[0].source);
   opener.appendMessage(fauxAssistantMessage("Late Owner write changes the hash."));
   await assert.rejects(runRepairPreCommitGate({ workflowDirectory: changed.directory, snapshot: snapChanged, approval: approvalChanged, ledger: ledgerChanged }), /drift/);
   const live = await makeWorkflow("repair-commit-livedrift-");
   const snapLive = await freezeRepairTargets(live.directory);
   const ledgerLive = createRepairApprovalLedger();
-  const approvalLive = approveRepairReplace({ snapshotId: snapLive.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approvalLive = approveRepairReplace({ snapshotId: snapLive.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const repairDir = repairSessionDirectory(live.root, live.workflowId);
   const repair = SessionManager.create(live.root, repairDir);
   repair.appendCustomEntry("agent-coordination.identity", { agentId: repair.getSessionId(), workflowId: live.workflowId, directSpawnerAgentId: null, metadata: { label: "Moderator", description: "Manual repair" } });
@@ -103,7 +103,7 @@ test("happy-path commit seals generation, journals receipt, single-use approval,
   const ctx = await makeWorkflow("repair-commit-happy-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const scratch = await mkdtemp(join(tmpdir(), "repair-commit-scratch-"));
   const repairedBySource: Record<string, string> = {};
   for (const entry of snapshot.entries) repairedBySource[entry.source] = await makeRepairedCopy(entry.source, scratch, "Repaired note.");
@@ -125,7 +125,7 @@ test("happy-path commit seals generation, journals receipt, single-use approval,
   assert.equal(journal.attemptId, attemptId);
   assert.equal(journal.snapshotId, snapshot.snapshotId);
   assert.equal(journal.approver, "owner-1");
-  assert.equal(journal.provenance, "owner-session-confirm");
+  assert.equal(journal.provenance, "owner-session-trigger");
   assert.equal(journal.generation, 1);
   assert.equal(journal.status, "committed");
   assert.ok(result.audit.diffSummary.length > 0);
@@ -148,7 +148,7 @@ test("crash after journal commit recovers without touching targets", async () =>
   const ctx = await makeWorkflow("repair-commit-crash-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const scratch = await mkdtemp(join(tmpdir(), "repair-commit-crash-scratch-"));
   const repairedBySource: Record<string, string> = {};
   for (const entry of snapshot.entries) repairedBySource[entry.source] = await makeRepairedCopy(entry.source, scratch, "Crash-path repair.");
@@ -174,7 +174,7 @@ test("failed post-commit admission keeps committed data with truthful error; idl
   const ctx = await makeWorkflow("repair-commit-admit-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const scratch = await mkdtemp(join(tmpdir(), "repair-commit-admit-scratch-"));
   const repairedBySource: Record<string, string> = {};
   for (const entry of snapshot.entries) repairedBySource[entry.source] = await makeRepairedCopy(entry.source, scratch, "Admission-path repair.");
@@ -227,7 +227,7 @@ async function makeCommitFixture(prefix: string, attemptId: string) {
   const ctx = await makeWorkflow(prefix);
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const scratch = await mkdtemp(join(tmpdir(), prefix + "scratch-"));
   const repairedBySource: Record<string, string> = {};
   for (const entry of snapshot.entries) repairedBySource[entry.source] = await makeRepairedCopy(entry.source, scratch, "Fixture repair.");
@@ -239,17 +239,17 @@ async function makeCommitFixture(prefix: string, attemptId: string) {
 test("replace approval binds the approver to the Owner-session Owner id", async () => {
   const ctx = await makeWorkflow("repair-commit-authority-");
   const snapshot = await freezeRepairTargets(ctx.directory);
-  const ok = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const ok = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   assert.equal(ok.approver, "owner-1");
-  assert.throws(() => approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-2", provenance: "owner-session-confirm" }), /unauthorized/);
-  assert.throws(() => approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "", ownerId: "owner-1", provenance: "owner-session-confirm" }), /invalid_input/);
-  assert.throws(() => approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "", provenance: "owner-session-confirm" }), /invalid_input/);
-  assert.throws(() => (approveRepairReplace as (options: unknown) => unknown)({ snapshotId: snapshot.snapshotId, provenance: "owner-session-confirm" }), /invalid_input/);
+  assert.throws(() => approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-2", provenance: "owner-session-trigger" }), /unauthorized/);
+  assert.throws(() => approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "", ownerId: "owner-1", provenance: "owner-session-trigger" }), /invalid_input/);
+  assert.throws(() => approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "", provenance: "owner-session-trigger" }), /invalid_input/);
+  assert.throws(() => (approveRepairReplace as (options: unknown) => unknown)({ snapshotId: snapshot.snapshotId, provenance: "owner-session-trigger" }), /invalid_input/);
 });
 test("pre-commit gate requires the approval ledger", async () => {
   const ctx = await makeWorkflow("repair-commit-ledger-required-");
   const snapshot = await freezeRepairTargets(ctx.directory);
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   await assert.rejects(runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval, ledger: undefined as never }), /invalid_input: repair approval ledger is required/);
 });
 test("same-attempt join still enforces snapshot binding, approval identity, and revocation", async () => {
@@ -259,7 +259,7 @@ test("same-attempt join still enforces snapshot binding, approval identity, and 
   notifyRepairHumanInputBeforeCommit(fx.ledger, fx.approval.approvalId, "esc");
   await assert.rejects(commitRepairReplace({ ...fx.base }), /revoked/);
   const otherLedger = createRepairApprovalLedger();
-  const other = approveRepairReplace({ snapshotId: fx.snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const other = approveRepairReplace({ snapshotId: fx.snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   await assert.rejects(commitRepairReplace({ ...fx.base, approval: other, ledger: otherLedger }), /stale_approval/);
   const drifted = { ...fx.snapshot, snapshotId: "different-snapshot-id" };
   await assert.rejects(commitRepairReplace({ ...fx.base, snapshot: drifted, ledger: createRepairApprovalLedger() }), /stale_approval/);

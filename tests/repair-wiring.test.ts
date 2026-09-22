@@ -64,7 +64,7 @@ test("drift on removed targets refuses", async () => {
   const ctx = await makeWorkflow("repair-wire-drift-removed-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const target = snapshot.entries[0].source;
   const stash = await mkdtemp(join(tmpdir(), "repair-wire-stash-"));
   const kept = join(stash, basename(target));
@@ -79,7 +79,7 @@ test("crash path keeps repaired bytes with stable hash", async () => {
   const ctx = await makeWorkflow("repair-wire-crash-bytes-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const scratch = await mkdtemp(join(tmpdir(), "repair-wire-crash-scratch-"));
   const repairedBySource: Record<string, string> = {};
   for (const entry of snapshot.entries) repairedBySource[entry.source] = await makeRepairedCopy(entry.source, scratch, "Crash bytes repair.");
@@ -92,7 +92,7 @@ test("persisted ledger records single-use consumed approval", async () => {
   const ctx = await makeWorkflow("repair-wire-consumed-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const scratch = await mkdtemp(join(tmpdir(), "repair-wire-consumed-scratch-"));
   const repairedBySource: Record<string, string> = {};
   for (const entry of snapshot.entries) repairedBySource[entry.source] = await makeRepairedCopy(entry.source, scratch, "Consumed repair.");
@@ -110,7 +110,7 @@ test("backup and journal inside the workflow are refused", async () => {
   const ctx = await makeWorkflow("repair-wire-inside-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
-  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-confirm" });
+  const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const scratch = await mkdtemp(join(tmpdir(), "repair-wire-inside-scratch-"));
   const repairedBySource: Record<string, string> = {};
   for (const entry of snapshot.entries) repairedBySource[entry.source] = await makeRepairedCopy(entry.source, scratch, "Inside repair.");
@@ -129,9 +129,9 @@ test("inspect-only backup review never writes live targets", async () => {
   assert.equal(restored.entries.length, targets.length);
   assert.equal(await sha256File(targets[0] as string), before);
 });
-test("Owner confirm constructs approval only for Owner, bound to exact snapshot", async (t) => {
+test("freeze auto-mints trigger approval bound to exact snapshot", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
   const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
   owner = coordinator.forAgent(identity.agentId);
@@ -144,19 +144,44 @@ test("Owner confirm constructs approval only for Owner, bound to exact snapshot"
   const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
   child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "wire-child" } });
   child.appendMessage(fauxAssistantMessage("Persist wire-child"));
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding.")]);
+  const receipt = await owner.requestManualRepair("freeze auto-mints trigger approval");
+  assert.equal(receipt.disposition, "created");
   const snapshot = await owner.freezeRepairSnapshot();
   assert.ok(snapshot.snapshotId.length > 0);
   assert.ok(snapshot.entries.length >= 1);
-  const approval = await owner.confirmRepairReplace(snapshot.snapshotId);
-  assert.equal(approval.snapshotId, snapshot.snapshotId);
-  assert.equal(approval.approver, identity.agentId);
-  assert.equal(approval.provenance, "owner-session-confirm");
-  await assert.rejects(owner.confirmRepairReplace("no-such-snapshot"), /stale_approval/);
+  const scratch = await mkdtemp(join(tmpdir(), "repair-wire-freeze-auto-scratch-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of snapshot.entries) repaired[entry.source] = await makeRepairedCopy(entry.source, scratch, "Freeze-auto repair.");
+  const result = await owner.commitRepairReplace(repaired, "attempt-freeze-auto-1");
+  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
+  assert.equal(result.snapshotId, snapshot.snapshotId);
+  await assert.rejects(owner.commitRepairReplace(repaired, "attempt-freeze-auto-2"), /unauthorized|consumed|no pending/);
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("Esc revokes pending approval through the persisted ledger, no auto-retry", async (t) => {
+test("commit without freeze refuses unauthorized without pending trigger approval", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
+  const identity = adoptOrValidateOwnerIdentity(host.runtime);
+  const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
+  owner = coordinator.forAgent(identity.agentId);
+  await bindTestOwnerHost(host, "tui");
+  const ownerMgr = host.session.sessionManager;
+  const toolId = "spawn-wire-nofreeze-a";
+  const entryId = ownerMgr.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "nofreeze-child", request: "Work", label: "nofreeze-child" }, { id: toolId })));
+  const workflowDir = workflowSessionDirectory(ownerMgr.getSessionDir(), identity.workflowId);
+  const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
+  child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "nofreeze-child" } });
+  child.appendMessage(fauxAssistantMessage("Persist nofreeze-child"));
+  await assert.rejects(owner.commitRepairReplace({ "/tmp/unknown": "/tmp/unknown" }, "attempt-nofreeze-1"), /unauthorized|no pending/);
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding.")]);
+  await owner.requestManualRepair("unknown snapshot triage");
+  await assert.rejects(owner.commitRepairReplace({ "/tmp/unknown": "/tmp/unknown" }, "attempt-nofreeze-2"), /unauthorized|no pending|invalid_input|stale_approval/);
+  await coordinator.shutdown(async () => host.runtime.dispose());
+});
+test("Esc revokes pending trigger approval through the persisted ledger, no auto-retry", async (t) => {
+  let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
   const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
   owner = coordinator.forAgent(identity.agentId);
@@ -169,22 +194,25 @@ test("Esc revokes pending approval through the persisted ledger, no auto-retry",
   const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
   child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "esc-child" } });
   child.appendMessage(fauxAssistantMessage("Persist esc-child"));
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding.")]);
+  const receipt = await owner.requestManualRepair("esc revocation triage");
+  assert.equal(receipt.disposition, "created");
   const snapshot = await owner.freezeRepairSnapshot();
-  const approval = await owner.confirmRepairReplace(snapshot.snapshotId);
+  const before = await sha256File(snapshot.entries[0].source as string);
   await owner.notifyRepairHumanInput("esc");
   let message = "";
   try { await owner.commitRepairReplace({ [snapshot.entries[0].source as string]: snapshot.entries[0].source as string }, "attempt-esc-1"); } catch (error) { message = error instanceof Error ? error.message : String(error); }
-  assert.ok(message.indexOf("revoked") !== -1 || message.indexOf("no pending") !== -1);
+  assert.ok(message.indexOf("revoked") !== -1 || message.indexOf("no pending") !== -1 || message.indexOf("unauthorized") !== -1, "expected revoked/unauthorized, got: " + message);
+  assert.equal(await sha256File(snapshot.entries[0].source as string), before);
   const ledgerRaw = await readFile(join(preadmissionRepairJournalDir(workflowDir), REPAIR_LEDGER_FILENAME), "utf8");
   const ledgerOnDisk = JSON.parse(ledgerRaw) as { revoked: string[] };
-  assert.ok(ledgerOnDisk.revoked.indexOf(approval.approvalId) !== -1);
-  const fresh = await owner.confirmRepairReplace(snapshot.snapshotId);
-  assert.ok(fresh.approvalId !== approval.approvalId);
+  assert.ok(ledgerOnDisk.revoked.length >= 1, "expected persisted revocation");
+  await assert.rejects(owner.freezeRepairSnapshot(), /unauthorized|no pending/);
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("new human message revokes pending approval and releases idle hold", async (t) => {
+test("new human message revokes pending trigger approval", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
   const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
   owner = coordinator.forAgent(identity.agentId);
@@ -197,27 +225,17 @@ test("new human message revokes pending approval and releases idle hold", async 
   const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
   child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "hm-child" } });
   child.appendMessage(fauxAssistantMessage("Persist hm-child"));
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding.")]);
+  const receipt = await owner.requestManualRepair("human-message revocation triage");
+  assert.equal(receipt.disposition, "created");
   const snapshot = await owner.freezeRepairSnapshot();
-  await owner.confirmRepairReplace(snapshot.snapshotId);
+  const before = await sha256File(snapshot.entries[0].source as string);
   await owner.resumeFromHuman("new human direction", undefined);
   let message = "";
   try { await owner.commitRepairReplace({ [snapshot.entries[0].source as string]: snapshot.entries[0].source as string }, "attempt-hm-1"); } catch (error) { message = error instanceof Error ? error.message : String(error); }
-  assert.ok(message.indexOf("no pending") !== -1 || message.indexOf("revoked") !== -1);
-  const hmScratch = await mkdtemp(join(tmpdir(), "repair-wire-hm-scratch-"));
-  const hmSnapshot = await owner.freezeRepairSnapshot();
-  await owner.confirmRepairReplace(hmSnapshot.snapshotId);
-  const hmRepaired: Record<string, string> = {};
-  for (const entry of hmSnapshot.entries) {
-    const rp = join(hmScratch, basename(entry.source).replace(".jsonl", ".repaired.jsonl"));
-    await copyFile(entry.source, rp);
-    SessionManager.open(rp).appendMessage(fauxAssistantMessage("Human-message idle repair."));
-    hmRepaired[entry.source] = rp;
-  }
-  const hmResult = await owner.commitRepairReplace(hmRepaired, "attempt-hm-2");
-  assert.ok(hmResult.disposition === "committed" || hmResult.disposition === "joined-committed");
-  await assert.rejects(owner.beginExecution(), /idle_until_human_message/);
-  await owner.resumeFromHuman("human takes over after repair", undefined);
-  await owner.beginExecution();
+  assert.ok(message.indexOf("no pending") !== -1 || message.indexOf("revoked") !== -1 || message.indexOf("unauthorized") !== -1, "expected revoked/unauthorized, got: " + message);
+  assert.equal(await sha256File(snapshot.entries[0].source as string), before);
+  await assert.rejects(owner.freezeRepairSnapshot(), /unauthorized|no pending/);
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
 test("second trigger join-or-fresh disposition (mock sessionFactory, disposition-only)", async () => {
@@ -296,8 +314,6 @@ test("broken fixture to idle reopen with switch preserves drafts, no auto-resume
   const advisory = await validateRepairFreezeAdvisory({ transcriptPaths: snapshot.entries.map((e) => e.source), stage: "wiring-test" });
   assert.equal(advisory.advisory, true);
   assert.equal(advisory.authorizesBytes, false);
-  const approval = await preOwner.confirmRepairReplace(snapshot.snapshotId);
-  assert.equal(approval.snapshotId, snapshot.snapshotId);
   const scratch = await mkdtemp(join(tmpdir(), "repair-wire-full-scratch-"));
   const repairedBySource: Record<string, string> = {};
   for (const entry of snapshot.entries) {
@@ -318,13 +334,6 @@ test("broken fixture to idle reopen with switch preserves drafts, no auto-resume
   assert.deepEqual(result.idle.drafts, drafts);
   assert.equal(result.idle.turnWithoutHumanMessage, false);
   await assert.rejects(preOwner.beginExecution(), /idle_until_human_message/);
-  await assert.rejects(coordinator.forModerator(moderatorId).confirmRepairReplace(snapshot.snapshotId), /wrong_participant/);
-  const sealedSnap = await preOwner.freezeRepairSnapshot();
-  await preOwner.confirmRepairReplace(sealedSnap.snapshotId);
-  const sealedResult = await preOwner.commitRepairReplaceSealed(sealedSnap.snapshotId, "attempt-full-sealed-1");
-  assert.ok(sealedResult.disposition === "committed" || sealedResult.disposition === "joined-committed");
-  assert.equal(sealedResult.snapshotId, sealedSnap.snapshotId);
-  assert.equal(sealedResult.idle.idle, true);
   await preOwner.resumeFromHuman("human takes over after repair", undefined);
   await preOwner.beginExecution();
   const ownerStatus = preOwner.status();
@@ -365,7 +374,7 @@ test("live two-trigger join on a real coordinator shares one Moderator and one r
 });
 test("preadmission repair host refuses non-repair coordination at the coordinator level", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
   const { WorkflowCoordinator: WC } = await import("../src/coordination/workflow-coordinator.ts");
   const coordinator = new WC(host.runtime, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
@@ -383,14 +392,17 @@ test("preadmission repair host refuses non-repair coordination at the coordinato
   const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
   child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "gate-child" } });
   child.appendMessage(fauxAssistantMessage("Persist gate-child"));
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding.")]);
+  const gateReceipt = await preOwner.requestManualRepair("gate triage");
+  assert.equal(gateReceipt.disposition, "created");
   const snapshot = await preOwner.freezeRepairSnapshot();
   assert.ok(Array.isArray(snapshot.entries));
   await coordinator.shutdown(async () => undefined);
   await host.runtime.dispose();
 });
-test("confirm while pending refuses until Esc revokes", async (t) => {
+test("second freeze replaces pending trigger approval", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
   const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
   owner = coordinator.forAgent(identity.agentId);
@@ -402,17 +414,24 @@ test("confirm while pending refuses until Esc revokes", async (t) => {
   const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
   child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "pending-child" } });
   child.appendMessage(fauxAssistantMessage("Persist pending-child"));
-  const snapshot = await owner.freezeRepairSnapshot();
-  const first = await owner.confirmRepairReplace(snapshot.snapshotId);
-  await assert.rejects(owner.confirmRepairReplace(snapshot.snapshotId), /pending_approval/);
-  await owner.notifyRepairHumanInput("esc");
-  const second = await owner.confirmRepairReplace(snapshot.snapshotId);
-  assert.ok(second.approvalId !== first.approvalId);
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding.")]);
+  const receipt = await owner.requestManualRepair("pending replace triage");
+  assert.equal(receipt.disposition, "created");
+  const firstSnap = await owner.freezeRepairSnapshot();
+  assert.ok(firstSnap.snapshotId.length > 0);
+  const secondSnap = await owner.freezeRepairSnapshot();
+  assert.ok(secondSnap.snapshotId.length > 0);
+  const scratch = await mkdtemp(join(tmpdir(), "repair-wire-pending-scratch-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of secondSnap.entries) repaired[entry.source] = await makeRepairedCopy(entry.source, scratch, "Pending-replace repair.");
+  const result = await owner.commitRepairReplace(repaired, "attempt-pending-replace-1");
+  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
+  assert.equal(result.snapshotId, secondSnap.snapshotId);
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("corrupt persisted ledger makes confirm rethrow instead of minting approval", async (t) => {
+test("corrupt persisted ledger makes freeze rethrow instead of minting approval", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
   const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
   owner = coordinator.forAgent(identity.agentId);
@@ -424,16 +443,19 @@ test("corrupt persisted ledger makes confirm rethrow instead of minting approval
   const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
   child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "corrupt-child" } });
   child.appendMessage(fauxAssistantMessage("Persist corrupt-child"));
-  const snapshot = await owner.freezeRepairSnapshot();
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding.")]);
+  const receipt = await owner.requestManualRepair("corrupt ledger triage");
+  assert.equal(receipt.disposition, "created");
+  await owner.freezeRepairSnapshot();
   const journalDir = preadmissionRepairJournalDir(workflowDir);
   await mkdir(journalDir, { recursive: true });
   await writeFile(join(journalDir, REPAIR_LEDGER_FILENAME), "not-json{{", "utf8");
-  await assert.rejects(owner.confirmRepairReplace(snapshot.snapshotId));
+  await assert.rejects(owner.freezeRepairSnapshot());
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
 test("discarded duplicate input keeps the repaired idle hold", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: false });
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
   const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
   owner = coordinator.forAgent(identity.agentId);
@@ -445,8 +467,10 @@ test("discarded duplicate input keeps the repaired idle hold", async (t) => {
   const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
   child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "discarded-child" } });
   child.appendMessage(fauxAssistantMessage("Persist discarded-child"));
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding.")]);
+  const receipt = await owner.requestManualRepair("discarded-hold triage");
+  assert.equal(receipt.disposition, "created");
   const snapshot = await owner.freezeRepairSnapshot();
-  await owner.confirmRepairReplace(snapshot.snapshotId);
   const scratch = await mkdtemp(join(tmpdir(), "repair-wire-discarded-scratch-"));
   const repaired: Record<string, string> = {};
   for (const entry of snapshot.entries) {
