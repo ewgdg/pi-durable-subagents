@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { backupFrozenTargets, listFrozenRepairTargets, sha256File, shouldJoinLiveRepair, verifyFrozenCopy } from "./repair-freeze.ts";
 import type { LiveRepairGate } from "./repair-freeze.ts";
 export type RepairFrozenSnapshotEntry = Readonly<{ source: string; sha256: string }>;
@@ -35,11 +35,11 @@ export function createRepairApprovalLedger(): RepairApprovalLedger {
   return { consumed: new Set<string>(), revoked: new Set<string>() };
 }
 /**
- * In-memory Esc/human-message revocation. There is no live Esc/human-message
- * hookup: the replace path is an unwired backend library, so no production
- * input path calls this. Tests and the future Owner-session command path call
- * it directly; crash-safe callers must use revokeRepairApprovalPersisted so
- * the revocation survives restarts via the persisted ledger next to the journal.
+ * In-memory Esc/human-message revocation. Production Owner-session input
+ * wiring (Esc key + new human message via the real input path) revokes the
+ * pending approvalId through revokeRepairApprovalPersisted, which persists
+ * via the ledger next to the journal. Direct calls are for tests only;
+ * crash-safe callers must use the persisted variant.
  */
 export function notifyRepairHumanInputBeforeCommit(ledger: RepairApprovalLedger, approvalId: string, kind: "esc" | "human-message"): void {
   if (!ledger || !(ledger.revoked instanceof Set)) throw new Error("invalid_input: repair approval ledger is required");
@@ -86,9 +86,8 @@ export async function loadRepairApprovalLedger(journalDir: string): Promise<Repa
 /**
  * Crash-safe Esc/human-message revocation: records the revocation in the
  * in-memory ledger and persists it next to the journal so a restart still
- * refuses the revoked approval. This is the only revocation path until the
- * checkpoint-4 Owner-session input wiring exists; no live input hookup is
- * faked here.
+ * refuses the revoked approval. The Owner-session Esc + new-human-message
+ * input path calls this through the persisted ledger store; never auto-retries.
  */
 export async function revokeRepairApprovalPersisted(journalDir: string, ledger: RepairApprovalLedger, approvalId: string, kind: "esc" | "human-message"): Promise<void> {
   notifyRepairHumanInputBeforeCommit(ledger, approvalId, kind);
@@ -171,12 +170,27 @@ async function readSealedGeneration(journalDir: string): Promise<number> {
 /** Journal filename segment: strict charset so attempt ids can never escape the journal dir. */
 export const REPAIR_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 /**
- * UNWIRED BACKEND LIBRARY. commitRepairReplace has zero production callers:
- * no live Owner path calls it in this pass. Wiring is deferred to checkpoint 4,
- * which must enforce at wiring time: the repaired-Owner idle hold
- * (openRepairedOwnerIdle fields), draft preservation, Runtime join/release
- * (never auto-resume or auto view-return), and no cross-host adoption.
- * Do not wire this to a live Owner here.
+ * Repair artifacts must live outside the frozen workflow directory. A backup
+ * or journal inside the workflow would itself end in .jsonl (backup copies)
+ * or be mistaken for repair input, causing drift or self-repair loops.
+ */
+export function assertRepairArtifactDirOutsideWorkflow(workflowDirectory: string, artifactDir: string, kind: string): void {
+  if (!isAbsolute(workflowDirectory) || !isAbsolute(artifactDir)) throw new Error("invalid_input: " + kind + " and workflow directory must be absolute paths");
+  if (artifactDir === workflowDirectory || artifactDir.startsWith(workflowDirectory + sep)) {
+    throw new Error("invalid_input: " + kind + " must live outside the frozen workflow directory: " + artifactDir);
+  }
+  const reverse = relative(artifactDir, workflowDirectory);
+  if (reverse === "" || (!reverse.startsWith(".." + sep) && reverse !== "..")) {
+    throw new Error("invalid_input: " + kind + " must not contain the frozen workflow directory: " + artifactDir);
+  }
+}
+/**
+ * Explicit replace path behind Owner-session user approval. Production callers
+ * must be the Owner-session confirm handler only (approver === ownerId,
+ * provenance owner-session-confirm, bound to the exact snapshot id).
+ * Wiring-time enforcement: repaired-Owner idle hold (openRepairedOwnerIdle
+ * fields), draft preservation, Runtime join/release (never auto-resume or
+ * auto view-return), and no cross-host adoption.
  */
 export async function commitRepairReplace(options: Readonly<{ workflowDirectory: string; snapshot: RepairFrozenSnapshot; approval: RepairReplaceApproval; ledger: RepairApprovalLedger; liveGate?: LiveRepairGate; repairedBySource: Readonly<Record<string, string>>; backupRoot: string; journalDir: string; attemptId?: string; ownerId: string; drafts?: unknown; testHooks?: RepairCommitHooks }>): Promise<RepairCommitResult> {
   const attemptId = options.attemptId ? options.attemptId : randomUUID();
@@ -188,6 +202,8 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
   if (!options.repairedBySource || typeof options.repairedBySource !== "object") throw new Error("invalid_input: repaired set is required");
   if (!isAbsolute(options.backupRoot)) throw new Error("invalid_input: backup root must be an absolute path");
   if (!isAbsolute(options.journalDir)) throw new Error("invalid_input: journal directory must be an absolute path");
+  assertRepairArtifactDirOutsideWorkflow(options.workflowDirectory, options.backupRoot, "backup root");
+  assertRepairArtifactDirOutsideWorkflow(options.workflowDirectory, options.journalDir, "journal dir");
   if (typeof options.ownerId !== "string" || options.ownerId.length === 0) throw new Error("invalid_input: repaired Owner idle needs an owner id");
   await mkdir(options.journalDir, { recursive: true });
   const persistedLedger = await loadRepairApprovalLedger(options.journalDir);

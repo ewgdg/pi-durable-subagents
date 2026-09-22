@@ -21,6 +21,7 @@ import {
 	createAgentSelectorSnapshot,
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
+	parseAgentsRepairConfirmSnapshotId,
 	parseAgentsRepairReason,
 } from "../process-runtime/remote-agent-selector.ts";
 import { validateManualRepairReason } from "../coordination/manual-repair.ts";
@@ -67,13 +68,15 @@ export function registerAgentsCommand(
 	ownerAdmission?: OwnerRecoveryError | "admitted",
 	/** Present only in the Workflow Owner session; enables `/agents models`. */
 	admittedOwnerView?: () => OrdinaryAgentCoordinatorView,
+	/** Preadmission repair host for admission-failed Owner sessions. Manual only. */
+	preadmissionRepair?: () => HumanPresentationCoordinatorView,
 ): void {
 	const admissionFailure = ownerAdmission === "admitted" ? undefined : ownerAdmission;
 	pi.registerCommand("agents", {
 		description: ownerAdmission ? "Show Agents or inspect coordination diagnostics" : "Show Agents in the current Workflow",
 		getArgumentCompletions: (prefix) => {
 			const completions = [
-				...(getAgentsArgumentCompletions(prefix, ownerAdmission === "admitted" ? { includeRepair: true } : undefined) ?? []),
+				...(getAgentsArgumentCompletions(prefix, (ownerAdmission === "admitted" || preadmissionRepair) ? { includeRepair: true } : undefined) ?? []),
 				...(ownerAdmission && "diagnostics".startsWith(prefix.trim()) ? [{ value: "diagnostics", label: "diagnostics" }] : []),
 				...(admittedOwnerView && "models".startsWith(prefix.trim()) ? [{ value: "models", label: "models" }] : []),
 			];
@@ -82,7 +85,13 @@ export function registerAgentsCommand(
 		handler: async (args, ctx) => {
 			if (ownerAdmission && args.trim() === "diagnostics") {
 				if (ctx.mode !== "tui") return;
-				await openOwnerDiagnostics(ctx.ui, admissionFailure);
+				const repairHost = admissionFailure ? preadmissionRepair?.() : undefined;
+				const ownerHost = admissionFailure ? undefined : admittedOwnerView?.();
+				const activeHost = repairHost ?? ownerHost;
+				await openOwnerDiagnostics(ctx.ui, admissionFailure, {
+					onRepair: activeHost ? () => activeHost.requestManualRepair(validateManualRepairReason(undefined)).then((receipt) => { ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info"); }).catch((error) => { ctx.ui.notify("Repair Moderator failed: " + (error instanceof Error ? error.message : String(error)), "error"); }) : undefined,
+					onEsc: activeHost ? () => activeHost.notifyRepairHumanInput("esc").catch(() => undefined) : undefined,
+				});
 				return;
 			}
 			if (admittedOwnerView && args.trim() === "models") {
@@ -98,6 +107,25 @@ export function registerAgentsCommand(
 				return;
 			}
 			if (admissionFailure) {
+				const mode = (() => { try { return parseAgentsCommandArgument(args); } catch { return "selector"; } })();
+				if ((mode === "repair" || mode === "repair-confirm" || mode === "repair-freeze") && preadmissionRepair) {
+					const host = preadmissionRepair();
+					try {
+						if (mode === "repair") {
+							const receipt = await host.requestManualRepair(validateManualRepairReason(parseAgentsRepairReason(args)));
+							ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
+						} else if (mode === "repair-freeze") {
+							const snap = await host.freezeRepairSnapshot();
+							ctx.ui.notify("Repair snapshot: " + snap.snapshotId + " (" + String(snap.entries.length) + " targets)", "info");
+						} else {
+							const approval = await host.confirmRepairReplace(parseAgentsRepairConfirmSnapshotId(args));
+							ctx.ui.notify("Repair approval: " + approval.approvalId + " for snapshot " + approval.snapshotId, "info");
+						}
+					} catch (error) {
+						ctx.ui.notify("Repair failed: " + (error instanceof Error ? error.message : String(error)), "error");
+					}
+					return;
+				}
 				ctx.ui.notify("Subagent coordination is unavailable. Use /agents diagnostics.", "warning");
 				return;
 			}
@@ -123,8 +151,28 @@ export function registerAgentsCommand(
 				}
 				return;
 			}
+			if (commandMode === "repair-freeze") {
+				const repairView = resolveView();
+				try {
+					const snap = await repairView.freezeRepairSnapshot();
+					ctx.ui.notify("Repair snapshot: " + snap.snapshotId + " (" + String(snap.entries.length) + " targets)", "info");
+				} catch (error) {
+					ctx.ui.notify("Repair freeze failed: " + (error instanceof Error ? error.message : String(error)), "error");
+				}
+				return;
+			}
+			if (commandMode === "repair-confirm") {
+				const repairView = resolveView();
+				try {
+					const approval = await repairView.confirmRepairReplace(parseAgentsRepairConfirmSnapshotId(args));
+					ctx.ui.notify("Repair approval: " + approval.approvalId + " for snapshot " + approval.snapshotId, "info");
+				} catch (error) {
+					ctx.ui.notify("Repair confirm failed: " + (error instanceof Error ? error.message : String(error)), "error");
+				}
+				return;
+			}
 			if (ownerAdmission && args.trim() && args.trim() !== "owner") {
-				throw new Error("Usage: /agents [owner|diagnostics]");
+				throw new Error(AGENTS_COMMAND_USAGE);
 			}
 			const view = resolveView();
 			// Navigation uses the admitted projection; transcript refresh must not

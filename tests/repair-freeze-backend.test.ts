@@ -7,7 +7,7 @@ import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { isRepairManagedPath, repairSessionDirectory } from "../src/coordination/manual-repair.ts";
-import { backupFrozenTargets, inspectFrozenCopy, listFrozenRepairTargets, restoreFrozenBackup, sha256File, shouldJoinLiveRepair, verifyFrozenCopy } from "../src/coordination/repair-freeze.ts";
+import { backupFrozenTargets, inspectFrozenBackup, inspectFrozenCopy, listFrozenRepairTargets, sha256File, shouldJoinLiveRepair, verifyFrozenCopy } from "../src/coordination/repair-freeze.ts";
 import { describeInstalledRepairSource, validateRepairFreezeAdvisory } from "../src/coordination/repair-validate.ts";
 import { workflowSessionDirectory } from "../src/runtime/workflow-session-directory.ts";
 async function sha256Text(text: string): Promise<string> {
@@ -93,7 +93,7 @@ test("inspect/verify are read-only and backup/restore round-trips with hash chec
   assert.equal((backup.entries[0] as { sha256: string }).sha256, beforeHash);
   assert.equal(await readFile(targetPath, "utf8"), beforeBytes);
   const restoreDir = await mkdtemp(join(tmpdir(), "repair-freeze-restore-"));
-  const restored = await restoreFrozenBackup(backup.backupDir, restoreDir);
+  const restored = await inspectFrozenBackup(backup.backupDir, restoreDir);
   assert.equal(restored.entries.length, 1);
   const restoredBytes = await readFile(restored.entries[0].restoredPath, "utf8");
   assert.equal(restoredBytes, beforeBytes);

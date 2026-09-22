@@ -28,12 +28,14 @@ test("agents command parses the manual repair trigger", () => {
 	assert.equal(parseAgentsRepairReason("repair"), undefined);
 	assert.equal(parseAgentsRepairReason("repair check the stalled handoff"), "check the stalled handoff");
 	assert.equal(parseAgentsRepairReason("repair   trimmed   "), "trimmed");
+	assert.equal(parseAgentsCommandArgument("repair-confirm abc123"), "repair-confirm");
+	assert.equal(parseAgentsCommandArgument("repair-freeze"), "repair-freeze");
 });
 
 test("agents completions offer repair only where the Owner admits it", () => {
 	assert.equal(getAgentsArgumentCompletions("r"), null);
 	const offered = getAgentsArgumentCompletions("r", { includeRepair: true });
-	assert.deepEqual(offered, [{ value: "repair", label: "repair" }]);
+	assert.deepEqual(offered, [{ value: "repair", label: "repair" }, { value: "repair-confirm", label: "repair-confirm" }, { value: "repair-freeze", label: "repair-freeze" }]);
 	const all = getAgentsArgumentCompletions("", { includeRepair: true });
 	assert.ok(all?.some(({ value }) => value === "owner"));
 	assert.ok(all?.some(({ value }) => value === "repair"));

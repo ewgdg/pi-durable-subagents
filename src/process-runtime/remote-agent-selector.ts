@@ -28,18 +28,28 @@ export type AgentSelectionSession = Readonly<{
 
 const AGENTS_OWNER_ARGUMENT = "owner";
 const AGENTS_REPAIR_ARGUMENT = "repair";
-export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner]";
+const AGENTS_REPAIR_CONFIRM_ARGUMENT = "repair-confirm";
+const AGENTS_REPAIR_FREEZE_ARGUMENT = "repair-freeze";
+export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner|repair|repair-confirm <snapshotId>|repair-freeze]";
 
-type AgentsCommandMode = "selector" | "owner" | "repair";
+type AgentsCommandMode = "selector" | "owner" | "repair" | "repair-confirm" | "repair-freeze";
 
 export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
 	const argument = args.trim();
 	if (!argument) return "selector";
 	if (argument === AGENTS_OWNER_ARGUMENT) return "owner";
+	if (argument === AGENTS_REPAIR_CONFIRM_ARGUMENT || argument.startsWith(AGENTS_REPAIR_CONFIRM_ARGUMENT + " ")) return "repair-confirm";
+	if (argument === AGENTS_REPAIR_FREEZE_ARGUMENT || argument.startsWith(AGENTS_REPAIR_FREEZE_ARGUMENT + " ")) return "repair-freeze";
 	if (argument === AGENTS_REPAIR_ARGUMENT || argument.startsWith(`${AGENTS_REPAIR_ARGUMENT} `)) return "repair";
 	throw new Error(AGENTS_COMMAND_USAGE);
 }
 
+/** Snapshot id after /agents repair-confirm; throws usage on missing id. */
+export function parseAgentsRepairConfirmSnapshotId(args: string): string {
+	const rest = args.trim().slice(AGENTS_REPAIR_CONFIRM_ARGUMENT.length).trim();
+	if (rest.length === 0 || rest.indexOf(String.fromCharCode(0)) !== -1 || /\s/.test(rest)) throw new Error(AGENTS_COMMAND_USAGE);
+	return rest;
+}
 /** Reason text after /agents repair; undefined when the trigger carries no reason. */
 export function parseAgentsRepairReason(args: string): string | undefined {
 	const rest = args.trim().slice(AGENTS_REPAIR_ARGUMENT.length).trim();
@@ -56,6 +66,12 @@ export function getAgentsArgumentCompletions(argumentPrefix: string, options?: R
 	}
 	if (options?.includeRepair && AGENTS_REPAIR_ARGUMENT.startsWith(argumentPrefix.trim())) {
 		completions.push({ value: AGENTS_REPAIR_ARGUMENT, label: AGENTS_REPAIR_ARGUMENT });
+	}
+	if (options?.includeRepair && AGENTS_REPAIR_CONFIRM_ARGUMENT.startsWith(argumentPrefix.trim())) {
+		completions.push({ value: AGENTS_REPAIR_CONFIRM_ARGUMENT, label: AGENTS_REPAIR_CONFIRM_ARGUMENT });
+	}
+	if (options?.includeRepair && AGENTS_REPAIR_FREEZE_ARGUMENT.startsWith(argumentPrefix.trim())) {
+		completions.push({ value: AGENTS_REPAIR_FREEZE_ARGUMENT, label: AGENTS_REPAIR_FREEZE_ARGUMENT });
 	}
 	return completions.length > 0 ? completions : null;
 }

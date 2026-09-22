@@ -126,6 +126,19 @@ import type {
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
 import type { ManualRepairReceipt } from "./manual-repair.ts";
+import {
+  approveRepairReplace,
+  commitRepairReplace as commitRepairReplaceBackend,
+  createRepairApprovalLedger,
+  freezeRepairTargets as freezeRepairTargetsBackend,
+  loadRepairApprovalLedger,
+  revokeRepairApprovalPersisted,
+  type RepairApprovalLedger,
+  type RepairCommitResult,
+  type RepairFrozenSnapshot,
+  type RepairReplaceApproval,
+} from "./repair-commit.ts";
+import { preadmissionRepairBackupRoot, preadmissionRepairJournalDir } from "./preadmission-repair.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type AgentRosterStatus = AgentStatus & Readonly<{
@@ -172,6 +185,25 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	primaryInputQueued(): Promise<void>;
 	/** Manual /agents repair: host a real Moderator. Owner only. */
 	requestManualRepair(reason: string): Promise<ManualRepairReceipt>;
+	/** Freeze repair targets as an immutable snapshot. Owner only, snapshot-only, no writes. */
+	freezeRepairSnapshot(): Promise<RepairFrozenSnapshot>;
+	/**
+	 * Owner-session confirm handler: the ONLY production construction site for
+	 * repair replace approvals (agentId === ownerIdentity.agentId,
+	 * approver === ownerId, bound to the exact snapshot id,
+	 * provenance owner-session-confirm).
+	 */
+	confirmRepairReplace(snapshotId: string): Promise<RepairReplaceApproval>;
+	/**
+	 * Real input-path revocation for Esc + new human message. Revokes the
+	 * pending approvalId through the persisted ledger store; never auto-retries.
+	 */
+	notifyRepairHumanInput(kind: "esc" | "human-message"): Promise<void>;
+	/**
+	 * Owner-only explicit replace commit with drift recheck, backup/seal/journal
+	 * and idle-until-human-message reopen. Uses the pending Owner approval.
+	 */
+	commitRepairReplace(repairedBySource: Readonly<Record<string, string>>, attemptId?: string, drafts?: unknown): Promise<RepairCommitResult>;
 	selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
@@ -278,6 +310,12 @@ export class WorkflowCoordinator {
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	readonly #agentIdBySpawnSource: Map<string, string>;
+	// Checkpoint-4 manual-repair wiring: Owner-only replace path state.
+	readonly #repairSnapshots = new Map<string, RepairFrozenSnapshot>();
+	#pendingRepairApproval: RepairReplaceApproval | undefined;
+	#repairLedger: RepairApprovalLedger | undefined;
+	#repairedOwnerIdleHold: Readonly<{ ownerId: string }> | undefined;
+	#preadmissionRepairOnly = false;
 	#shutdownPromise: Promise<void> | undefined;
 	readonly #shutdownController = new AbortController();
 	#shuttingDown = false;
@@ -544,6 +582,161 @@ export class WorkflowCoordinator {
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
 	}
 
+	/**
+	 * Preadmission repair-only init: verifies Owner identity + native config
+	 * source without replaying broken coordination history. No transcript
+	 * refresh, no recovered relationships, no Request titles, no live originals.
+	 * Only manual repair trigger + repair Moderator hosting stay available;
+	 * unadmitted-original routing stays precise-unavailable. Manual only.
+	 */
+	async initializePreadmissionRepair(): Promise<void> {
+		this.#preadmissionRepairOnly = true;
+		// Template snapshot comes from native config (cwd/agentDir/model),
+		// never from broken coordination history.
+		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
+	}
+
+	#assertRepairAvailable(callerAgentId: string): void {
+		this.#assertAdmissionOpen();
+		if (callerAgentId !== this.#ownerIdentity.agentId) {
+			throw new Error("wrong_participant: manual repair is Owner only");
+		}
+	}
+
+	#repairWorkflowDirectory(): string {
+		return this.#sessionFactory.workflowSessionDirectory();
+	}
+
+	#repairJournalDir(): string {
+		return preadmissionRepairJournalDir(this.#repairWorkflowDirectory());
+	}
+
+	#repairBackupRoot(): string {
+		return preadmissionRepairBackupRoot(this.#repairWorkflowDirectory());
+	}
+
+	#ensureRepairLedger(): RepairApprovalLedger {
+		if (!this.#repairLedger) this.#repairLedger = createRepairApprovalLedger();
+		return this.#repairLedger;
+	}
+
+	/**
+	 * Owner-only frozen snapshot for the explicit replace path. Snapshot-only,
+	 * no writes. Pre-commit Owner target stays snapshot-only; live repair
+	 * namespace is excluded by the freeze enumeration.
+	 */
+	async #freezeRepairSnapshotForOwner(callerAgentId: string): Promise<RepairFrozenSnapshot> {
+		this.#assertRepairAvailable(callerAgentId);
+		const snapshot = await freezeRepairTargetsBackend(this.#repairWorkflowDirectory());
+		this.#repairSnapshots.set(snapshot.snapshotId, snapshot);
+		return snapshot;
+	}
+
+	/**
+	 * Owner-session confirm handler: the ONLY production construction site for
+	 * repair replace approvals. Checks agentId === ownerIdentity.agentId and
+	 * approver === ownerId, binds to the exact snapshot id, provenance
+	 * owner-session-confirm. Stores the pending approvalId for Esc/human-message
+	 * revocation through the persisted ledger.
+	 */
+	async #confirmRepairReplaceForOwner(callerAgentId: string, snapshotId: string): Promise<RepairReplaceApproval> {
+		this.#assertRepairAvailable(callerAgentId);
+		if (typeof snapshotId !== "string" || snapshotId.length === 0) {
+			throw new Error("invalid_input: repair confirm needs a frozen snapshot id");
+		}
+		const snapshot = this.#repairSnapshots.get(snapshotId);
+		if (!snapshot) {
+			throw new Error("stale_approval: unknown repair snapshot " + snapshotId + "; freeze targets first");
+		}
+		const ownerId = this.#ownerIdentity.agentId;
+		// agentId === ownerIdentity.agentId already checked; approver must equal ownerId.
+		const approval = approveRepairReplace({
+			snapshotId: snapshot.snapshotId,
+			approver: ownerId,
+			ownerId,
+			provenance: "owner-session-confirm",
+		});
+		const ledger = this.#ensureRepairLedger();
+		// Merge persisted revocations/consumptions so a restart still refuses.
+		try {
+			const persisted = await loadRepairApprovalLedger(this.#repairJournalDir());
+			for (const id of persisted.consumed) ledger.consumed.add(id);
+			for (const id of persisted.revoked) ledger.revoked.add(id);
+		} catch {
+			// Missing ledger means no persisted revocations; other IO errors throw below on commit.
+		}
+		this.#pendingRepairApproval = approval;
+		return approval;
+	}
+
+	/**
+	 * Real input-path revocation for Esc + new human message. Revokes the
+	 * pending approvalId through the persisted ledger store; never auto-retries.
+	 * No-op when no approval is pending.
+	 */
+	async #notifyRepairHumanInputForOwner(callerAgentId: string, kind: "esc" | "human-message"): Promise<void> {
+		this.#assertAdmissionOpen();
+		// Any participant human input revokes a pending Owner approval: Esc and
+		// new messages are human holds, not model authority. Owner check is for
+		// the approval itself, not the input source.
+		const pending = this.#pendingRepairApproval;
+		if (!pending) return;
+		const ledger = this.#ensureRepairLedger();
+		await revokeRepairApprovalPersisted(this.#repairJournalDir(), ledger, pending.approvalId, kind);
+		this.#pendingRepairApproval = undefined;
+	}
+
+	/**
+	 * Owner-only explicit replace commit. Gate-first (no writes on failure),
+	 * drift recheck, backup/seal/journal, single-use approval, idle
+	 * reopen with drafts preserved. Enforces idle-until-human-message hold by
+	 * the host (no turn without human msg) and Runtime join/release without
+	 * cross-host adoption (each Agent keeps its own host; switch only moves
+	 * interactive_selection retention, never adopts).
+	 */
+	async #commitRepairReplaceForOwner(
+		callerAgentId: string,
+		repairedBySource: Readonly<Record<string, string>>,
+		attemptId?: string,
+		drafts?: unknown,
+	): Promise<RepairCommitResult> {
+		this.#assertRepairAvailable(callerAgentId);
+		const pending = this.#pendingRepairApproval;
+		if (!pending) {
+			throw new Error("unauthorized: no pending repair approval; confirm the exact snapshot first");
+		}
+		const snapshot = this.#repairSnapshots.get(pending.snapshotId);
+		if (!snapshot) {
+			throw new Error("stale_approval: pending repair snapshot is unavailable; freeze targets first");
+		}
+		const ledger = this.#ensureRepairLedger();
+		const ownerId = this.#ownerIdentity.agentId;
+		// Drafts preserved in respective editors: capture caller drafts (editor
+		// text) into the idle receipt; switch never clears the other editor.
+		const result = await commitRepairReplaceBackend({
+			workflowDirectory: this.#repairWorkflowDirectory(),
+			snapshot,
+			approval: pending,
+			ledger,
+			repairedBySource,
+			backupRoot: this.#repairBackupRoot(),
+			journalDir: this.#repairJournalDir(),
+			...(attemptId === undefined ? {} : { attemptId }),
+			ownerId,
+			...(drafts === undefined ? {} : { drafts }),
+		});
+		// Single-use: backend consumes the approval; clear pending so Esc/human
+		// input after commit has nothing to revoke.
+		this.#pendingRepairApproval = undefined;
+		// Enforce idle-until-human-message hold by the host: no turn without a
+		// new human message. beginExecution refuses while the hold is set;
+		// handleHumanInput clears it on the next human message.
+		if (result.disposition === "committed" || result.disposition === "joined-committed") {
+			this.#repairedOwnerIdleHold = { ownerId };
+		}
+		return result;
+	}
+
 	modelPolicy(): ModelPolicySnapshot {
 		return {
 			availableModels: this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().map(
@@ -738,6 +931,11 @@ export class WorkflowCoordinator {
 				if (agentId !== this.#ownerIdentity.agentId) throw new Error("wrong_participant: manual repair is Owner only");
 				return this.#operationalIncidents.requestManualRepair(reason);
 			},
+			freezeRepairSnapshot: () => this.#freezeRepairSnapshotForOwner(agentId),
+			confirmRepairReplace: (snapshotId) => this.#confirmRepairReplaceForOwner(agentId, snapshotId),
+			notifyRepairHumanInput: (kind) => this.#notifyRepairHumanInputForOwner(agentId, kind),
+			commitRepairReplace: (repairedBySource, attemptId, drafts) =>
+				this.#commitRepairReplaceForOwner(agentId, repairedBySource, attemptId, drafts),
 		selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
 				this.#assertAdmissionOpen();
@@ -1537,6 +1735,11 @@ export class WorkflowCoordinator {
 		submissionSequence?: number,
 	): Promise<void> {
 		this.#assertAdmissionOpen();
+		// Idle-until-human-message hold by the host: no turn without human msg.
+		// Cleared only by handleHumanInput on a new human message.
+		if (this.#repairedOwnerIdleHold && agentId === this.#repairedOwnerIdleHold.ownerId) {
+			throw new Error("idle_until_human_message: repaired Owner stays idle until a new human message; no turn without human msg");
+		}
 		const record = this.#requireAgent(agentId);
 		const inputSubmission = this.#captureInputSubmission(record, submissionSequence);
 		this.#assertInputSubmissionAdmissible(record, inputSubmission);
@@ -1630,54 +1833,76 @@ export class WorkflowCoordinator {
 		images: readonly ImageContent[] | undefined,
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition> {
-		const record = this.#requireAgent(agentId);
-		let inputSubmission: ProjectionInputSubmission | undefined;
-		try {
-			inputSubmission = this.#captureInputSubmission(record, submissionSequence);
-			this.#assertInputSubmissionAdmissible(record, inputSubmission);
-		} catch {
-			return Promise.resolve("discarded");
-		}
-		if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
-			return Promise.resolve("submitted");
-		}
-		return this.#agentViewLane.run(async () => {
-			const active = this.#activeAgentView;
-			if (!active || active.record.identity.agentId !== agentId) {
-				return await this.#runSupervisor.resumeFromHuman(agentId, text, images, submissionSequence)
-					? "submitted"
-					: "continue";
+		// Real input-path revocation: any new human message revokes a pending
+		// repair approval through the persisted ledger; never auto-retries.
+		// Idle hold releases only on a new human message.
+		const pending = this.#pendingRepairApproval;
+		const revokeAndContinue = async (): Promise<HumanInputDisposition> => {
+			if (pending) {
+				try {
+					await revokeRepairApprovalPersisted(this.#repairJournalDir(), this.#ensureRepairLedger(), pending.approvalId, "human-message");
+				} catch {
+					// Journal dir may not exist yet when approval was never persisted;
+					// in-memory revoke still holds via the ledger set.
+					this.#ensureRepairLedger().revoked.add(pending.approvalId);
+				}
+				if (this.#pendingRepairApproval?.approvalId === pending.approvalId) {
+					this.#pendingRepairApproval = undefined;
+				}
 			}
-			return active.record.host.lane.run(async () => {
-				if (this.#activeAgentView !== active) return "discarded";
-				if (
-					inputSubmission !== undefined &&
-					active.record.host.projectionInputSubmissionIsFenced(inputSubmission)
-				) return "discarded";
-				const currentHandle = active.record.host.currentHandle();
-				if (
-					currentHandle &&
-					active.attachment.projection() === active.record.host.currentProjection()
-				) {
-					if (active.record.host.currentResumptionHold()) {
-						return await this.#runSupervisor.resumeFromHumanInLane(
-							active.record,
-							text,
-							images,
-							submissionSequence,
-						)
-							? "submitted"
-							: "continue";
-					}
-					return "continue";
-				}
-				if (!currentHandle) {
-					await active.record.host.startInLane(["interactive_selection"]);
-				}
-				await this.#runSupervisor.submitFromHumanInLane(active.record, text, images, submissionSequence);
+			if (this.#repairedOwnerIdleHold && agentId === this.#repairedOwnerIdleHold.ownerId) {
+				this.#repairedOwnerIdleHold = undefined;
+			}
+			const record = this.#requireAgent(agentId);
+			let inputSubmission: ProjectionInputSubmission | undefined;
+			try {
+				inputSubmission = this.#captureInputSubmission(record, submissionSequence);
+				this.#assertInputSubmissionAdmissible(record, inputSubmission);
+			} catch {
+				return "discarded";
+			}
+			if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
 				return "submitted";
+			}
+			return this.#agentViewLane.run(async () => {
+				const active = this.#activeAgentView;
+				if (!active || active.record.identity.agentId !== agentId) {
+					return await this.#runSupervisor.resumeFromHuman(agentId, text, images, submissionSequence)
+						? "submitted"
+						: "continue";
+				}
+				return active.record.host.lane.run(async () => {
+					if (this.#activeAgentView !== active) return "discarded";
+					if (
+						inputSubmission !== undefined &&
+						active.record.host.projectionInputSubmissionIsFenced(inputSubmission)
+					) return "discarded";
+					const currentHandle = active.record.host.currentHandle();
+					if (
+						currentHandle &&
+						active.attachment.projection() === active.record.host.currentProjection()
+					) {
+						if (active.record.host.currentResumptionHold()) {
+							return await this.#runSupervisor.resumeFromHumanInLane(
+								active.record,
+								text,
+								images,
+								submissionSequence,
+							)
+								? "submitted"
+								: "continue";
+						}
+						return "continue";
+					}
+					if (!currentHandle) {
+						await active.record.host.startInLane(["interactive_selection"]);
+					}
+					await this.#runSupervisor.submitFromHumanInLane(active.record, text, images, submissionSequence);
+					return "submitted";
+				});
 			});
-		});
+		};
+		return revokeAndContinue();
 	}
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {

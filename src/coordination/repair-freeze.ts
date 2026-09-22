@@ -96,12 +96,11 @@ export async function backupFrozenTargets(sources: readonly string[], backupRoot
 }
 export type FrozenRestoreEntry = Readonly<{ backupPath: string; restoredPath: string; sha256: string }>;
 /**
- * Inspect-only restore: copies backup bytes to a caller-chosen inspect dir
+ * Inspect-only backup review: copies backup bytes to a caller-chosen inspect dir
  * for human review. It never writes live workflow targets; the explicit
- * replace path (repair-commit.ts) is the only writer. A rename to
- * inspectFrozenBackup is deferred to checkpoint 4 (see plan).
+ * replace path (repair-commit.ts) is the only writer.
  */
-export async function restoreFrozenBackup(backupDir: string, restoreDir: string): Promise<Readonly<{ entries: readonly FrozenRestoreEntry[] }>> {
+export async function inspectFrozenBackup(backupDir: string, restoreDir: string): Promise<Readonly<{ entries: readonly FrozenRestoreEntry[] }>> {
   if (!isAbsolute(backupDir) || !isAbsolute(restoreDir)) throw new Error("invalid_input: backup and restore dirs must be absolute");
   const manifestRaw = await readFile(join(backupDir, "manifest.json"), "utf8");
   const manifest = JSON.parse(manifestRaw) as { entries?: Array<{ backupFile?: string; sha256?: string }> };
@@ -137,6 +136,12 @@ export async function inspectFrozenCopy(copyPath: string): Promise<FrozenCopyIns
   return { sessionPath: copyPath, headerId, entryCount: entries.length };
 }
 export type FrozenCopyVerification = Readonly<{ sessionPath: string; disposition: "pass" | "fail"; diagnostics: readonly { file: string; entryId?: string; reason: string }[]; warnings: readonly string[]; outOfScope: readonly string[] }>;
+/**
+ * Advisory allow-list for dry-replay tool review. Unknown tools warn
+ * (unknown-tool) and never block: the set is a blind spot, not a safety
+ * gate. Human review decides whether an unknown tool is safe; replay-pass
+ * does not imply safe.
+ */
 const KNOWN_SPAWN_TOOLS = new Set(["agent_message", "agent_wait", "agent_spawn", "agent_observe", "agent_control", "ask_user", "workflow_resume", "moderator_control", "report_to_user", "repair_validate"]);
 export async function verifyFrozenCopy(copyPath: string): Promise<FrozenCopyVerification> {
   if (!isAbsolute(copyPath)) throw new Error("invalid_input: frozen copy must be an absolute path");
