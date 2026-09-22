@@ -27,6 +27,8 @@ Adopt Pi 0.87 agent_before_settle, turn_end drafts, and buildSessionProjection i
 - [x] R1 implemented + targeted tests (native lifecycle suite passes against real Pi 0.87)
 - [x] R2 implemented + targeted tests (lane-free turn_end; entry-gated commit proof)
 - [x] R3 implemented + targeted tests (projection context + viewer; context_edit hides)
+ - [x] Boundary review must-fix 1: settlement no longer admits execution capacity (safeBoundaryReached drops ensureExecution; per-turn admission stays in toolExecutionStarted) + real-coordinator quota-1 regression test + registrar order corrected to real Pi agent_end-before-before_settle
+ - [x] Boundary review must-fix 2: context_edit drafts scan transcript.activeBranch only + branched-transcript registrar regression test
 - [ ] Full validation + commits + handoff (required suites green; see Outcomes)
 
 ## Decisions
@@ -34,6 +36,9 @@ Adopt Pi 0.87 agent_before_settle, turn_end drafts, and buildSessionProjection i
 - Decided: canContinue==false uses ctx.ui.notify warning (the available diagnostics channel) and returns entries without continue.
 - Decided: exact turn_end entry IDs are not visible on the AgentSession subscribe surface, so precise proof is entry-count-gated message_end + completion fallback (no new event plumbing).
 - Decided: owner-fork-context.ts and coordination-history-context.ts needed no code change (they consume transcript.context / projectParticipantHistoryContext, behavior identical for normal turns); post-mortem viewer and RetainedTranscript.context moved to buildSessionProjection.
+ - Decided (must-fix 1): settlement reconciliation must not admit model-execution capacity. Real Pi order is agent_end before agent_before_settle, so the permit is already released; safeBoundaryReached drops ensureExecution (per-turn sibling admission stays in toolExecutionStarted). Registrar event order corrected to agent_end-then-before_settle so the fake bus matches Pi.
+ - Decided (must-fix 2): settlement drafts scan transcript.activeBranch, not transcript.entries. Pi validates drafts against [header, ...getBranch()]; an off-branch context_edit target discards the whole proposal with continue, so branch-excluded snapshots must never be drafted.
+ - Follow-ups explicitly NOT done here: duplicate-hide suppression across repeated boundaries; canContinue==false notify reword; commit-proof heuristic beyond entry-count gating; per-turn lane reconciliation suites.
 
 ## Surprises & Discoveries
 - messages.reachSafeBoundary already guards ending/interrupting lanes, but still enters host.lane otherwise; awaited turn_end therefore still risks deadlock with disposal waiting for the same turn.

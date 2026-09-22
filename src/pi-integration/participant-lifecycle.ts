@@ -271,7 +271,10 @@ function resolvedAttentionEdits(
 ): SessionBoundaryDraft[] {
 	const owed = new Set(frames.map(frame => frame.requestId));
 	const edits: SessionBoundaryDraft[] = [];
-	for (const entry of transcript.entries) {
+	// Pi validates drafts against [header, ...getBranch()]: an off-branch target
+	// discards the whole proposal, losing hides and continue. Scan only the
+	// active branch so navigation never turns settlement into a silent stop.
+	for (const entry of transcript.activeBranch) {
 		if (entry.type !== "custom_message" || entry.customType !== REQUEST_ATTENTION_CUSTOM_TYPE) continue;
 		const requests = (entry.details as { requests?: readonly { requestMessageId?: unknown }[] } | undefined)?.requests;
 		if (!Array.isArray(requests)) continue;

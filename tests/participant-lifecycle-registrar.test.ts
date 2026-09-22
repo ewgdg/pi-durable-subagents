@@ -26,6 +26,7 @@ import {
 } from "../src/pi-integration/participant-lifecycle.ts";
 
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
+ import { REQUEST_ATTENTION_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
 import { createMessageDelivery, inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { obligationStack, type ObligationFrame } from "../src/protocol/obligation-focus.ts";
@@ -79,6 +80,47 @@ test("Owner context keeps inherited attention informational and newly delivered 
 		assert.equal(JSON.stringify(manager.getEntries()), original);
 	}
 });
+
+test("settlement hides only active-branch attention snapshots", async () => {
+	const context = createExtensionContext();
+	const manager = context.sessionManager;
+	const frame = appendRequestDelivery(manager, { requesterAgentId: "requester", title: "Branch work", question: "Branch question" });
+	// Commit a genuine Answer so the snapshot below is fully resolved.
+	const answerEntryId = manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "answer", requestId: frame.requestId, answer: "Branch work done.",
+	}, { id: "answer-branch-work" }), { stopReason: "toolUse" }));
+	const receipt = { messageId: deriveMessageIdentity({ agentId: manager.getSessionId(), entryId: answerEntryId, toolCallId: "answer-branch-work" }),
+		requestMessageId: frame.requestId, requestTitle: frame.title, messageStatus: "sent" as const };
+	manager.appendMessage({ role: "toolResult", toolCallId: "answer-branch-work", toolName: "agent_message",
+		content: [{ type: "text", text: "Branch work done." }], isError: false, timestamp: 1, details: receipt });
+	assert.deepEqual(obligationStack(transcriptFromSessionManager(manager).inspect(), manager.getSessionId()), []);
+	const preSnapshotLeaf = manager.getLeafId()!;
+	const snapshotId = manager.appendCustomMessageEntry(REQUEST_ATTENTION_CUSTOM_TYPE, "Outstanding Requests.", true,
+		{ requests: [{ requestMessageId: frame.requestId, requesterAgentId: frame.requesterAgentId, title: frame.title }] });
+	const onBranchLeaf = manager.getLeafId()!;
+	// Navigate away: the resolved snapshot leaves the active branch.
+	manager.branch(preSnapshotLeaf);
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, lifecycleHandlers());
+	const answerResult = { ...toolResultMessage, toolName: "agent_message", details: receipt };
+	await pi.emit("turn_end", { type: "turn_end", toolResults: [answerResult] }, context);
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
+	assert.equal(await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context), undefined,
+		"an off-branch snapshot must not produce drafts Pi would reject");
+	assert.throws(() => manager.appendContextEdit(snapshotId, null), /active branch/,
+		"the omitted draft would have discarded the whole proposal with continue");
+	// Back on the snapshot branch, the same settlement hides it.
+	manager.branch(onBranchLeaf);
+	await pi.emit("turn_end", { type: "turn_end", toolResults: [answerResult] }, context);
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
+	const continuation = await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context) as {
+		entries?: Array<{ type: string; targetId?: string }>; continue?: boolean;
+	} | undefined;
+	assert.equal(continuation?.entries?.length, 1);
+	assert.equal(continuation?.entries?.[0]?.type, "context_edit");
+	assert.equal(continuation?.entries?.[0]?.targetId, snapshotId);
+	manager.appendContextEdit(snapshotId, null);
+ });
 
 test("one Owner context pass separates inherited and invalid exact-duplicate native records", async () => {
 	const context = createExtensionContext();
@@ -185,11 +227,13 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 		entries?: Array<{ type: string; customType?: string; content?: string; display?: boolean; details?: unknown; targetId?: string; replacement?: null }>; continue?: boolean;
 	} | undefined;
 	assert.equal(continuation?.continue, true);
+	// Real Pi order is agent_end before agent_before_settle: executionEnded
+	// releases the permit before settlement reconciliation runs.
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
 	for (const draft of continuation?.entries ?? []) {
 		if (draft.type === "custom_message") sessionManager.appendCustomMessageEntry(draft.customType!, draft.content!, draft.display!, draft.details);
 		else if (draft.type === "context_edit") sessionManager.appendContextEdit(draft.targetId!, draft.replacement ?? null);
 	}
-	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
 	const presentation = sessionManager.getLeafEntry();
 	assert.equal(presentation?.type, "custom_message");
 	assert.ok(presentation?.type === "custom_message" && presentation.display);
@@ -301,13 +345,14 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		toolResults: [toolResultMessage],
 	}, context);
 	// turn_end is lane-free; lane reconciliation now runs at agent_before_settle.
-	await pi.emit("agent_before_settle", {
-		type: "agent_before_settle",
-		context: { canContinue: true },
-	}, context);
+	// Real Pi order is agent_end before agent_before_settle.
 	await pi.emit("agent_end", {
 		type: "agent_end",
 		messages: [toolResultMessage],
+	}, context);
+	await pi.emit("agent_before_settle", {
+		type: "agent_before_settle",
+		context: { canContinue: true },
 	}, context);
 
 	assert.deepEqual(calls, [
@@ -315,8 +360,8 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		"execution-started",
 		["human-result", { message: toolResultMessage }],
 		["tool-started", { toolCallId: "tool-call-1", toolName: "read" }],
-		"safe-boundary",
 		"execution-ended",
+		"safe-boundary",
 	]);
 });
 
@@ -423,13 +468,14 @@ test("ordinary and Moderator extensions preserve local lifecycle operation order
 				message: toolResultMessage,
 				toolResults: [toolResultMessage],
 			}, context);
-			await pi.emit("agent_before_settle", {
-				type: "agent_before_settle",
-				context: { canContinue: true },
-			}, context);
+			// Real Pi order is agent_end before agent_before_settle.
 			await pi.emit("agent_end", {
 				type: "agent_end",
 				messages: [toolResultMessage],
+			}, context);
+			await pi.emit("agent_before_settle", {
+				type: "agent_before_settle",
+				context: { canContinue: true },
 			}, context);
 
 			assert.deepEqual(calls, [
@@ -440,13 +486,12 @@ test("ordinary and Moderator extensions preserve local lifecycle operation order
 				"reconcile-committed-results",
 				"ensure-execution",
 				["begin-tool", "tool-call-2", "bash"],
-				"reconcile-human-results",
-				"reconcile-committed-results",
-				"ensure-execution",
-				"reach-safe-boundary",
 				"reconcile-committed-results",
 				"end-execution",
 				"reconcile-human-results",
+				"reconcile-human-results",
+				"reconcile-committed-results",
+				"reach-safe-boundary",
 			]);
 		});
 	}
