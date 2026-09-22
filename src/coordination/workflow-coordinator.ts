@@ -124,6 +124,7 @@ import type {
 } from "../presentation/post-mortem-agent-view-surface.ts";
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
+import type { ManualRepairReceipt } from "./manual-repair.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type AgentRosterStatus = AgentStatus & Readonly<{
@@ -168,6 +169,8 @@ export type HumanPresentationCoordinatorView = Readonly<{
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition>;
 	primaryInputQueued(): Promise<void>;
+	/** Manual /agents repair: host a real Moderator. Owner only. */
+	requestManualRepair(reason: string): Promise<ManualRepairReceipt>;
 	selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
@@ -712,7 +715,12 @@ export class WorkflowCoordinator {
 				if (this.#requireAgent(agentId).host.currentRunSuspension()) return Promise.resolve();
 				return this.#agentWaits.preemptForHumanInput(this.#requireAgent(agentId));
 			},
-			selectionRoster: () => this.#selectionRoster(),
+				requestManualRepair: (reason) => {
+				this.#assertAdmissionOpen();
+				if (agentId !== this.#ownerIdentity.agentId) throw new Error("wrong_participant: manual repair is Owner only");
+				return this.#operationalIncidents.requestManualRepair(reason);
+			},
+		selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
 				this.#assertAdmissionOpen();
 				return this.#openAgentPresentation(targetAgentId);

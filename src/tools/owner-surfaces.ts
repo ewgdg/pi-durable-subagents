@@ -16,11 +16,14 @@ import {
 } from "../presentation/agent-view-surface.ts";
 import { openPostMortemAgentViewSurface } from "../presentation/post-mortem-agent-view-surface.ts";
 import {
+	AGENTS_COMMAND_USAGE,
 	createAgentSelectionSession,
 	createAgentSelectorSnapshot,
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
+	parseAgentsRepairReason,
 } from "../process-runtime/remote-agent-selector.ts";
+import { validateManualRepairReason } from "../coordination/manual-repair.ts";
 import {
 	registerParticipantCoordinationTools,
 	type AgentObserveInput,
@@ -70,7 +73,7 @@ export function registerAgentsCommand(
 		description: ownerAdmission ? "Show Agents or inspect coordination diagnostics" : "Show Agents in the current Workflow",
 		getArgumentCompletions: (prefix) => {
 			const completions = [
-				...(getAgentsArgumentCompletions(prefix) ?? []),
+				...(getAgentsArgumentCompletions(prefix, ownerAdmission === "admitted" ? { includeRepair: true } : undefined) ?? []),
 				...(ownerAdmission && "diagnostics".startsWith(prefix.trim()) ? [{ value: "diagnostics", label: "diagnostics" }] : []),
 				...(admittedOwnerView && "models".startsWith(prefix.trim()) ? [{ value: "models", label: "models" }] : []),
 			];
@@ -98,10 +101,31 @@ export function registerAgentsCommand(
 				ctx.ui.notify("Subagent coordination is unavailable. Use /agents diagnostics.", "warning");
 				return;
 			}
+			const commandMode = parseAgentsCommandArgument(args);
+			if (commandMode === "repair") {
+				if (!ownerAdmission) throw new Error(AGENTS_COMMAND_USAGE);
+				const repairView = resolveView();
+				try {
+					const receipt = await repairView.requestManualRepair(
+						validateManualRepairReason(parseAgentsRepairReason(args)),
+					);
+					ctx.ui.notify(
+						receipt.disposition === "created"
+							? `Repair Moderator created: ${receipt.moderatorAgentId}`
+							: `Repair Moderator already active: ${receipt.moderatorAgentId}`,
+						"info",
+					);
+				} catch (error) {
+					ctx.ui.notify(
+						`Repair Moderator failed: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+				return;
+			}
 			if (ownerAdmission && args.trim() && args.trim() !== "owner") {
 				throw new Error("Usage: /agents [owner|diagnostics]");
 			}
-			const commandMode = parseAgentsCommandArgument(args);
 			const view = resolveView();
 			// Navigation uses the admitted projection; transcript refresh must not
 			// prevent opening the selector or returning to Owner.

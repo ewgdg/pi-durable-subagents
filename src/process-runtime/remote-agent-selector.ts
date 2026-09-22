@@ -27,24 +27,37 @@ export type AgentSelectionSession = Readonly<{
 }>;
 
 const AGENTS_OWNER_ARGUMENT = "owner";
+const AGENTS_REPAIR_ARGUMENT = "repair";
 export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner]";
 
-type AgentsCommandMode = "selector" | "owner";
+type AgentsCommandMode = "selector" | "owner" | "repair";
 
 export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
 	const argument = args.trim();
 	if (!argument) return "selector";
 	if (argument === AGENTS_OWNER_ARGUMENT) return "owner";
+	if (argument === AGENTS_REPAIR_ARGUMENT || argument.startsWith(`${AGENTS_REPAIR_ARGUMENT} `)) return "repair";
 	throw new Error(AGENTS_COMMAND_USAGE);
 }
 
-export function getAgentsArgumentCompletions(argumentPrefix: string): {
+/** Reason text after /agents repair; undefined when the trigger carries no reason. */
+export function parseAgentsRepairReason(args: string): string | undefined {
+	const rest = args.trim().slice(AGENTS_REPAIR_ARGUMENT.length).trim();
+	return rest.length > 0 ? rest : undefined;
+}
+
+export function getAgentsArgumentCompletions(argumentPrefix: string, options?: Readonly<{ includeRepair?: boolean }>): {
 	value: string;
 	label: string;
 }[] | null {
-	return AGENTS_OWNER_ARGUMENT.startsWith(argumentPrefix.trim())
-		? [{ value: AGENTS_OWNER_ARGUMENT, label: AGENTS_OWNER_ARGUMENT }]
-		: null;
+	const completions: Array<{ value: string; label: string }> = [];
+	if (AGENTS_OWNER_ARGUMENT.startsWith(argumentPrefix.trim())) {
+		completions.push({ value: AGENTS_OWNER_ARGUMENT, label: AGENTS_OWNER_ARGUMENT });
+	}
+	if (options?.includeRepair && AGENTS_REPAIR_ARGUMENT.startsWith(argumentPrefix.trim())) {
+		completions.push({ value: AGENTS_REPAIR_ARGUMENT, label: AGENTS_REPAIR_ARGUMENT });
+	}
+	return completions.length > 0 ? completions : null;
 }
 
 /** Capture every selector input at one scoped Owner presentation boundary. */
@@ -181,7 +194,9 @@ export function registerRemoteAgentsCommand(
 		description: "Show Agents in the current Workflow",
 		getArgumentCompletions: getAgentsArgumentCompletions,
 		handler: async (args, ctx) => {
-			if (parseAgentsCommandArgument(args) === "owner") {
+			const commandMode = parseAgentsCommandArgument(args);
+			if (commandMode === "repair") throw new Error(AGENTS_COMMAND_USAGE);
+			if (commandMode === "owner") {
 				const snapshot = await presentation.snapshot();
 				// The Owner exists in the roster whatever its Run phase, so /agents owner
 				// still returns to it while a stopped Owner Run is Dormant.
