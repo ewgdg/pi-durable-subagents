@@ -169,9 +169,24 @@ async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: Huma
  const isModeratorRow = (status: { agentId: string; workflowId: string }) => status.agentId !== status.workflowId;
  const liveMods = [...roster.live].filter(isModeratorRow);
  const dormantMods = [...roster.dormant].filter(isModeratorRow);
+ // Prefer-live: post-admission (no pending entry) with a live/dormant Owner in
+ // the roster, include that Owner instead of filtering it out, so reopening
+ // /agents shows the normal live Owner roster item, not a stale pending hint.
+ // Pre-admission (entry present) keeps repair scope (Moderators only, broken
+ // Owner hidden) to preserve snapshot-only disabled + admission-pending admit.
+ const liveOwner = [...roster.live, ...roster.dormant].find((status) => status.agentId === status.workflowId);
+ let effectiveLiveMods = liveMods;
+ let effectiveDormantMods = dormantMods;
+ if (repaired === undefined && liveOwner !== undefined) {
+   if (roster.live.some((status) => status.agentId === liveOwner.agentId)) {
+     effectiveLiveMods = [liveOwner, ...liveMods.filter((status) => status.agentId !== liveOwner.agentId)];
+   } else {
+     effectiveDormantMods = [liveOwner, ...dormantMods.filter((status) => status.agentId !== liveOwner.agentId)];
+   }
+ }
  const mountedId = view.status().agentId;
- const selectedId = liveMods[0]?.agentId ?? dormantMods[0]?.agentId ?? repaired?.ownerId ?? mountedId;
- return { liveMods, dormantMods, repaired, mountedId, selectedId };
+ const selectedId = effectiveLiveMods[0]?.agentId ?? effectiveDormantMods[0]?.agentId ?? repaired?.ownerId ?? mountedId;
+ return { liveMods: effectiveLiveMods, dormantMods: effectiveDormantMods, repaired, mountedId, selectedId };
  };
  const initial = buildRepairSnapshot();
  const selection = createAgentSelectionSession(view, initial.mountedId);
@@ -197,14 +212,18 @@ async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: Huma
  }),
  prepareSelection: async (act) => {
  if (act.kind === "open_report") return;
- const repairedId = current.repaired?.ownerId;
+ // Use a fresh entry (not the stale open-time snapshot) so post-admission picks
+ // prefer the live Owner roster item instead of re-admitting. Suppressed entry
+ // (admission completed) falls through to normal live presentation.
+ const freshRepaired = view.repairedOwnerEntry();
+ const repairedId = freshRepaired?.ownerId;
  if (act.kind === "select_agent" && repairedId && act.agentId === repairedId) {
-const stage = current.repaired?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
-if (stage === "admission-pending") {
-await view.admitRepairedOwner();
-return;
-}
-throw new Error("unavailable: repaired Owner is available after repair completes");
+ const stage = freshRepaired?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
+ if (stage === "admission-pending") {
+ await view.admitRepairedOwner();
+ return;
+ }
+ throw new Error("unavailable: repaired Owner is available after repair completes");
  }
  await selection.prepare(act);
  },
@@ -344,13 +363,28 @@ export function registerAgentsCommand(
 					if (mode === "owner") {
 						try {
 							const entry = host.repairedOwnerEntry();
+							// Prefer-live: post-admission (no entry) with a live Owner in the
+							// roster means the repaired Owner is already live. Do not emit the
+							// stale snapshot-only hint; the selector below shows normal live Owner.
+							// Idle hold still enforced via beginExecution until human message.
+							if (!entry) {
+								const roster = host.selectionRoster();
+								const liveOwner = [...roster.live, ...roster.dormant].find((status) => status.agentId === status.workflowId);
+								if (liveOwner !== undefined) {
+									ctx.ui.notify("Repaired Owner admitted live idle until human message: " + liveOwner.agentId, "info");
+								} else {
+									ctx.ui.notify("Repaired Owner is available after repair completes: " + host.status().agentId, "info");
+								}
+							} else {
 							const stage = entry?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
 							if (stage === "admission-pending") {
 								await host.admitRepairedOwner();
-								const admitted = host.repairedOwnerEntry();
-								ctx.ui.notify("Repaired Owner admission-pending acknowledged idle until human message: " + (admitted?.ownerId ?? host.status().agentId), "info");
+								// Admission suppresses the pending entry (prefer-live); notify with
+								// the pre-admit owner id, not the suppressed post-admit entry.
+								ctx.ui.notify("Repaired Owner admission-pending acknowledged idle until human message: " + entry.ownerId, "info");
 							} else {
 								ctx.ui.notify("Repaired Owner is available after repair completes: " + (entry?.ownerId ?? host.status().agentId), "info");
+							}
 							}
 						} catch (error) {
 							ctx.ui.notify("Repaired Owner view failed: " + (error instanceof Error ? error.message : String(error)), "error");

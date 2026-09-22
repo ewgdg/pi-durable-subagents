@@ -344,6 +344,12 @@ export class WorkflowCoordinator {
 	#preadmissionRepairFailure: ManualRepairFailureEvidence | undefined;
 	#repairLedger: RepairApprovalLedger | undefined;
 	#repairedOwnerIdleHold: Readonly<{ ownerId: string; drafts?: unknown }> | undefined;
+	// Admission-completed suppression: set on successful admitRepairedOwner to drop
+	// the selector pending entry while keeping the execution idle hold until a new
+	// human message. Cleared on a fresh repair trigger/commit so the next cycle
+	// shows snapshot-only then admission-pending again. Decouples selector entry
+	// from beginExecution refusal (hold still refuses until resumeFromHuman).
+	#repairedOwnerAdmitted = false;
 	#preadmissionRepairOnly = false;
 	#shutdownPromise: Promise<void> | undefined;
 	readonly #shutdownController = new AbortController();
@@ -863,12 +869,27 @@ export class WorkflowCoordinator {
 		// handleHumanInput clears it on the next human message.
 		if (result.disposition === "committed" || result.disposition === "joined-committed" || result.disposition === "committed-admission-failed") {
 			this.#repairedOwnerIdleHold = drafts === undefined ? { ownerId } : { ownerId, drafts };
+			// New commit starts admission-pending: clear admission-completed
+			// suppression so the pending entry shows until admission completes.
+			this.#repairedOwnerAdmitted = false;
 		}
 		return result;
 	}
 	// Explicit repaired-Owner entry. Never a fabricated live record. Post-commit hold means admission-pending.
 	// Pre-commit trigger or preadmission repair host means snapshot-only. Otherwise no entry.
+ 	// Prefer-live: once admission completes, suppress the pending entry entirely
+ 	// so reopening /agents shows the normal live Owner roster item. The execution
+ 	// idle hold stays set until a new human message (beginExecution still refuses).
 	#repairedOwnerEntry(): RepairedOwnerSelectorEntry | undefined {
+ 		if (this.#repairedOwnerAdmitted) {
+ 			return undefined;
+ 		}
+ 		return this.#repairedOwnerEntryIgnoringAdmission();
+ 	}
+ 	// Entry ignoring the admission-completed suppression. Used by admission itself
+ 	// so repeated admits stay fresh (new marker/snapshot) while idle, and by the
+ 	// selector entry above for prefer-live suppression after admission.
+ 	#repairedOwnerEntryIgnoringAdmission(): RepairedOwnerSelectorEntry | undefined {
 		const ownerId = this.#ownerIdentity.agentId;
 		const workflowId = this.#ownerIdentity.workflowId;
 		const transcriptPath = this.#operationalIncidents.manualRepairTranscriptPath() ?? this.#preadmissionRepairFailure?.transcriptPath ?? this.#agents.get(ownerId)?.transcript.inspect().transcriptPath ?? undefined;
@@ -912,7 +933,10 @@ export class WorkflowCoordinator {
 		if (!isOwner && !isHumanSeatModerator) {
 			throw new Error("wrong_participant: repair admission needs the Owner or a Moderator navigating from the human Owner seat");
 		}
-		const entry = this.#repairedOwnerEntry();
+		// Use the admission-ignoring entry so repeated admits stay fresh while idle:
+		// the selector entry is suppressed after the first admission (prefer-live),
+		// but direct admits must still succeed until a new human message clears the hold.
+		const entry = this.#repairedOwnerEntryIgnoringAdmission();
 		if (!entry) {
 			throw new Error("unavailable: no repaired Owner entry in repair context");
 		}
@@ -933,6 +957,11 @@ export class WorkflowCoordinator {
 		const priorDrafts = this.#repairedOwnerIdleHold?.drafts;
 		const effectiveDrafts = drafts === undefined ? priorDrafts : drafts;
 		this.#repairedOwnerIdleHold = effectiveDrafts === undefined ? { ownerId: entry.ownerId } : { ownerId: entry.ownerId, drafts: effectiveDrafts };
+		// Admission completed: suppress the selector pending entry (prefer-live live
+		// Owner roster item) while keeping the execution idle hold until a new human
+		// message. beginExecution still refuses; snapshots rebuild fresh every call
+		// (no cache) so reopening /agents reflects live immediately.
+		this.#repairedOwnerAdmitted = true;
 		const idle = effectiveDrafts === undefined ? openRepairedOwnerIdle(entry.ownerId) : openRepairedOwnerIdle(entry.ownerId, { drafts: effectiveDrafts });
 		const freshMarker = Object.freeze({ at: new Date().toISOString() });
 		return { ownerId: entry.ownerId, snapshot, idle, freshMarker };
@@ -1199,6 +1228,9 @@ export class WorkflowCoordinator {
 				if (receipt.disposition === "created") {
 					this.#pendingRepairApproval = undefined;
 					this.#pendingRepairTrigger = { moderatorAgentId: receipt.moderatorAgentId, approver: agentId };
+					// Fresh trigger starts a new repair cycle: clear admission-completed
+					// suppression so snapshot-only then admission-pending show again.
+					this.#repairedOwnerAdmitted = false;
 				}
 				return receipt;
 			},
