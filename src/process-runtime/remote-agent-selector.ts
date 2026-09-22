@@ -108,21 +108,15 @@ export function createAgentSelectionSession(
 			// reacquire its presentation, which could replace the live attachment.
 			if (action.kind === "select_agent" && action.agentId === selectedAgentId) return;
 			// Repaired-Owner routing by entry kind: admission-pending admits fresh from disk;
-			// snapshot-only opens the frozen snapshot reader with zero commit demand and
-			// no admission attempt. Both ride human navigation provenance from the Owner seat.
+			// snapshot-only is disabled until repair completes: not selectable, refused with
+			// an explanatory reason. Admission rides human navigation provenance from the Owner seat.
 			const repairedEntry = typeof (view as unknown as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? (view as unknown as { repairedOwnerEntry: () => { ownerId: string; stage?: string } | undefined }).repairedOwnerEntry() : undefined;
 			if (action.kind === "select_agent" && repairedEntry && action.agentId === repairedEntry.ownerId) {
 				if (repairedEntry.stage === "admission-pending") {
 					await (view as unknown as { admitRepairedOwner: (drafts?: unknown) => Promise<unknown> }).admitRepairedOwner();
 					return;
 				}
-				const readSnapshot = (view as unknown as { readRepairedOwnerSnapshot?: () => Promise<unknown> }).readRepairedOwnerSnapshot;
-				if (typeof readSnapshot === "function") {
-					await readSnapshot.call(view);
-					return;
-				}
-				await (view as unknown as { admitRepairedOwner: (drafts?: unknown) => Promise<unknown> }).admitRepairedOwner();
-				return;
+				throw new Error("unavailable: repaired Owner is available after repair completes");
 			}
 			const selection = await view.openAgentPresentation(action.agentId);
 			if (selection.kind === "post_mortem") postMortemAgentView = selection;

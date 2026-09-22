@@ -779,9 +779,22 @@ class AgentSelectorSurface implements Component {
 		if (repaired) {
 			const stage = repaired.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
 			const path = repaired.transcriptPath ?? "transcript path unavailable";
+			if (stage !== "admission-pending") {
+				// Pre-commit entry is disabled by construction: informational row, no selection
+				// action, so Enter never dismisses the selector. The repair-prepare layers refuse
+				// explicit picks (including the O shortcut) with the same explanatory reason.
+				return {
+					value: repaired.ownerId,
+					label: "Owner (snapshot-only, available after repair completes)",
+					description: "available after repair completes",
+					kind: "owner",
+					repairedOwner: repaired,
+					detailLines: ["", "Owner " + repaired.ownerId, "Stage: snapshot-only (disabled)", "available after repair completes", "Transcript: " + path, "Verified identity, never a live record"],
+				};
+			}
 			return {
 				value: repaired.ownerId,
-				label: "Owner (" + stage + ")",
+				label: "Owner (admission-pending)",
 				description: path,
 				kind: "owner",
 				repairedOwner: repaired,

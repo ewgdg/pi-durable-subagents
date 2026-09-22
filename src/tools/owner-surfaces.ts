@@ -204,8 +204,7 @@ if (stage === "admission-pending") {
 await view.admitRepairedOwner();
 return;
 }
-await view.readRepairedOwnerSnapshot();
-return;
+throw new Error("unavailable: repaired Owner is available after repair completes");
  }
  await selection.prepare(act);
  },
@@ -234,8 +233,7 @@ return;
 if (stage === "admission-pending") {
 ui.notify("Repaired Owner " + stage + " acknowledged idle until human message: " + repairedId, "info");
 } else {
-const where = entry?.transcriptPath ?? "transcript path unavailable";
-ui.notify("Repaired Owner snapshot-only evidence ready: " + repairedId + " : " + where, "info");
+ui.notify("Repaired Owner is available after repair completes: " + repairedId, "info");
 }
  return;
  }
@@ -352,8 +350,7 @@ export function registerAgentsCommand(
 								const admitted = host.repairedOwnerEntry();
 								ctx.ui.notify("Repaired Owner admission-pending acknowledged idle until human message: " + (admitted?.ownerId ?? host.status().agentId), "info");
 							} else {
-								await host.readRepairedOwnerSnapshot();
-								ctx.ui.notify("Repaired Owner snapshot-only evidence ready: " + (entry?.ownerId ?? host.status().agentId) + " : " + (entry?.transcriptPath ?? "transcript path unavailable"), "info");
+								ctx.ui.notify("Repaired Owner is available after repair completes: " + (entry?.ownerId ?? host.status().agentId), "info");
 							}
 						} catch (error) {
 							ctx.ui.notify("Repaired Owner view failed: " + (error instanceof Error ? error.message : String(error)), "error");

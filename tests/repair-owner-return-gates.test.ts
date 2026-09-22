@@ -65,7 +65,7 @@ test("post-commit Moderator navigation admits without trigger binding", async (t
  assert.deepEqual(ownerAdmitted.snapshot, admitted.snapshot);
  await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("pre-commit snapshot-only routes to frozen reader with zero commit demand", async (t) => {
+test("pre-commit Owner entry is disabled until repair completes", async (t) => {
  let owner: any;
  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
  const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -87,43 +87,54 @@ child.appendMessage(fauxAssistantMessage("Persist snap-child"));
  const entry = owner.repairedOwnerEntry();
  assert.ok(entry);
  assert.equal(entry.stage, "snapshot-only");
- const snapshot = await (owner as any).readRepairedOwnerSnapshot();
- assert.equal(snapshot.agentId, identity.agentId);
- assert.equal(snapshot.workflowId, identity.workflowId);
+// Disabled by construction: the selector refuses the pick with an explanatory reason.
+// No admission attempt, no snapshot reader, and never the commit-demanding error.
+let refusal = "";
+try {
+const disabledView: any = {
+status: () => ({ agentId: identity.agentId }),
+repairedOwnerEntry: () => entry,
+admitRepairedOwner: (...args: unknown[]) => (owner as any).admitRepairedOwner(...args),
+openAgentPresentation: async () => { throw new Error("disabled pre-commit entry must not route to live presentation"); },
+humanAttention: () => [],
+};
+const navigatingModerator = "moderator-gate-snap-1";
+const disabledSession = createAgentSelectionSession(disabledView, navigatingModerator);
+await disabledSession.prepare({ kind: "select_agent", agentId: identity.agentId });
+} catch (error) {
+refusal = error instanceof Error ? error.message : String(error);
+}
+assert.match(refusal, /available after repair completes/);
+assert.doesNotMatch(refusal, /snapshot-only/);
+// Backend guard stays for direct misuse; UI flows never reach it.
  await assert.rejects(owner.admitRepairedOwner(), /snapshot-only/);
  await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("selector routes snapshot-only to reader and admission-pending to admit", async () => {
+test("selector refuses snapshot-only and admits admission-pending", async () => {
  const ownerId = "owner-gate-1";
  const moderatorId = "moderator-gate-1";
  const snapshotOnly = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "snapshot-only" });
  let admitCalled = false;
- let readCalled = false;
  const snapshotView: any = {
  status: () => ({ agentId: moderatorId }),
  repairedOwnerEntry: () => snapshotOnly,
- admitRepairedOwner: async () => { admitCalled = true; throw new Error("snapshot-only: commit repair before admission of the repaired Owner"); },
- readRepairedOwnerSnapshot: async () => { readCalled = true; return { agentId: ownerId, workflowId: ownerId, header: {}, entries: [] }; },
+admitRepairedOwner: async () => { admitCalled = true; throw new Error("disabled entry must not attempt admission"); },
  openAgentPresentation: async () => { throw new Error("must not route snapshot-only to live presentation"); },
  humanAttention: () => [],
  };
  const snapshotSession = createAgentSelectionSession(snapshotView, moderatorId);
- await snapshotSession.prepare({ kind: "select_agent", agentId: ownerId });
- assert.equal(readCalled, true);
+await assert.rejects(snapshotSession.prepare({ kind: "select_agent", agentId: ownerId }), /available after repair completes/);
  assert.equal(admitCalled, false);
  const admissionPending = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "admission-pending" });
  let admitCalled2 = false;
- let readCalled2 = false;
  const admitView: any = {
  status: () => ({ agentId: moderatorId }),
  repairedOwnerEntry: () => admissionPending,
  admitRepairedOwner: async () => { admitCalled2 = true; return { ownerId }; },
- readRepairedOwnerSnapshot: async () => { readCalled2 = true; return { agentId: ownerId }; },
  openAgentPresentation: async () => { throw new Error("must not route admission-pending to live presentation"); },
  humanAttention: () => [],
  };
  const admitSession = createAgentSelectionSession(admitView, moderatorId);
  await admitSession.prepare({ kind: "select_agent", agentId: ownerId });
  assert.equal(admitCalled2, true);
- assert.equal(readCalled2, false);
 });

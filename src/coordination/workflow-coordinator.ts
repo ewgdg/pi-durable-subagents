@@ -227,9 +227,6 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	// repair trigger is pending, consumed by commit, or cleared by resolve/Dormant.
 	// Snapshot-only refuses. Failure keeps committed data.
 	admitRepairedOwner(drafts?: unknown): Promise<RepairedOwnerAdmissionResult>;
-	// Frozen snapshot reader for pre-commit snapshot-only entry. Same human-seat provenance
-	// as admission. No commit demand, no admission attempt, no idle hold.
-	readRepairedOwnerSnapshot(): Promise<RepairOwnerSnapshot>;
 	// Enforce idle-until-human-message hold on a freshly admitted Owner. Owner only. No auto turn.
 	adoptRepairedOwnerIdleHold(drafts?: unknown): RepairedOwnerIdle;
 	selectionRoster(): Readonly<{
@@ -940,27 +937,6 @@ export class WorkflowCoordinator {
 		const freshMarker = Object.freeze({ at: new Date().toISOString() });
 		return { ownerId: entry.ownerId, snapshot, idle, freshMarker };
 	}
-	// Frozen snapshot reader for pre-commit snapshot-only entry. Same human-seat provenance
-	// as admission (Owner or any Moderator), but read-only: no trigger check, no stage
-	// demand beyond entry presence, no admission attempt, no idle hold, no view close.
-	// Pre-commit Owner entry routes here exactly as before (readRepairOwnerSnapshot path).
-	async #readRepairedOwnerSnapshotForOwner(callerAgentId: string): Promise<RepairOwnerSnapshot> {
-		this.#assertAdmissionOpen();
-		const ownerId = this.#ownerIdentity.agentId;
-		const isOwner = callerAgentId === ownerId;
-		const isHumanSeatModerator = this.#isModerator(callerAgentId);
-		if (!isOwner && !isHumanSeatModerator) {
-			throw new Error("wrong_participant: repair snapshot needs the Owner or a Moderator navigating from the human Owner seat");
-		}
-		const entry = this.#repairedOwnerEntry();
-		if (!entry) {
-			throw new Error("unavailable: no repaired Owner entry in repair context");
-		}
-		if (!entry.transcriptPath) {
-			throw new Error("evidence_unavailable: repaired Owner entry has no transcript path");
-		}
-		return readRepairOwnerSnapshot(entry.transcriptPath);
-	}
 	modelPolicy(): ModelPolicySnapshot {
 		return {
 			availableModels: this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().map(
@@ -1233,7 +1209,6 @@ export class WorkflowCoordinator {
 				this.#commitRepairReplaceForOwner(agentId, repairedBySource, attemptId, drafts),
 			repairedOwnerEntry: () => this.#repairedOwnerEntry(),
 			admitRepairedOwner: (drafts) => this.#admitRepairedOwnerForOwner(agentId, drafts),
-			readRepairedOwnerSnapshot: () => this.#readRepairedOwnerSnapshotForOwner(agentId),
 			adoptRepairedOwnerIdleHold: (drafts) => this.#adoptRepairedOwnerIdleHoldForOwner(agentId, drafts),
 		selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
