@@ -160,7 +160,21 @@ class OwnerDiagnosticsSurface implements Component {
 
 	handleInput(data: string): void {
 		if (matchesKey(data, Key.escape) || matchesKey(data, "q")) { if (matchesKey(data, Key.escape) && this.onEsc) void this.onEsc(); this.done(); return; }
-		if (matchesKey(data, "r") && this.onRepair) { void this.onRepair(); return; }
+		if (matchesKey(data, "r") && this.onRepair) {
+			try {
+				const result = this.onRepair!();
+				if (result instanceof Promise) {
+					void result.then(
+						() => this.done(),
+						() => undefined,
+					);
+				} else {
+					this.done();
+				}
+			} catch {
+				}
+			return;
+		}
 		if (matchesKey(data, "t") || matchesKey(data, "s")) {
 			this.#technical = matchesKey(data, "t");
 			this.#scrollTop = 0;

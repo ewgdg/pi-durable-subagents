@@ -63,6 +63,16 @@ export function deactivateOwnerAgentTools(pi: ExtensionAPI): void {
 	);
 }
 
+async function switchToRepairModerator(
+	view: HumanPresentationCoordinatorView,
+	moderatorAgentId: string,
+): Promise<void> {
+	const selection = createAgentSelectionSession(view, view.status().agentId);
+	const action = { kind: "select_agent" as const, agentId: moderatorAgentId };
+	await selection.prepare(action);
+	await selection.complete(action);
+}
+
 export function registerAgentsCommand(
 	pi: ExtensionAPI,
 	resolveView: () => HumanPresentationCoordinatorView,
@@ -90,7 +100,22 @@ export function registerAgentsCommand(
 				const ownerHost = admissionFailure ? undefined : admittedOwnerView?.();
 				const activeHost = repairHost ?? ownerHost;
 				await openOwnerDiagnostics(ctx.ui, admissionFailure, {
-					onRepair: activeHost ? () => activeHost.requestManualRepair(validateManualRepairReason(undefined)).then((receipt) => { ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info"); }).catch((error) => { ctx.ui.notify("Repair Moderator failed: " + (error instanceof Error ? error.message : String(error)), "error"); }) : undefined,
+					onRepair: activeHost ? async () => {
+            let receipt;
+            try {
+              receipt = await activeHost.requestManualRepair(validateManualRepairReason(undefined));
+            } catch (error) {
+              ctx.ui.notify("Repair Moderator failed: " + (error instanceof Error ? error.message : String(error)), "error");
+              throw error;
+            }
+            ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
+            try {
+              await switchToRepairModerator(activeHost, receipt.moderatorAgentId);
+            } catch (error) {
+              ctx.ui.notify("Repair view failed: " + (error instanceof Error ? error.message : String(error)), "error");
+              throw error;
+            }
+          } : undefined,
 					onEsc: activeHost ? () => activeHost.notifyRepairHumanInput("esc").catch((error) => { ctx.ui.notify("Repair revoke failed: " + (error instanceof Error ? error.message : String(error)), "error"); }) : undefined,
 				});
 				return;
@@ -115,6 +140,11 @@ export function registerAgentsCommand(
 						if (mode === "repair") {
 							const receipt = await host.requestManualRepair(validateManualRepairReason(parseAgentsRepairReason(args)));
 							ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
+							try {
+							  await switchToRepairModerator(host, receipt.moderatorAgentId);
+							} catch (error) {
+							  ctx.ui.notify("Repair view failed: " + (error instanceof Error ? error.message : String(error)), "error");
+							}
 						} else if (mode === "repair-freeze") {
 							const snap = await host.freezeRepairSnapshot();
 							ctx.ui.notify("Repair snapshot: " + snap.snapshotId + " (" + String(snap.entries.length) + " targets)", "info");
@@ -137,19 +167,29 @@ export function registerAgentsCommand(
 			if (commandMode === "repair") {
 				if (!ownerAdmission) throw new Error(AGENTS_COMMAND_USAGE);
 				const repairView = resolveView();
+				let receipt;
 				try {
-					const receipt = await repairView.requestManualRepair(
+					receipt = await repairView.requestManualRepair(
 						validateManualRepairReason(parseAgentsRepairReason(args)),
-					);
-					ctx.ui.notify(
-						receipt.disposition === "created"
-							? `Repair Moderator created: ${receipt.moderatorAgentId}`
-							: `Repair Moderator already active: ${receipt.moderatorAgentId}`,
-						"info",
 					);
 				} catch (error) {
 					ctx.ui.notify(
-						`Repair Moderator failed: ${error instanceof Error ? error.message : String(error)}`,
+						"Repair Moderator failed: " + (error instanceof Error ? error.message : String(error)),
+						"error",
+					);
+					return;
+				}
+				ctx.ui.notify(
+					receipt.disposition === "created"
+						? "Repair Moderator created: " + receipt.moderatorAgentId
+						: "Repair Moderator already active: " + receipt.moderatorAgentId,
+					"info",
+				);
+				try {
+					await switchToRepairModerator(repairView, receipt.moderatorAgentId);
+				} catch (error) {
+					ctx.ui.notify(
+						"Repair view failed: " + (error instanceof Error ? error.message : String(error)),
 						"error",
 					);
 				}
