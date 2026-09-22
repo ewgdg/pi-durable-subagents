@@ -35,6 +35,7 @@ import {
 	transcriptFromSessionFile,
 	transcriptFromSessionManager,
 } from "../pi-integration/session-manager-transcript.ts";
+import { MANUAL_REPAIR_NAMESPACE, isRepairManagedPath } from "../coordination/manual-repair.ts";
 import { workflowSessionDirectory } from "../runtime/workflow-session-directory.ts";
 
 export type RecoveredOrdinaryAgent = Readonly<{
@@ -112,13 +113,32 @@ export async function discoverColdWorkflow(options: {
 			quarantinedCandidateCount: 1,
 		};
 	}
+	const repairDirectory = join(directory, MANUAL_REPAIR_NAMESPACE);
+	let repairFilenames: string[] = [];
+	let repairUnreadable = 0;
+	try {
+		repairFilenames = (await readdir(repairDirectory)).filter((name) => name.endsWith(".jsonl"));
+	} catch (error) {
+		if (!isMissingDirectory(error)) repairUnreadable = 1;
+	}
 
 	const candidates: Candidate[] = [];
 	const quarantinedAgentIds = new Set<string>();
-	let unreadableCandidateCount = 0;
+	let unreadableCandidateCount = repairUnreadable;
 	for (const filename of filenames) {
 		try {
 			candidates.push(await readCandidate(join(directory, filename)));
+		} catch (error) {
+			unreadableCandidateCount += 1;
+			if (error instanceof CandidateError && error.agentId) {
+				quarantinedAgentIds.add(error.agentId);
+			}
+		}
+	}
+
+	for (const filename of repairFilenames) {
+		try {
+			candidates.push(await readCandidate(join(repairDirectory, filename)));
 		} catch (error) {
 			unreadableCandidateCount += 1;
 			if (error instanceof CandidateError && error.agentId) {
@@ -157,6 +177,13 @@ export async function discoverColdWorkflow(options: {
 		if (candidate.identity.workflowId !== ownerIdentity.workflowId) {
 			candidate.invalid = true;
 			quarantinedAgentIds.add(candidate.identity.agentId);
+		}
+		if (isRepairManagedPath(candidate.path, directory) && candidate.role !== "moderator") {
+			// The repair namespace hosts live Moderator evidence only; an ordinary
+			// transcript there satisfies neither namespace and is quarantined.
+			candidate.invalid = true;
+			quarantinedAgentIds.add(candidate.identity.agentId);
+			continue;
 		}
 		if (candidate.role === "moderator") continue;
 		const parentTranscript = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
