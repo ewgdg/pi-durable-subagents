@@ -217,7 +217,10 @@ test("manual repair Input carries pointers plus the short procedure", () => {
     workflowDirectory: "/tmp/wf",
   });
   assert.equal(input.procedure, MANUAL_REPAIR_PROCEDURE);
-  assert.equal(MANUAL_REPAIR_PROCEDURE.split("\n").length, 5);
+const procedureLines = MANUAL_REPAIR_PROCEDURE.split("\n");
+assert.equal(procedureLines.length, 6);
+assert.match(procedureLines[4] as string, /^5\. Unrepairable exit/);
+assert.match(procedureLines[5] as string, /^6\. User returns via \/agents/);
   assert.throws(
     () => buildManualRepairInput("", {
       stage: "admitted Owner trigger",
