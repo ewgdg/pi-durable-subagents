@@ -447,6 +447,9 @@ export class OperationalIncidentCoordinator {
 	admitToolExecution(agentId: string, toolCallId: string, toolName: string): void {
 		const record = this.#requireAgent(agentId);
 		this.#operationReviews.reconcileAgent(agentId);
+		// Agent Wait is intentional coordination suspension. Dependency Deadlock
+		// observes its Request graph; Operation Review must not time the parked tool.
+		if (toolName === "agent_wait") return;
 		const transcript = record.transcript.inspect();
 		const { source } = resolveCommittedToolCall({
 			agentId,
@@ -454,9 +457,6 @@ export class OperationalIncidentCoordinator {
 			toolCallId,
 			toolName,
 		});
-		// Agent Wait is intentional coordination suspension. Dependency Deadlock
-		// observes its Request graph; Operation Review must not time the parked tool.
-		if (toolName === "agent_wait") return;
 		const entry = transcript.entries.find(({ id }) => id === source.entryId);
 		if (entry?.type !== "message" || entry.message.role !== "assistant") {
 			throw new Error("invariant_violation: root tool call source is unavailable");

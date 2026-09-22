@@ -41,32 +41,39 @@ export function resolveCommittedToolCall(options: {
 }): { source: ToolCallPointer; input: Record<string, unknown> } {
 	const { agentId, transcript, toolCallId, toolName } = options;
 	const entries = coordinationEntries(transcript, agentId, `call:${toolCallId}`);
-	return indexedState(transcript).memo(
+	const state = indexedState(transcript);
+	return state.memo(
 		resolveCommittedToolCall,
 		`${agentId}\0${toolName}\0${toolCallId}`,
-		entries.length,
+		// The branch leaf participates in the version: switching branches can
+		// change which duplicate is current without growing this bucket.
+		[entries.length, transcript.activeBranch.at(-1)?.id ?? null],
 		() => {
-			const matches: Array<{ entry: SessionEntry; input: Record<string, unknown> }> = [];
+			const matches: Array<{ entry: SessionEntry; input: Record<string, unknown>; partIndex: number }> = [];
 
 			for (const entry of entries) {
 				if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-				for (const part of entry.message.content) {
+				for (let partIndex = 0; partIndex < entry.message.content.length; partIndex++) {
+					const part = entry.message.content[partIndex]!;
 					if (part.type !== "toolCall" || part.id !== toolCallId) continue;
 					if (part.name !== toolName) {
 						throw new ProtocolInvariantError(
 							`tool call ${toolCallId} is ${part.name}, not ${toolName}`,
 						);
 					}
-					matches.push({ entry, input: part.arguments });
+					matches.push({ entry, input: part.arguments, partIndex });
 				}
 			}
 
-			if (matches.length !== 1) {
+			if (matches.length === 0) {
 				throw new ProtocolInvariantError(
-					`expected one committed ${toolName} source for ${toolCallId}, found ${matches.length}`,
+					`expected one committed ${toolName} source for ${toolCallId}, found 0`,
 				);
 			}
-			const match = matches[0];
+			// Native tool call ids are model-generated and can repeat across
+			// retried or branched turns. The currently executing call is the
+			// latest commit, preferring the active branch over rewound history.
+			const match = latestCommittedMatch(transcript, matches);
 			if (!match) throw new Error("Tool call source narrowing failed");
 			return {
 				source: { agentId, entryId: match.entry.id, toolCallId },
@@ -74,6 +81,29 @@ export function resolveCommittedToolCall(options: {
 			};
 		},
 	);
+}
+
+function latestCommittedMatch(
+	transcript: TranscriptInspection,
+	matches: Array<{ entry: SessionEntry; input: Record<string, unknown>; partIndex: number }>,
+): { entry: SessionEntry; input: Record<string, unknown> } | undefined {
+	if (matches.length === 1) return matches[0];
+	const positions = indexedState(transcript).positions;
+	const onBranch = new Set(transcript.activeBranch.map((entry) => entry.id));
+	const branched = matches.filter((match) => onBranch.has(match.entry.id));
+	const candidates = branched.length > 0 ? branched : matches;
+	let latest = candidates[0];
+	for (const candidate of candidates.slice(1)) {
+		const latestPosition = positions.get(latest!.entry.id) ?? -1;
+		const candidatePosition = positions.get(candidate.entry.id) ?? -1;
+		if (
+			candidatePosition > latestPosition ||
+			(candidatePosition === latestPosition && candidate.partIndex > latest!.partIndex)
+		) {
+			latest = candidate;
+		}
+	}
+	return latest;
 }
 
 export function compareCommittedToolCallOrder(
