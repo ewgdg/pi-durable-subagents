@@ -85,6 +85,10 @@ export type ModeratorTrigger =
 		kind: "operation_review";
 		toolCall: ToolCallPointer;
 		reviewIntervalMs: number;
+	}>
+	| Readonly<{
+		kind: "manual_repair";
+		reason: string;
 	}>;
 
 export type ModeratorInput = Readonly<{
@@ -374,6 +378,17 @@ function validateModeratorInput(value: unknown): ModeratorInput {
 			toolCall,
 			reviewIntervalMs: triggerValue.reviewIntervalMs as number,
 		};
+	} else if (triggerValue.kind === "manual_repair") {
+		requireExactKeys(triggerValue, ["kind", "reason"]);
+		if (
+			typeof triggerValue.reason !== "string" ||
+			triggerValue.reason.length === 0 ||
+			triggerValue.reason.includes("\0")
+		) {
+			throw new ProtocolInvariantError("Moderator Input repair reason is invalid");
+		}
+		affectedAgentIds = [];
+		trigger = { kind: "manual_repair", reason: triggerValue.reason };
 	} else {
 		throw new ProtocolInvariantError("Moderator Input trigger is invalid");
 	}

@@ -622,6 +622,10 @@ const ModeratorTriggerSchema = Type.Union([
 		toolCall: ToolCallPointerSchema,
 		reviewIntervalMs: Type.Integer({ minimum: 1 }),
 	}),
+	closed({
+		kind: Type.Literal("manual_repair"),
+		reason: NonEmptyStringSchema,
+	}),
 ]);
 const HumanAttentionItemSchema = closed({
 	requestId: NonEmptyStringSchema,

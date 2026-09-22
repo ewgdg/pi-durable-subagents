@@ -32,7 +32,7 @@ export function formatOperationalIncidentHeadline(
 export function operationalIncidentRequestEvidence(
 	attention: OperationalIncidentAttention,
 ) {
-	if ((attention.trigger.kind === "operation_review" || attention.trigger.kind === "moderation_unavailable")) {
+	if ((attention.trigger.kind === "operation_review" || attention.trigger.kind === "manual_repair" || attention.trigger.kind === "moderation_unavailable")) {
 		return { total: 0, sources: [] };
 	}
 	return (attention.trigger.kind === "dependency_deadlock" || attention.trigger.kind === "delivery_stall")

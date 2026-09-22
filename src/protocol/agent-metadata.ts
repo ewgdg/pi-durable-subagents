@@ -51,8 +51,14 @@ export function resolveOwnerAgentMetadata(): Readonly<{
 }
 
 export function resolveModeratorAgentMetadata(
-	triggerKind: ModeratorTriggerKind,
+	triggerKind: ModeratorTriggerKind | "manual_repair",
 ): Readonly<{ label: "Moderator"; description: string }> {
+	if (triggerKind === "manual_repair") {
+		return {
+			label: "Moderator",
+			description: "Manual repair; no incident claimed",
+		};
+	}
 	return {
 		label: "Moderator",
 		description: normalizeAgentMetadata(
