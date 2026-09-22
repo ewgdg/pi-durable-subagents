@@ -6,6 +6,7 @@ import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryIt
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
 import { validateRepairFreezeAdvisory } from "./repair-validate.ts";
+import { listRepairReports, listRepairReportsSync, publishRepairReport } from "./repair-reports.ts";
 import type { ObligationFrame } from "../protocol/obligation-focus.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { refreshAgentTranscripts } from "./agent-record.ts";
@@ -644,6 +645,24 @@ export class WorkflowCoordinator {
 		return preadmissionRepairBackupRoot(this.#repairWorkflowDirectory());
 	}
 
+	/** Owner-scope report history for activity surfaces: merges the repair journal in preadmission. */
+	#reportHistoryForActivity(): readonly ReportHistoryItem[] {
+		const owned = this.#reports.history();
+		if (!this.#preadmissionRepairOnly) return owned;
+		try {
+			const repaired = listRepairReportsSync(this.#repairJournalDir());
+			if (repaired.length === 0) return owned;
+			const seen = new Set(owned.map((item) => item.report.reportId));
+			const merged = [...owned];
+			for (const item of repaired) {
+				if (!seen.has(item.report.reportId)) merged.push(item);
+			}
+			return Object.freeze(merged);
+		} catch {
+			return owned;
+		}
+	}
+
 	preadmissionRepairWorkflowDirectory(): string {
 		// Exposed so the preadmission entry can assert its evidence
 		// workflowDirectory equals the live coordinator host directories.
@@ -675,7 +694,21 @@ export class WorkflowCoordinator {
 		if (!isOwner && !isTriggerModerator) {
 			throw new Error("wrong_participant: repair freeze needs the Owner or the trigger-bound repair Moderator");
 		}
-		const snapshot = await freezeRepairTargetsBackend(this.#repairWorkflowDirectory());
+		// Seed the frozen set with the trigger-time Owner transcript path: the
+		// retired Owner file lives at the session-dir root, outside the workflow
+		// directory walk that only sees repair/ in the broken layout. Prefer the
+		// committed repairContext path, then preadmission failure evidence, then
+		// the live Owner transcript path. An empty snapshot when the Owner file
+		// is the known target is refused by the list layer (never return []).
+		const seededOwnerPath =
+			this.#operationalIncidents.manualRepairTranscriptPath() ??
+			this.#preadmissionRepairFailure?.transcriptPath ??
+			this.#agents.get(ownerId)?.transcript.inspect().transcriptPath ??
+			undefined;
+		const snapshot = await freezeRepairTargetsBackend(
+			this.#repairWorkflowDirectory(),
+			seededOwnerPath ? [seededOwnerPath] : undefined,
+		);
 		this.#repairSnapshots.set(snapshot.snapshotId, snapshot);
 		const approval = approveRepairReplace({
 			snapshotId: snapshot.snapshotId,
@@ -920,6 +953,21 @@ export class WorkflowCoordinator {
 					throw new Error("invariant_violation: Report does not match committed tool call");
 				}
 				if (!transcript.transcriptPath) throw new Error("Report requires a durable source transcript");
+				// Preadmission repair host: the broken Owner transcript is frozen
+				// evidence and must never gain entries. Repair Moderator reports
+				// land in the dedicated repair report journal (outside the frozen
+				// workflow directory), so reporting never mutates frozen bytes or
+				// causes drift. Admitted hosts keep the existing Owner-transcript store.
+				if (this.#preadmissionRepairOnly && this.#operationalIncidents.isManualRepairModerator(agentId)) {
+					const report = await publishRepairReport({
+						journalDir: this.#repairJournalDir(),
+						input: validated,
+						reporter: { agentId, label: record.identity.metadata.label },
+						source: { ...committed.source, transcriptPath: transcript.transcriptPath },
+					});
+					this.#notifyAgentActivityChanged();
+					return { reportId: report.reportId, createdAt: report.createdAt };
+				}
 				const report = this.#reports.publish(validated,
 					{ agentId, label: record.identity.metadata.label },
 					{ ...committed.source, transcriptPath: transcript.transcriptPath });
@@ -1097,9 +1145,34 @@ export class WorkflowCoordinator {
 			hasPendingHumanQuestions: () => this.#humanRequests.hasPendingQuestions(),
 			humanAttention: () =>
 				this.#humanRequests.attentionItems(this.#ownerIdentity.agentId),
-			reportHistory: () => this.#reports.history(),
+			// Preadmission repair host: merge the dedicated repair report journal
+			// so repair Moderator reports stay operator-visible without touching
+			// the frozen broken Owner transcript.
+			reportHistory: () => {
+				const owned = this.#reports.history();
+				if (!this.#preadmissionRepairOnly) return owned;
+				try {
+					const repaired = listRepairReportsSync(this.#repairJournalDir());
+					if (repaired.length === 0) return owned;
+					const seen = new Set(owned.map((item) => item.report.reportId));
+					const merged = [...owned];
+					for (const item of repaired) {
+						if (!seen.has(item.report.reportId)) merged.push(item);
+					}
+					return Object.freeze(merged);
+				} catch {
+					return owned;
+				}
+			},
 			setReportRead: (reportId, read) => {
 				this.#assertAdmissionOpen();
+				// Frozen evidence guard: never append read-state to the broken Owner
+				// transcript in the preadmission host. Repair reports have no
+				// Owner-backed read-state; acknowledge without writes.
+				if (this.#preadmissionRepairOnly) {
+					this.#notifyAgentActivityChanged();
+					return;
+				}
 				this.#reports.setRead(reportId, read);
 				this.#notifyAgentActivityChanged();
 			},
@@ -1450,7 +1523,7 @@ export class WorkflowCoordinator {
 				this.#agentActivityStatus(this.#requireAgent(childId))
 			),
 			answerMode: this.#humanRequests.hasPendingRequest(agentId),
-			reports: ownerScope ? this.#reports.history() : [],
+			reports: ownerScope ? this.#reportHistoryForActivity() : [],
 			humanAttention: ownerScope
 				? this.#humanRequests.attentionItems(this.#ownerIdentity.agentId)
 				: [],

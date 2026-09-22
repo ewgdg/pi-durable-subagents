@@ -133,9 +133,16 @@ export function assertRepairApprovalFresh(approval: Readonly<{ approvalId?: unkn
   if (ledger && ledger.revoked && (ledger.revoked as ReadonlySet<string>).has(approval.approvalId)) throw new Error("revoked: repair approval " + approval.approvalId + " was cancelled (explicit repair cancel); request a fresh /agents repair trigger");
   if (ledger && ledger.consumed && (ledger.consumed as ReadonlySet<string>).has(approval.approvalId)) throw new Error("consumed: repair approval " + approval.approvalId + " is single-use and already consumed");
 }
-export async function freezeRepairTargets(workflowDirectory: string): Promise<RepairFrozenSnapshot> {
+export async function freezeRepairTargets(
+  workflowDirectory: string,
+  seededTranscriptPaths?: readonly string[],
+): Promise<RepairFrozenSnapshot> {
   if (!isAbsolute(workflowDirectory) || workflowDirectory.indexOf("\0") !== -1) throw new Error("invalid_input: workflow directory must be an absolute path");
-  const targets = await listFrozenRepairTargets(workflowDirectory);
+  // Seeded paths carry the retired Owner transcript (session-dir root) that the
+  // workflow-directory walk cannot reach. Empty snapshots are refused by the
+  // list layer: an empty frozen set when the Owner file is the known target is
+  // never returned.
+  const targets = await listFrozenRepairTargets(workflowDirectory, seededTranscriptPaths);
   const entries: Array<{ source: string; sha256: string }> = [];
   for (const source of targets) entries.push({ source, sha256: await sha256File(source) });
   entries.sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
@@ -147,7 +154,16 @@ export async function runRepairPreCommitGate(options: Readonly<{ workflowDirecto
   if (!snapshot || typeof snapshot.snapshotId !== "string" || !Array.isArray(snapshot.entries)) throw new Error("invalid_input: repair snapshot is required");
   assertRepairApprovalFresh(options.approval, snapshot.snapshotId, options.ledger);
   if (shouldJoinLiveRepair(options.liveGate)) throw new Error("join_live_repair: a live repair writer still holds the repair namespace; retire it before replacing Owner targets");
-  const current = await listFrozenRepairTargets(options.workflowDirectory);
+  // Drift scope must cover seeded outside-workflow sources (the retired Owner
+  // file). Re-seed the current listing from snapshot sources outside the
+  // workflow directory so added/removed/changed includes the Owner target.
+  const outsideSeeds = snapshot.entries
+    .map((entry) => entry.source)
+    .filter((source) => source !== options.workflowDirectory && !source.startsWith(options.workflowDirectory + sep));
+  const current = await listFrozenRepairTargets(
+    options.workflowDirectory,
+    outsideSeeds.length > 0 ? outsideSeeds : undefined,
+  );
   const wanted = new Map<string, string>();
   for (const entry of snapshot.entries) wanted.set(entry.source, entry.sha256);
   const currentHashes = new Map<string, string>();
@@ -162,13 +178,22 @@ export async function runRepairPreCommitGate(options: Readonly<{ workflowDirecto
   const outOfScope: string[] = [];
   for (const source of current) {
     const verification = await verifyFrozenCopy(source);
-    if (verification.disposition !== "pass") throw new Error("replay_failed: frozen copy failed dry-replay for " + source + ": " + verification.diagnostics.map((item) => item.reason).join("; "));
+    // Current-target validation is advisory: frozen repair targets are broken
+    // by definition (that is why they are repaired). Drift (above) proves
+    // conservation; repaired-copy validation in commitRepairReplace stays
+    // strict so a still-broken fix cannot commit. Collect current diagnostics
+    // as warnings instead of refusing the fix.
+    if (verification.disposition !== "pass") {
+      for (const item of verification.diagnostics) {
+        warnings.push("frozen-target-broken: " + item.reason + " in file " + item.file);
+      }
+    }
     for (const warning of verification.warnings) warnings.push(warning);
     for (const note of verification.outOfScope) outOfScope.push(note);
   }
   const files = current.map((source) => ({ source, sha256: currentHashes.get(source) as string }));
   files.sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
-  const diffSummary = files.length + " frozen targets verified against snapshot " + snapshot.snapshotId + ": no drift, replay pass (pass does not imply safe)";
+  const diffSummary = files.length + " frozen targets verified against snapshot " + snapshot.snapshotId + ": no drift; current-target validation is advisory (broken targets expected), repaired copies are strictly validated at commit (pass does not imply safe)";
   return { snapshotId: snapshot.snapshotId, targetCount: files.length, files, warnings, outOfScope, diffSummary, backupLocation: undefined };
 }
 export function openRepairedOwnerIdle(ownerId: string, options?: Readonly<{ drafts?: unknown }>): RepairedOwnerIdle {

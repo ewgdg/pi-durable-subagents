@@ -539,6 +539,16 @@ export class OperationalIncidentCoordinator {
 		return this.#manualRepair?.moderatorAgentId === agentId;
 	}
 
+	/**
+	 * Trigger-time Owner transcript path for freeze seeding. Prefers the
+	 * committed manual-repair Input repairContext (failure stage/error/path at
+	 * trigger time), so the retired Owner file is frozen even when the workflow
+	 * directory holds only repair/. Undefined when the trigger knows no path.
+	 */
+	manualRepairTranscriptPath(): string | undefined {
+		return this.#manualRepair?.input.repairContext?.transcriptPath;
+	}
+
 	async requestManualRepair(reason: string, failure?: ManualRepairFailureEvidence): Promise<ManualRepairReceipt> {
 		const validated = validateManualRepairReason(reason);
 		const existing = this.#manualRepair;

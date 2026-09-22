@@ -1,8 +1,9 @@
-import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, isAbsolute, join } from "node:path";
 import { isRepairManagedPath } from "./manual-repair.ts";
 import { transcriptFromSessionFile } from "../pi-integration/session-manager-transcript.ts";
+import { inspectMessageDeliveries } from "../protocol/message-delivery.ts";
 export type LiveRepairGate = Readonly<{ phase: string; failed: boolean; hasRecord: boolean }>;
 export function shouldJoinLiveRepair(existing: LiveRepairGate | undefined): boolean {
   if (!existing) return false;
@@ -11,9 +12,25 @@ export function shouldJoinLiveRepair(existing: LiveRepairGate | undefined): bool
   if (existing.phase === "dormant") return false;
   return true;
 }
-export async function listFrozenRepairTargets(workflowDirectory: string): Promise<readonly string[]> {
+export async function listFrozenRepairTargets(
+  workflowDirectory: string,
+  seededTranscriptPaths?: readonly string[],
+): Promise<readonly string[]> {
   if (!isAbsolute(workflowDirectory) || workflowDirectory.includes("\0")) {
     throw new Error("invalid_input: workflow directory must be an absolute path");
+  }
+  if (seededTranscriptPaths !== undefined) {
+    if (!Array.isArray(seededTranscriptPaths)) {
+      throw new Error("invalid_input: seeded repair targets must be an array of absolute paths");
+    }
+    for (const seeded of seededTranscriptPaths) {
+      if (typeof seeded !== "string" || seeded.length === 0 || seeded.includes("\0")) {
+        throw new Error("invalid_input: seeded repair target must be a non-empty path");
+      }
+      if (!isAbsolute(seeded)) {
+        throw new Error("invalid_input: seeded repair target must be an absolute path: " + String(seeded));
+      }
+    }
   }
   // Recursive walk with isRepairManagedPath as the filter: the repair/
   // namespace is excluded at any depth, so the guard is load-bearing rather
@@ -41,10 +58,43 @@ export async function listFrozenRepairTargets(workflowDirectory: string): Promis
   try {
     await walk(workflowDirectory);
   } catch (error) {
-    if (isMissingDirectory(error)) return [];
-    throw error;
+    if (isMissingDirectory(error)) {
+      // Missing workflow dir with no seeds is still an empty snapshot: refuse below.
+    } else {
+      throw error;
+    }
+  }
+  // Trigger-time evidence seed: the retired Owner transcript lives at the
+  // session-dir root, outside the workflow directory walk. Union it with the
+  // inventory (dedupe, keep repair/* exclusion). Membership/drift/sha256
+  // semantics stay with the snapshot + pre-commit gate.
+  const seen = new Set<string>(targets);
+  for (const seeded of seededTranscriptPaths ?? []) {
+    if (isRepairManagedPath(seeded, workflowDirectory)) continue;
+    if (!seeded.endsWith(".jsonl")) continue;
+    if (seen.has(seeded)) continue;
+    let fileStat;
+    try {
+      fileStat = await stat(seeded);
+    } catch (error) {
+      throw new Error(
+        "freeze_failed: known Owner repair target is unavailable: " + seeded + ": " +
+        (error instanceof Error ? error.message : String(error)),
+      );
+    }
+    if (!fileStat.isFile()) {
+      throw new Error("freeze_failed: known Owner repair target is unavailable (not a file): " + seeded);
+    }
+    seen.add(seeded);
+    targets.push(seeded);
   }
   targets.sort();
+  if (targets.length === 0) {
+    throw new Error(
+      "freeze_failed: no frozen repair targets in " + workflowDirectory +
+      "; the retired Owner transcript is the known target when the workflow directory holds only repair/ — seed freeze with repairContext.transcriptPath and never accept an empty snapshot",
+    );
+  }
   return targets;
 }
 function isMissingDirectory(error: unknown): boolean {
@@ -159,6 +209,18 @@ export async function verifyFrozenCopy(copyPath: string): Promise<FrozenCopyVeri
   const header = inspection.header;
   if (!header || typeof (header as { id?: unknown }).id !== "string") {
     diagnostics.push({ file: copyPath, reason: "replay_failed: frozen copy has no native session header" });
+    return { sessionPath: copyPath, disposition: "fail", diagnostics, warnings, outOfScope };
+  }
+  // Conservation check: duplicate Message Deliveries for one committed source
+  // pass schema validation but block admission. A frozen copy that still
+  // carries them must fail validation (and the pre-commit gate), so the
+  // Moderator fixes isolated copies before commit. Read-only: no writes.
+  try {
+    const agentId = (header as { id: string }).id;
+    inspectMessageDeliveries({ recipientAgentId: agentId, transcript: inspection });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    diagnostics.push({ file: copyPath, reason: "replay_failed: frozen copy carries invalid coordination evidence: " + reason });
     return { sessionPath: copyPath, disposition: "fail", diagnostics, warnings, outOfScope };
   }
   for (const entry of inspection.entries) {

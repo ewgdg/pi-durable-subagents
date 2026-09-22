@@ -52,14 +52,17 @@ export type ManualRepairFailureEvidence = Readonly<{
 /**
  * Short prescriptive repair procedure committed with every manual-repair
  * Input. Tool order only: freeze, validate, fix isolated copies, commit,
- * resolve. No fix recipe, no expected output.
+ * resolve, plus the explicit unrepairable exit. No fix recipe, no expected
+ * output. The dead-end exit is report_to_user then moderator_control resolve
+ * to Dormant without commit: never stall deliberating report-vs-resolve.
  */
 export const MANUAL_REPAIR_PROCEDURE = [
 	"1. repair_freeze for a snapshot id (snapshot-only, no writes).",
 	"2. repair_validate on the snapshot to get the error.",
 	"3. Fix isolated copies with edit/write tools, never live targets or installed source.",
 	"4. repair_commit under this trigger, then moderator_control resolve.",
-	"5. User returns via /agents; Esc or a new human message aborts only the in-flight step, never this trigger.",
+	"5. Unrepairable exit (no new op): if freeze refuses, commit refuses twice, or drift/hash conservation cannot be established, stop without publication. Report the blocker via report_to_user with an unsuccessful outcome, then moderator_control resolve to Dormant (history retained, no commit, never misleading resolved/success). Do not deliberate; the exit is report then resolve.",
+	"6. User returns via /agents; Esc or a new human message aborts only the in-flight step, never this trigger.",
 ].join("\n");
 
 /**
