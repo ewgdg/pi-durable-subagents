@@ -1,9 +1,10 @@
 # Workflow-owned transcript repair — proposed design
 
 Design for [#129](https://github.com/ewgdg/pi-durable-subagents/issues/129).
-**Not implemented; repair mechanics remain proposed.** `/agents repair` remains unavailable.
-This document separates the proposed contract from existing behavior. It does not
-authorize an autonomous repair engine or implement a missing-title migration.
+IMPLEMENTED (manual scope): the repair command opens a real Moderator in the same workflow dir (see docs/manual-repair-demo.md).
+Manual trigger only, trigger-is-approval, frozen copies with drift recheck, backup/seal/journal, idle reopen.
+The full-automatic flow below remains the earlier proposal and is NOT what shipped; the narrower manual scope supersedes it for now.
+It does not authorize an autonomous repair engine or implement a missing-title migration.
 
 ## Goal and recommendation
 
