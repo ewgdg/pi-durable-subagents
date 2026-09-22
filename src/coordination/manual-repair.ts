@@ -59,7 +59,7 @@ export const MANUAL_REPAIR_PROCEDURE = [
 	"2. repair_validate on the snapshot to get the error.",
 	"3. Fix isolated copies with edit/write tools, never live targets or installed source.",
 	"4. repair_commit under this trigger, then moderator_control resolve.",
-	"5. User returns via /agents; Esc or a new human message revokes the trigger.",
+	"5. User returns via /agents; Esc or a new human message aborts only the in-flight step, never this trigger.",
 ].join("\n");
 
 /**
