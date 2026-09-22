@@ -1,5 +1,5 @@
 import {
-	buildSessionContext,
+	buildSessionProjection,
 	type SessionContext,
 	type SessionEntry,
 	type SessionHeader,
@@ -248,7 +248,11 @@ export class RetainedTranscript {
 	context(): SessionContext {
 		if (!this.#context) {
 			this.contextBuilds++;
-			this.#context = buildSessionContext(this.entries, this.#leaf, this.byId);
+			// Project from the canonical session projection so append-only context
+			// edits (e.g. hidden resolved attention) apply to model context. The
+			// SessionContext shape is preserved for existing callers.
+			const projection = buildSessionProjection(this.entries, this.#leaf, this.byId);
+			this.#context = { messages: projection.messages, thinkingLevel: projection.thinkingLevel, model: projection.model };
 		}
 		return this.#context;
 	}

@@ -6,9 +6,8 @@ import {
 	CustomMessageComponent,
 	ToolExecutionComponent,
 	UserMessageComponent,
-	buildContextEntries,
+	buildSessionProjection,
 	getMarkdownTheme,
-	sessionEntryToContextMessages,
 	type ExtensionUIContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -244,13 +243,15 @@ function createTranscriptPresentation(
 	const presentation = new Container();
 	const markdownTheme = getMarkdownTheme();
 	const activeTail = transcript.activeBranch.at(-1)?.id;
-	const entries = buildContextEntries(
+	// Render the canonical projection so compaction and append-only context edits
+	// match what the model saw; physical history stays untouched.
+	const projection = buildSessionProjection(
 		[...transcript.entries],
 		activeTail,
 		new Map(transcript.entries.map((entry) => [entry.id, entry])),
 	);
 	const pendingTools = new Map<string, ToolExecutionComponent>();
-	for (const message of entries.flatMap((entry) => sessionEntryToContextMessages(entry))) {
+	for (const message of projection.messages) {
 		if (message.role === "assistant") {
 			presentation.addChild(new AssistantMessageComponent(
 				message,
