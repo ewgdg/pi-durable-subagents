@@ -8,7 +8,6 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
-	parseAgentsRepairReason,
 } from "../src/process-runtime/remote-agent-selector.ts";
 import {
 	assertRepairTargetAdmitted,
@@ -22,12 +21,9 @@ test("agents command parses the manual repair trigger", () => {
 	assert.equal(parseAgentsCommandArgument(""), "selector");
 	assert.equal(parseAgentsCommandArgument("owner"), "owner");
 	assert.equal(parseAgentsCommandArgument("repair"), "repair");
-	assert.equal(parseAgentsCommandArgument("repair check the stalled handoff"), "repair");
+	assert.throws(() => parseAgentsCommandArgument("repair with reason is gone"), /Usage:/);
 	assert.throws(() => parseAgentsCommandArgument("bogus"), /Usage: \/agents/);
 	assert.throws(() => parseAgentsCommandArgument("repairx"), /Usage: \/agents/);
-	assert.equal(parseAgentsRepairReason("repair"), undefined);
-	assert.equal(parseAgentsRepairReason("repair check the stalled handoff"), "check the stalled handoff");
-	assert.equal(parseAgentsRepairReason("repair   trimmed   "), "trimmed");
 	assert.throws(() => parseAgentsCommandArgument("repair-confirm abc123"), /Usage: \/agents/);
 	assert.throws(() => parseAgentsCommandArgument("repair-commit abc123"), /Usage: \/agents/);
 	assert.throws(() => parseAgentsCommandArgument("repair-freeze"), /Usage: \/agents/);

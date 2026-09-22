@@ -36,14 +36,8 @@ export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
 	const argument = args.trim();
 	if (!argument) return "selector";
 	if (argument === AGENTS_OWNER_ARGUMENT) return "owner";
-	if (argument === AGENTS_REPAIR_ARGUMENT || argument.startsWith(`${AGENTS_REPAIR_ARGUMENT} `)) return "repair";
+	if (argument === AGENTS_REPAIR_ARGUMENT) return "repair";
 	throw new Error(AGENTS_COMMAND_USAGE);
-}
-
-/** Reason text after /agents repair; undefined when the trigger carries no reason. */
-export function parseAgentsRepairReason(args: string): string | undefined {
-	const rest = args.trim().slice(AGENTS_REPAIR_ARGUMENT.length).trim();
-	return rest.length > 0 ? rest : undefined;
 }
 
 export function getAgentsArgumentCompletions(argumentPrefix: string, options?: Readonly<{ includeRepair?: boolean }>): {

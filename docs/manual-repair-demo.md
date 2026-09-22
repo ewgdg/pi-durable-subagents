@@ -3,7 +3,7 @@
 ## A. Live, healthy Owner session
 
 1. Launch pi with this build, open any healthy workflow session.
-2. Run `/agents repair <reason>` for a Repair Moderator (second trigger joins while live; fresh one after Dormant). The trigger receipt IS the approval: it mints the pending trigger `{moderatorAgentId, approver}` with `owner-session-trigger` provenance.
+2. Run `/agents repair` for a Repair Moderator (second trigger joins while live; fresh one after Dormant). The trigger receipt IS the approval: it mints the pending trigger `{moderatorAgentId, approver}` with `owner-session-trigger` provenance.
 3. Run `/agents` to see the real Moderator record and switch Owner and Moderator: join and release Runtimes without cross-host adoption, drafts preserved, no auto-resume, pre-commit Owner shows snapshot only.
 4. As Moderator, diagnose from installed package source (read-only evidence, never live broken Owner traversal), fix isolated copies with ordinary tools, then `repair_validate` (advisory only, grants zero authority).
 5. `repair_freeze` under the current trigger authority (snapshot-only, no writes; auto-mints the trigger approval bound to the exact snapshot; re-freeze replaces pending).
@@ -18,7 +18,7 @@ interactive pi on it (current checkout code; -ne blocks the stale copy):
 
     npm run demo:repair
 
-Expected: blockage widget plus /agents diagnostics hint, session file untouched. /agents diagnostics offers manual repair; press r (or run /agents repair REASON from the failed surface) to host the Moderator. Same trigger, freeze, commit, idle, and switch flow as healthy; failed-admission data kept.
+Expected: blockage widget plus /agents diagnostics hint, session file untouched. /agents diagnostics offers manual repair; press r (or run /agents repair from the failed surface) to host the Moderator. Same trigger, freeze, commit, idle, and switch flow as healthy; failed-admission data kept.
 
 Do not use print mode against the materialized file (it appends conversation); re-run the smoke test for a fresh tempfile instead.
 

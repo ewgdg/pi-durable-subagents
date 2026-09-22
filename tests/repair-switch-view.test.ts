@@ -121,7 +121,7 @@ test("admitted repair switches to created Moderator via physical surface", async
   const fakeStart = createFakeStart(startRecords, {});
   const ui = mockUiWithTransient(notifies, fakeTui, transientCalls);
   const command = captureCommand((pi) => registerAgentsCommand(pi, () => harness.view, "admitted", () => harness.view as never, undefined, { startRepairSurface: fakeStart as never }));
-  await command.handler("repair triage test", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
+  await command.handler("repair", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
   assert.deepEqual(harness.opened, ["moderator-created"]);
   assert.equal(transientCalls.length, 1);
   assert.equal(startRecords.length, 1);
@@ -142,7 +142,7 @@ test("admitted repair switches to live Moderator on joined via physical surface"
   const fakeStart = createFakeStart(startRecords, {});
   const ui = mockUiWithTransient(notifies, fakeTui, transientCalls);
   const command = captureCommand((pi) => registerAgentsCommand(pi, () => harness.view, "admitted", () => harness.view as never, undefined, { startRepairSurface: fakeStart as never }));
-  await command.handler("repair second call", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
+  await command.handler("repair", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
   assert.deepEqual(harness.opened, ["moderator-live"]);
   assert.equal(startRecords.length, 1);
   assert.equal(harness.bound.length, 1);
@@ -158,7 +158,7 @@ test("admitted repair failure keeps window with no surface attempt", async () =>
   const fakeStart = createFakeStart(startRecords, {});
   const ui = mockUiWithTransient(notifies, fakeTui, transientCalls);
   const command = captureCommand((pi) => registerAgentsCommand(pi, () => harness.view, "admitted", () => harness.view as never, undefined, { startRepairSurface: fakeStart as never }));
-  await command.handler("repair triage", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
+  await command.handler("repair", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
   assert.deepEqual(harness.opened, []);
   assert.deepEqual(startRecords, []);
   assert.deepEqual(harness.bound, []);
@@ -174,7 +174,7 @@ test("admitted repair prepare failure keeps window with no bind", async () => {
   const fakeStart = createFakeStart(startRecords, {});
   const ui = mockUiWithTransient(notifies, fakeTui, transientCalls);
   const command = captureCommand((pi) => registerAgentsCommand(pi, () => harness.view, "admitted", () => harness.view as never, undefined, { startRepairSurface: fakeStart as never }));
-  await command.handler("repair triage", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
+  await command.handler("repair", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
   assert.deepEqual(harness.opened, ["moderator-1"]);
   assert.deepEqual(startRecords, []);
   assert.deepEqual(harness.bound, []);
@@ -191,7 +191,7 @@ test("admitted repair surface start failure releases prepared view with no half-
   const fakeStart = createFakeStart(startRecords, { throwError: new Error("surface-boom") });
   const ui = mockUiWithTransient(notifies, fakeTui, transientCalls);
   const command = captureCommand((pi) => registerAgentsCommand(pi, () => harness.view, "admitted", () => harness.view as never, undefined, { startRepairSurface: fakeStart as never }));
-  await command.handler("repair triage", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
+  await command.handler("repair", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
   assert.deepEqual(harness.opened, ["moderator-1"]);
   assert.deepEqual(harness.bound, []);
   assert.deepEqual(harness.unbound, []);
@@ -207,7 +207,7 @@ test("admitted repair surface ready failure closes and unbinds with no half-swit
   const fakeStart = createFakeStart(startRecords, { readyError: new Error("ready-boom") });
   const ui = mockUiWithTransient(notifies, fakeTui, transientCalls);
   const command = captureCommand((pi) => registerAgentsCommand(pi, () => harness.view, "admitted", () => harness.view as never, undefined, { startRepairSurface: fakeStart as never }));
-  await command.handler("repair triage", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
+  await command.handler("repair", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
   assert.deepEqual(harness.opened, ["moderator-1"]);
   assert.equal(harness.bound.length, 1);
   await new Promise((r) => setImmediate(r));
@@ -226,7 +226,7 @@ test("preadmission repair switches via host physical surface", async () => {
   const fakeStart = createFakeStart(startRecords, {});
   const ui = mockUiWithTransient(notifies, fakeTui, transientCalls);
   const command = captureCommand((pi) => registerAgentsCommand(pi, () => { throw new Error("not admitted"); }, admissionFailure, undefined, () => harness.view, { startRepairSurface: fakeStart as never }));
-  await command.handler("repair preadmission triage", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
+  await command.handler("repair", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
   assert.deepEqual(harness.opened, ["moderator-pre"]);
   assert.equal(startRecords.length, 1);
   assert.equal(startRecords[0] && startRecords[0].ownerTui, fakeTui);
@@ -243,7 +243,7 @@ test("preadmission repair failure keeps window", async () => {
   const fakeStart = createFakeStart(startRecords, {});
   const ui = mockUiWithTransient(notifies, fakeTui, transientCalls);
   const command = captureCommand((pi) => registerAgentsCommand(pi, () => { throw new Error("not admitted"); }, admissionFailure, undefined, () => harness.view, { startRepairSurface: fakeStart as never }));
-  await command.handler("repair triage", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
+  await command.handler("repair", { ui, mode: "tui", shutdown() {} } as unknown as ExtensionCommandContext);
   assert.deepEqual(harness.opened, []);
   assert.deepEqual(startRecords, []);
   assert.deepEqual(harness.bound, []);

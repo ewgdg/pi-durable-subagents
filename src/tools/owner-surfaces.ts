@@ -21,7 +21,6 @@ import {
 	createAgentSelectorSnapshot,
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
-	parseAgentsRepairReason,
 } from "../process-runtime/remote-agent-selector.ts";
 import { validateManualRepairReason } from "../coordination/manual-repair.ts";
 import {
@@ -340,7 +339,7 @@ export function registerAgentsCommand(
 				if (mode === "repair" && preadmissionRepair) {
 					const host = preadmissionRepair();
 					try {
-						const receipt = await host.requestManualRepair(validateManualRepairReason(parseAgentsRepairReason(args)));
+						const receipt = await host.requestManualRepair(validateManualRepairReason(undefined));
 						ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
 						try {
                             const surface = await swapRepairViaTransientOverlay(ctx.ui, host, receipt.moderatorAgentId, () => ctx.shutdown(), repairDeps?.startRepairSurface);
@@ -407,7 +406,7 @@ export function registerAgentsCommand(
 				let receipt;
 				try {
 					receipt = await repairView.requestManualRepair(
-						validateManualRepairReason(parseAgentsRepairReason(args)),
+						validateManualRepairReason(undefined),
 					);
 				} catch (error) {
 					ctx.ui.notify(
