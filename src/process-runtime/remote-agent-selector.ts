@@ -101,19 +101,13 @@ export function createAgentSelectionSession(
 			// Selecting the mounted participant only closes the selector. Do not
 			// reacquire its presentation, which could replace the live attachment.
 			if (action.kind === "select_agent" && action.agentId === selectedAgentId) return;
-			// Repaired-Owner routing by entry kind: admission-pending admits fresh from disk;
-			// snapshot-only is disabled until repair completes: not selectable, silent
-			// no-op (no admit, no live routing, no error). Admission rides human
-			// navigation provenance from the Owner seat.
-			const repairedEntry = typeof (view as unknown as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? (view as unknown as { repairedOwnerEntry: () => { ownerId: string; stage?: string } | undefined }).repairedOwnerEntry() : undefined;
+			// Repaired Owner is never selectable: greyed pending is informational only
+			// (no O shortcut, no footer action, no Enter action) and pre-commit has
+			// no Owner row at all. Admission happens automatically on commit success,
+			// never via selection. Explicit picks that still arrive here are silently
+			// ignored (no admit, no live routing, no error).
+			const repairedEntry = typeof (view as unknown as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? (view as unknown as { repairedOwnerEntry: () => { ownerId: string } | undefined }).repairedOwnerEntry() : undefined;
 			if (action.kind === "select_agent" && repairedEntry && action.agentId === repairedEntry.ownerId) {
-				if (repairedEntry.stage === "admission-pending") {
-					await (view as unknown as { admitRepairedOwner: (drafts?: unknown) => Promise<unknown> }).admitRepairedOwner();
-					return;
-				}
-				// Snapshot-only is an impossible pick: the UI never offers it as
-				// selectable (no O shortcut, no footer action, no Enter action).
-				// Explicit picks that still arrive here are silently ignored.
 				return;
 			}
 			const selection = await view.openAgentPresentation(action.agentId);
@@ -217,7 +211,7 @@ function filterRepairSnapshotIfNeeded(
 
 /**
  * Repair-context selector scope with prefer-live: while a repaired entry is
- * present (snapshot-only disabled or admission-pending) the switcher shows
+ * present (greyed pending, never selectable) the switcher shows
  * only the Moderator itself, never the broken Owner or other agents. Once the
  * entry is suppressed post-admission (repaired undefined) and the original
  * roster has a live/dormant Owner, include that Owner so the menu still opens
@@ -278,20 +272,13 @@ export function registerRemoteAgentsCommand(
 				const owner = [...snapshot.live, ...snapshot.dormant].find(
 					(status) => status.agentId === status.workflowId,
 				);
-				const repaired = (snapshot as unknown as { repairedOwner?: { ownerId: string; stage?: string } }).repairedOwner;
-				if (!owner && repaired) {
-					// Snapshot-only is an impossible pick: silent no-op (no admit,
-					// no routing, no error). Pending still admits via select.
-					if (repaired.stage !== "admission-pending") {
-						return;
-					}
-					await presentation.select({
-						kind: "select_agent",
-						agentId: repaired.ownerId,
-					});
+				// Repair Owner is never selectable via /agents owner: pre-commit has no
+				// Owner row and pending is greyed/non-selectable. Admission is automatic
+				// on commit, never via selection. Missing live Owner is a silent no-op
+				// (no admit, no routing, no error) so the menu stays usable.
+				if (!owner) {
 					return;
 				}
-				if (!owner) throw new Error("Agent selector roster has no Owner");
 				await presentation.select({
 					kind: "select_agent",
 					agentId: owner.agentId,

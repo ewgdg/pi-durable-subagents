@@ -217,14 +217,17 @@ class AgentSelectorSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, "o")) {
-			// Snapshot-only Owner is non-selectable: silent no-op (no selection,
-			// no error). Live Owner and admission-pending stay selectable.
-			if (this.#isSnapshotOnlyOwnerDisabled()) {
+			// No live Owner means no Go-to-Owner: silent no-op (no selection,
+			// no error). Covers pre-commit (no Owner row at all) and post-commit
+			// greyed pending (non-selectable, never admits). Only a live Owner
+			// is selectable via O.
+			if (this.#isOwnerGoToDisabled()) {
 				return;
 			}
+			const liveOwnerId = this.#ownerCandidate()?.agentId as string;
 			void this.#completeSelection({
 				kind: "select_agent",
-				agentId: this.#effectiveOwnerId(),
+				agentId: liveOwnerId,
 			}, false);
 			return;
 		}
@@ -442,11 +445,14 @@ class AgentSelectorSurface implements Component {
 			this.#focusedAgentRow = undefined;
 		}
 		// Owner ends the shared keyboard order but is painted only in the fixed footer.
+		// Pre-commit has no Owner row at all; pending is greyed in the footer only.
+		const ownerRow = this.#ownerItem();
+		const ownerTail = ownerRow ? [ownerRow] : [];
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
 			: this.#activeTab === "reports"
-				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), this.#ownerItem()]
-				: [...this.#dormantRoster.map((status) => this.#agentItem(status)), this.#ownerItem()];
+				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), ...ownerTail]
+				: [...this.#dormantRoster.map((status) => this.#agentItem(status)), ...ownerTail];
 		const focused = this.#focusedAgentRow;
 		if (focused && !this.#items.some(({ value }) => value === focused.agentId)) {
 			const status = [...this.#options.live, ...this.#options.dormant].find(
@@ -642,10 +648,11 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#liveItems(): AgentSelectorItem[] {
+		const ownerRow = this.#ownerItem();
 		return [
 			...this.#attentionItems(),
 			...this.#liveChildren(this.#scopeAgentId).map((status) => this.#agentItem(status)),
-			this.#ownerItem(),
+			...(ownerRow ? [ownerRow] : []),
 		];
 	}
 
@@ -754,7 +761,12 @@ class AgentSelectorSurface implements Component {
 		if (live) return live;
 		const repaired = this.#options.repairedOwner?.ownerId;
 		if (repaired) return repaired;
-		throw new Error("Agent selector roster has no Owner");
+		// Repair pre-commit has no Owner row at all: fall back to the shared
+		// workflow id for hierarchy browsing so the menu still opens with the
+		// Moderator only and never throws.
+		const fallbackWorkflowId = [...this.#options.live, ...this.#options.dormant][0]?.workflowId;
+		if (fallbackWorkflowId) return fallbackWorkflowId;
+		return this.#options.selectedAgentId;
 	}
 
 	/** The Owner exists in the roster whatever its Run phase: a stopped Owner Run is Dormant, not absent. */
@@ -764,21 +776,12 @@ class AgentSelectorSurface implements Component {
 		);
 	}
 
-	/** Snapshot-only with no live Owner is non-selectable: no O shortcut, no footer action, no Enter action. */
-	#isSnapshotOnlyOwnerDisabled(): boolean {
-		if (this.#ownerCandidate()) return false;
-		const repaired = this.#options.repairedOwner;
-		if (!repaired) return false;
-		return repaired.stage !== "admission-pending";
+	/** No live Owner means no Go-to-Owner: no O shortcut, no footer action, no Enter admission. */
+	#isOwnerGoToDisabled(): boolean {
+		return !this.#ownerCandidate();
 	}
 
-	#ownerStatus(): AgentRosterStatus {
-		const owner = this.#ownerCandidate();
-		if (!owner) throw new Error("Agent selector roster has no Owner");
-		return owner;
-	}
-
-	#ownerItem(): AgentSelectorItem {
+	#ownerItem(): AgentSelectorItem | undefined {
 		const live = this.#ownerCandidate();
 		if (live) {
 			return {
@@ -790,37 +793,37 @@ class AgentSelectorSurface implements Component {
 		}
 		const repaired = this.#options.repairedOwner;
 		if (repaired) {
-			const stage = repaired.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
+			// Post-commit pending is greyed/non-selectable by construction:
+			// informational row, no selection action, so Enter never dismisses
+			// the selector and never admits. The O shortcut and footer are
+			// likewise non-selectable (silent no-op), and the repair-prepare
+			// layers silently ignore explicit picks. Admission happens
+			// automatically on commit success, never via selection.
 			const path = repaired.transcriptPath ?? "transcript path unavailable";
-			if (stage !== "admission-pending") {
-				// Pre-commit entry is disabled by construction: informational row, no selection
-				// action, so Enter never dismisses the selector. The O shortcut and
-				// footer are likewise non-selectable (silent no-op), and the
-				// repair-prepare layers silently ignore explicit picks.
-				return {
-					value: repaired.ownerId,
-					label: "Owner (snapshot-only, available after repair completes)",
-					description: "available after repair completes",
-					kind: "owner",
-					repairedOwner: repaired,
-					detailLines: ["", "Owner " + repaired.ownerId, "Stage: snapshot-only (disabled)", "available after repair completes", "Transcript: " + path, "Verified identity, never a live record"],
-				};
-			}
+			const stage = repaired.stage === "admission-pending" ? "admission-pending" : repaired.stage;
 			return {
 				value: repaired.ownerId,
-				label: "Owner (admission-pending)",
-				description: path,
+				label: "Owner (" + stage + ", selection disabled)",
+				description: "selection disabled",
 				kind: "owner",
 				repairedOwner: repaired,
-				action: { kind: "select_agent", agentId: repaired.ownerId },
-				detailLines: ["", "Owner " + repaired.ownerId, "Stage: " + stage, "Transcript: " + path, "Verified identity, never a live record"],
+				detailLines: ["", "Owner " + repaired.ownerId, "Stage: " + stage + " (greyed, non-selectable)", "selection disabled - admission is automatic on commit", "Transcript: " + path, "Verified identity, never a live record"],
 			};
 		}
-		throw new Error("Agent selector roster has no Owner");
+		// Pre-commit and post-admission without a pending entry have no Owner row
+		// at all (Moderator only pre-commit, live Owner via roster post-admission).
+		// Never throws so the menu opens in every repair state.
+		return undefined;
 	}
 
+	#hasOwnerTail(): boolean {
+		return this.#items.length > 0 && this.#items[this.#items.length - 1]?.kind === "owner";
+	}
+	#rosterRowCount(): number {
+		return this.#hasOwnerTail() ? Math.max(0, this.#items.length - 1) : this.#items.length;
+	}
 	#maximumRosterScrollOffset(): number {
-		return Math.max(0, this.#items.length - 1 - this.#visibleRows);
+		return Math.max(0, this.#rosterRowCount() - this.#visibleRows);
 	}
 
 	#ensureSelectedVisible(): void {
@@ -849,8 +852,9 @@ class AgentSelectorSurface implements Component {
 		const viewport = new SelectList(visibleItems, Math.max(1, visibleItems.length), theme);
 		viewport.setSelectedIndex(selectedVisible ? selectedOffset : 0);
 		const lines = viewport.render(width).slice(0, visibleItems.length);
-		if (startIndex > 0 || startIndex + visibleItems.length < this.#items.length - 1) {
-			const range = `  (${Math.min(this.#selectedIndex + 1, this.#items.length - 1)}/${this.#items.length - 1})`;
+		const rosterCount = this.#rosterRowCount();
+		if (startIndex > 0 || startIndex + visibleItems.length < rosterCount) {
+			const range = `  (${Math.min(this.#selectedIndex + 1, Math.max(1, rosterCount))}/${Math.max(1, rosterCount)})`;
 			lines.push(this.#theme.fg("muted", truncateToWidth(range, Math.max(0, width - 2), "")));
 		}
 		return lines;
@@ -860,12 +864,13 @@ class AgentSelectorSurface implements Component {
 		const startIndex = Math.max(0, Math.min(
 			this.#rosterScrollOffset, this.#maximumRosterScrollOffset(),
 		));
-		const visibleItems = this.#items.slice(startIndex, Math.min(startIndex + this.#visibleRows, this.#items.length - 1));
+		const rosterEnd = this.#rosterRowCount();
+		const visibleItems = this.#items.slice(startIndex, Math.min(startIndex + this.#visibleRows, rosterEnd));
 		const listLines = this.#renderRosterViewport(width, startIndex, visibleItems);
 		const hasAgents = this.#items.some(({ kind }) => kind === "agent");
 		const reportHistory = this.#activeTab === "reports";
 		const showEmptyMessage = reportHistory
-			? this.#items.every(({ kind }) => kind === "owner")
+			? this.#rosterRowCount() === 0 && (this.#options.reports ?? []).length === 0
 			: !hasAgents;
 		const visibleAttention = visibleItems.some(({ kind }) => kind === "decide" || kind === "attention");
 		const visibleBodyRows = visibleItems.length;
@@ -1063,24 +1068,27 @@ class AgentSelectorSurface implements Component {
 	#renderOwnerFooter(): SelectorLine {
 		const liveOwner = this.#ownerCandidate();
 		const repairedFooter = this.#options.repairedOwner;
-		// Snapshot-only with no live Owner is non-selectable: greyed with no
-		// clickable region (no O shortcut, no footer action, no Enter action).
-		if (!liveOwner && repairedFooter && repairedFooter.stage !== "admission-pending") {
-			const disabledOwnerId = repairedFooter.ownerId;
-			const disabledLabel = "Owner (snapshot-only)";
-			const disabledText = this.#theme.fg("dim", "Go to " + this.#participantLabel(disabledOwnerId, disabledLabel)) + this.#theme.fg("dim", " [o]");
-			return { text: disabledText, regions: [] };
+		if (liveOwner) {
+			const footerOwnerId = liveOwner.agentId;
+			const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(footerOwnerId, "Owner")}`) + this.#theme.fg("dim", " [o]");
+			const pending = this.#items[this.#selectedIndex]?.kind === "owner"
+				? this.#selectionSpinnerItem?.description : undefined;
+			return {
+				text: text + (pending ? this.#theme.fg("dim", ` ${pending}`) : ""),
+				regions: [{ start: 0, end: visibleWidth(text), text,
+					action: { kind: "open", value: footerOwnerId } }],
+			};
 		}
-		const footerOwnerId = liveOwner?.agentId ?? repairedFooter?.ownerId ?? this.#effectiveOwnerId();
-		const footerLabel = liveOwner ? "Owner" : repairedFooter ? "Owner (" + (repairedFooter.stage === "admission-pending" ? "admission-pending" : "snapshot-only") + ")" : "Owner";
-		const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(footerOwnerId, footerLabel)}`) + this.#theme.fg("dim", " [o]");
-		const pending = this.#items[this.#selectedIndex]?.kind === "owner"
-			? this.#selectionSpinnerItem?.description : undefined;
-		return {
-			text: text + (pending ? this.#theme.fg("dim", ` ${pending}`) : ""),
-			regions: [{ start: 0, end: visibleWidth(text), text,
-				action: { kind: "open", value: footerOwnerId } }],
-		};
+		if (repairedFooter) {
+			// Post-commit pending is greyed/non-selectable: no clickable region,
+			// no O shortcut, no Enter admission. Admission is automatic on commit.
+			const stage = repairedFooter.stage === "admission-pending" ? "admission-pending" : repairedFooter.stage;
+			const greyed = this.#theme.fg("dim", "Owner (" + stage + ", selection disabled)") + this.#theme.fg("dim", " [o]");
+			return { text: greyed, regions: [] };
+		}
+		// Pre-commit has no Owner row at all: empty footer so the menu shows only
+		// the Moderator and never throws. Post-admission shows the live Owner above.
+		return { text: "", regions: [] };
 	}
 
 	#renderTabs(): SelectorLine {

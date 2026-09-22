@@ -12,7 +12,7 @@ import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts
 import { buildRepairedOwnerEntry } from "../src/coordination/manual-repair.ts";
 import { createAgentSelectionSession } from "../src/process-runtime/remote-agent-selector.ts";
 import { workflowSessionDirectory } from "../src/runtime/workflow-session-directory.ts";
-test("post-commit Moderator navigation admits without trigger binding", async (t) => {
+test("commit auto-admits; Moderator and Owner re-admits stay fresh without trigger binding", async (t) => {
  let owner: any;
  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
  const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -46,9 +46,9 @@ test("post-commit Moderator navigation admits without trigger binding", async (t
  const drafts = { editor: "gate draft preserved" };
  const result = await owner.commitRepairReplace(repairedBySource, "attempt-gate-1", drafts);
  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
- const postEntry = owner.repairedOwnerEntry();
- assert.ok(postEntry);
- assert.equal(postEntry.stage, "admission-pending");
+ // Commit auto-admitted: entry suppressed, live Owner roster item, idle hold.
+ assert.equal(owner.repairedOwnerEntry(), undefined);
+ assert.ok([...owner.selectionRoster().live, ...owner.selectionRoster().dormant].some((s: any) => s.agentId === identity.agentId && s.agentId === s.workflowId));
  const modView = coordinator.forModerator(moderatorId) as any;
  const admitted = await modView.admitRepairedOwner();
  assert.equal(admitted.ownerId, identity.agentId);
@@ -65,7 +65,7 @@ test("post-commit Moderator navigation admits without trigger binding", async (t
  assert.deepEqual(ownerAdmitted.snapshot, admitted.snapshot);
  await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("pre-commit Owner entry is disabled until repair completes", async (t) => {
+test("pre-commit has no Owner entry; pending picks never admit", async (t) => {
  let owner: any;
  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
  const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -84,18 +84,19 @@ child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessi
 child.appendMessage(fauxAssistantMessage("Persist snap-child"));
  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding.")]);
  await owner.requestManualRepair("gate snapshot triage");
- const entry = owner.repairedOwnerEntry();
- assert.ok(entry);
- assert.equal(entry.stage, "snapshot-only");
-// Disabled by construction: snapshot-only prepare is a silent no-op.
-// No admission attempt, no snapshot routing, no error toast.
+ // No snapshot-only entry, ever: pre-commit has no Owner row at all.
+ assert.equal(owner.repairedOwnerEntry(), undefined);
+// Greyed pending is never selectable: explicit picks never admit and never route.
+// No admission attempt, no live routing, no error toast.
+const { buildRepairedOwnerEntry: buildEntry } = await import("../src/coordination/manual-repair.ts");
+const pendingEntry = buildEntry({ ownerId: identity.agentId, workflowId: identity.workflowId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "admission-pending" });
 let routed = false;
 let admitAttempted = false;
 const disabledView: any = {
 status: () => ({ agentId: identity.agentId }),
-repairedOwnerEntry: () => entry,
+repairedOwnerEntry: () => pendingEntry,
 admitRepairedOwner: async (...args: unknown[]) => { admitAttempted = true; return (owner as any).admitRepairedOwner(...args); },
-openAgentPresentation: async () => { routed = true; throw new Error("disabled pre-commit entry must not route to live presentation"); },
+openAgentPresentation: async () => { routed = true; throw new Error("pending must not route to live presentation"); },
 humanAttention: () => [],
 };
 const navigatingModerator = "moderator-gate-snap-1";
@@ -104,10 +105,10 @@ await disabledSession.prepare({ kind: "select_agent", agentId: identity.agentId 
 assert.equal(routed, false);
 assert.equal(admitAttempted, false);
 // Backend guard stays for direct misuse; UI flows never reach it.
- await assert.rejects(owner.admitRepairedOwner(), /snapshot-only/);
+ await assert.rejects(owner.admitRepairedOwner(), /unavailable/);
  await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("selector silently ignores snapshot-only and admits admission-pending", async () => {
+test("selector never admits repaired picks (snapshot-only or pending)", async () => {
  const ownerId = "owner-gate-1";
  const moderatorId = "moderator-gate-1";
  const snapshotOnly = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "snapshot-only" });
@@ -127,14 +128,16 @@ await snapshotSilentSession.prepare({ kind: "select_agent", agentId: ownerId });
  assert.equal(snapshotRouted, false);
  const admissionPending = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "admission-pending" });
  let admitCalled2 = false;
+ let admitRouted2 = false;
  const admitView: any = {
  status: () => ({ agentId: moderatorId }),
  repairedOwnerEntry: () => admissionPending,
  admitRepairedOwner: async () => { admitCalled2 = true; return { ownerId }; },
- openAgentPresentation: async () => { throw new Error("must not route admission-pending to live presentation"); },
+ openAgentPresentation: async () => { admitRouted2 = true; throw new Error("must not route admission-pending to live presentation"); },
  humanAttention: () => [],
  };
  const admitSession = createAgentSelectionSession(admitView, moderatorId);
  await admitSession.prepare({ kind: "select_agent", agentId: ownerId });
- assert.equal(admitCalled2, true);
+ assert.equal(admitCalled2, false);
+ assert.equal(admitRouted2, false);
 });

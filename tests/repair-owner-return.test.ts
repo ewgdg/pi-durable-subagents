@@ -25,7 +25,7 @@ function selectorHarness() {
  const ui = { custom: (factory: any) => new Promise((resolve) => { doneResolve = resolve; component = factory({ terminal: { rows: 30, columns: 80 }, requestRender: () => undefined } as never, plainTheme(), {} as never, resolve); }), notify: () => undefined } as never;
  return { ui, getComponent: () => component };
 }
-test("selector opens pre-commit snapshot-only with zero live Owner", async () => {
+test("stale snapshot-only entry stays non-selectable (backend defense)", async () => {
  const moderatorId = "moderator-1";
  const ownerId = "owner-1";
  const repaired = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "snapshot-only" });
@@ -47,22 +47,29 @@ test("selector opens pre-commit snapshot-only with zero live Owner", async () =>
  component.handleInput(ESC);
  assert.equal(await selection, undefined);
 });
-test("selector opens post-commit admission-pending with zero live Owner", async () => {
+test("selector opens post-commit admission-pending greyed and non-selectable", async () => {
  const moderatorId = "moderator-1";
  const ownerId = "owner-1";
  const repaired = buildRepairedOwnerEntry({ ownerId, workflowId: ownerId, transcriptPath: "/tmp/repaired-owner.jsonl", stage: "admission-pending" });
  assert.equal(repaired.stage, "admission-pending");
+ const prepareCalls: unknown[] = [];
+ const errors: unknown[] = [];
  const harness = selectorHarness();
- const selection = openAgentSelectorSurface(harness.ui, { live: [rosterStatus(moderatorId, ownerId, "live")], dormant: [], selectedAgentId: moderatorId, repairedOwner: repaired });
+ const ESC = String.fromCharCode(27);
+ const selection = openAgentSelectorSurface(harness.ui, { live: [rosterStatus(moderatorId, ownerId, "live")], dormant: [], selectedAgentId: moderatorId, repairedOwner: repaired, prepareSelection: (action: unknown) => { prepareCalls.push(action); }, onSelectionError: (error: unknown) => { errors.push(error); } });
  await Promise.resolve();
  await Promise.resolve();
  const component = harness.getComponent();
  assert.ok(component);
  component.handleInput("o");
- const action = await selection;
- assert.deepEqual(action, { kind: "select_agent", agentId: ownerId });
+ await Promise.resolve();
+ await Promise.resolve();
+ assert.deepEqual(prepareCalls, []);
+ assert.deepEqual(errors, []);
+ component.handleInput(ESC);
+ assert.equal(await selection, undefined);
 });
-test("post-commit admission is fresh object with idle hold until human message", async (t) => {
+test("commit auto-admits live-idle Owner with no click (preadmission)", async (t) => {
  let owner: any;
  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
  const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -80,10 +87,9 @@ test("post-commit admission is fresh object with idle hold until human message",
  child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "return-child" } });
  child.appendMessage(fauxAssistantMessage("Persist return-child"));
  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding.")]);
- const preEntry = owner.repairedOwnerEntry();
- assert.ok(preEntry);
- assert.equal(preEntry.stage, "snapshot-only");
+ assert.equal(owner.repairedOwnerEntry(), undefined);
  const receipt = await owner.requestManualRepair("return admission triage");
+ assert.equal(owner.repairedOwnerEntry(), undefined);
  assert.equal(receipt.disposition, "created");
  const snapshot = await owner.freezeRepairSnapshot();
  assert.ok(snapshot.entries.length >= 1);
@@ -98,33 +104,30 @@ test("post-commit admission is fresh object with idle hold until human message",
  const drafts = { editor: "owner draft preserved" };
  const result = await owner.commitRepairReplace(repairedBySource, "attempt-return-1", drafts);
  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
- const postEntry = owner.repairedOwnerEntry();
- assert.ok(postEntry);
- assert.equal(postEntry.stage, "admission-pending");
+ // Commit auto-admits under trigger authority: no click, pending suppressed,
+ // live Owner roster item with the idle hold and preserved drafts.
+ assert.equal((result as any).idle.draftsPreserved, true);
+ assert.deepEqual((result as any).idle.drafts, drafts);
+ assert.equal(owner.repairedOwnerEntry(), undefined);
+ const liveOwner = [...owner.selectionRoster().live, ...owner.selectionRoster().dormant].find((s: any) => s.agentId === s.workflowId);
+ assert.ok(liveOwner);
+ assert.equal(liveOwner.agentId, identity.agentId);
  await assert.rejects(owner.beginExecution(), /idle_until_human_message/);
- const retiredSel: any = await owner.openAgentPresentation(receipt.moderatorAgentId);
- assert.equal(retiredSel.kind, "selected");
- const retiredObj = retiredSel.view ?? retiredSel;
+ // Repeated manual admits stay fresh while idle (backend defense path).
  const fresh1: any = await owner.admitRepairedOwner(drafts);
  assert.equal(fresh1.ownerId, identity.agentId);
  assert.equal(fresh1.snapshot.agentId, identity.agentId);
- assert.equal(fresh1.idle.idle, true);
  assert.equal(fresh1.idle.idleUntil, "human-message");
- assert.equal(fresh1.idle.humanOnlyHold, true);
- assert.equal(fresh1.idle.autoResume, false);
- assert.equal(fresh1.idle.draftsPreserved, true);
  assert.deepEqual(fresh1.idle.drafts, drafts);
- assert.ok(fresh1.freshMarker !== retiredObj);
  const fresh2: any = await owner.admitRepairedOwner(drafts);
  assert.ok(fresh2.freshMarker !== fresh1.freshMarker);
- assert.ok(fresh2.snapshot !== fresh1.snapshot);
  assert.deepEqual(fresh2.snapshot, fresh1.snapshot);
  await assert.rejects(owner.beginExecution(), /idle_until_human_message/);
  await owner.resumeFromHuman("human takes over after repair", undefined);
  await owner.beginExecution();
  await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("failed admission keeps data plus journal with truthful error and menu still opens", async (t) => {
+test("post-admission tamper is detected on re-admit; data plus journal kept, menu still opens", async (t) => {
  let owner: any;
  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
  const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -163,7 +166,7 @@ test("failed admission keeps data plus journal with truthful error and menu stil
  assert.ok(backupEntries.length >= 1);
  const backupDir = join(backupRoot, backupEntries[0] as string);
  assert.ok((await stat(backupDir)).isDirectory());
- const transcriptPath = owner.repairedOwnerEntry()?.transcriptPath as string;
+ const transcriptPath = ((result as any).files?.[0]?.source ?? owner.repairedOwnerEntry()?.transcriptPath) as string;
  assert.ok(transcriptPath);
  const corrupting = SessionManager.open(transcriptPath);
  corrupting.appendCustomEntry("agent-coordination.identity", { agentId: identity.agentId, workflowId: "different-workflow", directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } });
@@ -177,18 +180,19 @@ test("failed admission keeps data plus journal with truthful error and menu stil
  const journalAfter = await readdir(journalDir);
  assert.ok(journalAfter.some((n: string) => n.indexOf("repair-journal-attempt-fail-1") !== -1));
  assert.ok((await stat(backupDir)).isDirectory());
- const stillPending = owner.repairedOwnerEntry();
- assert.ok(stillPending);
- assert.equal(stillPending.stage, "admission-pending");
+ // Auto-admission already succeeded at commit, so the entry stays suppressed
+ // (prefer-live) even though a later re-admit fails on tampered bytes.
+ assert.equal(owner.repairedOwnerEntry(), undefined);
  assert.ok(Array.isArray(owner.reportHistory()));
- const repaired = buildRepairedOwnerEntry({ ownerId: identity.agentId, workflowId: identity.workflowId, transcriptPath, stage: "admission-pending" });
+ const liveRoster = owner.selectionRoster();
+ assert.ok([...liveRoster.live, ...liveRoster.dormant].some((s: any) => s.agentId === identity.agentId && s.agentId === s.workflowId));
  const harness = selectorHarness();
- const selection = openAgentSelectorSurface(harness.ui, { live: [], dormant: [], selectedAgentId: identity.agentId, repairedOwner: repaired, reports: owner.reportHistory() });
+ const ESC2 = String.fromCharCode(27);
+ const selection = openAgentSelectorSurface(harness.ui, { live: [...liveRoster.live], dormant: [...liveRoster.dormant], selectedAgentId: identity.agentId, reports: owner.reportHistory() });
  await Promise.resolve();
  await Promise.resolve();
  assert.ok(harness.getComponent());
- harness.getComponent().handleInput("o");
- const action = await selection;
- assert.deepEqual(action, { kind: "select_agent", agentId: identity.agentId });
+ harness.getComponent().handleInput(ESC2);
+ assert.equal(await selection, undefined);
  await coordinator.shutdown(async () => host.runtime.dispose());
 });

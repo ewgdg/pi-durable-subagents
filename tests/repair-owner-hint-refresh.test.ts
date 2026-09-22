@@ -62,14 +62,16 @@ test("pre-admission snapshot shows pending with no live Owner (filtered repair s
   assert.equal((snap as any).repairedOwner.ownerId, ownerId);
   assert.ok(![...snap.live, ...snap.dormant].some((s: any) => s.agentId === s.workflowId));
 });
-test("post-admission snapshot of SAME coordinator shows live Owner and zero pending (staleness regression)", async (t) => {
+test("commit auto-admits: SAME coordinator shows live Owner and zero pending (staleness regression)", async (t) => {
   const { host, identity, coordinator, owner } = await setupRepairedCoordinator(t, "refresh-a");
-  const preEntry = owner.repairedOwnerEntry();
-  assert.ok(preEntry);
-  assert.equal(preEntry.stage, "admission-pending");
+  // Commit auto-admitted under trigger authority: no click, entry suppressed.
+  assert.equal(owner.repairedOwnerEntry(), undefined);
   const preSnap = createAgentSelectorSnapshot(owner, owner.status().agentId);
-  assert.ok((preSnap as any).repairedOwner);
-  assert.equal((preSnap as any).repairedOwner.stage, "admission-pending");
+  assert.equal((preSnap as any).repairedOwner, undefined);
+  const livePre = [...preSnap.live, ...preSnap.dormant].find((s: any) => s.agentId === s.workflowId);
+  assert.ok(livePre);
+  assert.equal(livePre.agentId, identity.agentId);
+  // Repeated manual admits stay fresh while idle (backend defense path).
   const admitted = await owner.admitRepairedOwner();
   assert.equal(admitted.ownerId, identity.agentId);
   assert.equal(admitted.snapshot.agentId, identity.agentId);
@@ -98,7 +100,7 @@ test("reopening selector after admit reflects live state (no snapshot cache)", a
   assert.equal((viaHandlers as any).repairedOwner, undefined);
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("healthy workflow never shows pending; pre-commit stays disabled", async (t) => {
+test("healthy workflow never shows pending; pre-commit has no Owner entry", async (t) => {
   let owner: any;
   const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);

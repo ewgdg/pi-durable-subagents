@@ -135,7 +135,7 @@ test("SYMPTOM1: prepare is a silent no-op for a snapshot-only repaired Owner", a
   assert.equal(routed, false, "snapshot-only must not route to a live presentation");
 });
 
-test("SYMPTOM2a: a fresh repair trigger resets a committed attempt to snapshot-only", async (t) => {
+test("SYMPTOM2a: pre-commit has no Owner entry and commit auto-admits (no snapshot-only, ever)", async (t) => {
   let owner: any;
   const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -156,12 +156,11 @@ test("SYMPTOM2a: a fresh repair trigger resets a committed attempt to snapshot-o
   ]);
   const first = await owner.requestManualRepair("robust stage first");
   assert.equal(first.disposition, "created");
-  assert.equal(owner.repairedOwnerEntry()?.stage, "snapshot-only");
+  assert.equal(owner.repairedOwnerEntry(), undefined);
   // Fast stale-hold repro: a previous commit idle hold persisting across a fresh
-  // trigger (both idleHold and trigger set) must stay snapshot-only, not pending.
-  // Pre-fix this reads pending; post-fix it stays snapshot-only.
+  // trigger (both idleHold and trigger set) must stay without an entry, not pending.
   await owner.adoptRepairedOwnerIdleHold();
-  assert.equal(owner.repairedOwnerEntry()?.stage, "snapshot-only");
+  assert.equal(owner.repairedOwnerEntry(), undefined);
   const snapshot = await owner.freezeRepairSnapshot();
   assert.ok(snapshot.entries.length >= 1);
   const scratch = await mkdtemp(join(tmpdir(), "repair-robust-stage-"));
@@ -174,7 +173,9 @@ test("SYMPTOM2a: a fresh repair trigger resets a committed attempt to snapshot-o
   }
   const committed = await owner.commitRepairReplace(repairedBySource, "robust-stage-1");
   assert.ok(committed.disposition === "committed" || committed.disposition === "joined-committed");
-  assert.equal(owner.repairedOwnerEntry()?.stage, "admission-pending");
+  // Commit auto-admits under trigger authority: pending is suppressed, live Owner shows.
+  assert.equal(owner.repairedOwnerEntry(), undefined);
+  assert.ok([...owner.selectionRoster().live, ...owner.selectionRoster().dormant].some((s: any) => s.agentId === s.workflowId));
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
 

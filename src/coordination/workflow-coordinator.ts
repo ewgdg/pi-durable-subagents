@@ -347,7 +347,7 @@ export class WorkflowCoordinator {
 	// Admission-completed suppression: set on successful admitRepairedOwner to drop
 	// the selector pending entry while keeping the execution idle hold until a new
 	// human message. Cleared on a fresh repair trigger/commit so the next cycle
-	// shows snapshot-only then admission-pending again. Decouples selector entry
+	// shows admission-pending again after the next commit. Decouples selector entry
 	// from beginExecution refusal (hold still refuses until resumeFromHuman).
 	#repairedOwnerAdmitted = false;
 	#preadmissionRepairOnly = false;
@@ -705,7 +705,7 @@ export class WorkflowCoordinator {
 	 * Frozen snapshot under trigger authority (/agents repair IS the approval).
 	 * Snapshot-only, no writes. Owner or trigger-bound Moderator. Auto-mints the
 	 * trigger approval (owner-session-trigger, approver === ownerId, bound to the
-	 * exact snapshot). Pre-commit Owner target stays snapshot-only; live repair
+	 * exact snapshot). Pre-commit has no Owner entry; live repair
 	 * namespace is excluded by the freeze enumeration. Re-freeze replaces any
 	 * prior pending approval.
 	 */
@@ -867,16 +867,57 @@ export class WorkflowCoordinator {
 		// Enforce idle-until-human-message hold by the host: no turn without a
 		// new human message. beginExecution refuses while the hold is set;
 		// handleHumanInput clears it on the next human message.
-		if (result.disposition === "committed" || result.disposition === "joined-committed" || result.disposition === "committed-admission-failed") {
+		if (result.disposition === "committed" || result.disposition === "joined-committed") {
 			this.#repairedOwnerIdleHold = drafts === undefined ? { ownerId } : { ownerId, drafts };
 			// New commit starts admission-pending: clear admission-completed
-			// suppression so the pending entry shows until admission completes.
+			// suppression so the pending entry shows until auto-admission completes.
+			this.#repairedOwnerAdmitted = false;
+			// Auto-admission under trigger authority (trigger-is-approval authorizes
+			// the whole attempt): same fresh-from-disk admission as the former
+			// clickable pending entry, host-side, without stealing the Moderator’s
+			// current view and without disturbing the Moderator run. Join/release
+			// without adoption, fresh read, drafts preserved, idle hold, no auto-resume.
+			// Works in both shapes (admitted with retired Owner, preadmission with no
+			// live Owner record) because it needs only verified identity plus the
+			// repaired transcript path, never a live Owner record or a view switch.
+			// Failure keeps committed data plus journal, surfaces a truthful error,
+			// and leaves the greyed pending row so the menu stays usable.
+			try {
+				await this.#autoAdmitRepairedOwnerAfterCommit(ownerId, drafts);
+			} catch (error) {
+				const admissionError = error instanceof Error ? error.message : String(error);
+				return { ...result, disposition: "committed-admission-failed", admissionError };
+			}
+		}
+		if (result.disposition === "committed-admission-failed") {
+			this.#repairedOwnerIdleHold = drafts === undefined ? { ownerId } : { ownerId, drafts };
 			this.#repairedOwnerAdmitted = false;
 		}
 		return result;
 	}
+	// Host-side auto-admission after a successful commit. Fresh from disk, no view
+	// switch, no bind, no Moderator disturbance. Verifies repaired transcript
+	// identity against verified Owner binding, preserves drafts in the idle hold,
+	// and flips to live (prefer-live suppression) only when ready. Throws with a
+	// truthful message on failure; caller maps it to committed-admission-failed
+	// while keeping committed data plus journal and the greyed pending row.
+	async #autoAdmitRepairedOwnerAfterCommit(ownerId: string, drafts?: unknown): Promise<void> {
+		const workflowId = this.#ownerIdentity.workflowId;
+		const transcriptPath = this.#operationalIncidents.manualRepairTranscriptPath() ?? this.#preadmissionRepairFailure?.transcriptPath ?? this.#agents.get(ownerId)?.transcript.inspect().transcriptPath ?? undefined;
+		if (!transcriptPath) {
+			throw new Error("evidence_unavailable: repaired Owner entry has no transcript path");
+		}
+		const snapshot = await readRepairOwnerSnapshot(transcriptPath);
+		if (snapshot.agentId !== ownerId || snapshot.workflowId !== workflowId) {
+			throw new Error("evidence_unavailable: repaired transcript identity does not match verified Owner identity");
+		}
+		const priorDrafts = this.#repairedOwnerIdleHold?.drafts;
+		const effectiveDrafts = drafts === undefined ? priorDrafts : drafts;
+		this.#repairedOwnerIdleHold = effectiveDrafts === undefined ? { ownerId } : { ownerId, drafts: effectiveDrafts };
+		this.#repairedOwnerAdmitted = true;
+	}
 	// Explicit repaired-Owner entry. Never a fabricated live record. Post-commit hold means admission-pending.
-	// Pre-commit trigger or preadmission repair host means snapshot-only. Otherwise no entry.
+	// Pre-commit and preadmission return undefined (no Owner row at all). Otherwise no entry.
  	// Prefer-live: once admission completes, suppress the pending entry entirely
  	// so reopening /agents shows the normal live Owner roster item. The execution
  	// idle hold stays set until a new human message (beginExecution still refuses).
@@ -893,14 +934,13 @@ export class WorkflowCoordinator {
 		const ownerId = this.#ownerIdentity.agentId;
 		const workflowId = this.#ownerIdentity.workflowId;
 		const transcriptPath = this.#operationalIncidents.manualRepairTranscriptPath() ?? this.#preadmissionRepairFailure?.transcriptPath ?? this.#agents.get(ownerId)?.transcript.inspect().transcriptPath ?? undefined;
-		// Post-commit only: a stale idle hold from a previous commit must not
+		// Post-commit only: no snapshot-only entry, ever. Pre-commit and preadmission
+		// repair hosts return undefined so the menu shows only the Moderator with
+		// no Owner row at all. A stale idle hold from a previous commit must not
 		// promote a fresh pre-commit trigger to pending. Pending requires idle
 		// hold with no pending trigger and no pending approval.
 		if (this.#repairedOwnerIdleHold && !this.#pendingRepairTrigger && !this.#pendingRepairApproval) {
 			return buildRepairedOwnerEntry({ ownerId, workflowId, transcriptPath, stage: "admission-pending" });
-		}
-		if (this.#pendingRepairTrigger || this.#preadmissionRepairOnly) {
-			return buildRepairedOwnerEntry({ ownerId, workflowId, transcriptPath, stage: "snapshot-only" });
 		}
 		return undefined;
 	}
@@ -1232,9 +1272,9 @@ export class WorkflowCoordinator {
 					this.#pendingRepairApproval = undefined;
 					this.#pendingRepairTrigger = { moderatorAgentId: receipt.moderatorAgentId, approver: agentId };
 					// Fresh trigger starts a new repair cycle: clear admission-completed
-					// suppression so snapshot-only then admission-pending show again.
+					// suppression so the next commit shows admission-pending again.
 					this.#repairedOwnerAdmitted = false;
-					// Fresh cycle starts pre-commit snapshot-only: clear any stale
+					// Fresh cycle starts with no Owner entry: clear any stale
 					// idle hold from a previous commit so the fresh trigger does not
 					// read as post-commit pending.
 					this.#repairedOwnerIdleHold = undefined;
@@ -1574,10 +1614,20 @@ export class WorkflowCoordinator {
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
 	}> {
+		// Repair roster scope: pre-commit and post-commit pending have no live Owner
+		// record (retired/broken), so the menu shows only the Moderator (pre-commit)
+		// or Moderator plus greyed pending (post-commit), never a live Owner row.
+		// Post-admission (admitted) and healthy workflows include the live Owner.
+		// No snapshot-only entry, ever. Internal routing still uses #agents directly;
+		// this scope affects selector menus only.
+		const hideOwnerFromRoster = !this.#repairedOwnerAdmitted && (!!this.#pendingRepairTrigger || !!this.#pendingRepairApproval || this.#preadmissionRepairOnly || !!this.#repairedOwnerIdleHold);
 		const authorityOrder = this.#agentAuthorityOrder();
 		const live: AgentRosterStatus[] = [];
 		const dormant: Array<{ status: AgentRosterStatus; recency: number; order: number }> = [];
 		for (const [order, record] of authorityOrder.entries()) {
+			if (hideOwnerFromRoster && record.identity.agentId === this.#ownerIdentity.agentId) {
+				continue;
+			}
 			const transcript = record.transcript.snapshot() ?? record.transcript.inspect();
 			const status = this.#rosterStatus(record, transcript);
 			if (status.run.phase !== "dormant") {

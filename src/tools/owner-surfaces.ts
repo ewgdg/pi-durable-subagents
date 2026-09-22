@@ -171,8 +171,8 @@ async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: Huma
  // Prefer-live: post-admission (no pending entry) with a live/dormant Owner in
  // the roster, include that Owner instead of filtering it out, so reopening
  // /agents shows the normal live Owner roster item, not a stale pending hint.
- // Pre-admission (entry present) keeps repair scope (Moderators only, broken
- // Owner hidden) to preserve snapshot-only disabled + admission-pending admit.
+ // Pre-commit and pending keep repair scope (Moderators only, broken Owner
+ // hidden): pre-commit has no Owner row, pending is greyed and never admits.
  const liveOwner = [...roster.live, ...roster.dormant].find((status) => status.agentId === status.workflowId);
  let effectiveLiveMods = liveMods;
  let effectiveDormantMods = dormantMods;
@@ -211,20 +211,15 @@ async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: Huma
  }),
  prepareSelection: async (act) => {
  if (act.kind === "open_report") return;
- // Use a fresh entry (not the stale open-time snapshot) so post-admission picks
- // prefer the live Owner roster item instead of re-admitting. Suppressed entry
- // (admission completed) falls through to normal live presentation.
+ // Repaired Owner is never selectable: greyed pending is informational only
+ // and pre-commit has no Owner row at all. Admission is automatic on commit
+ // success, never via selection. Use a fresh entry so post-admission picks
+ // prefer the live Owner roster item. Suppressed entry (admission completed)
+ // falls through to normal live presentation; any repaired pick is silently
+ // ignored (no admit, no routing, no error).
  const freshRepaired = view.repairedOwnerEntry();
  const repairedId = freshRepaired?.ownerId;
  if (act.kind === "select_agent" && repairedId && act.agentId === repairedId) {
- const stage = freshRepaired?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
- if (stage === "admission-pending") {
- await view.admitRepairedOwner();
- return;
- }
- // Snapshot-only is an impossible pick: the UI never offers it as
- // selectable, so explicit picks are silently ignored (no admit, no
- // routing, no error).
  return;
  }
  await selection.prepare(act);
@@ -249,13 +244,7 @@ async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: Huma
  }
  const repairedId = current.repaired?.ownerId;
  if (repairedId && action.agentId === repairedId) {
- const entry = view.repairedOwnerEntry();
- const stage = entry?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
-if (stage === "admission-pending") {
-ui.notify("Repaired Owner " + stage + " acknowledged idle until human message: " + repairedId, "info");
-} else {
-ui.notify("Repaired Owner is available after repair completes: " + repairedId, "info");
-}
+ui.notify("Repaired Owner selection disabled (admission is automatic on commit): " + repairedId, "info");
  return;
  }
  const prepared = selection.preparedView();
@@ -367,7 +356,7 @@ export function registerAgentsCommand(
 							const entry = host.repairedOwnerEntry();
 							// Prefer-live: post-admission (no entry) with a live Owner in the
 							// roster means the repaired Owner is already live. Do not emit the
-							// stale snapshot-only hint; the selector below shows normal live Owner.
+							// stale pending hint; the selector below shows normal live Owner.
 							// Idle hold still enforced via beginExecution until human message.
 							if (!entry) {
 								const roster = host.selectionRoster();
@@ -378,15 +367,9 @@ export function registerAgentsCommand(
 									ctx.ui.notify("Repaired Owner is available after repair completes: " + host.status().agentId, "info");
 								}
 							} else {
-							const stage = entry?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
-							if (stage === "admission-pending") {
-								await host.admitRepairedOwner();
-								// Admission suppresses the pending entry (prefer-live); notify with
-								// the pre-admit owner id, not the suppressed post-admit entry.
-								ctx.ui.notify("Repaired Owner admission-pending acknowledged idle until human message: " + entry.ownerId, "info");
-							} else {
-								ctx.ui.notify("Repaired Owner is available after repair completes: " + (entry?.ownerId ?? host.status().agentId), "info");
-							}
+							// Pending is greyed/non-selectable: info only, never admit via selection.
+							// Admission is automatic on commit success; pre-commit has no Owner row.
+							ctx.ui.notify("Repaired Owner selection disabled (admission is automatic on commit): " + (entry?.ownerId ?? host.status().agentId), "info");
 							}
 						} catch (error) {
 							ctx.ui.notify("Repaired Owner view failed: " + (error instanceof Error ? error.message : String(error)), "error");
