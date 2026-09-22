@@ -107,8 +107,20 @@ export function createAgentSelectionSession(
 			// Selecting the mounted participant only closes the selector. Do not
 			// reacquire its presentation, which could replace the live attachment.
 			if (action.kind === "select_agent" && action.agentId === selectedAgentId) return;
-			const repairedOwnerId = typeof (view as unknown as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? (view as unknown as { repairedOwnerEntry: () => { ownerId: string } | undefined }).repairedOwnerEntry()?.ownerId : undefined;
-			if (action.kind === "select_agent" && repairedOwnerId && action.agentId === repairedOwnerId) {
+			// Repaired-Owner routing by entry kind: admission-pending admits fresh from disk;
+			// snapshot-only opens the frozen snapshot reader with zero commit demand and
+			// no admission attempt. Both ride human navigation provenance from the Owner seat.
+			const repairedEntry = typeof (view as unknown as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? (view as unknown as { repairedOwnerEntry: () => { ownerId: string; stage?: string } | undefined }).repairedOwnerEntry() : undefined;
+			if (action.kind === "select_agent" && repairedEntry && action.agentId === repairedEntry.ownerId) {
+				if (repairedEntry.stage === "admission-pending") {
+					await (view as unknown as { admitRepairedOwner: (drafts?: unknown) => Promise<unknown> }).admitRepairedOwner();
+					return;
+				}
+				const readSnapshot = (view as unknown as { readRepairedOwnerSnapshot?: () => Promise<unknown> }).readRepairedOwnerSnapshot;
+				if (typeof readSnapshot === "function") {
+					await readSnapshot.call(view);
+					return;
+				}
 				await (view as unknown as { admitRepairedOwner: (drafts?: unknown) => Promise<unknown> }).admitRepairedOwner();
 				return;
 			}

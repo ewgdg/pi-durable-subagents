@@ -222,8 +222,14 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	// Never a fabricated live record. Snapshot-only pre-commit, admission-pending post-commit.
 	repairedOwnerEntry(): RepairedOwnerSelectorEntry | undefined;
 	// Genuine fresh admission from repaired transcript on disk. Joins old repair host first.
-	// Owner or trigger-bound Moderator. Snapshot-only refuses. Failure keeps committed data.
+	// Human navigation provenance: the /agents command runs in the Owner TUI session
+	// (the human Owner seat), so Owner or any Moderator admits identically whether the
+	// repair trigger is pending, consumed by commit, or cleared by resolve/Dormant.
+	// Snapshot-only refuses. Failure keeps committed data.
 	admitRepairedOwner(drafts?: unknown): Promise<RepairedOwnerAdmissionResult>;
+	// Frozen snapshot reader for pre-commit snapshot-only entry. Same human-seat provenance
+	// as admission. No commit demand, no admission attempt, no idle hold.
+	readRepairedOwnerSnapshot(): Promise<RepairOwnerSnapshot>;
 	// Enforce idle-until-human-message hold on a freshly admitted Owner. Owner only. No auto turn.
 	adoptRepairedOwnerIdleHold(drafts?: unknown): RepairedOwnerIdle;
 	selectionRoster(): Readonly<{
@@ -896,11 +902,18 @@ export class WorkflowCoordinator {
 	async #admitRepairedOwnerForOwner(callerAgentId: string, drafts?: unknown): Promise<RepairedOwnerAdmissionResult> {
 		this.#assertAdmissionOpen();
 		const ownerId = this.#ownerIdentity.agentId;
-		const trigger = this.#pendingRepairTrigger;
+		// Human navigation provenance, not moderator binding: every /agents selection runs
+		// in the Owner TUI session (the human Owner seat), so the trigger-bound repair
+		// Moderator binding is irrelevant here. It is gone after commit (single-use) and
+		// after resolve/Dormant (release), yet explicit Owner navigation must admit
+		// identically in post-resolve/Dormant, fresh-trigger, and mid-attempt states.
+		// Any Moderator identity qualifies (live or Dormant, current or released repair
+		// Moderator); children and unknown participants stay refused. Idle hold below
+		// keeps the human-only requirement after admission.
 		const isOwner = callerAgentId === ownerId;
-		const isTriggerModerator = this.#operationalIncidents.isManualRepairModerator(callerAgentId) && trigger?.moderatorAgentId === callerAgentId;
-		if (!isOwner && !isTriggerModerator) {
-			throw new Error("wrong_participant: repair admission needs the Owner or the trigger-bound repair Moderator");
+		const isHumanSeatModerator = this.#isModerator(callerAgentId);
+		if (!isOwner && !isHumanSeatModerator) {
+			throw new Error("wrong_participant: repair admission needs the Owner or a Moderator navigating from the human Owner seat");
 		}
 		const entry = this.#repairedOwnerEntry();
 		if (!entry) {
@@ -926,6 +939,27 @@ export class WorkflowCoordinator {
 		const idle = effectiveDrafts === undefined ? openRepairedOwnerIdle(entry.ownerId) : openRepairedOwnerIdle(entry.ownerId, { drafts: effectiveDrafts });
 		const freshMarker = Object.freeze({ at: new Date().toISOString() });
 		return { ownerId: entry.ownerId, snapshot, idle, freshMarker };
+	}
+	// Frozen snapshot reader for pre-commit snapshot-only entry. Same human-seat provenance
+	// as admission (Owner or any Moderator), but read-only: no trigger check, no stage
+	// demand beyond entry presence, no admission attempt, no idle hold, no view close.
+	// Pre-commit Owner entry routes here exactly as before (readRepairOwnerSnapshot path).
+	async #readRepairedOwnerSnapshotForOwner(callerAgentId: string): Promise<RepairOwnerSnapshot> {
+		this.#assertAdmissionOpen();
+		const ownerId = this.#ownerIdentity.agentId;
+		const isOwner = callerAgentId === ownerId;
+		const isHumanSeatModerator = this.#isModerator(callerAgentId);
+		if (!isOwner && !isHumanSeatModerator) {
+			throw new Error("wrong_participant: repair snapshot needs the Owner or a Moderator navigating from the human Owner seat");
+		}
+		const entry = this.#repairedOwnerEntry();
+		if (!entry) {
+			throw new Error("unavailable: no repaired Owner entry in repair context");
+		}
+		if (!entry.transcriptPath) {
+			throw new Error("evidence_unavailable: repaired Owner entry has no transcript path");
+		}
+		return readRepairOwnerSnapshot(entry.transcriptPath);
 	}
 	modelPolicy(): ModelPolicySnapshot {
 		return {
@@ -1199,6 +1233,7 @@ export class WorkflowCoordinator {
 				this.#commitRepairReplaceForOwner(agentId, repairedBySource, attemptId, drafts),
 			repairedOwnerEntry: () => this.#repairedOwnerEntry(),
 			admitRepairedOwner: (drafts) => this.#admitRepairedOwnerForOwner(agentId, drafts),
+			readRepairedOwnerSnapshot: () => this.#readRepairedOwnerSnapshotForOwner(agentId),
 			adoptRepairedOwnerIdleHold: (drafts) => this.#adoptRepairedOwnerIdleHoldForOwner(agentId, drafts),
 		selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {

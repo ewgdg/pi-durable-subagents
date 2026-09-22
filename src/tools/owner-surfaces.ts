@@ -199,8 +199,13 @@ async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: Huma
  if (act.kind === "open_report") return;
  const repairedId = current.repaired?.ownerId;
  if (act.kind === "select_agent" && repairedId && act.agentId === repairedId) {
- await view.admitRepairedOwner();
- return;
+const stage = current.repaired?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
+if (stage === "admission-pending") {
+await view.admitRepairedOwner();
+return;
+}
+await view.readRepairedOwnerSnapshot();
+return;
  }
  await selection.prepare(act);
  },
@@ -226,7 +231,12 @@ async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: Huma
  if (repairedId && action.agentId === repairedId) {
  const entry = view.repairedOwnerEntry();
  const stage = entry?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
- ui.notify("Repaired Owner " + stage + " acknowledged idle until human message: " + repairedId, "info");
+if (stage === "admission-pending") {
+ui.notify("Repaired Owner " + stage + " acknowledged idle until human message: " + repairedId, "info");
+} else {
+const where = entry?.transcriptPath ?? "transcript path unavailable";
+ui.notify("Repaired Owner snapshot-only evidence ready: " + repairedId + " : " + where, "info");
+}
  return;
  }
  const prepared = selection.preparedView();
@@ -335,12 +345,18 @@ export function registerAgentsCommand(
 					const host = preadmissionRepair();
 					if (mode === "owner") {
 						try {
-							await host.admitRepairedOwner();
 							const entry = host.repairedOwnerEntry();
 							const stage = entry?.stage === "admission-pending" ? "admission-pending" : "snapshot-only";
-							ctx.ui.notify("Repaired Owner " + stage + " acknowledged idle until human message: " + (entry?.ownerId ?? host.status().agentId), "info");
+							if (stage === "admission-pending") {
+								await host.admitRepairedOwner();
+								const admitted = host.repairedOwnerEntry();
+								ctx.ui.notify("Repaired Owner admission-pending acknowledged idle until human message: " + (admitted?.ownerId ?? host.status().agentId), "info");
+							} else {
+								await host.readRepairedOwnerSnapshot();
+								ctx.ui.notify("Repaired Owner snapshot-only evidence ready: " + (entry?.ownerId ?? host.status().agentId) + " : " + (entry?.transcriptPath ?? "transcript path unavailable"), "info");
+							}
 						} catch (error) {
-							ctx.ui.notify("Repaired Owner admission failed: " + (error instanceof Error ? error.message : String(error)), "error");
+							ctx.ui.notify("Repaired Owner view failed: " + (error instanceof Error ? error.message : String(error)), "error");
 						}
 					}
 					try {
