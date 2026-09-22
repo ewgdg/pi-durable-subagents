@@ -7,7 +7,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { repairSessionDirectory } from "../src/coordination/manual-repair.ts";
 import { sha256File } from "../src/coordination/repair-freeze.ts";
-import { approveRepairReplace, assertRepairApprovalFresh, assertRepairRecoveryPreconditions, commitRepairReplace, createRepairApprovalLedger, freezeRepairTargets, isRepairTransactionClosed, loadRepairApprovalLedger, notifyRepairHumanInputBeforeCommit, openRepairedOwnerIdle, persistRepairApprovalLedger, recoverRepairCommitFromJournal, revokeRepairApprovalPersisted, runRepairPreCommitGate, selectRepairHistory, REPAIR_ATTEMPT_ID_PATTERN, REPAIR_LEDGER_FILENAME, REPAIR_STOPPED_WRITER_RECOVERY_INSTRUCTIONS } from "../src/coordination/repair-commit.ts";
+import { approveRepairReplace, assertRepairApprovalFresh, assertRepairRecoveryPreconditions, cancelRepairApproval, cancelRepairApprovalPersisted, commitRepairReplace, createRepairApprovalLedger, freezeRepairTargets, isRepairTransactionClosed, loadRepairApprovalLedger, notifyRepairHumanInputBeforeCommit, openRepairedOwnerIdle, persistRepairApprovalLedger, recoverRepairCommitFromJournal, revokeRepairApprovalPersisted, runRepairPreCommitGate, selectRepairHistory, REPAIR_ATTEMPT_ID_PATTERN, REPAIR_LEDGER_FILENAME, REPAIR_STOPPED_WRITER_RECOVERY_INSTRUCTIONS } from "../src/coordination/repair-commit.ts";
 import { workflowSessionDirectory } from "../src/runtime/workflow-session-directory.ts";
 function ordinaryChild(owner: SessionManager, workflowId: string, toolCallId: string, label: string) {
   const directory = workflowSessionDirectory(owner.getSessionDir(), workflowId);
@@ -52,23 +52,46 @@ test("replace approval needs explicit Owner-session trigger; stale snapshot refu
   assert.equal(audit.backupLocation, undefined);
   assert.ok(audit.diffSummary.length > 0);
 });
-test("esc and human-message revoke approval with no auto-retry; fresh trigger approval works", async () => {
+test("esc and human-message preserve approval; explicit cancel revokes", async () => {
   const ctx = await makeWorkflow("repair-commit-revoke-");
   const snapshot = await freezeRepairTargets(ctx.directory);
   const ledger = createRepairApprovalLedger();
+  // Esc aborts the step only: authority persists, fresh gate still passes.
   const escApproval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   notifyRepairHumanInputBeforeCommit(ledger, escApproval.approvalId, "esc");
-  assert.throws(() => assertRepairApprovalFresh(escApproval, snapshot.snapshotId, ledger), /revoked/);
-  assert.throws(() => assertRepairApprovalFresh(escApproval, snapshot.snapshotId, ledger), /revoked/);
-  await assert.rejects(runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval: escApproval, ledger }), /revoked/);
+  assert.doesNotThrow(() => assertRepairApprovalFresh(escApproval, snapshot.snapshotId, ledger));
+  const escAudit = await runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval: escApproval, ledger });
+  assert.equal(escAudit.targetCount, snapshot.entries.length);
+  // New human message likewise preserves authority.
   const hmApproval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   notifyRepairHumanInputBeforeCommit(ledger, hmApproval.approvalId, "human-message");
-  assert.throws(() => assertRepairApprovalFresh(hmApproval, snapshot.snapshotId, ledger), /revoked/);
-  assert.throws(() => assertRepairApprovalFresh(hmApproval, snapshot.snapshotId, ledger), /revoked/);
+  assert.doesNotThrow(() => assertRepairApprovalFresh(hmApproval, snapshot.snapshotId, ledger));
+  const hmAudit = await runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval: hmApproval, ledger });
+  assert.equal(hmAudit.targetCount, snapshot.entries.length);
+  // Explicit cancel (deliberate intent) still clears: later gate refuses.
+  const cancelled = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
+  cancelRepairApproval(ledger, cancelled.approvalId);
+  assert.throws(() => assertRepairApprovalFresh(cancelled, snapshot.snapshotId, ledger), /revoked/);
+  await assert.rejects(runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval: cancelled, ledger }), /revoked/);
+  // Unaffected approvals still pass after a cancel elsewhere.
   const fresh = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   const audit = await runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval: fresh, ledger });
   assert.equal(audit.targetCount, snapshot.entries.length);
   assert.equal(audit.backupLocation, undefined);
+});
+test("esc mid-commit aborts with targets untouched; retry succeeds after fresh revalidation", async () => {
+  const fx = await makeCommitFixture("repair-commit-esc-retry-", "attempt-esc-retry-1");
+  const before = new Map<string, string>();
+  for (const entry of fx.snapshot.entries) before.set(entry.source, await sha256File(entry.source));
+  // Esc aborts the in-flight step only: the abort signal itself writes nothing.
+  notifyRepairHumanInputBeforeCommit(fx.ledger, fx.approval.approvalId, "esc");
+  for (const entry of fx.snapshot.entries) assert.equal(await sha256File(entry.source), before.get(entry.source));
+  // Retry in the same attempt succeeds WITHOUT a fresh trigger after fresh gate.
+  const result = await commitRepairReplace(fx.base);
+  assert.equal(result.disposition, "committed");
+  for (const entry of fx.snapshot.entries) assert.equal(await sha256File(entry.source), await sha256File((fx.base.repairedBySource as Record<string, string>)[entry.source] as string));
+  // Commit success stays single-use: a second commit needs a fresh trigger.
+  await assert.rejects(commitRepairReplace({ ...fx.base, attemptId: "attempt-esc-retry-2" }), /consumed/);
 });
 test("drift on added and changed targets refuses; live repair appends excluded", async () => {
   const added = await makeWorkflow("repair-commit-drift-add-");
@@ -252,11 +275,17 @@ test("pre-commit gate requires the approval ledger", async () => {
   const approval = approveRepairReplace({ snapshotId: snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
   await assert.rejects(runRepairPreCommitGate({ workflowDirectory: ctx.directory, snapshot, approval, ledger: undefined as never }), /invalid_input: repair approval ledger is required/);
 });
-test("same-attempt join still enforces snapshot binding, approval identity, and revocation", async () => {
+test("same-attempt join still enforces snapshot binding, approval identity, and cancel", async () => {
   const fx = await makeCommitFixture("repair-commit-join-guard-", "attempt-join-guard-1");
   const first = await commitRepairReplace(fx.base);
   assert.equal(first.disposition, "committed");
+  // Esc preserves authority even after commit bookkeeping: the same-attempt
+  // join path replays without reapplying and does not treat Esc as cancel.
   notifyRepairHumanInputBeforeCommit(fx.ledger, fx.approval.approvalId, "esc");
+  const joinedAfterEsc = await commitRepairReplace({ ...fx.base });
+  assert.equal(joinedAfterEsc.disposition, "joined-committed");
+  // Explicit cancel still refuses the same-attempt join.
+  cancelRepairApproval(fx.ledger, fx.approval.approvalId);
   await assert.rejects(commitRepairReplace({ ...fx.base }), /revoked/);
   const otherLedger = createRepairApprovalLedger();
   const other = approveRepairReplace({ snapshotId: fx.snapshot.snapshotId, approver: "owner-1", ownerId: "owner-1", provenance: "owner-session-trigger" });
@@ -264,10 +293,19 @@ test("same-attempt join still enforces snapshot binding, approval identity, and 
   const drifted = { ...fx.snapshot, snapshotId: "different-snapshot-id" };
   await assert.rejects(commitRepairReplace({ ...fx.base, snapshot: drifted, ledger: createRepairApprovalLedger() }), /stale_approval/);
 });
-test("revocation through the persisted ledger refuses commit without in-memory notify", async () => {
+test("esc via persisted path preserves authority; cancel via persisted ledger refuses", async () => {
   const fx = await makeCommitFixture("repair-commit-persisted-revoke-", "attempt-persisted-revoke-1");
+  // Esc / human-message through the persisted path must NOT revoke: the commit
+  // still succeeds after fresh revalidation (authority persists).
+  const escWitness = createRepairApprovalLedger();
+  await revokeRepairApprovalPersisted(fx.journalDir, escWitness, fx.approval.approvalId, "esc");
+  assert.equal(escWitness.revoked.has(fx.approval.approvalId), false);
+  const hmWitness = createRepairApprovalLedger();
+  await revokeRepairApprovalPersisted(fx.journalDir, hmWitness, fx.approval.approvalId, "human-message");
+  assert.equal(hmWitness.revoked.has(fx.approval.approvalId), false);
+  // Explicit cancel through the persisted ledger refuses commit.
   const witness = createRepairApprovalLedger();
-  await revokeRepairApprovalPersisted(fx.journalDir, witness, fx.approval.approvalId, "human-message");
+  await cancelRepairApprovalPersisted(fx.journalDir, witness, fx.approval.approvalId);
   assert.ok(witness.revoked.has(fx.approval.approvalId));
   const persisted = await loadRepairApprovalLedger(fx.journalDir);
   assert.ok(persisted.revoked.has(fx.approval.approvalId));

@@ -36,17 +36,33 @@ export function createRepairApprovalLedger(): RepairApprovalLedger {
   return { consumed: new Set<string>(), revoked: new Set<string>() };
 }
 /**
- * In-memory Esc/human-message revocation. Production Owner-session input
- * wiring (Esc key + new human message via the real input path) revokes the
- * pending approvalId through revokeRepairApprovalPersisted, which persists
- * via the ledger next to the journal. Direct calls are for tests only;
- * crash-safe callers must use the persisted variant.
+ * Trigger authority lives for the attempt lifetime (minted at /agents repair
+ * trigger). Esc ("esc") or a new human message ("human-message") aborts only
+ * the in-flight commit step with no partial apply -- it MUST NOT clear the
+ * trigger authority. Safety comes from the fresh drift + validation recheck on
+ * every commit attempt, never from a cleared flag.
+ *
+ * This abort signal therefore validates its inputs and preserves authority: it
+ * touches neither the ledger nor the pending trigger/approval. A later commit
+ * attempt in the same attempt proceeds WITHOUT a fresh trigger after fresh
+ * revalidation. Explicit repair cancel ("cancel") is the deliberate-intent
+ * path that DOES revoke; crash-safe callers must use the persisted variant.
  */
-export function notifyRepairHumanInputBeforeCommit(ledger: RepairApprovalLedger, approvalId: string, kind: "esc" | "human-message"): void {
+export function notifyRepairHumanInputBeforeCommit(ledger: RepairApprovalLedger, approvalId: string, kind: "esc" | "human-message" | "cancel"): void {
   if (!ledger || !(ledger.revoked instanceof Set)) throw new Error("invalid_input: repair approval ledger is required");
   if (typeof approvalId !== "string" || approvalId.length === 0) throw new Error("invalid_input: repair approval id is required");
-  if (kind !== "esc" && kind !== "human-message") throw new Error("invalid_input: repair human input must be esc or human-message");
+  if (kind !== "esc" && kind !== "human-message" && kind !== "cancel") throw new Error("invalid_input: repair human input must be esc, human-message, or cancel");
+  // Esc / new human message aborts the step only: preserve trigger authority
+  // so a retry in the same attempt succeeds after fresh revalidation.
+  if (kind !== "cancel") return;
   ledger.revoked.add(approvalId);
+}
+/**
+ * Explicit repair cancel (deliberate user intent, distinct from Esc/interrupt).
+ * Revokes the approval in-memory so later commits need a fresh trigger.
+ */
+export function cancelRepairApproval(ledger: RepairApprovalLedger, approvalId: string): void {
+  notifyRepairHumanInputBeforeCommit(ledger, approvalId, "cancel");
 }
 /** Persisted-ledger filename inside the journal dir (mode 600). */
 export const REPAIR_LEDGER_FILENAME = "repair-ledger.json";
@@ -85,14 +101,25 @@ export async function loadRepairApprovalLedger(journalDir: string): Promise<Repa
   return { consumed: new Set(sets.consumed), revoked: new Set(sets.revoked) };
 }
 /**
- * Crash-safe Esc/human-message revocation: records the revocation in the
+ * Crash-safe explicit-cancel revocation: records the cancellation in the
  * in-memory ledger and persists it next to the journal so a restart still
- * refuses the revoked approval. The Owner-session Esc + new-human-message
- * input path calls this through the persisted ledger store; never auto-retries.
+ * refuses the cancelled approval. Esc / new-human-message MUST NOT call this:
+ * interrupts abort the step only and preserve trigger authority. Explicit
+ * repair cancel is the only intent path that clears authority here.
  */
-export async function revokeRepairApprovalPersisted(journalDir: string, ledger: RepairApprovalLedger, approvalId: string, kind: "esc" | "human-message"): Promise<void> {
+export async function revokeRepairApprovalPersisted(journalDir: string, ledger: RepairApprovalLedger, approvalId: string, kind: "esc" | "human-message" | "cancel"): Promise<void> {
   notifyRepairHumanInputBeforeCommit(ledger, approvalId, kind);
+  // Esc / human-message preserves authority: no ledger write is needed to
+  // refuse anything, and writing would falsely single-use the trigger.
+  if (kind !== "cancel") return;
   await persistRepairApprovalLedger(journalDir, ledger);
+}
+/**
+ * Crash-safe explicit repair cancel (deliberate user intent). Revokes + persists
+ * so a restart still refuses the cancelled approval.
+ */
+export async function cancelRepairApprovalPersisted(journalDir: string, ledger: RepairApprovalLedger, approvalId: string): Promise<void> {
+  await revokeRepairApprovalPersisted(journalDir, ledger, approvalId, "cancel");
 }
 function resolveExpectedSnapshotId(expected: string | Readonly<{ snapshotId?: unknown }>): string {
   if (typeof expected === "string") return expected;
@@ -103,7 +130,7 @@ export function assertRepairApprovalFresh(approval: Readonly<{ approvalId?: unkn
   if (!approval || typeof approval.approvalId !== "string" || typeof approval.snapshotId !== "string") throw new Error("invalid_input: repair approval is required");
   const expectedId = resolveExpectedSnapshotId(expected);
   if (approval.snapshotId !== expectedId) throw new Error("stale_approval: repair approval " + approval.approvalId + " binds to snapshot " + String(approval.snapshotId) + ", not " + String(expectedId));
-  if (ledger && ledger.revoked && (ledger.revoked as ReadonlySet<string>).has(approval.approvalId)) throw new Error("revoked: repair approval " + approval.approvalId + " was revoked by human input before commit; never auto-retry, ask the Owner for a fresh /agents repair trigger");
+  if (ledger && ledger.revoked && (ledger.revoked as ReadonlySet<string>).has(approval.approvalId)) throw new Error("revoked: repair approval " + approval.approvalId + " was cancelled (explicit repair cancel); request a fresh /agents repair trigger");
   if (ledger && ledger.consumed && (ledger.consumed as ReadonlySet<string>).has(approval.approvalId)) throw new Error("consumed: repair approval " + approval.approvalId + " is single-use and already consumed");
 }
 export async function freezeRepairTargets(workflowDirectory: string): Promise<RepairFrozenSnapshot> {
@@ -224,7 +251,7 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
     if (typeof existing.snapshotId !== "string" || existing.snapshotId !== options.snapshot.snapshotId) throw new Error("stale_approval: repair journal for attempt " + attemptId + " binds to snapshot " + String(existing.snapshotId) + ", not " + options.snapshot.snapshotId);
     if (options.approval.snapshotId !== options.snapshot.snapshotId) throw new Error("stale_approval: repair approval " + options.approval.approvalId + " binds to snapshot " + String(options.approval.snapshotId) + ", not " + options.snapshot.snapshotId);
     if (typeof existing.approvalId !== "string" || existing.approvalId !== options.approval.approvalId) throw new Error("stale_approval: repair journal for attempt " + attemptId + " was committed under a different approval; never reuse an attempt id across approvals");
-    if (effectiveLedger.revoked.has(options.approval.approvalId)) throw new Error("revoked: repair approval " + options.approval.approvalId + " was revoked by human input before commit; never auto-retry, ask the Owner for a fresh /agents repair trigger");
+    if (effectiveLedger.revoked.has(options.approval.approvalId)) throw new Error("revoked: repair approval " + options.approval.approvalId + " was cancelled (explicit repair cancel); request a fresh /agents repair trigger");
     const files = Array.isArray(existing.files) ? existing.files as Array<{ source: string; sha256Before: string; sha256After: string }> : [];
     const auditRaw = (existing.audit && typeof existing.audit === "object" ? existing.audit : {}) as { diffSummary?: unknown; warnings?: unknown; outOfScope?: unknown };
     const auditWarnings = Array.isArray(auditRaw.warnings) ? auditRaw.warnings as string[] : [];
@@ -240,6 +267,9 @@ export async function commitRepairReplace(options: Readonly<{ workflowDirectory:
       throw error;
     }
   }
+  // Freshness gate: every commit attempt re-runs drift + validation on fresh
+  // bytes immediately before apply. Never cache across an interrupt: a commit
+  // that races arrived input observes it here, not via a cleared flag.
   const gate = await runRepairPreCommitGate({ workflowDirectory: options.workflowDirectory, snapshot: options.snapshot, approval: options.approval, ledger: effectiveLedger, liveGate: options.liveGate });
   const wantedSources = options.snapshot.entries.map((entry) => entry.source).sort();
   const repairedSources = Object.keys(options.repairedBySource).sort();

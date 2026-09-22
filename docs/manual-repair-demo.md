@@ -9,7 +9,7 @@
 5. `repair_freeze` under the current trigger authority (snapshot-only, no writes; auto-mints the trigger approval bound to the exact snapshot; re-freeze replaces pending).
 6. `repair_commit` under the same trigger authority (backend gates: drift recheck, validation re-run, backup+seal+journal; single-use per trigger; second commit without a fresh trigger is refused).
 7. `moderator_control resolve` sends handling to Dormant, history retained. Repaired Owner reopens idle until a new human message; user returns via `/agents` (`/agents owner`).
-8. Esc or a new human message revokes the pending trigger + approval via the persisted ledger and clears both; commit after revoke is refused with live targets untouched.
+8. Esc or a new human message aborts the in-flight commit step only (no partial apply) and preserves trigger authority; retry in the same attempt succeeds WITHOUT a fresh trigger after fresh drift + validation rechecks. Only commit success (single-use), explicit repair cancel, `moderator_control resolve`/Dormant, or supersession by a fresh trigger clears the trigger authority. A commit that races arrived input observes it via the fresh recheck, never via a cleared flag.
 
 ## B. Live, broken Owner session (preadmission entry)
 
@@ -35,8 +35,9 @@ Do not use print mode against the materialized file (it appends conversation); r
 - The repair Moderator's /agents switcher shows only itself; spawn, message,
   wait, control, and resume stay repair-only refused.
 - Approval is the `/agents repair` trigger receipt (owner-session-trigger provenance,
-  bound to the exact snapshot, single commit per trigger, Esc/human-message revokes
-  + clears via the persisted ledger). There is no Moderator-driven authority beyond
+  bound to the exact snapshot, single commit per trigger; Esc/human-message aborts the
+  step only and preserves authority, while explicit cancel, `moderator_control resolve`/
+  Dormant, or a fresh trigger clears it). There is no Moderator-driven authority beyond
   the trigger: advisory validate reports grant zero authority, and model tool calls
   plus moderator_control resolve never authorize.
 

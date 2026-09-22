@@ -215,7 +215,9 @@ export function registerAgentsCommand(
               throw error;
             }
           } : undefined,
-					onEsc: activeHost ? () => activeHost.notifyRepairHumanInput("esc").catch((error) => { ctx.ui.notify("Repair revoke failed: " + (error instanceof Error ? error.message : String(error)), "error"); }) : undefined,
+					// Esc aborts the in-flight repair step only and preserves trigger
+					// authority; explicit cancel (deliberate intent) is the path that clears.
+					onEsc: activeHost ? () => activeHost.notifyRepairHumanInput("esc").catch((error) => { ctx.ui.notify("Repair interrupt failed: " + (error instanceof Error ? error.message : String(error)), "error"); }) : undefined,
 				});
 				return;
 			}

@@ -132,7 +132,7 @@ import {
   createRepairApprovalLedger,
   freezeRepairTargets as freezeRepairTargetsBackend,
   loadRepairApprovalLedger,
-  revokeRepairApprovalPersisted,
+  cancelRepairApprovalPersisted,
   type RepairApprovalLedger,
   type RepairCommitResult,
   type RepairFrozenSnapshot,
@@ -188,11 +188,19 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	/** Freeze repair targets under the current /agents repair trigger authority. Snapshot-only, no writes. Owner or trigger-bound Moderator. Auto-mints trigger approval. */
 	freezeRepairSnapshot(): Promise<RepairFrozenSnapshot>;
 	/**
-	 * Real input-path revocation for Esc + new human message. Revokes the
-	 * pending trigger approval through the persisted ledger store; never auto-retries.
-	 * Clears both pending trigger and pending approval.
+	 * Esc / new-human-message abort signal for the in-flight repair step only.
+	 * Preserves trigger authority: touches neither the ledger nor the pending
+	 * trigger/approval. A later commit in the same attempt proceeds WITHOUT a
+	 * fresh trigger after fresh drift + validation rechecks. Safety comes from
+	 * those fresh rechecks, never from a cleared flag.
 	 */
 	notifyRepairHumanInput(kind: "esc" | "human-message"): Promise<void>;
+	/**
+	 * Explicit repair cancel (deliberate user intent, distinct from Esc/interrupt).
+	 * Revokes the pending approval through the persisted ledger and clears both
+	 * pending trigger and pending approval. Owner only.
+	 */
+	cancelRepairTrigger(): Promise<void>;
 	/**
 	 * Explicit replace commit under the current trigger authority with drift recheck,
 	 * backup/seal/journal and idle-until-human-message reopen. Uses the pending trigger
@@ -693,29 +701,51 @@ export class WorkflowCoordinator {
 		return snapshot;
 	}
 	/**
-	 * Owner/human-input-path revocation for Esc + new human message. Owner only:
-	 * the caller must be the Owner view; the general human-input path in
-	 * #handleHumanInput covers any-participant messages separately.
-	 * Revokes the pending trigger approval through the persisted ledger store and clears
-	 * both pending trigger and pending approval;
-	 * persist failures propagate to the caller (diagnostics surfaces them);
-	 * never auto-retries. No-op when nothing is pending.
+	 * Owner/human-input-path abort for Esc + new human message. Owner only.
+	 * Aborts the in-flight commit step with no partial apply (gate-first backend
+	 * already guarantees this) and PRESERVES trigger authority: touches neither
+	 * the ledger nor the pending trigger/approval. A later commit in the same
+	 * attempt proceeds WITHOUT a fresh trigger after fresh revalidation.
+	 * Explicit cancel (cancelRepairTriggerForOwner) is the only intent path that
+	 * clears authority here. No-op when nothing is pending.
 	 */
 	async #notifyRepairHumanInputForOwner(callerAgentId: string, kind: "esc" | "human-message"): Promise<void> {
 		this.#assertAdmissionOpen();
 		if (callerAgentId !== this.#ownerIdentity.agentId) {
 			throw new Error("wrong_participant: manual repair is Owner only");
 		}
-		// Owner/human-input path only: Esc and new Owner messages are human holds,
-		// not model authority. Any-participant message revocation lives in
-		// #handleHumanInput, not here.
+		// Abort-only: Esc and new Owner messages are human holds that stop the
+		// in-flight step via Run interruption (handled by Pi). Authority survives;
+		// safety comes from the fresh drift + validation gate on every commit.
+		if (kind !== "esc" && kind !== "human-message") {
+			throw new Error("invalid_input: repair human input must be esc or human-message");
+		}
+		return;
+	}
+	/**
+	 * Explicit repair cancel (deliberate user intent, distinct from Esc/interrupt).
+	 * Owner only. Revokes the pending approval through the persisted ledger store
+	 * and clears both pending trigger and pending approval; persist failures
+	 * propagate to the caller (diagnostics surfaces them). No-op when nothing
+	 * is pending.
+	 */
+	async #cancelRepairTriggerForOwner(callerAgentId: string): Promise<void> {
+		this.#assertAdmissionOpen();
+		if (callerAgentId !== this.#ownerIdentity.agentId) {
+			throw new Error("wrong_participant: manual repair is Owner only");
+		}
 		const pending = this.#pendingRepairApproval;
-		const trigger = this.#pendingRepairTrigger;
-		if (!pending && !trigger) return;
 		if (pending) {
 			const ledger = this.#ensureRepairLedger();
-			await revokeRepairApprovalPersisted(this.#repairJournalDir(), ledger, pending.approvalId, kind);
+			await cancelRepairApprovalPersisted(this.#repairJournalDir(), ledger, pending.approvalId);
 		}
+		this.#pendingRepairApproval = undefined;
+		this.#pendingRepairTrigger = undefined;
+	}
+	/** Clear trigger authority on moderator_control resolve / Dormant release. */
+	#clearRepairAuthorityOnModeratorResolve(moderatorAgentId: string): void {
+		const trigger = this.#pendingRepairTrigger;
+		if (!trigger || trigger.moderatorAgentId !== moderatorAgentId) return;
 		this.#pendingRepairApproval = undefined;
 		this.#pendingRepairTrigger = undefined;
 	}
@@ -767,8 +797,9 @@ export class WorkflowCoordinator {
 			...(drafts === undefined ? {} : { drafts }),
 		});
 		// Single-use per trigger: backend consumes the approval; clear both pending
-		// trigger and pending approval so Esc/human input after commit has nothing
-		// to revoke and a second commit without a fresh trigger is refused.
+		// trigger and pending approval so a second commit without a fresh trigger
+		// is refused (single-use). Esc/human input never clears authority; only
+		// commit success, explicit cancel, resolve/Dormant, or supersession does.
 		this.#pendingRepairApproval = undefined;
 		this.#pendingRepairTrigger = undefined;
 		// Enforce idle-until-human-message hold by the host: no turn without a
@@ -899,7 +930,14 @@ export class WorkflowCoordinator {
 					agentId,
 					toolCallId,
 					input,
-				);
+				).then((receipt) => {
+					// moderator_control resolve / Dormant clears trigger authority:
+					// a later commit needs a fresh trigger. Blocked leaves it intact.
+					if (receipt.disposition === "resolved" || receipt.disposition === "already_cleared") {
+						this.#clearRepairAuthorityOnModeratorResolve(agentId);
+					}
+					return receipt;
+				});
 			},
 			repairValidate: async (toolCallId, input) => {
 				this.#assertAdmissionOpen();
@@ -1013,14 +1051,18 @@ export class WorkflowCoordinator {
 				if (agentId !== this.#ownerIdentity.agentId) throw new Error("wrong_participant: manual repair is Owner only");
 				const receipt = await this.#operationalIncidents.requestManualRepair(reason);
 				// Owner-session provenance at trigger time for both admitted + preadmission paths.
-				// Created captures the fresh trigger; joined keeps the existing trigger.
+				// Created captures the fresh trigger and supersedes any prior pending
+				// approval (a fresh trigger starts a new attempt lifetime); joined
+				// keeps the existing trigger and authority.
 				if (receipt.disposition === "created") {
+					this.#pendingRepairApproval = undefined;
 					this.#pendingRepairTrigger = { moderatorAgentId: receipt.moderatorAgentId, approver: agentId };
 				}
 				return receipt;
 			},
 			freezeRepairSnapshot: () => this.#freezeRepairSnapshotForOwner(agentId),
 			notifyRepairHumanInput: (kind) => this.#notifyRepairHumanInputForOwner(agentId, kind),
+			cancelRepairTrigger: () => this.#cancelRepairTriggerForOwner(agentId),
 			commitRepairReplace: (repairedBySource, attemptId, drafts) =>
 				this.#commitRepairReplaceForOwner(agentId, repairedBySource, attemptId, drafts),
 		selectionRoster: () => this.#selectionRoster(),
@@ -1920,13 +1962,14 @@ export class WorkflowCoordinator {
 		images: readonly ImageContent[] | undefined,
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition> {
-		// Real input-path revocation: only an admissible new human message revokes
-		// a pending repair trigger approval and releases the repaired idle hold.
-		// Clears both pending trigger and pending approval.
+		// New human messages preserve repair trigger authority: an admissible
+		// message releases the repaired idle hold but MUST NOT revoke or clear
+		// the pending trigger/approval. A later commit in the same attempt
+		// proceeds WITHOUT a fresh trigger; safety comes from the fresh drift +
+		// validation gate on every commit, not from a cleared flag.
 		// Fenced/stale submissions return discarded with no side effects:
 		// a discarded duplicate keeps the hold so beginExecution still refuses.
-		const pending = this.#pendingRepairApproval;
-		const revokeAndContinue = async (): Promise<HumanInputDisposition> => {
+		const releaseHoldAndContinue = async (): Promise<HumanInputDisposition> => {
 			const record = this.#requireAgent(agentId);
 			let inputSubmission: ProjectionInputSubmission | undefined;
 			try {
@@ -1935,27 +1978,13 @@ export class WorkflowCoordinator {
 			} catch {
 				return "discarded";
 			}
-			const releaseHoldAndRevoke = async (): Promise<void> => {
-				if (pending) {
-					try {
-						await revokeRepairApprovalPersisted(this.#repairJournalDir(), this.#ensureRepairLedger(), pending.approvalId, "human-message");
-					} catch {
-						// Journal dir may not exist yet when approval was never persisted;
-						// in-memory revoke still holds via the ledger set.
-						this.#ensureRepairLedger().revoked.add(pending.approvalId);
-					}
-					if (this.#pendingRepairApproval?.approvalId === pending.approvalId) {
-						this.#pendingRepairApproval = undefined;
-					}
-				}
-				// Human message also clears the pending repair trigger (single-use per trigger).
-				this.#pendingRepairTrigger = undefined;
+			const releaseHoldOnly = async (): Promise<void> => {
 				if (this.#repairedOwnerIdleHold && agentId === this.#repairedOwnerIdleHold.ownerId) {
 					this.#repairedOwnerIdleHold = undefined;
 				}
 			};
 			if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
-				await releaseHoldAndRevoke();
+				await releaseHoldOnly();
 				return "submitted";
 			}
 			const disposition = await this.#agentViewLane.run(async () => {
@@ -1996,11 +2025,11 @@ export class WorkflowCoordinator {
 				});
 			});
 			if (disposition !== "discarded") {
-				await releaseHoldAndRevoke();
+				await releaseHoldOnly();
 			}
 			return disposition;
 		};
-		return revokeAndContinue();
+		return releaseHoldAndContinue();
 	}
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {

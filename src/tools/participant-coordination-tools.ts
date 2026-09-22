@@ -909,7 +909,7 @@ export function registerParticipantCoordinationTools<
 		pi.registerTool<typeof repairCommitParameters, import("../coordination/repair-commit.ts").RepairCommitResult>({
 			name: "repair_commit",
 			label: "Commit Repair",
-			description: "Commit repaired copies under the current trigger authority. Backend re-runs drift + validation gates itself; advisory validate reports grant zero authority. Single-use per trigger; second commit without fresh trigger refused. Backup+seal+journal; repaired Owner reopens idle until new human message; Esc aborts without partial apply. After commit, moderator_control resolve; user returns via /agents.",
+			description: "Commit repaired copies under the current trigger authority. Backend re-runs drift + validation gates itself; advisory validate reports grant zero authority. Single-use per trigger; second commit without fresh trigger refused. Backup+seal+journal; repaired Owner reopens idle until new human message; Esc aborts the step only and preserves authority (retry without fresh trigger). After commit, moderator_control resolve; user returns via /agents.",
 			promptSnippet: "Commit under trigger authority; single-use per trigger. Diagnose/fix/validate/commit, then moderator_control resolve; user returns via /agents.",
 			executionMode: "sequential",
 			parameters: repairCommitParameters,

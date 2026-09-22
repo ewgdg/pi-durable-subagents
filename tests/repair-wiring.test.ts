@@ -179,7 +179,7 @@ test("commit without freeze refuses unauthorized without pending trigger approva
   await assert.rejects(owner.commitRepairReplace({ "/tmp/unknown": "/tmp/unknown" }, "attempt-nofreeze-2"), /unauthorized|no pending|invalid_input|stale_approval/);
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("Esc revokes pending trigger approval through the persisted ledger, no auto-retry", async (t) => {
+test("Esc preserves trigger authority; retry succeeds after fresh revalidation", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
   const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -199,18 +199,64 @@ test("Esc revokes pending trigger approval through the persisted ledger, no auto
   assert.equal(receipt.disposition, "created");
   const snapshot = await owner.freezeRepairSnapshot();
   const before = await sha256File(snapshot.entries[0].source as string);
+  const receipt2 = receipt;
+  assert.equal(receipt2.disposition, "created");
+  // Esc aborts the step only: signal writes nothing and preserves authority.
   await owner.notifyRepairHumanInput("esc");
-  let message = "";
-  try { await owner.commitRepairReplace({ [snapshot.entries[0].source as string]: snapshot.entries[0].source as string }, "attempt-esc-1"); } catch (error) { message = error instanceof Error ? error.message : String(error); }
-  assert.ok(message.indexOf("revoked") !== -1 || message.indexOf("no pending") !== -1 || message.indexOf("unauthorized") !== -1, "expected revoked/unauthorized, got: " + message);
+  assert.equal(await sha256File(snapshot.entries[0].source as string), before);
+  // Retry in the same attempt succeeds WITHOUT a fresh trigger.
+  const scratch = await mkdtemp(join(tmpdir(), "repair-wire-esc-retry-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of snapshot.entries) {
+    const rp = join(scratch, basename(entry.source) + ".repaired.jsonl");
+    await copyFile(entry.source, rp);
+    SessionManager.open(rp).appendMessage(fauxAssistantMessage("Esc-retry repair."));
+    repaired[entry.source] = rp;
+  }
+  const result = await owner.commitRepairReplace(repaired, "attempt-esc-retry-1");
+  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
+  // Commit success stays single-use: a second commit needs a fresh trigger.
+  await assert.rejects(owner.commitRepairReplace(repaired, "attempt-esc-retry-2"), /unauthorized|consumed|no pending/);
+  await coordinator.shutdown(async () => host.runtime.dispose());
+});
+test("explicit cancel clears trigger authority; commit needs fresh trigger", async (t) => {
+  let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+  const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
+  const identity = adoptOrValidateOwnerIdentity(host.runtime);
+  const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
+  owner = coordinator.forAgent(identity.agentId);
+  await bindTestOwnerHost(host, "tui");
+  const sessionDir = host.session.sessionManager.getSessionDir();
+  const workflowDir = workflowSessionDirectory(sessionDir, identity.workflowId);
+  const ownerMgr = host.session.sessionManager;
+  const toolId = "spawn-wire-cancel-a";
+  const entryId = ownerMgr.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "cancel-child", request: "Work", label: "cancel-child" }, { id: toolId })));
+  const child = SessionManager.create(ownerMgr.getSessionDir(), workflowDir);
+  child.appendCustomEntry("agent-coordination.identity", { agentId: child.getSessionId(), workflowId: identity.workflowId, directSpawnerAgentId: identity.agentId, creationPreset: null, spawnSource: { agentId: identity.agentId, entryId, toolCallId: toolId }, metadata: { label: "cancel-child" } });
+  child.appendMessage(fauxAssistantMessage("Persist cancel-child"));
+  host.model.setResponses([() => fauxAssistantMessage("Repair triage holding."), () => fauxAssistantMessage("Repair triage holding.")]);
+  const receipt = await owner.requestManualRepair("explicit cancel triage");
+  assert.equal(receipt.disposition, "created");
+  const snapshot = await owner.freezeRepairSnapshot();
+  const before = await sha256File(snapshot.entries[0].source as string);
+  await owner.cancelRepairTrigger();
+  const scratch = await mkdtemp(join(tmpdir(), "repair-wire-cancel-retry-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of snapshot.entries) {
+    const rp = join(scratch, basename(entry.source) + ".repaired.jsonl");
+    await copyFile(entry.source, rp);
+    SessionManager.open(rp).appendMessage(fauxAssistantMessage("Cancel repair."));
+    repaired[entry.source] = rp;
+  }
+  await assert.rejects(owner.commitRepairReplace(repaired, "attempt-cancel-1"), /unauthorized|revoked|no pending|consumed/);
   assert.equal(await sha256File(snapshot.entries[0].source as string), before);
   const ledgerRaw = await readFile(join(preadmissionRepairJournalDir(workflowDir), REPAIR_LEDGER_FILENAME), "utf8");
   const ledgerOnDisk = JSON.parse(ledgerRaw) as { revoked: string[] };
-  assert.ok(ledgerOnDisk.revoked.length >= 1, "expected persisted revocation");
+  assert.ok(ledgerOnDisk.revoked.length >= 1, "expected persisted cancellation");
   await assert.rejects(owner.freezeRepairSnapshot(), /unauthorized|no pending/);
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
-test("new human message revokes pending trigger approval", async (t) => {
+test("new human message preserves trigger authority; retry succeeds", async (t) => {
   let owner: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
   const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner as ReturnType<WorkflowCoordinator["forAgent"]>), { persistent: true, processVisibleModel: true, implicitModeratorResponses: false });
   const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -230,12 +276,21 @@ test("new human message revokes pending trigger approval", async (t) => {
   assert.equal(receipt.disposition, "created");
   const snapshot = await owner.freezeRepairSnapshot();
   const before = await sha256File(snapshot.entries[0].source as string);
-  await owner.resumeFromHuman("new human direction", undefined);
-  let message = "";
-  try { await owner.commitRepairReplace({ [snapshot.entries[0].source as string]: snapshot.entries[0].source as string }, "attempt-hm-1"); } catch (error) { message = error instanceof Error ? error.message : String(error); }
-  assert.ok(message.indexOf("no pending") !== -1 || message.indexOf("revoked") !== -1 || message.indexOf("unauthorized") !== -1, "expected revoked/unauthorized, got: " + message);
+  // New human messages preserve trigger authority: the message itself writes
+  // no repair bytes and clears no authority; retry succeeds without a fresh
+  // trigger after fresh revalidation.
+  await owner.resumeFromHuman("new human direction (preserves trigger)", undefined);
   assert.equal(await sha256File(snapshot.entries[0].source as string), before);
-  await assert.rejects(owner.freezeRepairSnapshot(), /unauthorized|no pending/);
+  const scratch = await mkdtemp(join(tmpdir(), "repair-wire-hm-retry-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of snapshot.entries) {
+    const rp = join(scratch, basename(entry.source) + ".repaired.jsonl");
+    await copyFile(entry.source, rp);
+    SessionManager.open(rp).appendMessage(fauxAssistantMessage("Human-retry repair."));
+    repaired[entry.source] = rp;
+  }
+  const result = await owner.commitRepairReplace(repaired, "attempt-hm-retry-1");
+  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
   await coordinator.shutdown(async () => host.runtime.dispose());
 });
 test("second trigger join-or-fresh disposition (mock sessionFactory, disposition-only)", async () => {

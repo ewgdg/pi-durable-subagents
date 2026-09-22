@@ -105,19 +105,49 @@ test("trigger-is-approval: unknown snapshot and repaired-set mismatch still refu
   await fx.coordinator.shutdown(async () => fx.host.runtime.dispose());
 });
 
-test("trigger-is-approval: Esc before apply stops commit with live targets untouched", async (t) => {
-  const fx = await setupWithTrigger(t, "trig-f", "esc stops commit");
+test("trigger-is-approval: Esc aborts the step only; retry succeeds without fresh trigger", async (t) => {
+  const fx = await setupWithTrigger(t, "trig-f", "esc preserves authority");
   const snapshot = await fx.owner.freezeRepairSnapshot();
   const before = new Map<string, string>();
   for (const entry of snapshot.entries) before.set(entry.source, await sha256File(entry.source as string));
+  // Esc aborts the in-flight step with no partial apply: the signal itself
+  // writes nothing and preserves trigger authority.
   await fx.owner.notifyRepairHumanInput("esc");
-  let message = "";
-  try {
-    await fx.owner.commitRepairReplace({ [snapshot.entries[0].source as string]: snapshot.entries[0].source as string }, "attempt-trig-f-1");
-  } catch (error) {
-    message = error instanceof Error ? error.message : String(error);
-  }
-  assert.ok(message.indexOf("revoked") !== -1 || message.indexOf("unauthorized") !== -1 || message.indexOf("no pending") !== -1, "expected revoked/unauthorized, got: " + message);
   for (const entry of snapshot.entries) assert.equal(await sha256File(entry.source as string), before.get(entry.source));
+  // Retry in the same attempt proceeds WITHOUT a fresh trigger after fresh
+  // drift + validation rechecks.
+  const scratch = await mkdtemp(join(tmpdir(), "repair-trig-f-scratch-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of snapshot.entries) repaired[entry.source] = await makeRepairedCopy(entry.source, scratch, "Esc-retry repair.");
+  const result = await fx.owner.commitRepairReplace(repaired, "attempt-trig-f-1");
+  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
+  assert.equal(result.snapshotId, snapshot.snapshotId);
+  for (const entry of snapshot.entries) assert.equal(await sha256File(entry.source as string), await sha256File(repaired[entry.source] as string));
+  await fx.coordinator.shutdown(async () => fx.host.runtime.dispose());
+});
+test("trigger-is-approval: new human message preserves authority; retry succeeds", async (t) => {
+  const fx = await setupWithTrigger(t, "trig-g", "human message preserves authority");
+  const snapshot = await fx.owner.freezeRepairSnapshot();
+  const before = new Map<string, string>();
+  for (const entry of snapshot.entries) before.set(entry.source, await sha256File(entry.source as string));
+  await fx.owner.resumeFromHuman("new human direction (preserves trigger)", undefined);
+  for (const entry of snapshot.entries) assert.equal(await sha256File(entry.source as string), before.get(entry.source));
+  const scratch = await mkdtemp(join(tmpdir(), "repair-trig-g-scratch-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of snapshot.entries) repaired[entry.source] = await makeRepairedCopy(entry.source, scratch, "Human-retry repair.");
+  const result = await fx.owner.commitRepairReplace(repaired, "attempt-trig-g-1");
+  assert.ok(result.disposition === "committed" || result.disposition === "joined-committed");
+  assert.equal(result.snapshotId, snapshot.snapshotId);
+  await fx.coordinator.shutdown(async () => fx.host.runtime.dispose());
+});
+test("trigger-is-approval: explicit cancel clears authority; commit needs fresh trigger", async (t) => {
+  const fx = await setupWithTrigger(t, "trig-h", "explicit cancel clears");
+  const snapshot = await fx.owner.freezeRepairSnapshot();
+  await fx.owner.cancelRepairTrigger();
+  const scratch = await mkdtemp(join(tmpdir(), "repair-trig-h-scratch-"));
+  const repaired: Record<string, string> = {};
+  for (const entry of snapshot.entries) repaired[entry.source] = await makeRepairedCopy(entry.source, scratch, "Cancel repair.");
+  await assert.rejects(fx.owner.commitRepairReplace(repaired, "attempt-trig-h-1"), /unauthorized|revoked|no pending|consumed/);
+  await assert.rejects(fx.owner.freezeRepairSnapshot(), /unauthorized|no pending/);
   await fx.coordinator.shutdown(async () => fx.host.runtime.dispose());
 });
