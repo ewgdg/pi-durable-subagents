@@ -33,6 +33,12 @@ Mimic the manual user process as a faithful clone: close Owner writers, fresh se
   - Cold discovery scans `repair/` (exact Workflow binding, Moderator-only; alias/dup/conflict quarantined).
   - Preadmission stubs: immutable Owner evidence snapshot, precise unavailable routing for unadmitted originals.
   - Authenticated `moderator_control` resolve releases to Dormant with history retained; selection opens Runtime without admitting a Run or replaying routine-start.
+- Checkpoint 2 (minimal inspect/backup/verify backend on frozen copies): frozen-only, advisory validate, no publish path.
+  - Frozen enumeration consumes `isRepairManagedPath`: top-level inventory only, `repair/*` never targets; live repairer is writer/host via join-or-refuse (`shouldJoinLiveRepair`), never a target.
+  - `src/coordination/repair-freeze.ts`: list/sha256/backup/restore plus read-only inspect (admission readers) and dry-replay verify (pass/fail + warnings, missing-title out-of-scope, replay-pass does not imply safe).
+  - `src/coordination/repair-validate.ts`: executing package source path/version plus doc paths plus staged error/stack (no cwd/HEAD assumption); advisory `validateRepairFreezeAdvisory` edits nothing, authorizes nothing, seals nothing, never resolves.
+  - Advisory-only `repair_validate` on the manual repair Moderator only (read-only inspectors, effects/startup/model disabled); other moderators refused; prior reports can never authorize changed bytes.
+  - Pre-commit Owner stays snapshot-only, post-commit idle-hold, drafts preserved, no auto-resume; unadmitted-original routing stays precisely unavailable.
 
 ## Decisions
 - Fresh branch over rebase; diagnosis-face over pure tooling; manual over auto.
