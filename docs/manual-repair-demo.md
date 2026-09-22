@@ -49,3 +49,15 @@ Do not use print mode against the materialized file (it appends conversation); r
     node tests/support/run-test-suite.ts fast --file=repair-trigger-approval.test.ts
     node --test tests/repair-broken-session-smoke.test.ts
     npx tsc --noEmit
+
+## E. Child-bridge repair tools and trigger-time Input
+
+- `repair_freeze`, `repair_validate`, and `repair_commit` are forwarded through
+  the control-backed child participant handlers into `coordination.repair*`
+  Control methods, with the same moderator-only role gating as `moderator_control`.
+  Other moderators keep the precise `wrong_participant` refusal from the coordinator.
+- Every manual-repair Input carries `repairContext` (failure stage, error text,
+  transcript path, verified Owner binding, workflow directory) plus the 5-step
+  `procedure`. Pointers only: no fix recipe, no expected output.
+
+    node --test tests/repair-child-bridge.test.ts

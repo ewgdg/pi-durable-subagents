@@ -141,7 +141,13 @@ test("trigger-to-first-moderator-turn surfaces zero duplicate-Deliveries", { tim
     );
     return result?.type === "message" && result.message.role === "toolResult" && !result.message.isError;
   }, 60000, "repair Moderator first turn (observe + resolve) did not complete cleanly");
-  assert.equal(scanJsonl(moderatorFile, "duplicate Deliveries"), 0);
+  // The trigger-time Input carries the admission-failure error pointer, so the
+  // phrase occurs exactly once, inside repairContext.error. Anything beyond
+  // the Input entry would be traversed broken evidence, which stays forbidden.
+  assert.equal(scanJsonl(moderatorFile, "duplicate Deliveries"), 1);
+  const moderatorEntries = SessionManager.open(moderatorFile).getEntries();
+  assert.ok(moderatorEntries[0]?.type === "custom_message" && JSON.stringify(moderatorEntries[0]).indexOf("duplicate Deliveries") !== -1);
+  for (const entry of moderatorEntries.slice(1)) assert.equal(JSON.stringify(entry).indexOf("duplicate Deliveries"), -1);
   assert.equal(scanJsonl(built.sessionFile, "duplicate Deliveries"), 0);
   assert.equal(ownerEntryCount(), frozenEntries);
   // No automatic incident inspection may run in the repair host: no fault

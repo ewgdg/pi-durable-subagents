@@ -90,6 +90,8 @@ const roleToolNames = {
 		"ask_user",
 		"moderator_control",
 		"repair_validate",
+		"repair_freeze",
+		"repair_commit",
 		"report_to_user",
 	],
 	owner: [
@@ -796,12 +798,16 @@ function assertClosedTypeBoxObjects(schema: unknown, path: string): void {
 	};
 	if (node.type === "object") {
 		assert.equal(node.type, "object", path);
-		if (!node.anyOf) assert.equal(node.additionalProperties, false, path);
+		// String maps (Type.Record) constrain values instead of closing properties.
+		if (!node.anyOf && !("patternProperties" in node)) assert.equal(node.additionalProperties, false, path);
 	}
 	for (const [index, variant] of (node.anyOf ?? []).entries()) {
 		assertClosedTypeBoxObjects(variant, `${path}.anyOf[${index}]`);
 	}
 	for (const [property, child] of Object.entries(node.properties ?? {})) {
+		assertClosedTypeBoxObjects(child, `${path}.${property}`);
+	}
+	for (const [property, child] of Object.entries((node as { patternProperties?: Record<string, unknown> }).patternProperties ?? {})) {
 		assertClosedTypeBoxObjects(child, `${path}.${property}`);
 	}
 	if (node.items) assertClosedTypeBoxObjects(node.items, `${path}.items`);

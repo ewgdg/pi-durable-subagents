@@ -50,7 +50,18 @@ export async function setupPreadmissionRepairHost(options: {
 		entryModulePath: options.entryModulePath,
 		workflowPolicy: new WorkflowPolicyStore(policyRead.snapshot),
 	});
-	await coordinator.initializePreadmissionRepair();
+	const failureError = options.failure.protocolError instanceof Error
+		? options.failure.protocolError.message
+		: String(options.failure.protocolError);
+	const failureTranscriptPath = options.failure.transcriptPath ?? evidence.transcriptPath;
+	// Preadmission trigger-time context: the admission-failure stage, error
+	// text, and failing transcript path travel with the manual-repair Input so
+	// the Moderator starts from evidence instead of reverse-engineering it.
+	await coordinator.initializePreadmissionRepair({
+		stage: options.failure.stage,
+		...(failureError.length > 0 ? { error: failureError } : {}),
+		...(failureTranscriptPath ? { transcriptPath: failureTranscriptPath } : {}),
+	});
 	if (evidence.workflowDirectory !== coordinator.preadmissionRepairWorkflowDirectory()) {
 		await coordinator.shutdown(async () => undefined).catch(() => undefined);
 		throw new Error("invariant_violation: preadmission evidence workflow directory mismatch");

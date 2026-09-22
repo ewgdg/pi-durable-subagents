@@ -9,6 +9,7 @@ import type { WorkflowCoordinator } from "../src/coordination/workflow-coordinat
 import { MODERATOR_INPUT_CUSTOM_TYPE } from "../src/protocol/moderator-input.ts";
 import { MODERATOR_ROUTINE_START_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
+import { MANUAL_REPAIR_PROCEDURE } from "../src/coordination/manual-repair.ts";
 import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 
@@ -80,10 +81,22 @@ test("manual repair hosts a real Moderator and resolves it to Dormant", { timeou
 	assert.equal(inputEntry.customType, MODERATOR_INPUT_CUSTOM_TYPE);
 	assert.equal(inputEntry.parentId, null);
 	assert.equal(inputEntry.display, true);
-	assert.deepEqual(JSON.parse(inputEntry.content as string), {
-		trigger: { kind: "manual_repair", reason: "Investigate the stalled handoff." },
-		inspectedThrough: [],
-	});
+	const parsedInput = JSON.parse(inputEntry.content as string) as {
+		trigger: unknown;
+		inspectedThrough: unknown;
+		repairContext?: Record<string, unknown>;
+		procedure?: unknown;
+	};
+	assert.deepEqual(parsedInput.trigger, { kind: "manual_repair", reason: "Investigate the stalled handoff." });
+	assert.deepEqual(parsedInput.inspectedThrough, []);
+	assert.equal(parsedInput.repairContext?.stage, "admitted Owner trigger");
+	assert.equal(parsedInput.repairContext?.ownerId, identity.agentId);
+	assert.equal(parsedInput.repairContext?.workflowId, identity.agentId);
+	assert.ok(typeof parsedInput.repairContext?.workflowDirectory === "string" && (parsedInput.repairContext?.workflowDirectory as string).length > 0);
+	const ownerSessionFile = host.session.sessionManager.getSessionFile();
+	if (ownerSessionFile) assert.equal(parsedInput.repairContext?.transcriptPath, ownerSessionFile);
+	else assert.equal(parsedInput.repairContext?.transcriptPath, undefined);
+	assert.equal(parsedInput.procedure, MANUAL_REPAIR_PROCEDURE);
 	assert.equal((inputEntry.details as { agentId: string }).agentId, moderatorId);
 	assert.equal((inputEntry.details as { workflowId: string }).workflowId, identity.agentId);
 	const roster = owner.selectionRoster();

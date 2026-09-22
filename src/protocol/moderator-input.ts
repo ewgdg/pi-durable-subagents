@@ -91,10 +91,31 @@ export type ModeratorTrigger =
 		reason: string;
 	}>;
 
+/**
+ * Trigger-time repair pointers for the manual-repair Moderator only: where the
+ * failure was observed, which Owner session it binds, and which directory
+ * holds the frozen targets. Pointers, not diagnosis: no fix recipe here.
+ */
+export type ManualRepairContext = Readonly<{
+	/** Admission-failure stage, or "admitted Owner trigger" when admission held. */
+	stage: string;
+	/** Admission-failure error text. Absent when admission held. */
+	error?: string;
+	/** Failing Owner transcript path, when the trigger knows one. */
+	transcriptPath?: string;
+	/** Verified Owner binding: ownerId === workflowId of the repaired session. */
+	ownerId: string;
+	workflowId: string;
+	/** Workflow directory holding the frozen repair targets. */
+	workflowDirectory: string;
+}>;
+
 export type ModeratorInput = Readonly<{
 	trigger: ModeratorTrigger;
 	inspectedThrough: readonly EntryPointer[];
 	previousAttempt?: EntryPointer;
+	repairContext?: ManualRepairContext;
+	procedure?: string;
 }>;
 
 export type ModelVisibleModeratorInput = Readonly<{
@@ -278,9 +299,11 @@ export function validateColdModeratorInput(options: {
 
 function validateModeratorInput(value: unknown): ModeratorInput {
 	const input = requireRecord(value);
-	requireExactKeys(input, input.previousAttempt === undefined
-		? ["trigger", "inspectedThrough"]
-		: ["trigger", "inspectedThrough", "previousAttempt"]);
+	const expectedKeys = ["trigger", "inspectedThrough"];
+	if (input.previousAttempt !== undefined) expectedKeys.push("previousAttempt");
+	if (input.repairContext !== undefined) expectedKeys.push("repairContext");
+	if (input.procedure !== undefined) expectedKeys.push("procedure");
+	requireExactKeys(input, expectedKeys);
 	const triggerValue = requireRecord(input.trigger);
 	let trigger: ModeratorTrigger;
 	let affectedAgentIds: readonly string[];
@@ -408,11 +431,63 @@ function validateModeratorInput(value: unknown): ModeratorInput {
 	const previousAttempt = input.previousAttempt === undefined
 		? undefined
 		: validateEntryPointer(input.previousAttempt);
+	const repair = validateManualRepairGuidance(input.repairContext, input.procedure, trigger);
 	return {
 		trigger,
 		inspectedThrough,
 		...(previousAttempt === undefined ? {} : { previousAttempt }),
+		...(repair.repairContext === undefined ? {} : { repairContext: repair.repairContext }),
+		...(repair.procedure === undefined ? {} : { procedure: repair.procedure }),
 	};
+}
+
+function validateManualRepairGuidance(
+	value: unknown,
+	procedure: unknown,
+	trigger: ModeratorTrigger,
+): Readonly<{ repairContext?: ManualRepairContext; procedure?: string }> {
+	if (value === undefined && procedure === undefined) return {};
+	if (trigger.kind !== "manual_repair") {
+		throw new ProtocolInvariantError("Moderator Input repair guidance needs a manual_repair trigger");
+	}
+	if (value === undefined || procedure === undefined) {
+		throw new ProtocolInvariantError("Moderator Input repair guidance needs both repairContext and procedure");
+	}
+	const context = requireRecord(value);
+	const expectedKeys = ["stage", "ownerId", "workflowId", "workflowDirectory"];
+	if (context.error !== undefined) expectedKeys.push("error");
+	if (context.transcriptPath !== undefined) expectedKeys.push("transcriptPath");
+	requireExactKeys(context, expectedKeys);
+	if (!isNonEmptyText(context.stage) || !isNonEmptyText(context.workflowDirectory)) {
+		throw new ProtocolInvariantError("Moderator Input repair context stage and workflowDirectory are invalid");
+	}
+	if (!isIdentifier(context.ownerId) || !isIdentifier(context.workflowId)) {
+		throw new ProtocolInvariantError("Moderator Input repair context Owner binding is invalid");
+	}
+	if (
+		(context.error !== undefined && !isNonEmptyText(context.error)) ||
+		(context.transcriptPath !== undefined && !isNonEmptyText(context.transcriptPath))
+	) {
+		throw new ProtocolInvariantError("Moderator Input repair context error and transcriptPath are invalid");
+	}
+	if (!isNonEmptyText(procedure)) {
+		throw new ProtocolInvariantError("Moderator Input repair procedure is invalid");
+	}
+	return {
+		repairContext: {
+			stage: context.stage as string,
+			...(context.error === undefined ? {} : { error: context.error as string }),
+			...(context.transcriptPath === undefined ? {} : { transcriptPath: context.transcriptPath as string }),
+			ownerId: context.ownerId as string,
+			workflowId: context.workflowId as string,
+			workflowDirectory: context.workflowDirectory as string,
+		},
+		procedure: procedure as string,
+	};
+}
+
+function isNonEmptyText(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && !value.includes("\0");
 }
 
 function validateEntryPointer(value: unknown): EntryPointer {

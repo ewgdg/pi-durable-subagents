@@ -300,9 +300,12 @@ test("second trigger join-or-fresh disposition (mock sessionFactory, disposition
   const root = await mkdtemp(join(tmpdir(), "repair-wire-join-"));
   const ownerIdentity = { agentId: "owner-join-1", workflowId: "owner-join-1", directSpawnerAgentId: null, metadata: { label: "Owner" as const, description: "Workflow Owner" as const } };
   const agents = new Map();
-  agents.set(ownerIdentity.agentId, { identity: ownerIdentity } as never);
+  agents.set(ownerIdentity.agentId, {
+    identity: ownerIdentity,
+    transcript: { inspect: () => ({ transcriptPath: undefined }) },
+  } as never);
   let phase = "live";
-  const sessionFactory = { admitProcessRuntimePlatform() {}, async prepareModeratorRun(args: { agentId: string }) { return { agentId: args.agentId, creationPreset: null, configuration: { cwd: root } }; }, createStagingSession(prepared: { agentId: string }, sub?: string) { return SessionManager.create(root, sub ? join(root, sub) : root, { id: prepared.agentId }); }, createModeratorRecord(args: { identity: { agentId: string } }) { return { identity: args.identity, host: { lane: { run: (task: () => Promise<void>) => task() }, startInLane: async () => undefined, removeRetentionReason: () => undefined, observe: () => ({ phase }), currentRunFailed: () => false } } as never; } } as never;
+  const sessionFactory = { workflowSessionDirectory: () => join(root, "pi-durable-subagents", ownerIdentity.workflowId), admitProcessRuntimePlatform() {}, async prepareModeratorRun(args: { agentId: string }) { return { agentId: args.agentId, creationPreset: null, configuration: { cwd: root } }; }, createStagingSession(prepared: { agentId: string }, sub?: string) { return SessionManager.create(root, sub ? join(root, sub) : root, { id: prepared.agentId }); }, createModeratorRecord(args: { identity: { agentId: string } }) { return { identity: args.identity, host: { lane: { run: (task: () => Promise<void>) => task() }, startInLane: async () => undefined, removeRetentionReason: () => undefined, observe: () => ({ phase }), currentRunFailed: () => false } } as never; } } as never;
   const messages = { admitCustomDeliveryInLane: async () => "pending", requestRelease: async () => undefined, shutdownDeliveryProgress() {} } as never;
   const incidents = new OperationalIncidentCoordinator({ agents: agents as never, ownerIdentity, sessionFactory: sessionFactory as never, messages: messages as never, workflowPolicy: new WorkflowPolicyStore(), integrateAgent: (record: never) => { agents.set((record as { identity: { agentId: string } }).identity.agentId, record as never); }, isShuttingDown: () => false, reportError: () => undefined, retainDiagnostic: () => ({ agentId: ownerIdentity.agentId, entryId: "d1" }), publishRuntimeReport: () => undefined, runtimeReportSourceForIncident: () => undefined, appendRuntimeReportFinding: () => undefined });
   const first = await incidents.requestManualRepair("first");

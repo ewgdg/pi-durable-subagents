@@ -12,6 +12,7 @@ import {
 	MAX_MODERATOR_REQUEST_SOURCES,
 	validateColdModeratorInput,
 	type EntryPointer,
+	type ManualRepairContext,
 	type ModeratorInput,
 	type ModeratorTrigger,
 } from "../protocol/moderator-input.ts";
@@ -54,7 +55,9 @@ import {
 } from "./hosted-moderator.ts";
 import {
 	MANUAL_REPAIR_NAMESPACE,
+	buildManualRepairInput,
 	validateManualRepairReason,
+	type ManualRepairFailureEvidence,
 	type ManualRepairReceipt,
 } from "./manual-repair.ts";
 import { shouldJoinLiveRepair } from "./repair-freeze.ts";
@@ -536,7 +539,7 @@ export class OperationalIncidentCoordinator {
 		return this.#manualRepair?.moderatorAgentId === agentId;
 	}
 
-	async requestManualRepair(reason: string): Promise<ManualRepairReceipt> {
+	async requestManualRepair(reason: string, failure?: ManualRepairFailureEvidence): Promise<ManualRepairReceipt> {
 		const validated = validateManualRepairReason(reason);
 		const existing = this.#manualRepair;
 		if (existing) {
@@ -551,10 +554,7 @@ export class OperationalIncidentCoordinator {
 		}
 		const bootstrap = await commitHostedModerator(this.#hostedModeratorDependencies(), {
 			metadata: () => resolveModeratorAgentMetadata("manual_repair"),
-			input: () => ({
-				trigger: { kind: "manual_repair", reason: validated },
-				inspectedThrough: [],
-			}),
+			input: () => buildManualRepairInput(validated, this.#manualRepairTriggerContext(failure)),
 			sessionSubdirectory: MANUAL_REPAIR_NAMESPACE,
 		});
 		if (!bootstrap) {
@@ -584,6 +584,27 @@ export class OperationalIncidentCoordinator {
 			throw error;
 		}
 		return { disposition: "created", moderatorAgentId: bootstrap.identity.agentId };
+	}
+
+	/**
+	 * Trigger-time repair pointers: admitted Owner binding plus workflow
+	 * directory by default; preadmission failure evidence (stage, error text,
+	 * failing transcript path) when the repair host supplies it. The trigger
+	 * grants no authority beyond hosting this Moderator.
+	 */
+	#manualRepairTriggerContext(failure?: ManualRepairFailureEvidence): ManualRepairContext {
+		const ownerId = this.#ownerIdentity.agentId;
+		const transcriptPath = failure?.transcriptPath
+			?? this.#agents.get(ownerId)?.transcript.inspect().transcriptPath
+			?? undefined;
+		return {
+			stage: failure?.stage ?? (this.#isRepairOnlyHost() ? "preadmission repair host" : "admitted Owner trigger"),
+			...(failure?.error ? { error: failure.error } : {}),
+			...(transcriptPath ? { transcriptPath } : {}),
+			ownerId,
+			workflowId: this.#ownerIdentity.workflowId,
+			workflowDirectory: this.#sessionFactory.workflowSessionDirectory(),
+		};
 	}
 
 	#releaseManualRepair(moderatorAgentId: string): void {

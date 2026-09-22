@@ -125,7 +125,7 @@ import type {
 } from "../presentation/post-mortem-agent-view-surface.ts";
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
-import type { ManualRepairReceipt } from "./manual-repair.ts";
+import type { ManualRepairFailureEvidence, ManualRepairReceipt } from "./manual-repair.ts";
 import {
   approveRepairReplace,
   commitRepairReplace as commitRepairReplaceBackend,
@@ -319,6 +319,7 @@ export class WorkflowCoordinator {
 	readonly #repairSnapshots = new Map<string, RepairFrozenSnapshot>();
 	#pendingRepairApproval: RepairReplaceApproval | undefined;
 	#pendingRepairTrigger: Readonly<{ moderatorAgentId: string; approver: string }> | undefined;
+	#preadmissionRepairFailure: ManualRepairFailureEvidence | undefined;
 	#repairLedger: RepairApprovalLedger | undefined;
 	#repairedOwnerIdleHold: Readonly<{ ownerId: string }> | undefined;
 	#preadmissionRepairOnly = false;
@@ -610,8 +611,9 @@ export class WorkflowCoordinator {
 	 * Only manual repair trigger + repair Moderator hosting stay available;
 	 * unadmitted-original routing stays precise-unavailable. Manual only.
 	 */
-	async initializePreadmissionRepair(): Promise<void> {
+	async initializePreadmissionRepair(failure?: ManualRepairFailureEvidence): Promise<void> {
 		this.#preadmissionRepairOnly = true;
+		this.#preadmissionRepairFailure = failure;
 		// Template snapshot comes from native config (cwd/agentDir/model),
 		// never from broken coordination history.
 		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
@@ -1049,7 +1051,7 @@ export class WorkflowCoordinator {
 				requestManualRepair: async (reason) => {
 				this.#assertAdmissionOpen();
 				if (agentId !== this.#ownerIdentity.agentId) throw new Error("wrong_participant: manual repair is Owner only");
-				const receipt = await this.#operationalIncidents.requestManualRepair(reason);
+				const receipt = await this.#operationalIncidents.requestManualRepair(reason, this.#preadmissionRepairFailure);
 				// Owner-session provenance at trigger time for both admitted + preadmission paths.
 				// Created captures the fresh trigger and supersedes any prior pending
 				// approval (a fresh trigger starts a new attempt lifetime); joined

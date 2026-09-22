@@ -184,6 +184,12 @@ export function createControlBackedChildParticipantHandlers(
 		reportToUser: (toolCallId, input) => request("coordination.reportToUser", { toolCallId, input: { ...input, evidence: [...input.evidence] } }),
 		moderatorControl: (toolCallId, input) =>
 			request("coordination.moderatorControl", { toolCallId, input }),
+		repairValidate: (toolCallId, input) =>
+			request("coordination.repairValidate", { toolCallId, input }),
+		repairFreeze: (toolCallId, input) =>
+			request("coordination.repairFreeze", { toolCallId, input }),
+		repairCommit: (toolCallId, input) =>
+			request("coordination.repairCommit", { toolCallId, input }),
 	};
 	return { lifecycle, coordination };
 }
@@ -296,6 +302,27 @@ export async function dispatchParticipantRequestToOwner(
 		case "coordination.moderatorControl":
 			if (!("moderatorControl" in handlers.coordination)) throw unavailableForRole(request.method);
 			response = await handlers.coordination.moderatorControl(
+				request.payload.toolCallId,
+				request.payload.input,
+			);
+			break;
+		case "coordination.repairValidate":
+			if (!("repairValidate" in handlers.coordination)) throw unavailableForRole(request.method);
+			response = await handlers.coordination.repairValidate!(
+				request.payload.toolCallId,
+				request.payload.input,
+			);
+			break;
+		case "coordination.repairFreeze":
+			if (!("repairFreeze" in handlers.coordination)) throw unavailableForRole(request.method);
+			response = await handlers.coordination.repairFreeze!(
+				request.payload.toolCallId,
+				request.payload.input,
+			);
+			break;
+		case "coordination.repairCommit":
+			if (!("repairCommit" in handlers.coordination)) throw unavailableForRole(request.method);
+			response = await handlers.coordination.repairCommit!(
 				request.payload.toolCallId,
 				request.payload.input,
 			);

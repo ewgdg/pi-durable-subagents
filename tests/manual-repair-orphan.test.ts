@@ -17,7 +17,10 @@ async function setupHostedFixture() {
   const root = await mkdtemp(join(tmpdir(), "manual-repair-orphan-"));
   const ownerIdentity: OwnerIdentity = { agentId: "owner-1", workflowId: "owner-1", directSpawnerAgentId: null, metadata: { label: "Owner", description: "Workflow Owner" } };
   const agents = new Map<string, AgentRecord>();
-  agents.set(ownerIdentity.agentId, { identity: ownerIdentity } as unknown as AgentRecord);
+  agents.set(ownerIdentity.agentId, {
+    identity: ownerIdentity,
+    transcript: { inspect: () => ({ transcriptPath: undefined }) },
+  } as unknown as AgentRecord);
   let failStart = true;
   let shuttingDown = false;
   const created: AgentRecord[] = [];
@@ -25,6 +28,7 @@ async function setupHostedFixture() {
   const retentionRemoved: Array<{ agentId: string; reason: string }> = [];
   const reported: unknown[] = [];
   const sessionFactory = {
+    workflowSessionDirectory: () => join(root, "pi-durable-subagents", ownerIdentity.workflowId),
     admitProcessRuntimePlatform() {},
     async prepareModeratorRun({ agentId }: { agentId: string }) {
       return { agentId, creationPreset: null, configuration: { cwd: root } };

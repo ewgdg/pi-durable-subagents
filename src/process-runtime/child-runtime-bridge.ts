@@ -855,6 +855,9 @@ async function handleOwnerRequest(
 		case "coordination.reportToUser":
 		case "presentation.reports.setRead":
 		case "coordination.moderatorControl":
+		case "coordination.repairValidate":
+		case "coordination.repairFreeze":
+		case "coordination.repairCommit":
 		case "presentation.agents.snapshot":
 		case "presentation.agents.select":
 			throw new Error(`child_runtime_direction_violation: ${request.method}`);
