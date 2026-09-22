@@ -244,8 +244,12 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 			}
 		});
 		// Turn-level entry IDs are not visible on the AgentSession event surface,
-		// so precise proof means gating message_end on fresh transcript entries:
-		// an unrelated concurrent message must not confirm this delivery.
+		// so message_end is only a wake-up: the entry-count gate avoids calling inspectCommit
+		// on every event, but any concurrent append can open it. Per-delivery proof is
+		// inspectCommit() itself, which must still be true to confirm; for triggerTurn to
+		// an idle agent the injected message_end can precede persistence, so confirmation
+		// then falls back to run completion. Both directions stay safe at the cost of
+		// delaying transcriptCommit awaited by resume/moderator paths.
 		const committedEntryCount = () => this.#session.sessionManager.getEntries().length;
 		const entriesBeforeDispatch = committedEntryCount();
 		const unsubscribe = this.#session.subscribe((event) => {

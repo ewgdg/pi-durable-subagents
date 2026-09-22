@@ -26,7 +26,7 @@ import {
 } from "../src/pi-integration/participant-lifecycle.ts";
 
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
- import { REQUEST_ATTENTION_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
+import { REQUEST_ATTENTION_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
 import { createMessageDelivery, inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { obligationStack, type ObligationFrame } from "../src/protocol/obligation-focus.ts";
@@ -120,7 +120,57 @@ test("settlement hides only active-branch attention snapshots", async () => {
 	assert.equal(continuation?.entries?.[0]?.type, "context_edit");
 	assert.equal(continuation?.entries?.[0]?.targetId, snapshotId);
 	manager.appendContextEdit(snapshotId, null);
- });
+});
+
+test("repeated boundaries do not re-hide already-hidden snapshots", async () => {
+	const context = createExtensionContext();
+	const manager = context.sessionManager;
+	const frame = appendRequestDelivery(manager, { requesterAgentId: "requester", title: "Duplicate work", question: "Duplicate question" });
+	const answerEntryId = manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "answer", requestId: frame.requestId, answer: "Duplicate done.",
+	}, { id: "answer-duplicate-work" }), { stopReason: "toolUse" }));
+	const receipt = { messageId: deriveMessageIdentity({ agentId: manager.getSessionId(), entryId: answerEntryId, toolCallId: "answer-duplicate-work" }),
+		requestMessageId: frame.requestId, requestTitle: frame.title, messageStatus: "sent" as const };
+	manager.appendMessage({ role: "toolResult", toolCallId: "answer-duplicate-work", toolName: "agent_message",
+		content: [{ type: "text", text: "Duplicate done." }], isError: false, timestamp: 1, details: receipt });
+	const snapshotId = manager.appendCustomMessageEntry(REQUEST_ATTENTION_CUSTOM_TYPE, "Outstanding Requests.", true,
+		{ requests: [{ requestMessageId: frame.requestId, requesterAgentId: frame.requesterAgentId, title: frame.title }] });
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, lifecycleHandlers());
+	const answerResult = { ...toolResultMessage, toolName: "agent_message", details: receipt };
+	const first = await pi.emit("turn_end", { type: "turn_end", toolResults: [answerResult] }, context) as {
+		entries?: Array<{ type: string; targetId?: string }>;
+	} | undefined;
+	assert.equal(first?.entries?.length, 1);
+	assert.equal(first?.entries?.[0]?.targetId, snapshotId);
+	manager.appendContextEdit(snapshotId, null);
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
+	assert.equal(await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context), undefined);
+	assert.equal(await pi.emit("turn_end", { type: "turn_end", toolResults: [answerResult] }, context), undefined);
+});
+
+test("Answer-then-wrap-up retains work without implying a turn limit (canContinue false)", async () => {
+	const context = createExtensionContext();
+	appendRequestDelivery(context.sessionManager, { requesterAgentId: "requester", title: "Wrap-up work", question: "Keep going" });
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, lifecycleHandlers());
+	await pi.emit("turn_end", { type: "turn_end", toolResults: [{ ...toolResultMessage,
+		toolName: "agent_message", details: { messageId: "answer-wrap", requestMessageId: "finished", messageStatus: "sent" },
+	}] }, context);
+	context.sessionManager.appendMessage(fauxAssistantMessage("Wrap-up summary."));
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
+	const continuation = await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: false } }, context) as {
+		entries?: Array<{ content?: unknown }>; continue?: boolean;
+	} | undefined;
+	assert.ok(continuation?.entries?.length);
+	assert.equal(continuation?.continue, undefined);
+	assert.match(JSON.stringify(continuation?.entries), /Wrap-up work/);
+	assert.equal(context.notifications.length, 1);
+	assert.doesNotMatch(context.notifications[0]!.message, /turn limit/);
+	assert.match(context.notifications[0]!.message, /assistant message/);
+	assert.equal(pi.messages.length, 0);
+	assert.equal(await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: false } }, context), undefined);
+});
 
 test("one Owner context pass separates inherited and invalid exact-duplicate native records", async () => {
 	const context = createExtensionContext();
@@ -195,6 +245,8 @@ test("locally committed omitted-Delivery Answer offers remaining work once", asy
 		toolName: "agent_message", details: { messageId: "answer", requestMessageId: "finished",
 			disposition: "committed", delivery: "omitted", reason: "request_source_unavailable" },
 	}] }, context);
+	// Real Pi order is agent_end before agent_before_settle.
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
 	const continuation = await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context) as {
 		entries?: Array<{ content?: unknown }>; continue?: boolean;
 	} | undefined;
@@ -222,14 +274,14 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 	await pi.emit("turn_end", { type: "turn_end", toolResults: [{ ...toolResultMessage,
 		toolName: "agent_message", details: { messageId: "answer", requestMessageId: "finished", messageStatus: "sent" },
 	}] }, context);
-	// Simulate Pi committing the settlement boundary drafts, as _commitBoundaryDrafts does.
+	// Real Pi order is agent_end before agent_before_settle: executionEnded releases
+	// the permit before settlement reconciliation runs. Simulate Pi committing the
+	// settlement boundary drafts, as _commitBoundaryDrafts does.
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
 	const continuation = await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: true } }, context) as {
 		entries?: Array<{ type: string; customType?: string; content?: string; display?: boolean; details?: unknown; targetId?: string; replacement?: null }>; continue?: boolean;
 	} | undefined;
 	assert.equal(continuation?.continue, true);
-	// Real Pi order is agent_end before agent_before_settle: executionEnded
-	// releases the permit before settlement reconciliation runs.
-	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
 	for (const draft of continuation?.entries ?? []) {
 		if (draft.type === "custom_message") sessionManager.appendCustomMessageEntry(draft.customType!, draft.content!, draft.display!, draft.details);
 		else if (draft.type === "context_edit") sessionManager.appendContextEdit(draft.targetId!, draft.replacement ?? null);
@@ -802,5 +854,5 @@ function createExtensionContext(initialEditorText = "") {
 }
 
 async function runExtension(extension: ExtensionFactory, pi: ExtensionAPI): Promise<void> {
-	await extension(pi);
+await extension(pi);
 }

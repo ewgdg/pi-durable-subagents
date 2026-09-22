@@ -201,9 +201,12 @@ export function registerParticipantLifecycle(
 			{ type: "custom_message", ...requestPresentation(frames) },
 		];
 		if (!event.context.canContinue) {
-			// A continuation request would be invalid here; keep the committed
+			// A continuation request would be invalid here (canContinue is false whenever
+			// the last projected message is assistant-role: the normal end for a
+			// non-terminating Answer plus wrap-up reply (agent-session.js
+			// _buildBoundaryContext), not a turn limit. Keep no-continue + retain the
 			// snapshot so the next native input resumes with full attention.
-			ctx.ui.notify("Remaining work retained without continuation: the model reached its turn limit.", "warning");
+			ctx.ui.notify("Remaining work retained without continuation: the turn ended on an assistant message with no queued input.", "warning");
 			return { entries };
 		}
 		return { entries, continue: true };
@@ -271,6 +274,14 @@ function resolvedAttentionEdits(
 ): SessionBoundaryDraft[] {
 	const owed = new Set(frames.map(frame => frame.requestId));
 	const edits: SessionBoundaryDraft[] = [];
+	// Model context is unaffected by repeats (last edit per target wins) but the
+	// session file grows per boundary. Skip targets that already carry an effective
+	// hide so repeated turn_end/before_settle pairs emit no new draft.
+	const hiddenByTarget = new Map<string, { replacement: unknown }>();
+	for (const entry of transcript.activeBranch) {
+		if (entry.type !== "context_edit") continue;
+		hiddenByTarget.set(entry.targetId, entry);
+	}
 	// Pi validates drafts against [header, ...getBranch()]: an off-branch target
 	// discards the whole proposal, losing hides and continue. Scan only the
 	// active branch so navigation never turns settlement into a silent stop.
@@ -281,7 +292,11 @@ function resolvedAttentionEdits(
 		const resolved = requests.every(request => typeof request.requestMessageId !== "string" || !owed.has(request.requestMessageId));
 		// A fresh snapshot replaces earlier ones even when work is still owed;
 		// otherwise only fully resolved snapshots may leave model context.
-		if (supersedeAll || resolved) edits.push({ type: "context_edit", targetId: entry.id, replacement: null });
+		if (!(supersedeAll || resolved)) continue;
+		// Skip already-hidden targets: Pi keeps the last edit per target, so a
+		// committed null replacement already omits this snapshot from model context.
+		if (hiddenByTarget.get(entry.id)?.replacement === null) continue;
+		edits.push({ type: "context_edit", targetId: entry.id, replacement: null });
 	}
 	return edits;
 }
