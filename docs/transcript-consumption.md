@@ -28,8 +28,10 @@ restore pending deliveries, or recreate incident handling.
 
 `refresh()` obtains current committed evidence asynchronously. Concurrent refreshes
 share consumption. Catch-up yields after at most 256 entries or one 64 KiB file
-chunk. Relationship catch-up also yields after 256 steps or roughly 8 ms; it
-budgets both change collection and relationship evaluation. Coordination tool execution, lifecycle observations, incident reconciliation,
+chunk. Shared relationship-source collection and each Agent's relationship evaluation
+also yield after 256 steps or roughly 8 ms. These are separate slice budgets, not
+a bound on the whole multi-Agent pass, roster preparation, or final publication.
+Coordination tool execution, lifecycle observations, incident reconciliation,
 and explicit selector opening refresh before reading facts. Run startup awaits
 relationship reconstruction while its existing startup fence is held; it preserves
 the exact Run’s readiness and terminal lifecycle. The Owner awaits initialization
@@ -88,13 +90,42 @@ resets the current coordination cutoff and its projections while retaining physi
 history. Historical entries before that cutoff remain available to conversation
 context and carry no current coordination authority.
 
+## Shared relationship source progress
+
+Each `RequestEvidence` coordinator owns one source cursor map and one disposable
+Request-change journal for the current roster/source epoch. The collector copies
+new entries from the adapters' existing `requestChanges` journals once, and indexes
+Creation Request IDs by direct spawner once per epoch. Each Agent graph retains its
+journal position and membership instead of building another full-roster cursor map.
+An unchanged global refresh still audits every source, but its relationship
+bookkeeping is O(A), rather than O(A²), in the number of known Agents.
+
+Source replacement, a new identity cutoff, roster replacement/reordering, and Agent
+admission conservatively create a new epoch. Pending old-epoch work is discarded
+before evaluation resumes. Collection captures each source's end position before
+yielding; graph evaluation likewise captures the journal end it will consume.
+Appends or lazy Request bindings arriving during catch-up require a successor batch.
+The shared journal remains available to lagging scoped readers. A failed evaluation
+invalidates that graph's progress and membership for reconstruction on retry; it
+cannot mark a partial result clean. Graphs belong to their coordinator, not to a
+transcript memo shared between independent coordinators.
+
+This is the first increment of #147. Changed Requests are still offered to every
+Agent graph, ordinary admission still invalidates all graph epochs, and global
+freshness audits remain necessary. Dependency-directed routing, admission deltas,
+whole-pass budgeting, and bounded journal retention remain follow-up work. The
+journal is one shared append-only list of Request ID references, retained until its
+epoch is discarded; it adds no durable processed flags or coordination authority.
+See [the comparison and scope](research/shared-relationship-sources.md).
+
 ## Validation and measurements
 
 Run the focused transcript contracts with:
 
 ```sh
-node --test tests/agent-transcript.test.ts tests/transcript-facts.test.ts tests/request-evidence.test.ts
+node --test tests/agent-transcript.test.ts tests/transcript-facts.test.ts tests/request-evidence.test.ts tests/relationship-refresh.test.ts
 node --expose-gc benchmarks/transcript-consumption.ts
+node --expose-gc benchmarks/relationship-refresh.ts
 ```
 
 The benchmark reports Owner SessionManager and Agent file-backed paths at 2,000 and

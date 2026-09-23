@@ -71,6 +71,12 @@ export class RequestEvidence {
 	// lane admission and before Pi appends the native tool result.
 	readonly #admittedAnswersByRequest = new Map<string, Answer>();
 	readonly #admittedCancellationsByRequest = new Map<string, Cancellation>();
+	readonly #relationshipGraphs = new WeakMap<AgentRecord, RelationshipGraph>();
+	#relationshipSources?: RelationshipSources;
+	#pendingRelationshipSources?: {
+		cursors: Map<AgentRecord, RelationshipCursor>;
+		pending: Generator<void>;
+	};
 
 	constructor(
 		agents: Map<string, AgentRecord>,
@@ -439,14 +445,15 @@ export class RequestEvidence {
 	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
 		return withAgentTranscriptObservations(this.#agents.values(), () => {
 			const graph = this.#relationshipGraph(agent);
-			do {
-				this.#startRelationshipUpdate(agent, graph);
-				while (this.#advanceRelationshipUpdate(graph)) {
-					/* Finish the shared cursor. */
-				}
-				this.#startRelationshipUpdate(agent, graph);
-			} while (graph.pending);
-			return graph.result;
+			for (;;) {
+				this.#startRelationshipSourceUpdate();
+				while (this.#advanceRelationshipSourceUpdate()) { /* Synchronous read barrier. */ }
+				this.#startRelationshipUpdate(agent, graph, this.#relationshipSources!);
+				if (!graph.pending) return graph.result;
+				while (this.#advanceRelationshipUpdate(graph)) { /* Finish the shared cursor. */ }
+				// Evaluation can bind another Request source without a physical append.
+				// Collect those changes before declaring this reader caught up.
+			}
 		});
 	}
 
@@ -459,19 +466,23 @@ export class RequestEvidence {
 			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
 			let allComplete = true;
 			withAgentTranscriptObservations(records, () => {
+				if (!this.#refreshRelationshipSourcesSlice()) { allComplete = false; return; }
+				const sources = this.#relationshipSources!;
 				for (const agent of records) {
 					const graph = this.#relationshipGraph(agent);
-					this.#startRelationshipUpdate(agent, graph);
+					this.#startRelationshipUpdate(agent, graph, sources);
 					const started = performance.now();
 					let consumed = 0;
 					while (consumed++ < REQUEST_STEPS_PER_TURN && performance.now() - started < REQUEST_CATCH_UP_SLICE_MS) {
 						if (!this.#advanceRelationshipUpdate(graph)) {
-							this.#startRelationshipUpdate(agent, graph);
+							this.#startRelationshipUpdate(agent, graph, sources);
 							if (!graph.pending) break;
 						}
 					}
 					if (graph.pending) allComplete = false;
 				}
+				this.#startRelationshipSourceUpdate();
+				if (this.#pendingRelationshipSources) allComplete = false;
 			}, inspections);
 			if (allComplete) result = inspections;
 			else await yieldTurn();
@@ -489,14 +500,16 @@ export class RequestEvidence {
 			// Pin these already-refreshed views. A synchronous read here would drain
 			// a concurrent append outside both the physical and relationship budgets.
 			withAgentTranscriptObservations(records, () => {
+				if (!this.#refreshRelationshipSourcesSlice()) return;
+				const sources = this.#relationshipSources!;
 				const graph = this.#relationshipGraph(agent);
-				this.#startRelationshipUpdate(agent, graph);
+				this.#startRelationshipUpdate(agent, graph, sources);
 				const updating = graph.pending !== undefined;
 				const started = performance.now();
 				let consumed = 0;
 				while (consumed++ < REQUEST_STEPS_PER_TURN && performance.now() - started < REQUEST_CATCH_UP_SLICE_MS) {
 					if (!this.#advanceRelationshipUpdate(graph)) {
-						this.#startRelationshipUpdate(agent, graph);
+						this.#startRelationshipUpdate(agent, graph, sources);
 						if (!graph.pending) {
 							if (!updating) result = graph.result;
 							break;
@@ -510,93 +523,118 @@ export class RequestEvidence {
 	}
 
 	#relationshipGraph(agent: AgentRecord): RelationshipGraph {
-		return indexedState(agent.transcript.inspect()).memo(
-			RequestEvidence.prototype.residualRelationshipsFor,
-			agent.identity.agentId,
-			this.#agents,
-			(): RelationshipGraph => ({
-				cursors: new Map(),
+		let graph = this.#relationshipGraphs.get(agent);
+		if (!graph) {
+			graph = {
+				count: 0,
+				initialized: false,
 				awaiting: new Set(),
 				owed: new Set(),
-				roster: [],
 				result: { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] },
-			}),
-		);
+			};
+			this.#relationshipGraphs.set(agent, graph);
+		}
+		return graph;
 	}
 
-	#startRelationshipUpdate(agent: AgentRecord, graph: RelationshipGraph): void {
-		const observations = [...this.#agents.values()].map((record) => ({
-			record,
-			state: indexedState(record.transcript.inspect()),
-		}));
-		if (graph.pending) {
-			if (
-				observations.length === graph.pendingSources?.size &&
-				observations.every(({ record, state }) => {
-					const cursor = graph.pendingSources!.get(record);
-					return cursor?.state === state && cursor.scope === state.scopeVersion;
-				})
-			)
-				return;
-			graph.pending = undefined;
-			graph.cursors.clear();
+	#startRelationshipSourceUpdate(): void {
+		const cursors = new Map<AgentRecord, RelationshipCursor>();
+		for (const record of this.#agents.values()) {
+			const state = indexedState(record.transcript.inspect());
+			cursors.set(record, { state, scope: state.scopeVersion, count: state.requestChanges.length });
 		}
-		const reset =
-			observations.length !== graph.roster.length ||
-			observations.some(({ record, state }, index) => {
-				const cursor = graph.cursors.get(record);
-				return (
-					graph.roster[index] !== record ||
-					!cursor ||
-					cursor.state !== state ||
-					cursor.scope !== state.scopeVersion
-				);
-			});
-		const creationIds: string[] = [];
-		if (reset) {
-			graph.cursors.clear();
-			graph.awaiting.clear();
-			graph.owed.clear();
-			graph.roster = observations.map(({ record }) => record);
-			for (const child of graph.roster) {
-				if (
-					"spawnSource" in child.identity &&
-					child.identity.directSpawnerAgentId === agent.identity.agentId
-				)
-					creationIds.push(deriveMessageIdentity(child.identity.spawnSource));
+		if (this.#pendingRelationshipSources) {
+			if (sameRelationshipSources(this.#pendingRelationshipSources.cursors, cursors)) return;
+			// A source/identity reset invalidates an in-flight batch, including any
+			// partially collected journal entries. No old-epoch graph can publish it.
+			this.#pendingRelationshipSources = undefined;
+			this.#relationshipSources = undefined;
+		}
+		const previous = this.#relationshipSources;
+		const reset = !previous || !sameRelationshipSources(previous.cursors, cursors);
+		if (!reset && [...cursors].every(([record, cursor]) => cursor.count === previous.cursors.get(record)!.count))
+			return;
+		const sources: RelationshipSources = reset
+			? { cursors: new Map(), changes: [], creationIds: new Map() }
+			: previous;
+		this.#pendingRelationshipSources = {
+			cursors,
+			pending: this.#collectRelationshipSources(sources, cursors, reset),
+		};
+	}
+
+	*#collectRelationshipSources(
+		sources: RelationshipSources,
+		cursors: Map<AgentRecord, RelationshipCursor>,
+		reset: boolean,
+	): Generator<void> {
+		for (const [record, cursor] of cursors) {
+			if (reset && "spawnSource" in record.identity) {
+				const spawner = record.identity.directSpawnerAgentId;
+				let ids = sources.creationIds.get(spawner);
+				if (!ids) sources.creationIds.set(spawner, (ids = []));
+				ids.push(deriveMessageIdentity(record.identity.spawnSource));
+			}
+			const start = sources.cursors.get(record)?.count ?? 0;
+			// The captured end must not grow while this generator yields. Later
+			// changes, including lazy Request bindings, belong to a successor batch.
+			for (let index = start; index < cursor.count; index++) {
+				sources.changes.push(cursor.state.requestChanges[index]!);
+				yield;
+			}
+			yield;
+		}
+		sources.cursors = cursors;
+		this.#relationshipSources = sources;
+	}
+
+	#advanceRelationshipSourceUpdate(): boolean {
+		const update = this.#pendingRelationshipSources;
+		if (!update) return false;
+		if (!update.pending.next().done) return true;
+		this.#pendingRelationshipSources = undefined;
+		return false;
+	}
+
+	#refreshRelationshipSourcesSlice(): boolean {
+		this.#startRelationshipSourceUpdate();
+		const started = performance.now();
+		let consumed = 0;
+		while (consumed++ < REQUEST_STEPS_PER_TURN && performance.now() - started < REQUEST_CATCH_UP_SLICE_MS) {
+			if (!this.#advanceRelationshipSourceUpdate()) {
+				this.#startRelationshipSourceUpdate();
+				return !this.#pendingRelationshipSources;
 			}
 		}
-		const cursors = new Map<AgentRecord, RelationshipCursor>();
-		for (const { record, state } of observations) {
-			cursors.set(record, {
-				state,
-				scope: state.scopeVersion,
-				count: state.requestChanges.length,
-				physicalCount: state.entries.length,
-			});
+		return !this.#pendingRelationshipSources;
+	}
+
+	#startRelationshipUpdate(agent: AgentRecord, graph: RelationshipGraph, sources: RelationshipSources): void {
+		if (graph.sources !== sources) {
+			graph.pending = undefined;
+			graph.sources = sources;
+			graph.count = 0;
+			graph.initialized = false;
+			graph.awaiting.clear();
+			graph.owed.clear();
 		}
-		if (
-			!reset &&
-			[...cursors].every(([record, cursor]) => cursor.count === graph.cursors.get(record)?.count)
-		)
-			return;
-		graph.pendingSources = cursors;
-		graph.pending = this.#updateRelationships(agent, graph, creationIds, cursors);
+		if (graph.pending || (graph.initialized && graph.count === sources.changes.length)) return;
+		const creationIds = graph.initialized ? [] : sources.creationIds.get(agent.identity.agentId) ?? [];
+		graph.pending = this.#updateRelationships(agent, graph, sources, creationIds, sources.changes.length);
 	}
 
 	*#updateRelationships(
 		agent: AgentRecord,
 		graph: RelationshipGraph,
+		sources: RelationshipSources,
 		creationIds: readonly string[],
-		cursors: Map<AgentRecord, RelationshipCursor>,
+		end: number,
 	): Generator<void> {
 		this.#validateAnswerResultReferences(agent);
 		const changed = new Set(creationIds);
-		for (const [record, cursor] of cursors) {
-			for (let index = graph.cursors.get(record)?.count ?? 0; index < cursor.count; index++) {
-				changed.add(cursor.state.requestChanges[index]!);
-				yield;
-			}
+		for (let index = graph.count; index < end; index++) {
+			changed.add(sources.changes[index]!);
+			yield;
 		}
 		for (const requestId of changed) {
 			const contribution = this.#relationshipForRequest(agent, requestId);
@@ -610,14 +648,8 @@ export class RequestEvidence {
 			awaitingAnswerRequestIds: [...graph.awaiting],
 			answerOwedRequestIds: [...graph.owed],
 		};
-		for (const cursor of cursors.values()) {
-			if (
-				cursor.state.scopeVersion === cursor.scope &&
-				cursor.state.entries.length === cursor.physicalCount
-			)
-				cursor.count = cursor.state.requestChanges.length;
-		}
-		graph.cursors = cursors;
+		graph.count = end;
+		graph.initialized = true;
 	}
 
 	#advanceRelationshipUpdate(graph: RelationshipGraph): boolean {
@@ -625,8 +657,9 @@ export class RequestEvidence {
 		try {
 			if (!graph.pending.next().done) return true;
 		} catch (error) {
-			// No cursor is committed on failure; the next observation reconstructs.
-			graph.cursors.clear();
+			// Shared source progress is reusable, but this graph must reconstruct
+			// from the journal after an error rather than accept partial membership.
+			graph.sources = undefined;
 			graph.pending = undefined;
 			throw error;
 		}
@@ -1120,14 +1153,33 @@ type RelationshipCursor = {
 	state: RetainedTranscript;
 	scope: number;
 	count: number;
-	physicalCount: number;
+};
+/** One shared, disposable journal per roster/source epoch, not one cursor map per graph. */
+type RelationshipSources = {
+	cursors: Map<AgentRecord, RelationshipCursor>;
+	changes: string[];
+	creationIds: Map<string, string[]>;
 };
 type RelationshipGraph = {
-	cursors: Map<AgentRecord, RelationshipCursor>;
-	roster: AgentRecord[];
+	sources?: RelationshipSources;
+	count: number;
+	initialized: boolean;
 	awaiting: Set<string>;
 	owed: Set<string>;
 	result: ResidualRequestRelationships;
 	pending?: Generator<void>;
-	pendingSources?: Map<AgentRecord, RelationshipCursor>;
 };
+
+function sameRelationshipSources(
+	previous: ReadonlyMap<AgentRecord, RelationshipCursor>,
+	current: ReadonlyMap<AgentRecord, RelationshipCursor>,
+): boolean {
+	if (previous.size !== current.size) return false;
+	const order = previous.keys();
+	for (const [record, cursor] of current) {
+		const before = previous.get(record);
+		if (order.next().value !== record || before?.state !== cursor.state || before.scope !== cursor.scope)
+			return false;
+	}
+	return true;
+}
