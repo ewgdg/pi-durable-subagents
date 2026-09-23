@@ -76,25 +76,10 @@ export class RequestEvidence {
 		agents: Map<string, AgentRecord>,
 		quarantinedAgentIds: ReadonlySet<string> = new Set(),
 		quarantinedWorkflowAgentIds: ReadonlySet<string> = quarantinedAgentIds,
-		/**
-		 * Live repair evidence scope. The preadmission repair host retires the
-		 * broken Owner record: its bytes stay frozen (diagnosed from snapshots
-		 * only) and never enter relationship, inspection, or delivery-evidence
-		 * traversals. Defaults to the full roster.
-		 */
-		isEvidenceLive: (agentId: string) => boolean = () => true,
 	) {
 		this.#agents = agents;
 		this.#quarantinedAgentIds = quarantinedAgentIds;
 		this.#quarantinedWorkflowAgentIds = quarantinedWorkflowAgentIds;
-		this.#isEvidenceLive = isEvidenceLive;
-	}
-
-	readonly #isEvidenceLive: (agentId: string) => boolean;
-
-	/** Traversal membership. Direct record resolution stays unscoped so identity, status, and roster reads keep working on retired records. */
-	#liveEvidenceRecords(): AgentRecord[] {
-		return [...this.#agents.values()].filter((record) => this.#isEvidenceLive(record.identity.agentId));
 	}
 
 	rememberAdmittedAnswer(answer: Answer): void {
@@ -198,7 +183,7 @@ export class RequestEvidence {
 		// history first makes each deadlock check reparse the whole workflow per child.
 		const creationRequest = this.#findCreationRequest(requestId);
 		if (creationRequest) return creationRequest;
-		for (const author of this.#liveEvidenceRecords()) {
+		for (const author of this.#agents.values()) {
 			const authorTranscript = author.transcript.inspect();
 			const authored = findAuthoredAgentMessageSource({
 				authorAgentId: author.identity.agentId,
@@ -268,7 +253,7 @@ export class RequestEvidence {
 	requestMetadata(requestId: string): Pick<Request, "messageId" | "fromAgentId" | "targetAgentId" | "title" | "source"> {
 		const request = this.findRequest(requestId);
 		if (request) return request;
-		for (const responder of this.#liveEvidenceRecords()) {
+		for (const responder of this.#agents.values()) {
 			const delivered = this.findDeliveredRequest(responder, requestId);
 			if (delivered) return {
 				messageId: requestId, fromAgentId: delivered.fromAgentId,
@@ -452,7 +437,7 @@ export class RequestEvidence {
 	}
 
 	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
-		return withAgentTranscriptObservations(this.#liveEvidenceRecords(), () => {
+		return withAgentTranscriptObservations(this.#agents.values(), () => {
 			const graph = this.#relationshipGraph(agent);
 			do {
 				this.#startRelationshipUpdate(agent, graph);
@@ -468,10 +453,10 @@ export class RequestEvidence {
 	async refreshRelationships(): Promise<ReadonlyMap<AgentRecord, TranscriptInspection>> {
 		let result: ReadonlyMap<AgentRecord, TranscriptInspection> | undefined;
 		do {
-			const records = this.#liveEvidenceRecords();
+			const records = [...this.#agents.values()];
 			const inspections = new Map<AgentRecord, TranscriptInspection>();
 			for (const record of records) inspections.set(record, await record.transcript.refresh());
-			if (records.length !== this.#liveEvidenceRecords().length || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
+			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
 			let allComplete = true;
 			withAgentTranscriptObservations(records, () => {
 				for (const agent of records) {
@@ -497,10 +482,10 @@ export class RequestEvidence {
 	async refreshRelationshipsFor(agent: AgentRecord): Promise<ResidualRequestRelationships> {
 		let result: ResidualRequestRelationships | undefined;
 		do {
-			const records = this.#liveEvidenceRecords();
+			const records = [...this.#agents.values()];
 			const inspections = new Map<AgentRecord, TranscriptInspection>();
 			for (const record of records) inspections.set(record, await record.transcript.refresh());
-			if (records.length !== this.#liveEvidenceRecords().length || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
+			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
 			// Pin these already-refreshed views. A synchronous read here would drain
 			// a concurrent append outside both the physical and relationship budgets.
 			withAgentTranscriptObservations(records, () => {
@@ -540,7 +525,7 @@ export class RequestEvidence {
 	}
 
 	#startRelationshipUpdate(agent: AgentRecord, graph: RelationshipGraph): void {
-		const observations = this.#liveEvidenceRecords().map((record) => ({
+		const observations = [...this.#agents.values()].map((record) => ({
 			record,
 			state: indexedState(record.transcript.inspect()),
 		}));
@@ -836,7 +821,7 @@ export class RequestEvidence {
 			}
 			throw this.#wrongParticipant(caller, messageId);
 		}
-		for (const candidateAuthor of this.#liveEvidenceRecords()) {
+		for (const candidateAuthor of this.#agents.values()) {
 			if (candidateAuthor.identity.agentId === caller.identity.agentId) continue;
 			if (this.#resolveAuthoredMessage(candidateAuthor, messageId)) {
 				throw this.#wrongParticipant(caller, messageId);
@@ -970,7 +955,7 @@ export class RequestEvidence {
 			if (resultRequestId !== undefined) {
 				this.#requireResponderRequest(author, resultRequestId);
 			}
-			const matches = this.#liveEvidenceRecords().flatMap((requester) => {
+			const matches = [...this.#agents.values()].flatMap((requester) => {
 				const deliveryRequestId = answerSourceDeliveryRequestId({
 					requesterAgentId: requester.identity.agentId,
 					transcript: requester.transcript.inspect(),
@@ -1117,7 +1102,7 @@ export class RequestEvidence {
 	}
 
 	#allDeliveredMessages(): DeliveredMessageEvidence[] {
-		return this.#liveEvidenceRecords().flatMap((record) =>
+		return [...this.#agents.values()].flatMap((record) =>
 			inspectMessageDeliveries({
 				recipientAgentId: record.identity.agentId,
 				transcript: record.transcript.inspect(),

@@ -5,14 +5,22 @@ import {
 	moderatorObligationReminderDeliveryId,
 } from "../protocol/moderator-obligation-reminder.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
+import { uuidv7 } from "@earendil-works/pi-ai";
 import { setImmediate } from "node:timers/promises";
+import {
+	materializeNewAgentTranscript,
+	transcriptFromSessionFile,
+} from "../pi-integration/session-manager-transcript.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
+	createModelVisibleModeratorInput,
+	createModelVisibleModeratorRoutineStart,
 	isModeratorIdentity,
 	MAX_MODERATOR_REQUEST_SOURCES,
+	validateCommittedModeratorInput,
 	validateColdModeratorInput,
 	type EntryPointer,
-	type ManualRepairContext,
+	type ModeratorIdentity,
 	type ModeratorInput,
 	type ModeratorTrigger,
 } from "../protocol/moderator-input.ts";
@@ -38,6 +46,7 @@ import {
 	validateModeratorControlInput,
 } from "../protocol/moderator-control.ts";
 import {
+	ProtocolInvariantError,
 	deriveMessageIdentity,
 	resolveCommittedToolCall,
 	toolCallPointerKey,
@@ -48,19 +57,6 @@ import type { AgentRunHandle, AgentRunFailure } from "../runtime/agent-runtime-h
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import { statusOf, withAgentTranscriptObservations, type AgentRecord } from "./agent-record.ts";
-import {
-	commitHostedModerator,
-	startHostedModeratorRun,
-	type HostedModeratorDependencies,
-} from "./hosted-moderator.ts";
-import {
-	MANUAL_REPAIR_NAMESPACE,
-	buildManualRepairInput,
-	validateManualRepairReason,
-	type ManualRepairFailureEvidence,
-	type ManualRepairReceipt,
-} from "./manual-repair.ts";
-import { shouldJoinLiveRepair } from "./repair-freeze.ts";
 import { detectDependencyDeadlocks } from "./dependency-deadlock.ts";
 import type { MessageCoordinator } from "./messages.ts";
 import {
@@ -117,7 +113,7 @@ type OperationalConditionSnapshot =
 	| OperationReviewConditionSnapshot;
 
 type IncidentReportContext = ConditionSnapshotBase & Readonly<{
-	kind: OperationalConditionSnapshot["kind"] | "manual_repair";
+	kind: OperationalConditionSnapshot["kind"];
 	incidentKey: string;
 	coldRecovery?: boolean;
 	snapshot?: OperationalConditionSnapshot;
@@ -209,11 +205,9 @@ export class OperationalIncidentCoordinator {
 	readonly #attemptByModeratorAgentId = new Map<string, OperationalConditionSnapshot>();
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
 	readonly #integratedAgentIds = new Set<string>();
-	#manualRepair: Readonly<{ moderatorAgentId: string; input: ModeratorInput; reason: string; sessionPath: string }> | undefined;
 	readonly #reconciliationLane = new SerialLane();
 	#pendingReconciliation: Promise<void> | undefined;
 	#inspectionStalled = false;
-	readonly #isRepairOnlyHost: () => boolean;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
@@ -233,13 +227,6 @@ export class OperationalIncidentCoordinator {
 		operationReviewClock?: OperationReviewClock;
 		deliveryProgressClock?: OperationReviewClock;
 		onAttentionChanged?(): void;
-		/**
-		 * Repair-only host: no automatic evidence inspection, obligation
-		 * reminders, or Moderator creation. Manual repair stays trigger-only
-		 * by construction instead of by accident of a broken-evidence throw.
-		 * Direct Moderator control (resolve/renew) and attention reads stay live.
-		 */
-		isRepairOnlyHost?: () => boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
@@ -257,7 +244,6 @@ export class OperationalIncidentCoordinator {
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
-		this.#isRepairOnlyHost = options.isRepairOnlyHost ?? (() => false);
 		const reviewClock = options.operationReviewClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#operationReviews = new OperationReviewWatcher({
 			clock: {
@@ -343,9 +329,8 @@ export class OperationalIncidentCoordinator {
 		const trigger = input.trigger;
 		const incidentKey = incidentReportKey(input);
 		const affectedAgentIds = trigger.kind === "operation_review" ? [trigger.toolCall.agentId]
-			: trigger.kind === "manual_repair" ? []
 			: trigger.kind === "dependency_deadlock" || trigger.kind === "delivery_stall" ? trigger.agentIds : [trigger.agentId];
-		const sources = trigger.kind === "operation_review" || trigger.kind === "manual_repair" ? []
+		const sources = trigger.kind === "operation_review" ? []
 			: trigger.kind === "run_failure" || trigger.kind === "obligation_stall" ? trigger.obligations.sources : trigger.requests.sources;
 		// Recover only immutable incident identity. No live handling, attempt budget,
 		// timer or automatic replacement is resurrected from a cold Moderator Input.
@@ -529,119 +514,6 @@ export class OperationalIncidentCoordinator {
 		);
 	}
 
-	/**
-	 * Manual /agents repair trigger. Hosts a real Moderator with a truthful
-	 * manual-repair Input: no Answer obligation, no Creation Request, no incident
-	 * trigger, no background watcher. One live repair Moderator at a time: a
-	 * second trigger while live joins the existing one instead of duplicating it.
-	 */
-	isManualRepairModerator(agentId: string): boolean {
-		return this.#manualRepair?.moderatorAgentId === agentId;
-	}
-
-	/**
-	 * Trigger-time Owner transcript path for freeze seeding. Prefers the
-	 * committed manual-repair Input repairContext (failure stage/error/path at
-	 * trigger time), so the retired Owner file is frozen even when the workflow
-	 * directory holds only repair/. Undefined when the trigger knows no path.
-	 */
-	manualRepairTranscriptPath(): string | undefined {
-		return this.#manualRepair?.input.repairContext?.transcriptPath;
-	}
-
-	async requestManualRepair(reason: string, failure?: ManualRepairFailureEvidence): Promise<ManualRepairReceipt> {
-		const validated = validateManualRepairReason(reason);
-		const existing = this.#manualRepair;
-		if (existing) {
-			const record = this.#agents.get(existing.moderatorAgentId);
-			const gate = record ? { phase: record.host.observe().phase, failed: record.host.currentRunFailed(), hasRecord: true } : { phase: "dormant", failed: false, hasRecord: false };
-			if (shouldJoinLiveRepair(gate)) {
-				return { disposition: "joined", moderatorAgentId: existing.moderatorAgentId };
-			}
-			// A dormant or failed predecessor stays as retained history on disk;
-			// a fresh trigger starts a new live repair Moderator.
-			this.#manualRepair = undefined;
-		}
-		const bootstrap = await commitHostedModerator(this.#hostedModeratorDependencies(), {
-			metadata: () => resolveModeratorAgentMetadata("manual_repair"),
-			input: () => buildManualRepairInput(validated, this.#manualRepairTriggerContext(failure)),
-			sessionSubdirectory: MANUAL_REPAIR_NAMESPACE,
-		});
-		if (!bootstrap) {
-			throw new Error("host_shutting_down: manual repair Moderator bootstrap did not complete");
-		}
-		this.#manualRepair = {
-			moderatorAgentId: bootstrap.identity.agentId,
-			input: bootstrap.input,
-			reason: validated,
-			sessionPath: bootstrap.sessionPath,
-		};
-		try {
-			await startHostedModeratorRun(this.#hostedModeratorDependencies(), {
-				moderator: bootstrap.moderator,
-			});
-		} catch (error) {
-			// Startup failure must not orphan a live Moderator: the bootstrap
-			// already integrated the record with moderator_handling retention.
-			// Release it like #releaseManualRepair (history stays on disk) so
-			// the next trigger creates exactly one fresh Moderator.
-			const orphan = bootstrap.moderator;
-			this.#manualRepair = undefined;
-			orphan.host.removeRetentionReason("moderator_handling");
-			void this.#messages.requestRelease(orphan)
-				.catch((releaseError: unknown) => this.#reportError(releaseError));
-			this.#reportError(error);
-			throw error;
-		}
-		return { disposition: "created", moderatorAgentId: bootstrap.identity.agentId };
-	}
-
-	/**
-	 * Trigger-time repair pointers: admitted Owner binding plus workflow
-	 * directory by default; preadmission failure evidence (stage, error text,
-	 * failing transcript path) when the repair host supplies it. The trigger
-	 * grants no authority beyond hosting this Moderator.
-	 */
-	#manualRepairTriggerContext(failure?: ManualRepairFailureEvidence): ManualRepairContext {
-		const ownerId = this.#ownerIdentity.agentId;
-		const transcriptPath = failure?.transcriptPath
-			?? this.#agents.get(ownerId)?.transcript.inspect().transcriptPath
-			?? undefined;
-		return {
-			stage: failure?.stage ?? (this.#isRepairOnlyHost() ? "preadmission repair host" : "admitted Owner trigger"),
-			...(failure?.error ? { error: failure.error } : {}),
-			...(transcriptPath ? { transcriptPath } : {}),
-			ownerId,
-			workflowId: this.#ownerIdentity.workflowId,
-			workflowDirectory: this.#sessionFactory.workflowSessionDirectory(),
-		};
-	}
-
-	#releaseManualRepair(moderatorAgentId: string): void {
-		const repair = this.#manualRepair;
-		if (!repair || repair.moderatorAgentId !== moderatorAgentId) return;
-		this.#manualRepair = undefined;
-		const moderator = this.#agents.get(moderatorAgentId);
-		if (!moderator) return;
-		moderator.host.removeRetentionReason("moderator_handling");
-		// Ordinary release to Dormant. History stays on disk: the committed Input
-		// and routine-start entries are retained while the selected Runtime may stay
-		// visible until the human moves on. No auto view-return, no auto resume.
-		void this.#messages.requestRelease(moderator)
-			.catch((error: unknown) => this.#reportError(error));
-	}
-
-	#hostedModeratorDependencies(): HostedModeratorDependencies {
-		return {
-			agents: this.#agents,
-			ownerIdentity: this.#ownerIdentity,
-			sessionFactory: this.#sessionFactory,
-			messages: this.#messages,
-			integrateAgent: (record) => this.#integrateAgent(record),
-			isShuttingDown: () => this.#isShuttingDown(),
-		};
-	}
-
 	async #renewOperationReview(
 		input: Extract<ModeratorControlInput, { operation: "renew_review_deadline" }>,
 	): Promise<ModeratorControlReceipt> {
@@ -691,10 +563,6 @@ export class OperationalIncidentCoordinator {
 		if (predicates.length > 0) {
 			return { disposition: "blocked", predicates };
 		}
-		if (this.#manualRepair?.moderatorAgentId === moderatorAgentId) {
-			this.#releaseManualRepair(moderatorAgentId);
-			return { disposition: "resolved" };
-		}
 		if (!attempt) return { disposition: "already_cleared" };
 		if (handling) this.#releaseHandling(handling.snapshot.key);
 		this.#attemptByModeratorAgentId.delete(moderatorAgentId);
@@ -740,7 +608,6 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#reconcileWorkflow(): Promise<void> {
-		if (this.#isRepairOnlyHost()) return Promise.resolve();
 		return this.#withModerationDeadline(async () => {
 			await this.#inspectWorkflow();
 			this.#dismissFault("moderation:evidence");
@@ -1016,50 +883,89 @@ export class OperationalIncidentCoordinator {
 	async #createModerator(
 		handling: OperationalIncidentHandling,
 	): Promise<void> {
-		const bootstrap = await commitHostedModerator(this.#hostedModeratorDependencies(), {
-			metadata: () => resolveModeratorAgentMetadata(handling.snapshot.kind),
-			input: () => ({
-				trigger: this.#triggerFor(handling.snapshot),
-				inspectedThrough: handling.snapshot.inspectedThrough,
-				...(handling.previousAttempt === undefined
-					? {}
-					: { previousAttempt: handling.previousAttempt }),
-			}),
-			onStage: (stage) => {
-				handling.creationStage = stage;
-			},
-			beforeInputCommit: () => {
-				if (this.#isShuttingDown()) return "aborted";
-				if (!this.#conditionRemains(handling.snapshot)) {
-					this.#handlingByKey.delete(handling.snapshot.key);
-					return "aborted";
-				}
-				return undefined;
-			},
-			beforeBootstrapCommit: () => {
-				const bootstrapBoundary =
-					this.#boundaryHooks.beforeModeratorBootstrapCommit?.();
-				if (this.#isShuttingDown()) return;
-				if (bootstrapBoundary === "confirmed_failure") {
-					throw new Error("Confirmed Moderator bootstrap commit failure");
-				}
-			},
-			onCommitted: () => {
-				if (handling.snapshot.kind === "operation_review") {
-					this.#operationReviews.markModeratorInputCommitted(
-						handling.snapshot.review.toolCall,
-					);
-				}
-			},
+		if (!this.#agents.has(this.#ownerIdentity.agentId)) {
+			throw new Error("invariant_violation: Workflow Owner is unavailable");
+		}
+		handling.creationStage = "Moderator runtime preparation";
+		this.#sessionFactory.admitProcessRuntimePlatform();
+		const agentId = uuidv7();
+		const prepared = await this.#sessionFactory.prepareModeratorRun({ agentId });
+		handling.creationStage = "Moderator staging session creation";
+		const sessionManager = this.#sessionFactory.createStagingSession(prepared);
+		if (this.#isShuttingDown()) return;
+		if (!this.#conditionRemains(handling.snapshot)) {
+			this.#handlingByKey.delete(handling.snapshot.key);
+			return;
+		}
+
+		const metadata = resolveModeratorAgentMetadata(handling.snapshot.kind);
+		const identity: ModeratorIdentity = {
+			agentId,
+			workflowId: this.#ownerIdentity.workflowId,
+			directSpawnerAgentId: null,
+			creationPreset: prepared.creationPreset,
+			metadata,
+		};
+		const input: ModeratorInput = {
+			trigger: this.#triggerFor(handling.snapshot),
+			inspectedThrough: handling.snapshot.inspectedThrough,
+			...(handling.previousAttempt === undefined
+				? {}
+				: { previousAttempt: handling.previousAttempt }),
+		};
+		handling.creationStage = "Moderator bootstrap commit";
+		const bootstrapBoundary =
+			this.#boundaryHooks.beforeModeratorBootstrapCommit?.();
+		if (this.#isShuttingDown()) return;
+		if (bootstrapBoundary === "confirmed_failure") {
+			throw new Error("Confirmed Moderator bootstrap commit failure");
+		}
+		const modelInput = createModelVisibleModeratorInput(identity, input);
+		sessionManager.appendCustomMessageEntry(
+			modelInput.customType,
+			modelInput.content,
+			modelInput.display,
+			modelInput.details,
+		);
+		let sessionPath: string;
+		try {
+			sessionPath = await materializeNewAgentTranscript(sessionManager);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			const candidatePath = sessionManager.getSessionFile();
+			if (!candidatePath || !hasExactDurableModeratorEvidence({
+				sessionPath: candidatePath,
+				identity,
+				input,
+			})) throw error;
+			sessionPath = candidatePath;
+		}
+		handling.creationStage = "Moderator bootstrap verification";
+		validateCommittedModeratorInput({
+			transcript: transcriptFromSessionFile(sessionPath).inspect(),
+			identity,
+			input,
 		});
-		if (!bootstrap) return;
-		const { identity: { agentId }, sessionPath, moderator } = bootstrap;
+		if (handling.snapshot.kind === "operation_review") {
+			this.#operationReviews.markModeratorInputCommitted(
+				handling.snapshot.review.toolCall,
+			);
+		}
 		handling.moderatorAgentId = agentId;
 		handling.committedAttemptCount += 1;
 		this.#attemptByModeratorAgentId.set(agentId, handling.snapshot);
 		// A committed successor seals the previous attempt's failure observations:
 		// the incident's Report exists now, so retained findings can be linked to it.
 		this.#flushModeratorFailureFindings(handling);
+
+		handling.creationStage = "Moderator record integration";
+		const moderator = this.#sessionFactory.createModeratorRecord({
+			identity,
+			initialPreparation: prepared,
+			sessionPath,
+		});
+		this.#agents.set(agentId, moderator);
+		this.#integrateAgent(moderator);
 		handling.creationStage = "Moderator Run startup";
 		if (
 			this.#boundaryHooks.beforeModeratorRunStart?.() ===
@@ -1069,17 +975,34 @@ export class OperationalIncidentCoordinator {
 			return;
 		}
 		try {
-			await startHostedModeratorRun(this.#hostedModeratorDependencies(), {
-				moderator,
-				onRunStarted: () => {
-					this.#appendFinding(handling.snapshot.key, { key: `moderator-started:${agentId}`, summary: `Moderator ${agentId} Run ${moderator.host.currentHandle()?.sequence} started as bounded recovery attempt ${handling.committedAttemptCount} of ${MAX_AUTOMATIC_MODERATOR_ATTEMPTS}. Outcome unknown.`, evidence: [`Moderator transcript: ${sessionPath}`] });
-				},
+			// Keep startup and scheduler admission atomic against queued Run termination.
+			await moderator.host.lane.run(async () => {
+				if (this.#isShuttingDown()) return;
+				await moderator.host.startInLane(["moderator_handling"]);
+				this.#appendFinding(handling.snapshot.key, { key: `moderator-started:${agentId}`, summary: `Moderator ${agentId} Run ${moderator.host.currentHandle()?.sequence} started as bounded recovery attempt ${handling.committedAttemptCount} of ${MAX_AUTOMATIC_MODERATOR_ATTEMPTS}. Outcome unknown.`, evidence: [`Moderator transcript: ${sessionPath}`] });
+				if (this.#isShuttingDown()) return;
+				const routineStart = createModelVisibleModeratorRoutineStart();
+				// Startup is already progress before the child reports agent.start.
+				// Scheduler ownership prevents treating this in-flight first turn as a stall.
+				const admission = await this.#messages.admitCustomDeliveryInLane(moderator, {
+					messageId: JSON.stringify([routineStart.customType, agentId]),
+					deliveryMode: "deferred",
+					customMessage: routineStart,
+					inspectProof: () => {
+						const entry = coordinationEntries(moderator.transcript.inspect(), agentId,
+							`custom:${routineStart.customType}`).find(entry =>
+							entry.type === "custom_message" && entry.content === routineStart.content);
+						return entry ? { agentId, entryId: entry.id } : undefined;
+					},
+				});
+				if (admission !== "pending") throw new Error(`Moderator startup delivery rejected: ${admission}`);
 			});
 		} catch (error) {
 			this.#reportError(error);
 			await this.#handleModeratorFailure(handling, moderator, { stage: handling.creationStage, error: error instanceof Error ? error.message : String(error), provenance: "Moderator startup rejection" });
 		}
 	}
+
 	async #handleModeratorFailure(
 		handling: OperationalIncidentHandling,
 		moderator: AgentRecord,
@@ -1544,10 +1467,6 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#scheduleReconciliation(): Promise<void> {
-		// Repair-only host: automatic inspection would traverse retired broken
-		// Owner evidence and invent incident handling for a workflow whose only
-		// sanctioned recovery is the human-triggered repair Moderator.
-		if (this.#isRepairOnlyHost()) return Promise.resolve();
 		// Host events often arrive in bursts. Share the pending observation and let
 		// input/timers run between scans instead of draining a long microtask queue.
 		return this.#pendingReconciliation ??= this.#reconciliationLane
@@ -1600,3 +1519,20 @@ function incidentReportKey(input: Pick<ModeratorInput, "trigger" | "inspectedThr
 	return JSON.stringify(canonical({ trigger: input.trigger, inspectedThrough: input.inspectedThrough }));
 }
 
+function hasExactDurableModeratorEvidence(options: {
+	sessionPath: string;
+	identity: ModeratorIdentity;
+	input: ModeratorInput;
+}): boolean {
+	try {
+		validateCommittedModeratorInput({
+			transcript: transcriptFromSessionFile(options.sessionPath).inspect(),
+			identity: options.identity,
+			input: options.input,
+		});
+		return true;
+	} catch (error) {
+		if (error instanceof ProtocolInvariantError) throw error;
+		return false;
+	}
+}

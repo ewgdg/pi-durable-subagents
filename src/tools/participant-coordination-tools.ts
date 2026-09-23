@@ -29,7 +29,6 @@ import type {
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
-import type { RepairValidateReport } from "../coordination/repair-validate.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import { COORDINATION_HISTORY_GUIDANCE } from "../presentation/coordination-history-guidance.ts";
 import {
@@ -88,9 +87,6 @@ export const participantCoordinationToolNames = {
 		"ask_user",
 		"report_to_user",
 		"moderator_control",
-		"repair_validate",
-		"repair_freeze",
-		"repair_commit",
 	],
 } as const satisfies Record<ParticipantCoordinationRole, readonly string[]>;
 
@@ -235,9 +231,6 @@ type ModeratorParticipantCoordinationToolHandler = Readonly<{
 		toolCallId: string,
 		input: ModeratorControlInput,
 	): Promise<ModeratorControlReceipt>;
-	repairValidate?(toolCallId: string, input: RepairValidateInput): Promise<RepairValidateReport>;
-	repairFreeze?(toolCallId: string, input: RepairFreezeInput): Promise<import("../coordination/repair-commit.ts").RepairFrozenSnapshot>;
-	repairCommit?(toolCallId: string, input: RepairCommitInput): Promise<import("../coordination/repair-commit.ts").RepairCommitResult>;
 }>;
 
 export type ParticipantCoordinationToolHandlers<
@@ -597,24 +590,6 @@ const reportToUserParameters = Type.Object({
 	evidence: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Exact transcript, entry, tool-call, diagnostic or other preserved evidence references." }),
 }, { additionalProperties: false });
 
-export type RepairValidateInput = Readonly<{ transcriptPaths: readonly string[] }>;
-
-const repairValidateParameters = Type.Object({
-	transcriptPaths: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-}, { additionalProperties: false });
-
-export type RepairFreezeInput = Readonly<object>;
-
-const repairFreezeParameters = Type.Object({}, { additionalProperties: false });
-
-export type RepairCommitInput = Readonly<{ snapshotId: string; repairedBySource: Readonly<Record<string, string>>; attemptId?: string }>;
-
-const repairCommitParameters = Type.Object({
-	snapshotId: Type.String({ minLength: 1 }),
-	repairedBySource: Type.Record(Type.String(), Type.String()),
-	attemptId: Type.Optional(Type.String({ minLength: 1 })),
-}, { additionalProperties: false });
-
 const workflowResumeParameters = Type.Object({}, { additionalProperties: false });
 
 export const participantCoordinationToolSchemas = {
@@ -627,9 +602,6 @@ export const participantCoordinationToolSchemas = {
 	ask_user: askUserParameters,
 	moderator_control: moderatorControlParameters,
 	report_to_user: reportToUserParameters,
-	repair_validate: repairValidateParameters,
-	repair_freeze: repairFreezeParameters,
-	repair_commit: repairCommitParameters,
 } as const;
 
 type AvailableHandlers = CommonParticipantCoordinationToolHandlers &
@@ -878,45 +850,6 @@ export function registerParticipantCoordinationTools<
 				return toolResult(
 					await availableHandlers.moderatorControl!(toolCallId, parameters),
 				);
-			},
-		});
-		pi.registerTool<typeof repairValidateParameters, RepairValidateReport>({
-			name: "repair_validate",
-			label: "Validate Repair",
-			description: "Advisory-only repair validation on frozen copies. Runs read-only inspectors and returns file/entry diagnostics plus unknowns. Edits nothing, grants zero authority, seals nothing, never resolves. After validate, commit through backend repair_commit under trigger authority, then moderator_control resolve; user returns to Owner via /agents.",
-			promptSnippet: "Advisory only, grants zero authority; after validate, commit through repair_commit under trigger authority, then moderator_control resolve; user returns via /agents.",
-			executionMode: "sequential",
-			parameters: repairValidateParameters,
-			renderCall: (args, theme) => new Text(theme.fg("toolTitle", "Validate Repair") + " " + boundedToolPreview((args.transcriptPaths ?? []).join(", ")), 0, 0),
-			renderResult: (result, _options, theme, context) => new Text(theme.fg(context.isError ? "error" : "muted", boundedToolPreview(JSON.stringify(result.details ?? result).slice(0, 240))), 0, 0),
-			async execute(toolCallId, parameters) {
-				return toolResult(await (availableHandlers as { repairValidate: (id: string, input: RepairValidateInput) => Promise<RepairValidateReport> }).repairValidate(toolCallId, parameters));
-			},
-		});
-		pi.registerTool<typeof repairFreezeParameters, import("../coordination/repair-commit.ts").RepairFrozenSnapshot>({
-			name: "repair_freeze",
-			label: "Freeze Repair",
-			description: "Freeze repair targets under the current /agents repair trigger authority. Snapshot-only, no writes. Returns snapshotId + entries. Diagnose from installed package source (read-only evidence) before freezing; fix isolated copies with ordinary tools after freezing.",
-			promptSnippet: "Freeze under trigger authority; snapshot-only. Diagnose from installed source first, fix isolated copies after; then validate/commit.",
-			executionMode: "sequential",
-			parameters: repairFreezeParameters,
-			renderCall: (_args, theme) => new Text(theme.fg("toolTitle", "Freeze Repair"), 0, 0),
-			renderResult: (result, _options, theme, context) => new Text(theme.fg(context.isError ? "error" : "muted", boundedToolPreview(JSON.stringify(result.details ?? result).slice(0, 240))), 0, 0),
-			async execute(toolCallId, parameters) {
-				return toolResult(await (availableHandlers as { repairFreeze: (id: string, input: RepairFreezeInput) => Promise<import("../coordination/repair-commit.ts").RepairFrozenSnapshot> }).repairFreeze(toolCallId, parameters));
-			},
-		});
-		pi.registerTool<typeof repairCommitParameters, import("../coordination/repair-commit.ts").RepairCommitResult>({
-			name: "repair_commit",
-			label: "Commit Repair",
-			description: "Commit repaired copies under the current trigger authority. Backend re-runs drift + validation gates itself; advisory validate reports grant zero authority. Single-use per trigger; second commit without fresh trigger refused. Backup+seal+journal; repaired Owner reopens idle until new human message; Esc aborts the step only and preserves authority (retry without fresh trigger). After commit, moderator_control resolve; user returns via /agents.",
-			promptSnippet: "Commit under trigger authority; single-use per trigger. Diagnose/fix/validate/commit, then moderator_control resolve; user returns via /agents.",
-			executionMode: "sequential",
-			parameters: repairCommitParameters,
-			renderCall: (args, theme) => new Text(theme.fg("toolTitle", "Commit Repair") + " " + boundedToolPreview((args as { snapshotId?: string }).snapshotId ?? ""), 0, 0),
-			renderResult: (result, _options, theme, context) => new Text(theme.fg(context.isError ? "error" : "muted", boundedToolPreview(JSON.stringify(result.details ?? result).slice(0, 240))), 0, 0),
-			async execute(toolCallId, parameters) {
-				return toolResult(await (availableHandlers as { repairCommit: (id: string, input: RepairCommitInput) => Promise<import("../coordination/repair-commit.ts").RepairCommitResult> }).repairCommit(toolCallId, parameters));
 			},
 		});
 	}

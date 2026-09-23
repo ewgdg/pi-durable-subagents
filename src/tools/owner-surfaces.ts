@@ -1,7 +1,7 @@
 import { copyToClipboard } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { TUI } from "@earendil-works/pi-tui";
 import { openModeratorReportSurface } from "../presentation/moderator-report-surface.ts";
-import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type {
 	HumanPresentationCoordinatorView,
@@ -16,13 +16,11 @@ import {
 } from "../presentation/agent-view-surface.ts";
 import { openPostMortemAgentViewSurface } from "../presentation/post-mortem-agent-view-surface.ts";
 import {
-	AGENTS_COMMAND_USAGE,
 	createAgentSelectionSession,
 	createAgentSelectorSnapshot,
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
 } from "../process-runtime/remote-agent-selector.ts";
-import { validateManualRepairReason } from "../coordination/manual-repair.ts";
 import {
 	registerParticipantCoordinationTools,
 	type AgentObserveInput,
@@ -60,217 +58,19 @@ export function deactivateOwnerAgentTools(pi: ExtensionAPI): void {
 	);
 }
 
-
-export type RepairSurfaceDeps = Readonly<{
-  startRepairSurface?: typeof startPhysicalAgentViewSurface;
-}>;
-
-async function prepareAndBindRepairModerator(
-  view: HumanPresentationCoordinatorView,
-  moderatorAgentId: string,
-  opts: Readonly<{
-    ownerTui: TUI;
-    requestShutdown: () => void;
-    startPhysical?: typeof startPhysicalAgentViewSurface;
-  }>
-): Promise<PhysicalAgentViewSurface | undefined> {
-  const selection = createAgentSelectionSession(view, view.status().agentId);
-  const action = { kind: "select_agent" as const, agentId: moderatorAgentId };
-  await selection.prepare(action);
-  if (selection.postMortemView()) {
-    throw new Error("Repair view failed: Moderator unavailable for live view");
-  }
-  const preparedView = selection.preparedView();
-  if (!preparedView) {
-    return undefined;
-  }
-  let surface: PhysicalAgentViewSurface | undefined;
-  try {
-    surface = (opts.startPhysical ?? startPhysicalAgentViewSurface)(preparedView, {
-      ownerTui: opts.ownerTui,
-      requestShutdown: opts.requestShutdown,
-    });
-  } catch (error) {
-    await preparedView.close().catch(() => undefined);
-    throw error;
-  }
-  if (!surface) {
-    await preparedView.close().catch(() => undefined);
-    throw new Error("Repair view failed: physical terminal unavailable");
-  }
-  let unbind: (() => void) | undefined;
-  try {
-    unbind = view.bindPhysicalAgentSurface(surface);
-  } catch (error) {
-    try {
-      surface.close();
-    } catch {
-    }
-    await surface.closed.catch(() => undefined);
-    throw error;
-  }
-  void surface.closed.finally(() => {
-    try {
-      if (unbind) unbind();
-    } catch {
-    }
-  });
-  try {
-    await surface.ready;
-  } catch (error) {
-    try {
-      surface.close();
-    } catch {
-    }
-    await surface.closed.catch(() => undefined);
-    throw error;
-  }
-  return surface;
-}
-
-async function captureRepairOwnerTui(
-  ui: ExtensionUIContext
-): Promise<TUI> {
-  let captured: TUI | undefined;
-  await ui.custom<void>((tui, _theme, _keys, done) => {
-    captured = tui;
-    done(undefined);
-    return {
-      render: () => [],
-      invalidate: () => undefined,
-      handleInput: () => undefined,
-    } as unknown as Component;
-  }, {
-    overlay: true,
-    overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
-  });
-  if (!captured) {
-    throw new Error("Repair view failed: owner TUI unavailable");
-  }
-  return captured;
-}
-
-async function swapRepairViaTransientOverlay(
-  ui: ExtensionUIContext,
-  view: HumanPresentationCoordinatorView,
-  moderatorAgentId: string,
-  requestShutdown: () => void,
-  startPhysical?: typeof startPhysicalAgentViewSurface
-): Promise<PhysicalAgentViewSurface | undefined> {
-  const ownerTui = await captureRepairOwnerTui(ui);
-  return prepareAndBindRepairModerator(view, moderatorAgentId, { ownerTui, requestShutdown, startPhysical });
-}
-
-async function openPreadmissionRepairSelector(ui: ExtensionUIContext, view: HumanPresentationCoordinatorView): Promise<void> {
- const buildRepairSnapshot = () => {
- const roster = view.selectionRoster();
- const repaired = view.repairedOwnerEntry();
- const isModeratorRow = (status: { agentId: string; workflowId: string }) => status.agentId !== status.workflowId;
- const liveMods = [...roster.live].filter(isModeratorRow);
- const dormantMods = [...roster.dormant].filter(isModeratorRow);
- // Prefer-live: post-admission (no pending entry) with a live/dormant Owner in
- // the roster, include that Owner instead of filtering it out, so reopening
- // /agents shows the normal live Owner roster item, not a stale pending hint.
- // Pre-commit and pending keep repair scope (Moderators only, broken Owner
- // hidden): pre-commit has no Owner row, pending is greyed and never admits.
- const liveOwner = [...roster.live, ...roster.dormant].find((status) => status.agentId === status.workflowId);
- let effectiveLiveMods = liveMods;
- let effectiveDormantMods = dormantMods;
- if (repaired === undefined && liveOwner !== undefined) {
-   if (roster.live.some((status) => status.agentId === liveOwner.agentId)) {
-     effectiveLiveMods = [liveOwner, ...liveMods.filter((status) => status.agentId !== liveOwner.agentId)];
-   } else {
-     effectiveDormantMods = [liveOwner, ...dormantMods.filter((status) => status.agentId !== liveOwner.agentId)];
-   }
- }
- const mountedId = view.status().agentId;
- const selectedId = effectiveLiveMods[0]?.agentId ?? effectiveDormantMods[0]?.agentId ?? repaired?.ownerId ?? mountedId;
- return { liveMods: effectiveLiveMods, dormantMods: effectiveDormantMods, repaired, mountedId, selectedId };
- };
- const initial = buildRepairSnapshot();
- const selection = createAgentSelectionSession(view, initial.mountedId);
- let reopen = true;
- while (reopen) {
- reopen = false;
- const current = buildRepairSnapshot();
- const action = await openAgentSelectorSurface(ui, {
- live: [...current.liveMods],
- dormant: [...current.dormantMods],
- selectedAgentId: current.selectedId,
- repairedOwner: current.repaired ?? undefined,
- humanAttention: [...view.humanAttention()],
- operationalAttention: [...view.operationalAttention()],
- reports: [...view.reportHistory()],
- setReportRead(reportId, read) {
- view.setReportRead(reportId, read);
- return view.reportHistory();
- },
- addChangeHandler: (handler) => view.addAgentActivityChangeHandler(() => {
- const next = buildRepairSnapshot();
- handler({ live: [...next.liveMods], dormant: [...next.dormantMods], repairedOwner: next.repaired ?? undefined, humanAttention: [...view.humanAttention()], operationalAttention: [...view.operationalAttention()], reports: [...view.reportHistory()] });
- }),
- prepareSelection: async (act) => {
- if (act.kind === "open_report") return;
- // Repaired Owner is never selectable: greyed pending is informational only
- // and pre-commit has no Owner row at all. Admission is automatic on commit
- // success, never via selection. Use a fresh entry so post-admission picks
- // prefer the live Owner roster item. Suppressed entry (admission completed)
- // falls through to normal live presentation; any repaired pick is silently
- // ignored (no admit, no routing, no error).
- const freshRepaired = view.repairedOwnerEntry();
- const repairedId = freshRepaired?.ownerId;
- if (act.kind === "select_agent" && repairedId && act.agentId === repairedId) {
- return;
- }
- await selection.prepare(act);
- },
- onSelectionError(error) {
- ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
- },
- });
- if (!action) return;
- if (action.kind === "open_report") {
- reopen = true;
- continue;
- }
- if (action.kind === "decide") {
- try {
- await selection.complete(action);
- } catch (error) {
- ui.notify("Human Request selection failed: " + (error instanceof Error ? error.message : String(error)), "error");
- return;
- }
- continue;
- }
- const repairedId = current.repaired?.ownerId;
- if (repairedId && action.agentId === repairedId) {
-ui.notify("Repaired Owner selection disabled (admission is automatic on commit): " + repairedId, "info");
- return;
- }
- const prepared = selection.preparedView();
- if (prepared) {
- await openAgentViewSurface(ui, prepared, { requestShutdown: () => undefined });
- return;
- }
- return;
- }
-}
 export function registerAgentsCommand(
 	pi: ExtensionAPI,
 	resolveView: () => HumanPresentationCoordinatorView,
 	ownerAdmission?: OwnerRecoveryError | "admitted",
 	/** Present only in the Workflow Owner session; enables `/agents models`. */
 	admittedOwnerView?: () => OrdinaryAgentCoordinatorView,
-	/** Preadmission repair host for admission-failed Owner sessions. Manual only. */
-	preadmissionRepair?: () => HumanPresentationCoordinatorView,
-  repairDeps?: RepairSurfaceDeps,
 ): void {
 	const admissionFailure = ownerAdmission === "admitted" ? undefined : ownerAdmission;
 	pi.registerCommand("agents", {
 		description: ownerAdmission ? "Show Agents or inspect coordination diagnostics" : "Show Agents in the current Workflow",
 		getArgumentCompletions: (prefix) => {
 			const completions = [
-				...(getAgentsArgumentCompletions(prefix, (ownerAdmission === "admitted" || preadmissionRepair) ? { includeRepair: true } : undefined) ?? []),
+				...(getAgentsArgumentCompletions(prefix) ?? []),
 				...(ownerAdmission && "diagnostics".startsWith(prefix.trim()) ? [{ value: "diagnostics", label: "diagnostics" }] : []),
 				...(admittedOwnerView && "models".startsWith(prefix.trim()) ? [{ value: "models", label: "models" }] : []),
 			];
@@ -279,39 +79,7 @@ export function registerAgentsCommand(
 		handler: async (args, ctx) => {
 			if (ownerAdmission && args.trim() === "diagnostics") {
 				if (ctx.mode !== "tui") return;
-				const repairHost = admissionFailure ? preadmissionRepair?.() : undefined;
-				const ownerHost = admissionFailure ? undefined : admittedOwnerView?.();
-				const activeHost = repairHost ?? ownerHost;
-				await openOwnerDiagnostics(ctx.ui, admissionFailure, {
-          onRepair: activeHost ? async (ownerTui: TUI) => {
-            let receipt;
-            try {
-              receipt = await activeHost.requestManualRepair(validateManualRepairReason(undefined));
-            } catch (error) {
-              ctx.ui.notify("Repair Moderator failed: " + (error instanceof Error ? error.message : String(error)), "error");
-              throw error;
-            }
-            ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
-            try {
-              const surface = await prepareAndBindRepairModerator(activeHost, receipt.moderatorAgentId, {
-                ownerTui,
-                requestShutdown: () => ctx.shutdown(),
-                startPhysical: repairDeps?.startRepairSurface,
-              });
-              if (surface) {
-                void surface.closed.catch((error) => {
-                  ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
-                });
-              }
-            } catch (error) {
-              ctx.ui.notify("Repair view failed: " + (error instanceof Error ? error.message : String(error)), "error");
-              throw error;
-            }
-          } : undefined,
-					// Esc aborts the in-flight repair step only and preserves trigger
-					// authority; explicit cancel (deliberate intent) is the path that clears.
-					onEsc: activeHost ? () => activeHost.notifyRepairHumanInput("esc").catch((error) => { ctx.ui.notify("Repair interrupt failed: " + (error instanceof Error ? error.message : String(error)), "error"); }) : undefined,
-				});
+				await openOwnerDiagnostics(ctx.ui, admissionFailure);
 				return;
 			}
 			if (admittedOwnerView && args.trim() === "models") {
@@ -327,109 +95,13 @@ export function registerAgentsCommand(
 				return;
 			}
 			if (admissionFailure) {
-				const mode = (() => { try { return parseAgentsCommandArgument(args); } catch { return "selector"; } })();
-				if (mode === "repair" && preadmissionRepair) {
-					const host = preadmissionRepair();
-					try {
-						const receipt = await host.requestManualRepair(validateManualRepairReason(undefined));
-						ctx.ui.notify("Repair Moderator " + receipt.disposition + ": " + receipt.moderatorAgentId, "info");
-						try {
-                            const surface = await swapRepairViaTransientOverlay(ctx.ui, host, receipt.moderatorAgentId, () => ctx.shutdown(), repairDeps?.startRepairSurface);
-                            if (surface) {
-                              void surface.closed.catch((error) => {
-                                ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
-                              });
-                            }
-						} catch (error) {
-						  ctx.ui.notify("Repair view failed: " + (error instanceof Error ? error.message : String(error)), "error");
-						}
-					} catch (error) {
-						ctx.ui.notify("Repair failed: " + (error instanceof Error ? error.message : String(error)), "error");
-					}
-					return;
-				}
-				if (preadmissionRepair) {
-					if (ctx.mode !== "tui") return;
-					const host = preadmissionRepair();
-					if (mode === "owner") {
-						try {
-							const entry = host.repairedOwnerEntry();
-							// Prefer-live: post-admission (no entry) with a live Owner in the
-							// roster means the repaired Owner is already live. Do not emit the
-							// stale pending hint; the selector below shows normal live Owner.
-							// Idle hold still enforced via beginExecution until human message.
-							if (!entry) {
-								const roster = host.selectionRoster();
-								const liveOwner = [...roster.live, ...roster.dormant].find((status) => status.agentId === status.workflowId);
-								if (liveOwner !== undefined) {
-									ctx.ui.notify("Repaired Owner admitted live idle until human message: " + liveOwner.agentId, "info");
-								} else {
-									ctx.ui.notify("Repaired Owner is available after repair completes: " + host.status().agentId, "info");
-								}
-							} else {
-							// Pending is greyed/non-selectable: info only, never admit via selection.
-							// Admission is automatic on commit success; pre-commit has no Owner row.
-							ctx.ui.notify("Repaired Owner selection disabled (admission is automatic on commit): " + (entry?.ownerId ?? host.status().agentId), "info");
-							}
-						} catch (error) {
-							ctx.ui.notify("Repaired Owner view failed: " + (error instanceof Error ? error.message : String(error)), "error");
-						}
-					}
-					try {
-						await openPreadmissionRepairSelector(ctx.ui, host);
-					} catch (error) {
-						ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
-					}
-					return;
-				}
 				ctx.ui.notify("Subagent coordination is unavailable. Use /agents diagnostics.", "warning");
 				return;
 			}
-			const commandMode = parseAgentsCommandArgument(args);
-			if (commandMode === "repair") {
-				if (!ownerAdmission) throw new Error(AGENTS_COMMAND_USAGE);
-				const repairView = resolveView();
-				let receipt;
-				try {
-					receipt = await repairView.requestManualRepair(
-						validateManualRepairReason(undefined),
-					);
-				} catch (error) {
-					ctx.ui.notify(
-						"Repair Moderator failed: " + (error instanceof Error ? error.message : String(error)),
-						"error",
-					);
-					return;
-				}
-				ctx.ui.notify(
-					receipt.disposition === "created"
-						? "Repair Moderator created: " + receipt.moderatorAgentId
-						: "Repair Moderator already active: " + receipt.moderatorAgentId,
-					"info",
-				);
-				try {
-                    const ownerTui = await captureRepairOwnerTui(ctx.ui);
-                    const surface = await prepareAndBindRepairModerator(repairView, receipt.moderatorAgentId, {
-                      ownerTui,
-                      requestShutdown: () => ctx.shutdown(),
-                      startPhysical: repairDeps?.startRepairSurface,
-                    });
-                    if (surface) {
-                      void surface.closed.catch((error) => {
-                        ctx.ui.notify("Agent view failed: " + (error instanceof Error ? error.message : String(error)), "error");
-                      });
-                    }
-				} catch (error) {
-					ctx.ui.notify(
-						"Repair view failed: " + (error instanceof Error ? error.message : String(error)),
-						"error",
-					);
-				}
-				return;
-			}
 			if (ownerAdmission && args.trim() && args.trim() !== "owner") {
-				throw new Error(AGENTS_COMMAND_USAGE);
+				throw new Error("Usage: /agents [owner|diagnostics]");
 			}
+			const commandMode = parseAgentsCommandArgument(args);
 			const view = resolveView();
 			// Navigation uses the admitted projection; transcript refresh must not
 			// prevent opening the selector or returning to Owner.
@@ -636,9 +308,6 @@ export function participantCoordinatorHandlers(
 			reportToUser: (toolCallId, input) => moderatorView().reportToUser(toolCallId, input),
 			moderatorControl: (toolCallId, input) =>
 				moderatorView().moderatorControl(toolCallId, input),
-			repairValidate: (toolCallId, input) => moderatorView().repairValidate(toolCallId, input),
-			repairFreeze: (toolCallId, input) => moderatorView().repairFreeze(toolCallId, input),
-			repairCommit: (toolCallId, input) => moderatorView().repairCommit(toolCallId, input),
 		};
 	}
 	const ordinaryView = resolveView as () => OrdinaryAgentCoordinatorView;

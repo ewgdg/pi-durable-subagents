@@ -138,16 +138,3 @@ test("clearing blockage removes only its own widget", () => {
 	showOwnerBlockage(ui, undefined);
 	assert.deepEqual([...widgets.keys()], ["unrelated"]);
 });
-test("diagnostics repair and Esc callbacks fire through the real input path", async () => {
-	const h = harness();
-	let repaired = 0;
-	let esc = 0;
-	const result = openOwnerDiagnostics(h.ui, failure, { onRepair: () => { repaired += 1; }, onEsc: () => { esc += 1; } });
-	assert.match(h.component.render(80).join("\n"), /r repair/);
-	h.component.handleInput?.("r");
-	assert.equal(repaired, 1);
-	assert.equal(esc, 0);
-	h.component.handleInput?.("\x1b");
-	assert.equal(esc, 1);
-	await result;
-});

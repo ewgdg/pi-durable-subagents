@@ -15,7 +15,6 @@ import type { RemoteAgentSelectorSnapshot } from "../src/control/agent-control-p
 import type { HumanPresentationCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
 import { registerAgentsCommand } from "../src/tools/owner-surfaces.ts";
 import {
-	AGENTS_COMMAND_USAGE,
 	createAgentSelectionSession,
 	createAgentSelectorSnapshot,
 	createOwnerAgentPresentationHandlers,
@@ -239,7 +238,7 @@ test("registered /agents rejects unsupported arguments before opening or selecti
 	const localCommand = captureCommand((pi) => registerAgentsCommand(pi, () => localView));
 	await assert.rejects(
 		localCommand.handler(" teammate ", {} as ExtensionCommandContext),
-		(error: unknown) => error instanceof Error && error.message === AGENTS_COMMAND_USAGE,
+		(error: unknown) => error instanceof Error && error.message === "Usage: /agents [owner]",
 	);
 	assert.deepEqual(localOpened, []);
 
@@ -262,7 +261,7 @@ test("registered /agents rejects unsupported arguments before opening or selecti
 	}));
 	await assert.rejects(
 		remoteCommand.handler(" teammate ", {} as ExtensionCommandContext),
-		(error: unknown) => error instanceof Error && error.message === AGENTS_COMMAND_USAGE,
+		(error: unknown) => error instanceof Error && error.message === "Usage: /agents [owner]",
 	);
 	assert.equal(remoteSnapshotCalls, 0);
 });

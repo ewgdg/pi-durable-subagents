@@ -36,17 +36,8 @@ export function showOwnerBlockage(ui: ExtensionUIContext, failure: OwnerRecovery
 	} : undefined);
 }
 
-export function openOwnerDiagnostics(
-	ui: ExtensionUIContext,
-	failure?: OwnerRecoveryError,
-	options?: Readonly<{
-		/** Manual repair entry from the admission-failed surface. Manual only, no watcher. */
-		onRepair?: (ownerTui: TUI) => void | Promise<void>;
-		/** Esc through the real input path revokes a pending repair approval via the persisted ledger. */
-		onEsc?: () => void | Promise<void>;
-	}>,
-): Promise<void> {
-	return ui.custom<void>((tui, theme, _keys, done) => new OwnerDiagnosticsSurface(tui, theme, failure, done, options), {
+export function openOwnerDiagnostics(ui: ExtensionUIContext, failure?: OwnerRecoveryError): Promise<void> {
+	return ui.custom<void>((tui, theme, _keys, done) => new OwnerDiagnosticsSurface(tui, theme, failure, done), {
 		overlay: true,
 		overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
 	});
@@ -83,9 +74,7 @@ function summaryText(failure: OwnerRecoveryError | undefined): string {
 		"This diagnostic does not establish the state of other running processes.",
 		"",
 		"Recovery",
-	"Manual repair: /agents repair opens a real Moderator for diagnosis first (diagnostics r triggers with the default reason).",
-	"The Moderator diagnoses, fixes, validates, and commits under that trigger authority; the Owner stays idle until a new human message. Esc aborts only the in-flight step; trigger authority persists for the attempt.",
-	"Unadmitted originals stay unavailable; no auto trigger, no watcher.",
+		"Transcript repair is unavailable in this build.",
 		"Native /fork preserves selected conversation in a new independent Workflow; /clone copies the active branch.",
 		"Owner role identification must have succeeded; otherwise fork is refused. Native /new remains available.",
 		"Copied coordination history grants no authority or pending obligations; the source transcript is unchanged.",
@@ -117,8 +106,6 @@ class OwnerDiagnosticsSurface implements Component {
 	readonly theme: Theme;
 	readonly failure: OwnerRecoveryError | undefined;
 	readonly done: () => void;
-	readonly onRepair: ((ownerTui: TUI) => void | Promise<void>) | undefined;
-	readonly onEsc: (() => void | Promise<void>) | undefined;
 	readonly #body = new Text("", 0, 0);
 	#technical = false;
 	#scrollTop = 0;
@@ -126,14 +113,11 @@ class OwnerDiagnosticsSurface implements Component {
 	#viewportRows = 1;
 
 	constructor(tui: TUI, theme: Theme, failure: OwnerRecoveryError | undefined,
-		done: () => void,
-		options?: Readonly<{ onRepair?: (ownerTui: TUI) => void | Promise<void>; onEsc?: () => void | Promise<void> }>) {
+		done: () => void) {
 		this.tui = tui;
 		this.theme = theme;
 		this.failure = failure;
 		this.done = done;
-		this.onRepair = options?.onRepair;
-		this.onEsc = options?.onEsc;
 		this.#updateBody();
 	}
 
@@ -148,7 +132,7 @@ class OwnerDiagnosticsSurface implements Component {
 		this.#viewportRows = Math.max(0, height - PRESENTATION_ROWS);
 		this.#maximumScrollTop = Math.max(0, body.length - this.#viewportRows);
 		this.#scrollTop = Math.min(this.#scrollTop, this.#maximumScrollTop);
-		const footer = this.theme.fg("dim", "q close · Esc close" + (this.onRepair ? " · r repair" : "") + " · " + (this.#technical ? "s Summary" : "t Technical details") + " · ↑/↓/wheel · PgUp/PgDn · Home/End");
+		const footer = this.theme.fg("dim", `q close · Esc close · ${this.#technical ? "s Summary" : "t Technical details"} · ↑/↓/wheel · PgUp/PgDn · Home/End`);
 		// Overlay composition covers only returned rows. Emit the whole viewport,
 		// including blank cells, so short diagnostics cannot expose underlying chat.
 		return [
@@ -159,22 +143,7 @@ class OwnerDiagnosticsSurface implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, Key.escape) || matchesKey(data, "q")) { if (matchesKey(data, Key.escape) && this.onEsc) void this.onEsc(); this.done(); return; }
-		if (matchesKey(data, "r") && this.onRepair) {
-			try {
-				const result = this.onRepair!(this.tui);
-				if (result instanceof Promise) {
-					void result.then(
-						() => this.done(),
-						() => undefined,
-					);
-				} else {
-					this.done();
-				}
-			} catch {
-				}
-			return;
-		}
+		if (matchesKey(data, Key.escape) || matchesKey(data, "q")) { this.done(); return; }
 		if (matchesKey(data, "t") || matchesKey(data, "s")) {
 			this.#technical = matchesKey(data, "t");
 			this.#scrollTop = 0;

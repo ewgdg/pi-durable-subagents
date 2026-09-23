@@ -9,8 +9,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
-import { preadmissionFailureNotice, setupPreadmissionRepairHost } from "./bootstrap/preadmission-host.ts";
-import type { WorkflowCoordinator } from "./coordination/workflow-coordinator.ts";
 import { OwnerRecoveryError } from "./bootstrap/owner-recovery-error.ts";
 import { ProtocolInvariantError } from "./protocol/identities.ts";
 import { showOwnerBlockage } from "./presentation/owner-diagnostics-surface.ts";
@@ -37,7 +35,6 @@ const ENTRY_MODULE_PATH = import.meta.filename;
 
 const piAgentCoordination: ExtensionFactory = (pi) => {
 	let resolveOwnerView: (() => OrdinaryAgentCoordinatorView) | undefined;
-	let preadmissionCoordinator: WorkflowCoordinator | undefined;
 	assertExtensionApiShape(pi);
 	registerSessionStartup(pi);
 	registerHerdrQuestionAttention(pi, () => resolveOwnerView?.());
@@ -53,7 +50,6 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	type OwnerAdmissionState = "pending" | "admitted" | "failed";
 	let ownerAdmissionState: OwnerAdmissionState = "pending";
 	let ownerIdentified = false;
-	let identifiedOwnerId: string | undefined;
 	let settleOwnerAdmission: () => void = () => {};
 	const ownerAdmissionSettled = new Promise<void>((resolve) => {
 		settleOwnerAdmission = resolve;
@@ -74,8 +70,6 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
 		ownerAdmissionState = "pending";
 		ownerIdentified = false;
-		identifiedOwnerId = undefined;
-		if (preadmissionCoordinator) { const prev = preadmissionCoordinator; preadmissionCoordinator = undefined; void prev.shutdown(async () => undefined).catch(() => undefined); }
 		deactivateOwnerAgentTools(pi);
 		try {
 			if (ctx.mode !== "tui" || !ctx.hasUI) return;
@@ -85,7 +79,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				bridge,
 				entryModulePath: ENTRY_MODULE_PATH,
 				event,
-				onOwnerIdentified: (id) => { ownerIdentified = true; identifiedOwnerId = id; },
+				onOwnerIdentified: () => { ownerIdentified = true; },
 			});
 			registerOwnerAgentTools(
 				pi,
@@ -105,29 +99,9 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 					ctx.sessionManager.getSessionFile(), error,
 				) : undefined;
 			if (!failure) throw error;
-			let resolvePreadmissionRepair: (() => import("./coordination/workflow-coordinator.ts").HumanPresentationCoordinatorView) | undefined;
-			if (ownerIdentified) {
-				try {
-					const setup = await setupPreadmissionRepairHost({
-						captureRuntime: () => bridge.capture(ctx.sessionManager as import("@earendil-works/pi-coding-agent").AgentSession["sessionManager"], ctx.ui).then((captured) => captured.runtime),
-						entryModulePath: ENTRY_MODULE_PATH,
-						failure,
-						identifiedOwnerId,
-						ownerIdentified,
-					});
-					preadmissionCoordinator = setup.coordinator;
-					resolvePreadmissionRepair = setup.resolvePreadmissionRepair;
-				} catch (repairError) {
-					// Surface preadmission setup failures visibly while keeping data
-					// untouched: diagnostics stay usable with this signal.
-					ctx.ui.notify(preadmissionFailureNotice(repairError), "error");
-				}
-			}
-			// A blocked Owner has no admitted coordinator. Diagnostics stays independent
-			// of that failed admission and out of restored chat history. Manual repair
-			// trigger from the failed surface uses the preadmission host (verified Owner
-			// identity + native config, no history replay, no fabricated records).
-			registerAgentsCommand(pi, resolveAdmittedOwnerView, failure, undefined, resolvePreadmissionRepair);
+			// A blocked Owner has no coordinator-backed commands. Keep diagnostics
+			// independent of that failed admission and out of restored chat history.
+			registerAgentsCommand(pi, resolveAdmittedOwnerView, failure);
 			showOwnerBlockage(ctx.ui, failure);
 		} finally {
 			settleOwnerAdmission();

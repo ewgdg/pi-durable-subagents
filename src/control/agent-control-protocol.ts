@@ -20,17 +20,12 @@ import {
 import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import { MODERATOR_ROUTINE_START_INSTRUCTION } from "../protocol/moderator-input.ts";
 import type { ModeratorControlInput, ModeratorControlReceipt } from "../protocol/moderator-control.ts";
-import type { RepairValidateReport } from "../coordination/repair-validate.ts";
-import type { RepairFrozenSnapshot, RepairCommitResult } from "../coordination/repair-commit.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import { AgentTemplateCatalogueSnapshotSchema } from "./control-protocol-schemas.ts";
 import {
 	participantCoordinationToolSchemas,
 	type AgentObserveInput,
 	type AgentObserveResult,
-	type RepairValidateInput,
-	type RepairFreezeInput,
-	type RepairCommitInput,
 } from "../tools/participant-coordination-tools.ts";
 
 const closed = <const P extends Parameters<typeof Type.Object>[0]>(properties: P) =>
@@ -505,62 +500,6 @@ const HumanRequestInputSchema = Type.Unsafe<HumanRequestInput>(
 const ModeratorControlInputSchema = Type.Unsafe<ModeratorControlInput>(
 	participantCoordinationToolSchemas.moderator_control,
 );
-const RepairValidateInputSchema = Type.Unsafe<RepairValidateInput>(
-	participantCoordinationToolSchemas.repair_validate,
-);
-const RepairFreezeInputSchema = Type.Unsafe<RepairFreezeInput>(
-	participantCoordinationToolSchemas.repair_freeze,
-);
-const RepairCommitInputSchema = Type.Unsafe<RepairCommitInput>(
-	participantCoordinationToolSchemas.repair_commit,
-);
-const RepairFrozenSnapshotSchema = Type.Unsafe<RepairFrozenSnapshot>(closed({
-	snapshotId: NonEmptyStringSchema,
-	createdAt: NonEmptyStringSchema,
-	workflowDirectory: NonEmptyStringSchema,
-	entries: Type.Array(closed({
-		source: NonEmptyStringSchema,
-		sha256: NonEmptyStringSchema,
-	})),
-}));
-const RepairValidateReportSchema = Type.Unsafe<RepairValidateReport>(closed({
-	advisory: Type.Literal(true),
-	authorizesBytes: Type.Literal(false),
-	sealsNothing: Type.Literal(true),
-	effectsApplied: Type.Literal(false),
-	resolveInvoked: Type.Literal(false),
-	diagnostics: Type.Array(Type.Unknown()),
-	unknowns: Type.Array(Type.String()),
-	warnings: Type.Array(Type.String()),
-	outOfScope: Type.Array(Type.String()),
-	files: Type.Array(closed({
-		path: NonEmptyStringSchema,
-		sha256: NonEmptyStringSchema,
-		entryCount: Type.Integer({ minimum: 0 }),
-	})),
-	installedSource: Type.Unknown(),
-}));
-const RepairCommitResultSchema = Type.Unsafe<RepairCommitResult>(closed({
-	disposition: Type.Union([
-		Type.Literal("committed"),
-		Type.Literal("committed-admission-failed"),
-		Type.Literal("joined-committed"),
-	]),
-	attemptId: NonEmptyStringSchema,
-	snapshotId: NonEmptyStringSchema,
-	generation: Type.Integer({ minimum: 0 }),
-	backupDir: NonEmptyStringSchema,
-	manifestPath: NonEmptyStringSchema,
-	files: Type.Array(closed({
-		source: NonEmptyStringSchema,
-		sha256Before: NonEmptyStringSchema,
-		sha256After: NonEmptyStringSchema,
-	})),
-	committedAt: NonEmptyStringSchema,
-	audit: Type.Unknown(),
-	idle: Type.Unknown(),
-	admissionError: Type.Optional(Type.String()),
-}));
 const ContextPreparationSchema = closed({
 	workScale: Type.Union([
 		Type.Literal("small"),
@@ -683,10 +622,6 @@ const ModeratorTriggerSchema = Type.Union([
 		toolCall: ToolCallPointerSchema,
 		reviewIntervalMs: Type.Integer({ minimum: 1 }),
 	}),
-	closed({
-		kind: Type.Literal("manual_repair"),
-		reason: NonEmptyStringSchema,
-	}),
 ]);
 const HumanAttentionItemSchema = closed({
 	requestId: NonEmptyStringSchema,
@@ -753,13 +688,6 @@ export const AgentSelectorSnapshotSchema = closed({
 	humanAttention: Type.Array(HumanAttentionItemSchema, { uniqueItems: true }),
 	operationalAttention: Type.Array(OperationalIncidentAttentionSchema, { uniqueItems: true }),
 	reports: Type.Array(ReportHistoryItemSchema),
- repairedOwner: Type.Optional(closed({
- ownerId: NonEmptyStringSchema,
- workflowId: NonEmptyStringSchema,
- transcriptPath: Type.Optional(NonEmptyStringSchema),
- stage: Type.Union([Type.Literal("snapshot-only"), Type.Literal("admission-pending")]),
- label: NonEmptyStringSchema,
- })),
 });
 type DeepReadonly<T> = T extends readonly []
 	? readonly []
@@ -896,18 +824,6 @@ export const agentControlMethods = {
 	"coordination.moderatorControl": {
 		request: ToolIntention(ModeratorControlInputSchema),
 		response: Type.Unsafe<ModeratorControlReceipt>(ModeratorControlReceiptSchema),
-	},
-	"coordination.repairValidate": {
-		request: ToolIntention(RepairValidateInputSchema),
-		response: RepairValidateReportSchema,
-	},
-	"coordination.repairFreeze": {
-		request: ToolIntention(RepairFreezeInputSchema),
-		response: RepairFrozenSnapshotSchema,
-	},
-	"coordination.repairCommit": {
-		request: ToolIntention(RepairCommitInputSchema),
-		response: RepairCommitResultSchema,
 	},
 	"presentation.agents.snapshot": {
 		request: EmptySchema,

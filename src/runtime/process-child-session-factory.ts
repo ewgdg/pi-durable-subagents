@@ -2,7 +2,7 @@ import {
 	type AgentSessionRuntime,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { ChildLaunchContractGuard } from "../process-runtime/child-launch-contract.ts";
 
@@ -190,13 +190,10 @@ export class ProcessChildSessionFactory {
 		});
 	}
 
-	createStagingSession(prepared: PreparedChildRuntime, subdirectory?: string): SessionManager {
-		const directory = subdirectory === undefined
-			? this.workflowSessionDirectory()
-			: join(this.workflowSessionDirectory(), subdirectory);
+	createStagingSession(prepared: PreparedChildRuntime): SessionManager {
 		return SessionManager.create(
 			prepared.configuration.cwd,
-			directory,
+			this.workflowSessionDirectory(),
 			{ id: prepared.agentId },
 		);
 	}

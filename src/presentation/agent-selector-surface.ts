@@ -20,7 +20,6 @@ import {
 import type { ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
-import type { RepairedOwnerSelectorEntry } from "../coordination/manual-repair.ts";
 import type { HumanAttentionItem } from "../coordination/human-requests.ts";
 import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
 import type { AgentRunSuspension } from "../runtime/agent-runtime-supervisor.ts";
@@ -84,7 +83,7 @@ export type AgentSelectorOptions = Readonly<{
 	live: readonly AgentRosterStatus[];
 	dormant: readonly AgentRosterStatus[];
 	selectedAgentId: string;
-	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention" | "reports" | "repairedOwner">) => void): () => void;
+	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention" | "reports">) => void): () => void;
 	reports?: readonly ReportHistoryItem[];
 	setReportRead?(reportId: string, read: boolean): Promise<readonly ReportHistoryItem[]> | readonly ReportHistoryItem[];
 	humanAttention?: readonly HumanAttentionItem[];
@@ -94,13 +93,11 @@ export type AgentSelectorOptions = Readonly<{
 		tui: TUI,
 	): Promise<void> | void;
 	onSelectionError?(error: unknown): void;
- repairedOwner?: RepairedOwnerSelectorEntry;
 }>;
 
 type AgentSelectorItem = SelectItem & Readonly<{
 	status?: AgentRosterStatus;
 	kind: "decide" | "attention" | "owner" | "agent";
-	repairedOwner?: RepairedOwnerSelectorEntry;
 	childControl?: string;
 	action?: AgentSelectorAction;
 	detailLines?: readonly string[];
@@ -176,7 +173,7 @@ class AgentSelectorSurface implements Component {
 		this.#done = done;
 		this.#options = options;
 		this.#partitionRoster();
-		const ownerId = this.#effectiveOwnerId();
+		const owner = this.#ownerStatus();
 		const selectedLive = this.#liveTree.find(
 			({ agentId }) => agentId === options.selectedAgentId,
 		);
@@ -184,12 +181,12 @@ class AgentSelectorSurface implements Component {
 			({ agentId }) => agentId === options.selectedAgentId,
 		);
 		this.#activeTab = selectedDormant ? "dormant" : "live";
-		this.#scopeAgentId = selectedLive?.agentId === ownerId
-			? ownerId
-			: selectedLive?.directSpawnerAgentId ?? ownerId;
+		this.#scopeAgentId = selectedLive?.agentId === owner.agentId
+			? owner.agentId
+			: selectedLive?.directSpawnerAgentId ?? owner.agentId;
 		this.#selectedValueByTab = {
 			live: this.#attentionItems()[0]?.value ?? (
-				selectedLive?.agentId !== ownerId ? selectedLive?.agentId : undefined
+				selectedLive?.agentId !== owner.agentId ? selectedLive?.agentId : undefined
 			),
 			dormant: selectedDormant?.agentId ?? this.#dormantRoster[0]?.agentId,
 		};
@@ -217,17 +214,9 @@ class AgentSelectorSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, "o")) {
-			// No live Owner means no Go-to-Owner: silent no-op (no selection,
-			// no error). Covers pre-commit (no Owner row at all) and post-commit
-			// greyed pending (non-selectable, never admits). Only a live Owner
-			// is selectable via O.
-			if (this.#isOwnerGoToDisabled()) {
-				return;
-			}
-			const liveOwnerId = this.#ownerCandidate()?.agentId as string;
 			void this.#completeSelection({
 				kind: "select_agent",
-				agentId: liveOwnerId,
+				agentId: this.#ownerStatus().agentId,
 			}, false);
 			return;
 		}
@@ -445,14 +434,11 @@ class AgentSelectorSurface implements Component {
 			this.#focusedAgentRow = undefined;
 		}
 		// Owner ends the shared keyboard order but is painted only in the fixed footer.
-		// Pre-commit has no Owner row at all; pending is greyed in the footer only.
-		const ownerRow = this.#ownerItem();
-		const ownerTail = ownerRow ? [ownerRow] : [];
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
 			: this.#activeTab === "reports"
-				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), ...ownerTail]
-				: [...this.#dormantRoster.map((status) => this.#agentItem(status)), ...ownerTail];
+				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), this.#ownerItem()]
+				: [...this.#dormantRoster.map((status) => this.#agentItem(status)), this.#ownerItem()];
 		const focused = this.#focusedAgentRow;
 		if (focused && !this.#items.some(({ value }) => value === focused.agentId)) {
 			const status = [...this.#options.live, ...this.#options.dormant].find(
@@ -638,7 +624,7 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#liveChildren(agentId: string): AgentRosterStatus[] {
-		const ownerId = this.#effectiveOwnerId();
+		const ownerId = this.#ownerStatus().agentId;
 		// Root browsing also includes live Moderators without a direct Spawner.
 		return this.#liveTree.filter((status) =>
 			status.agentId !== ownerId &&
@@ -648,11 +634,10 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#liveItems(): AgentSelectorItem[] {
-		const ownerRow = this.#ownerItem();
 		return [
 			...this.#attentionItems(),
 			...this.#liveChildren(this.#scopeAgentId).map((status) => this.#agentItem(status)),
-			...(ownerRow ? [ownerRow] : []),
+			this.#ownerItem(),
 		];
 	}
 
@@ -754,19 +739,7 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#ownerIdentityId(): string | undefined {
-		return this.#ownerCandidate()?.agentId ?? this.#options.repairedOwner?.ownerId;
-	}
-	#effectiveOwnerId(): string {
-		const live = this.#ownerCandidate()?.agentId;
-		if (live) return live;
-		const repaired = this.#options.repairedOwner?.ownerId;
-		if (repaired) return repaired;
-		// Repair pre-commit has no Owner row at all: fall back to the shared
-		// workflow id for hierarchy browsing so the menu still opens with the
-		// Moderator only and never throws.
-		const fallbackWorkflowId = [...this.#options.live, ...this.#options.dormant][0]?.workflowId;
-		if (fallbackWorkflowId) return fallbackWorkflowId;
-		return this.#options.selectedAgentId;
+		return this.#ownerCandidate()?.agentId;
 	}
 
 	/** The Owner exists in the roster whatever its Run phase: a stopped Owner Run is Dormant, not absent. */
@@ -776,54 +749,23 @@ class AgentSelectorSurface implements Component {
 		);
 	}
 
-	/** No live Owner means no Go-to-Owner: no O shortcut, no footer action, no Enter admission. */
-	#isOwnerGoToDisabled(): boolean {
-		return !this.#ownerCandidate();
+	#ownerStatus(): AgentRosterStatus {
+		const owner = this.#ownerCandidate();
+		if (!owner) throw new Error("Agent selector roster has no Owner");
+		return owner;
 	}
 
-	#ownerItem(): AgentSelectorItem | undefined {
-		const live = this.#ownerCandidate();
-		if (live) {
-			return {
-				value: live.agentId,
-				label: "Owner",
-				kind: "owner",
-				action: { kind: "select_agent", agentId: live.agentId },
-			};
-		}
-		const repaired = this.#options.repairedOwner;
-		if (repaired) {
-			// Post-commit pending is greyed/non-selectable by construction:
-			// informational row, no selection action, so Enter never dismisses
-			// the selector and never admits. The O shortcut and footer are
-			// likewise non-selectable (silent no-op), and the repair-prepare
-			// layers silently ignore explicit picks. Admission happens
-			// automatically on commit success, never via selection.
-			const path = repaired.transcriptPath ?? "transcript path unavailable";
-			const stage = repaired.stage === "admission-pending" ? "admission-pending" : repaired.stage;
-			return {
-				value: repaired.ownerId,
-				label: "Owner (" + stage + ", selection disabled)",
-				description: "selection disabled",
-				kind: "owner",
-				repairedOwner: repaired,
-				detailLines: ["", "Owner " + repaired.ownerId, "Stage: " + stage + " (greyed, non-selectable)", "selection disabled - admission is automatic on commit", "Transcript: " + path, "Verified identity, never a live record"],
-			};
-		}
-		// Pre-commit and post-admission without a pending entry have no Owner row
-		// at all (Moderator only pre-commit, live Owner via roster post-admission).
-		// Never throws so the menu opens in every repair state.
-		return undefined;
+	#ownerItem(): AgentSelectorItem {
+		return {
+			value: this.#ownerStatus().agentId,
+			label: "Owner",
+			kind: "owner",
+			action: { kind: "select_agent", agentId: this.#ownerStatus().agentId },
+		};
 	}
 
-	#hasOwnerTail(): boolean {
-		return this.#items.length > 0 && this.#items[this.#items.length - 1]?.kind === "owner";
-	}
-	#rosterRowCount(): number {
-		return this.#hasOwnerTail() ? Math.max(0, this.#items.length - 1) : this.#items.length;
-	}
 	#maximumRosterScrollOffset(): number {
-		return Math.max(0, this.#rosterRowCount() - this.#visibleRows);
+		return Math.max(0, this.#items.length - 1 - this.#visibleRows);
 	}
 
 	#ensureSelectedVisible(): void {
@@ -852,9 +794,8 @@ class AgentSelectorSurface implements Component {
 		const viewport = new SelectList(visibleItems, Math.max(1, visibleItems.length), theme);
 		viewport.setSelectedIndex(selectedVisible ? selectedOffset : 0);
 		const lines = viewport.render(width).slice(0, visibleItems.length);
-		const rosterCount = this.#rosterRowCount();
-		if (startIndex > 0 || startIndex + visibleItems.length < rosterCount) {
-			const range = `  (${Math.min(this.#selectedIndex + 1, Math.max(1, rosterCount))}/${Math.max(1, rosterCount)})`;
+		if (startIndex > 0 || startIndex + visibleItems.length < this.#items.length - 1) {
+			const range = `  (${Math.min(this.#selectedIndex + 1, this.#items.length - 1)}/${this.#items.length - 1})`;
 			lines.push(this.#theme.fg("muted", truncateToWidth(range, Math.max(0, width - 2), "")));
 		}
 		return lines;
@@ -864,13 +805,12 @@ class AgentSelectorSurface implements Component {
 		const startIndex = Math.max(0, Math.min(
 			this.#rosterScrollOffset, this.#maximumRosterScrollOffset(),
 		));
-		const rosterEnd = this.#rosterRowCount();
-		const visibleItems = this.#items.slice(startIndex, Math.min(startIndex + this.#visibleRows, rosterEnd));
+		const visibleItems = this.#items.slice(startIndex, Math.min(startIndex + this.#visibleRows, this.#items.length - 1));
 		const listLines = this.#renderRosterViewport(width, startIndex, visibleItems);
 		const hasAgents = this.#items.some(({ kind }) => kind === "agent");
 		const reportHistory = this.#activeTab === "reports";
 		const showEmptyMessage = reportHistory
-			? this.#rosterRowCount() === 0 && (this.#options.reports ?? []).length === 0
+			? this.#items.every(({ kind }) => kind === "owner")
 			: !hasAgents;
 		const visibleAttention = visibleItems.some(({ kind }) => kind === "decide" || kind === "attention");
 		const visibleBodyRows = visibleItems.length;
@@ -964,22 +904,22 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#browseRoot(): void {
-		const ownerId = this.#effectiveOwnerId();
-		if (this.#scopeAgentId === ownerId) return;
+		if (this.#scopeAgentId === this.#ownerStatus().agentId) return;
+		const owner = this.#ownerStatus();
 		let ancestor = [...this.#options.live, ...this.#options.dormant].find(
 			({ agentId }) => agentId === this.#scopeAgentId,
 		);
-		while (ancestor?.directSpawnerAgentId && ancestor.directSpawnerAgentId !== ownerId) {
+		while (ancestor?.directSpawnerAgentId && ancestor.directSpawnerAgentId !== owner.agentId) {
 			const parentId = ancestor.directSpawnerAgentId;
 			ancestor = [...this.#options.live, ...this.#options.dormant].find(
 				({ agentId }) => agentId === parentId,
 			);
 		}
-		this.#scopeAgentId = ownerId;
+		this.#scopeAgentId = owner.agentId;
 		const rootAgents = this.#liveItems().filter(({ kind }) => kind === "agent");
 		// Root browsing targets an Agent, not the higher-priority Attention Inbox.
 		this.#selectedValueByTab.live = rootAgents.find(({ value }) => value === ancestor?.agentId)?.value
-			?? rootAgents[0]?.value ?? ownerId;
+			?? rootAgents[0]?.value ?? owner.agentId;
 		this.#list = this.#createList();
 	}
 
@@ -994,24 +934,24 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#zoomOut(): void {
-		const ownerId = this.#effectiveOwnerId();
-		if (this.#scopeAgentId === ownerId) return;
+		const owner = this.#ownerStatus();
+		if (this.#scopeAgentId === owner.agentId) return;
 		const previousScope = this.#scopeAgentId;
 		const scope = [...this.#options.live, ...this.#options.dormant].find(
 			({ agentId }) => agentId === previousScope,
 		);
-		this.#scopeAgentId = scope?.directSpawnerAgentId ?? ownerId;
+		this.#scopeAgentId = scope?.directSpawnerAgentId ?? owner.agentId;
 		this.#selectedValueByTab.live = previousScope;
 		this.#list = this.#createList();
 	}
 
 	#scopeTitle(width: number): SelectorLine {
 		const allStatuses = [...this.#options.live, ...this.#options.dormant];
-		const ownerId = this.#effectiveOwnerId();
+		const owner = this.#ownerStatus();
 		const ancestors: AgentRosterStatus[] = [];
 		const scope = allStatuses.find(({ agentId }) => agentId === this.#scopeAgentId);
 		let current = scope;
-		while (current && current.agentId !== ownerId) {
+		while (current && current.agentId !== owner.agentId) {
 			ancestors.unshift(current);
 			current = allStatuses.find(
 				({ agentId }) => agentId === current?.directSpawnerAgentId,
@@ -1038,7 +978,7 @@ class AgentSelectorSurface implements Component {
 					: scope
 						? {
 							kind: "ancestor" as const,
-							agentId: scope.directSpawnerAgentId ?? ownerId,
+							agentId: scope.directSpawnerAgentId ?? owner.agentId,
 							childId: scope.agentId,
 						}
 						: undefined;
@@ -1066,29 +1006,14 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#renderOwnerFooter(): SelectorLine {
-		const liveOwner = this.#ownerCandidate();
-		const repairedFooter = this.#options.repairedOwner;
-		if (liveOwner) {
-			const footerOwnerId = liveOwner.agentId;
-			const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(footerOwnerId, "Owner")}`) + this.#theme.fg("dim", " [o]");
-			const pending = this.#items[this.#selectedIndex]?.kind === "owner"
-				? this.#selectionSpinnerItem?.description : undefined;
-			return {
-				text: text + (pending ? this.#theme.fg("dim", ` ${pending}`) : ""),
-				regions: [{ start: 0, end: visibleWidth(text), text,
-					action: { kind: "open", value: footerOwnerId } }],
-			};
-		}
-		if (repairedFooter) {
-			// Post-commit pending is greyed/non-selectable: no clickable region,
-			// no O shortcut, no Enter admission. Admission is automatic on commit.
-			const stage = repairedFooter.stage === "admission-pending" ? "admission-pending" : repairedFooter.stage;
-			const greyed = this.#theme.fg("dim", "Owner (" + stage + ", selection disabled)") + this.#theme.fg("dim", " [o]");
-			return { text: greyed, regions: [] };
-		}
-		// Pre-commit has no Owner row at all: empty footer so the menu shows only
-		// the Moderator and never throws. Post-admission shows the live Owner above.
-		return { text: "", regions: [] };
+		const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(this.#ownerStatus().agentId, "Owner")}`) + this.#theme.fg("dim", " [o]");
+		const pending = this.#items[this.#selectedIndex]?.kind === "owner"
+			? this.#selectionSpinnerItem?.description : undefined;
+		return {
+			text: text + (pending ? this.#theme.fg("dim", ` ${pending}`) : ""),
+			regions: [{ start: 0, end: visibleWidth(text), text,
+				action: { kind: "open", value: this.#ownerStatus().agentId } }],
+		};
 	}
 
 	#renderTabs(): SelectorLine {

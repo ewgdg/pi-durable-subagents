@@ -131,12 +131,6 @@ export class MessageCoordinator {
 		deliveryProgressClock?: import("./operation-review.ts").OperationReviewClock;
 		onDeliveryProgressChanged?(): void;
 		isWaitingForCapacity?(agentId: string): boolean;
-		/**
-		 * Live repair evidence scope, forwarded to RequestEvidence. The
-		 * preadmission repair host retires the broken Owner record so its
-		 * frozen bytes never enter evidence traversals.
-		 */
-		isEvidenceLive?: (agentId: string) => boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
@@ -148,7 +142,6 @@ export class MessageCoordinator {
 			this.#agents,
 			this.#quarantinedAgentIds,
 			this.#quarantinedWorkflowAgentIds,
-			options.isEvidenceLive,
 		);
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,

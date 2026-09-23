@@ -27,31 +27,24 @@ export type AgentSelectionSession = Readonly<{
 }>;
 
 const AGENTS_OWNER_ARGUMENT = "owner";
-const AGENTS_REPAIR_ARGUMENT = "repair";
-export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner|repair]";
+export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner]";
 
-type AgentsCommandMode = "selector" | "owner" | "repair";
+type AgentsCommandMode = "selector" | "owner";
 
 export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
 	const argument = args.trim();
 	if (!argument) return "selector";
 	if (argument === AGENTS_OWNER_ARGUMENT) return "owner";
-	if (argument === AGENTS_REPAIR_ARGUMENT) return "repair";
 	throw new Error(AGENTS_COMMAND_USAGE);
 }
 
-export function getAgentsArgumentCompletions(argumentPrefix: string, options?: Readonly<{ includeRepair?: boolean }>): {
+export function getAgentsArgumentCompletions(argumentPrefix: string): {
 	value: string;
 	label: string;
 }[] | null {
-	const completions: Array<{ value: string; label: string }> = [];
-	if (AGENTS_OWNER_ARGUMENT.startsWith(argumentPrefix.trim())) {
-		completions.push({ value: AGENTS_OWNER_ARGUMENT, label: AGENTS_OWNER_ARGUMENT });
-	}
-	if (options?.includeRepair && AGENTS_REPAIR_ARGUMENT.startsWith(argumentPrefix.trim())) {
-		completions.push({ value: AGENTS_REPAIR_ARGUMENT, label: AGENTS_REPAIR_ARGUMENT });
-	}
-	return completions.length > 0 ? completions : null;
+	return AGENTS_OWNER_ARGUMENT.startsWith(argumentPrefix.trim())
+		? [{ value: AGENTS_OWNER_ARGUMENT, label: AGENTS_OWNER_ARGUMENT }]
+		: null;
 }
 
 /** Capture every selector input at one scoped Owner presentation boundary. */
@@ -67,7 +60,6 @@ export function createAgentSelectorSnapshot(
 		humanAttention: [...view.humanAttention()],
 		operationalAttention: [...view.operationalAttention()],
 		reports: [...view.reportHistory()],
-		...(typeof (view as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? { repairedOwner: (view as unknown as { repairedOwnerEntry: () => RemoteAgentSelectorSnapshot['repairedOwner'] }).repairedOwnerEntry() ?? undefined } : {}),
 	};
 }
 
@@ -101,15 +93,6 @@ export function createAgentSelectionSession(
 			// Selecting the mounted participant only closes the selector. Do not
 			// reacquire its presentation, which could replace the live attachment.
 			if (action.kind === "select_agent" && action.agentId === selectedAgentId) return;
-			// Repaired Owner is never selectable: greyed pending is informational only
-			// (no O shortcut, no footer action, no Enter action) and pre-commit has
-			// no Owner row at all. Admission happens automatically on commit success,
-			// never via selection. Explicit picks that still arrive here are silently
-			// ignored (no admit, no live routing, no error).
-			const repairedEntry = typeof (view as unknown as { repairedOwnerEntry?: unknown }).repairedOwnerEntry === "function" ? (view as unknown as { repairedOwnerEntry: () => { ownerId: string } | undefined }).repairedOwnerEntry() : undefined;
-			if (action.kind === "select_agent" && repairedEntry && action.agentId === repairedEntry.ownerId) {
-				return;
-			}
 			const selection = await view.openAgentPresentation(action.agentId);
 			if (selection.kind === "post_mortem") postMortemAgentView = selection;
 			else preparedAgentView = selection.view;
@@ -149,29 +132,18 @@ export function createOwnerAgentPresentationHandlers(
 	resolveView: () => HumanPresentationCoordinatorView,
 	selectedAgentId: string,
 	postMortemPresenter?: PostMortemAgentPresenter,
-	options?: Readonly<{ repairModeratorAgentId?: string }>,
 ): OwnerParticipantPresentationHandlers {
-	const repairModeratorAgentId = options?.repairModeratorAgentId;
 	return {
 		setReportRead: async (reportId, read) => resolveView().setReportRead(reportId, read),
 		snapshot: async () => {
 			const view = resolveView();
 			// Child navigation uses the same admitted projection as Owner navigation,
 			// not a transcript refresh that could block the route back to Owner.
-			const snapshot = createAgentSelectorSnapshot(view, selectedAgentId);
-			// Repair context keeps the switcher available but hides the broken
-			// Owner and every other agent: the repair Moderator sees only
-			// itself. Diagnostics (attention, reports) stay visible.
-			return repairModeratorAgentId === undefined
-				? snapshot
-				: filterRepairModeratorSelectorSnapshot(snapshot, repairModeratorAgentId);
+			return createAgentSelectorSnapshot(view, selectedAgentId);
 		},
 		addChangeHandler(handler) {
 			return resolveView().addAgentActivityChangeHandler(() =>
-				handler(filterRepairSnapshotIfNeeded(
-					createAgentSelectorSnapshot(resolveView(), selectedAgentId),
-					repairModeratorAgentId,
-				))
+				handler(createAgentSelectorSnapshot(resolveView(), selectedAgentId))
 			);
 		},
 		async select(action, signal) {
@@ -200,60 +172,6 @@ export function createOwnerAgentPresentationHandlers(
 	};
 }
 
-function filterRepairSnapshotIfNeeded(
-	snapshot: RemoteAgentSelectorSnapshot,
-	repairModeratorAgentId: string | undefined,
-): RemoteAgentSelectorSnapshot {
-	return repairModeratorAgentId === undefined
-		? snapshot
-		: filterRepairModeratorSelectorSnapshot(snapshot, repairModeratorAgentId);
-}
-
-/**
- * Repair-context selector scope with prefer-live: while a repaired entry is
- * present (greyed pending, never selectable) the switcher shows
- * only the Moderator itself, never the broken Owner or other agents. Once the
- * entry is suppressed post-admission (repaired undefined) and the original
- * roster has a live/dormant Owner, include that Owner so the menu still opens
- * (live Owner stays live alongside self; dormant Owner stays dormant; self
- * stays live even if originally dormant; selected stays Moderator). Attention
- * and report history pass through untouched so diagnostics stay available.
- */
-export function filterRepairModeratorSelectorSnapshot(
-	snapshot: RemoteAgentSelectorSnapshot,
-	repairModeratorAgentId: string,
-): RemoteAgentSelectorSnapshot {
-	const self = [...snapshot.live, ...snapshot.dormant].find(
-		(status) => status.agentId === repairModeratorAgentId,
-	);
-	if (!self) {
-		throw new Error(
-			"unavailable: repair Moderator " + repairModeratorAgentId + " has no admitted record in the selector snapshot",
-		);
-	}
-	// Pending/disabled row shows via repaired: keep tight repair scope.
-	if (snapshot.repairedOwner) {
-		return { ...snapshot, live: [self], dormant: [], selectedAgentId: repairModeratorAgentId };
-	}
-	// Prefer-live: post-admission suppression (no repaired entry) with an Owner
-	// in the original roster includes that Owner so #effectiveOwnerId never
-	// throws and the menu opens for live and Dormant Moderators alike.
-	const owner = [...snapshot.live, ...snapshot.dormant].find(
-		(status) => status.agentId === status.workflowId,
-	);
-	if (!owner || owner.agentId === repairModeratorAgentId) {
-		return { ...snapshot, live: [self], dormant: [], selectedAgentId: repairModeratorAgentId };
-	}
-	const ownerWasLive = snapshot.live.some((status) => status.agentId === owner.agentId);
-	if (ownerWasLive) {
-		if (self.agentId === owner.agentId) {
-			return { ...snapshot, live: [self], dormant: [], selectedAgentId: repairModeratorAgentId };
-		}
-		return { ...snapshot, live: [self, owner], dormant: [], selectedAgentId: repairModeratorAgentId };
-	}
-	return { ...snapshot, live: [self], dormant: [owner], selectedAgentId: repairModeratorAgentId };
-}
-
 /** Register the real child-local selector against its truthful Pi TUI context. */
 export function registerRemoteAgentsCommand(
 	pi: ExtensionAPI,
@@ -263,22 +181,14 @@ export function registerRemoteAgentsCommand(
 		description: "Show Agents in the current Workflow",
 		getArgumentCompletions: getAgentsArgumentCompletions,
 		handler: async (args, ctx) => {
-			const commandMode = parseAgentsCommandArgument(args);
-			if (commandMode === "repair") throw new Error(AGENTS_COMMAND_USAGE);
-			if (commandMode === "owner") {
+			if (parseAgentsCommandArgument(args) === "owner") {
 				const snapshot = await presentation.snapshot();
 				// The Owner exists in the roster whatever its Run phase, so /agents owner
 				// still returns to it while a stopped Owner Run is Dormant.
 				const owner = [...snapshot.live, ...snapshot.dormant].find(
 					(status) => status.agentId === status.workflowId,
 				);
-				// Repair Owner is never selectable via /agents owner: pre-commit has no
-				// Owner row and pending is greyed/non-selectable. Admission is automatic
-				// on commit, never via selection. Missing live Owner is a silent no-op
-				// (no admit, no routing, no error) so the menu stays usable.
-				if (!owner) {
-					return;
-				}
+				if (!owner) throw new Error("Agent selector roster has no Owner");
 				await presentation.select({
 					kind: "select_agent",
 					agentId: owner.agentId,

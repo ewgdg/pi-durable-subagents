@@ -110,14 +110,6 @@ export function resolveAgentRunConfiguration(options: {
 			? inherited.thinking
 			: overrides?.model?.thinking ?? defaults.thinking,
 	};
-	// Template-default and inherited models bypass the explicit-id availability
-	// check above. A repair Moderator inherits the Owner model by default, so an
-	// Owner exclusion must refuse here rather than silently selecting a banned
-	// model for the fresh run.
-	if (options.isModelExcluded?.(modelConfiguration.model)) {
-		const selectedIdentity = modelConfiguration.model.provider + "/" + modelConfiguration.model.modelId;
-		throw new Error("Configured Agent model is excluded by model policy: " + selectedIdentity);
-	}
 	// The child clamps an unsupported level when it starts, so the launch specification
 	// and the recorded configuration must both name the level it will really run.
 	const thinking = options.clampThinking?.(modelConfiguration.model, modelConfiguration.thinking)
