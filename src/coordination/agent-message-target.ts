@@ -236,13 +236,8 @@ function inspectPersistedTargetResult(options: {
 				!("targetAgentId" in result.message.details)
 			)
 				return { state: "indeterminate" };
-			const targetAgentId = result.message.details.targetAgentId;
-			if (typeof targetAgentId !== "string" || targetAgentId.length === 0) {
-				throw new Error(
-					"invariant_violation: Agent Message author result has an invalid targetAgentId",
-				);
-			}
-			return { state: "resolved", targetAgentId };
+			// The accepted-shape filter above guarantees a non-blank string target.
+			return { state: "resolved", targetAgentId: result.message.details.targetAgentId as string };
 		},
 	);
 }

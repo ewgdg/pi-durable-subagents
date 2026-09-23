@@ -13,10 +13,8 @@ import {
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
-import {
-	HUMAN_REQUEST_FENCED_MESSAGE as FENCED_MESSAGE,
-	HUMAN_REQUEST_INTERRUPTED_MESSAGE as INTERRUPTED_MESSAGE,
-} from "./human-request-messages.ts";
+const INTERRUPTED_MESSAGE = "Human request interrupted before an answer was provided.";
+const FENCED_MESSAGE = "Human request ended because its Agent Run is no longer available.";
 const INTERACTIVE_EDITOR_REQUIRED_MESSAGE =
 	"Human Request requires an interactive Agent editor.";
 const IMAGE_ANSWER_UNSUPPORTED_MESSAGE =
