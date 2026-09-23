@@ -142,7 +142,7 @@ test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) =>
 	assert.match((await h.frame()).join("\n"), /agent-05/);
 
 	// Chrome wheel is handled but does not move selection.
-	for (const target of ["Live", "Go to Owner", "agent-05", "Tab views"]) {
+	for (const target of ["Live", "Go to Owner", "Tab views"]) {
 		const p = await h.point(target);
 		h.terminal.mouse(65, p.x, p.y);
 		h.terminal.mouse(64, p.x, p.y);
@@ -163,6 +163,37 @@ test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) =>
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 	assert.match((await h.frame()).join("\n"), /agent-05/);
+
+	// One wheel event moves exactly one row.
+	selected = await h.point("Agent 05");
+	h.terminal.mouse(65, selected.x, selected.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
+	assert.match((await h.frame()).join("\n"), /agent-06/);
+
+	// Wheel over the selected row details also moves selection.
+	const details = await h.point("agent-06");
+	h.terminal.mouse(65, details.x, details.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 07/);
+	const detailsBack = await h.point("agent-07");
+	h.terminal.mouse(64, detailsBack.x, detailsBack.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
+
+	// Wheel over the Agents heading moves selection too.
+	const heading = await h.point("Agents");
+	h.terminal.mouse(65, heading.x, heading.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 07/);
+	const headingUp = await h.point("Agents");
+	h.terminal.mouse(64, headingUp.x, headingUp.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
+	selected = await h.point("Agent 06");
+	h.terminal.mouse(64, selected.x, selected.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 
 	// Wheel at the top bound stays put without wrapping.
 	const top = await harness(t, { live, selectedAgentId: "agent-00" });

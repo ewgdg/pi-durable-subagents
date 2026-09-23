@@ -912,19 +912,19 @@ class AgentSelectorSurface implements Component {
 			}
 			lines.push({ text: line, regions, roster: true });
 			if (startIndex + offset === this.#selectedIndex) {
-				// Details are informational: no click or wheel region.
+				// Details are informational for clicks; wheel over them scrolls selection.
 				lines.push(...this.#focusedDetailLines(item, width)
-					.slice(0, detailRows).map((text) => ({ text })));
+					.slice(0, detailRows).map((text) => ({ text, roster: true })));
 			}
 		}
 		const rendered: SelectorLine[] = [
-			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "History" : "Attention Inbox")) }, ...attention] : []),
+			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "History" : "Attention Inbox")), roster: true }, ...attention] : []),
 			...(reportHistory ? [] : [this.#activeTab === "live"
-				? this.#scopeTitle(width)
-				: { text: this.#theme.fg("toolTitle", "Agents") }]),
+				? { ...this.#scopeTitle(width), roster: true }
+				: { text: this.#theme.fg("toolTitle", "Agents"), roster: true }]),
 			...agents,
 			...(showEmptyMessage ? [{ text: this.#theme.fg("dim", reportHistory
-				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : quarantinedHistory ? "  No quarantined Agents" : "  No dormant Agents") }] : []),
+				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : quarantinedHistory ? "  No quarantined Agents" : "  No dormant Agents"), roster: true }] : []),
 		];
 		// Share one terminal-bounded budget across tabs, including optional headers,
 		// empty messages and scrolling, so content changes never move the frame.
