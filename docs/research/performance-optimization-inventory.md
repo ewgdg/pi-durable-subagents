@@ -1,6 +1,8 @@
 # Performance optimization inventory: incremental work across Agents
 
-Status: investigation and proposed work, not an implemented runtime design.
+Status: investigation and proposed work, not a claim that the entire inventory is implemented.
+
+The first implementation slice is documented in [Activity presentation](../activity-presentation.md#incremental-refresh-and-structural-order): known-Agent activity refreshes use dirty-source batches, authority order is cached across unchanged roster structure, and focused work counters/benchmarks cover both. Unscoped refreshes, global subscriptions, relationship-graph redesign, and the other inventory items remain separate work.
 
 Inspected baseline: `e1d08de` on `main`, after withdrawing #129. Investigation date: 2026-09-22 in America/Vancouver (2026-09-23 UTC). Runtime used for the probes: Node `v24.21.0`.
 
