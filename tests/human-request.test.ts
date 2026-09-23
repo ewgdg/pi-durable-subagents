@@ -961,3 +961,41 @@ function textContent(content: readonly unknown[]): string {
 			: []
 	).join("\n");
 }
+
+test("a replacement coordinator does not restore unanswered historical Human Requests", async (t) => {
+	let view: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+	const host = await createUnboundTestOwnerHost(t,
+		(pi) => createAgentBoundExtension(() => {
+			if (!view) throw new Error("View unavailable");
+			return view;
+		})(pi),
+	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const manager = host.session.sessionManager;
+	// Neither a missing result nor a non-user Run fence leaves an answerable call:
+	// Human attention is volatile and ends with the coordinator that admitted it.
+	manager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("ask_user", { question: "Asked before host loss." }, { id: "ask-without-result" }),
+		{ stopReason: "toolUse" },
+	));
+	manager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("ask_user", { question: "Fenced before host loss." }, { id: "ask-run-fenced" }),
+		{ stopReason: "toolUse" },
+	));
+	manager.appendMessage({
+		role: "toolResult",
+		toolCallId: "ask-run-fenced",
+		toolName: "ask_user",
+		content: [{ type: "text", text: "Human request ended because its Agent Run is no longer available." }],
+		isError: true,
+		timestamp: Date.now(),
+	});
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-durable-subagents>",
+	});
+	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
+	view = coordinator.forAgent(identity.agentId);
+
+	assert.deepEqual(view.humanAttention(), []);
+	assert.equal(view.hasPendingHumanQuestions(), false);
+});

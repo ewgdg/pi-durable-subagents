@@ -542,10 +542,6 @@ export class WorkflowCoordinator {
 	async initialize(): Promise<void> {
 		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
 		await this.#messages.refreshTranscriptFacts();
-		let recoveredQuestions = 0;
-		for (const record of this.#agents.values()) {
-			recoveredQuestions += this.#humanRequests.recoverPendingRequests(record.identity.agentId);
-		}
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
 	}
 
