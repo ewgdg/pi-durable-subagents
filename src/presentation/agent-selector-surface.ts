@@ -67,6 +67,11 @@ const SELECTION_SPINNER_FRAMES = [
 ] as const;
 const SELECTION_SPINNER_INTERVAL_MILLISECONDS = 80;
 
+// One physical wheel tick can arrive as several same-direction wheel events
+// (high-rate terminals, multiplexer re-emission). Repeats inside this window
+// collapse into a single step so one tick always moves exactly one entry.
+const WHEEL_TICK_WINDOW_MS = 50;
+
 export type AgentSelectorAction =
 	| Readonly<{ kind: "open_report"; reportId: string }>
 	| Readonly<{
@@ -95,6 +100,8 @@ export type AgentSelectorOptions = Readonly<{
 		tui: TUI,
 	): Promise<void> | void;
 	onSelectionError?(error: unknown): void;
+	/** Clock for wheel-tick coalescing; defaults to Date.now. Tests inject a fake. */
+	now?: () => number;
 }>;
 
 type AgentSelectorItem = SelectItem & Readonly<{
@@ -151,6 +158,8 @@ class AgentSelectorSurface implements Component {
 	#focusedAgentRow: { agentId: string; index: number } | undefined;
 	#visibleRows = 1;
 	#rosterScrollOffset = 0;
+	#lastWheelTime = Number.NEGATIVE_INFINITY;
+	#lastWheelDirection = 0;
 	#list: SelectList;
 	#selectionPending = false;
 	#hitRegions: HitRegion[] = [];
@@ -280,6 +289,16 @@ class AgentSelectorSurface implements Component {
 			if (this.#rosterRows.has(event.y) &&
 				event.x >= this.#contentLeft && event.x < this.#contentLeft + this.#contentWidth &&
 				event.wheelDelta) {
+				// Collapse a same-direction burst inside one tick window into a
+				// single step; reversing direction responds immediately.
+				const direction = event.wheelDelta < 0 ? -1 : 1;
+				const now = this.#options.now?.() ?? Date.now();
+				if (direction === this.#lastWheelDirection &&
+					now - this.#lastWheelTime < WHEEL_TICK_WINDOW_MS) {
+					return { handled: true, render: false };
+				}
+				this.#lastWheelDirection = direction;
+				this.#lastWheelTime = now;
 				// SelectList's public wheel behavior scrolls by moving selection one row.
 				const beforeIndex = this.#selectedIndex;
 				const beforeOffset = this.#rosterScrollOffset;

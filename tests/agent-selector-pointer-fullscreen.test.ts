@@ -137,12 +137,17 @@ test("hover highlights without moving keyboard selection; details and other butt
 
 test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) => {
 	const live = [status("owner", "Owner", null), ...Array.from({ length: 25 }, (_, i) => status("agent-" + String(i).padStart(2, "0"), "Agent " + String(i).padStart(2, "0")))];
-	const h = await harness(t, { live, selectedAgentId: "agent-05" });
+	// Wheel ticks are simulated with an explicit clock: same-timestamp repeats
+	// belong to one physical tick, while +100ms means the next tick.
+	let now = 1_000;
+	const advance = (ms: number) => { now += ms; };
+	const h = await harness(t, { live, selectedAgentId: "agent-05", now: () => now });
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 	assert.match((await h.frame()).join("\n"), /agent-05/);
 
 	// Chrome wheel is handled but does not move selection.
 	for (const target of ["Live", "Go to Owner", "Tab views"]) {
+		advance(100);
 		const p = await h.point(target);
 		h.terminal.mouse(65, p.x, p.y);
 		h.terminal.mouse(64, p.x, p.y);
@@ -152,20 +157,21 @@ test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) =>
 
 	// Wheel down moves selection one row per event; details follow the new selection.
 	let selected = await h.point("Agent 05");
-	for (let step = 0; step < 2; step++) h.terminal.mouse(65, selected.x, selected.y);
+	for (let step = 0; step < 2; step++) { advance(100); h.terminal.mouse(65, selected.x, selected.y); }
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 07/);
 	assert.match((await h.frame()).join("\n"), /agent-07/);
 
 	// Wheel up moves selection back.
 	selected = await h.point("Agent 07");
-	for (let step = 0; step < 2; step++) h.terminal.mouse(64, selected.x, selected.y);
+	for (let step = 0; step < 2; step++) { advance(100); h.terminal.mouse(64, selected.x, selected.y); }
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 	assert.match((await h.frame()).join("\n"), /agent-05/);
 
 	// One wheel event moves exactly one row.
 	selected = await h.point("Agent 05");
+	advance(100);
 	h.terminal.mouse(65, selected.x, selected.y);
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
@@ -173,30 +179,36 @@ test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) =>
 
 	// Wheel over the selected row details also moves selection.
 	const details = await h.point("agent-06");
+	advance(100);
 	h.terminal.mouse(65, details.x, details.y);
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 07/);
 	const detailsBack = await h.point("agent-07");
+	advance(100);
 	h.terminal.mouse(64, detailsBack.x, detailsBack.y);
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
 
 	// Wheel over the Agents heading moves selection too.
 	const heading = await h.point("Agents");
+	advance(100);
 	h.terminal.mouse(65, heading.x, heading.y);
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 07/);
 	const headingUp = await h.point("Agents");
+	advance(100);
 	h.terminal.mouse(64, headingUp.x, headingUp.y);
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
 	selected = await h.point("Agent 06");
+	advance(100);
 	h.terminal.mouse(64, selected.x, selected.y);
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 
 	// Wheel at the top bound stays put without wrapping.
-	const top = await harness(t, { live, selectedAgentId: "agent-00" });
+	let topNow = 1_000;
+	const top = await harness(t, { live, selectedAgentId: "agent-00", now: () => topNow });
 	assert.match((await top.frame()).join("\n"), /→ Agent 00/);
 	const topPoint = await top.point("Agent 00");
 	for (let step = 0; step < 5; step++) top.terminal.mouse(64, topPoint.x, topPoint.y);
@@ -205,7 +217,8 @@ test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) =>
 	await top.input("\x1b");
 
 	// Wheel at the bottom bound does not wrap to the top.
-	const bottom = await harness(t, { live, selectedAgentId: "agent-24" });
+	let bottomNow = 1_000;
+	const bottom = await harness(t, { live, selectedAgentId: "agent-24", now: () => bottomNow });
 	const bottomPoint = await bottom.point("Agent 24");
 	for (let step = 0; step < 5; step++) bottom.terminal.mouse(65, bottomPoint.x, bottomPoint.y);
 	await bottom.frame();
@@ -219,6 +232,7 @@ test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) =>
 		const lines = await h.frame();
 		const row = lines.find((line) => line.includes("→ Agent"))!;
 		const q = await h.point(row.trim().replace(/^│\s*/, "").split("  ")[0]!);
+		advance(100);
 		h.terminal.mouse(65, q.x, q.y);
 		await h.frame();
 	}
@@ -242,16 +256,51 @@ test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) =>
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "agent-" + selectedLabel });
 
 	// Tiny rosters keep selection at the scroll bound.
+	let tinyNow = 1_000;
 	const tiny = await harness(t, {
 		live: [status("owner", "Owner", null), status("tiny", "Tiny")],
 		selectedAgentId: "tiny",
+		now: () => tinyNow,
 	});
 	const tinyTarget = await tiny.point("Tiny");
+	tinyNow += 100;
 	tiny.terminal.mouse(65, tinyTarget.x, tinyTarget.y);
+	tinyNow += 100;
 	tiny.terminal.mouse(64, tinyTarget.x, tinyTarget.y);
 	await tiny.frame();
 	assert.match((await tiny.frame()).join("\n"), /→ Tiny/, "tiny rosters keep their selection at the scroll bound");
 	await tiny.input("\x1b");
+});
+
+test("wheel bursts within one tick move selection exactly once", { timeout: 5_000 }, async (t) => {
+	const live = [status("owner", "Owner", null), ...Array.from({ length: 25 }, (_, i) => status("agent-" + String(i).padStart(2, "0"), "Agent " + String(i).padStart(2, "0")))];
+	// One physical tick can arrive as several wheel events (high-rate terminals,
+	// multiplexer re-emission): same-tick repeats collapse into a single step,
+	// while later ticks step again. Reversals respond immediately.
+	let now = 1_000;
+	const h = await harness(t, { live, selectedAgentId: "agent-05", now: () => now });
+	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
+	const burst = await h.point("Agent 05");
+	for (let step = 0; step < 3; step++) h.terminal.mouse(65, burst.x, burst.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
+	assert.match((await h.frame()).join("\n"), /agent-06/);
+	// Still inside the tick window: further repeats stay collapsed.
+	for (let step = 0; step < 3; step++) h.terminal.mouse(65, burst.x, burst.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
+	// The next tick steps again.
+	now += 1_000;
+	const next = await h.point("Agent 06");
+	h.terminal.mouse(65, next.x, next.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 07/);
+	// Reversing within the window responds immediately.
+	const back = await h.point("Agent 07");
+	h.terminal.mouse(64, back.x, back.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 06/);
+	await h.input("\x1b");
 });
 
 test("async preparation retains keyboard focus and blocks pointer actions inside the panel", { timeout: 5_000 }, async (t) => {
