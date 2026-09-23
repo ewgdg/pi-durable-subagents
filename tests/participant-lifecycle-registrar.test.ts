@@ -396,7 +396,6 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		message: toolResultMessage,
 		toolResults: [toolResultMessage],
 	}, context);
-	// turn_end is lane-free; lane reconciliation now runs at agent_before_settle.
 	// Real Pi order is agent_end before agent_before_settle.
 	await pi.emit("agent_end", {
 		type: "agent_end",
@@ -412,6 +411,7 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		"execution-started",
 		["human-result", { message: toolResultMessage }],
 		["tool-started", { toolCallId: "tool-call-1", toolName: "read" }],
+		"safe-boundary",
 		"execution-ended",
 		"safe-boundary",
 	]);
@@ -538,6 +538,9 @@ test("ordinary and Moderator extensions preserve local lifecycle operation order
 				"reconcile-committed-results",
 				"ensure-execution",
 				["begin-tool", "tool-call-2", "bash"],
+				"reconcile-human-results",
+				"reconcile-committed-results",
+				"reach-safe-boundary",
 				"reconcile-committed-results",
 				"end-execution",
 				"reconcile-human-results",
@@ -674,6 +677,11 @@ test("participant lifecycle registrar preserves fail-fast handler errors", async
 				toolName: "read",
 				args: {},
 			},
+		],
+		[
+			"turn_end",
+			"safeBoundaryReached",
+			{ type: "turn_end", turnIndex: 0, message: toolResultMessage, toolResults: [] },
 		],
 		[
 			"agent_before_settle",

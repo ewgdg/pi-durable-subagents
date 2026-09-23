@@ -169,20 +169,21 @@ export function registerParticipantLifecycle(
 			toolName: event.toolName,
 		})
 	);
-	// turn_end stays synchronous and lane-free: it only records Answer delivery and
-	// returns append-only drafts. Awaiting lane-admitting coordination here would
-	// deadlock Run disposal while it waits for the same turn to settle
-	// (see src/coordination/messages.ts). Lane reconciliation runs at
-	// agent_before_settle instead, after Pi drains its queues.
-	pi.on("turn_end", (event, ctx) => {
+	// Pi awaits turn_end after the complete issued tool batch and before it builds
+	// the next model context, making this the Steer freeze boundary. Run disposal
+	// cannot deadlock here: reachSafeBoundary skips the lane once a Run is ending
+	// or interrupting (see src/coordination/messages.ts).
+	pi.on("turn_end", async (event, ctx) => {
 		if (event.toolResults.some(deliveredAnswer)) answerDelivered = true;
+		await handlers.safeBoundaryReached();
 		const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
 		const frames = currentFrames(transcript, ctx.sessionManager.getSessionId());
 		const hides = resolvedAttentionEdits(transcript, frames, false);
 		return hides.length ? { entries: hides } : undefined;
 	});
-	// agent_before_settle fires after Pi drains queues and before settlement; a
-	// returned continue:true requests one next provider request when canContinue.
+	// agent_before_settle fires after Pi drains queues and before settlement; its
+	// boundary covers work that arrived after the last turn_end. A returned
+	// continue:true requests one next provider request when canContinue.
 	// This replaces the former agent_end + sendMessage(steer, triggerTurn) loop.
 	pi.on("agent_before_settle", async (event, ctx) => {
 		await handlers.safeBoundaryReached();
