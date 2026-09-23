@@ -138,6 +138,7 @@ class ModelPolicySurface implements Component, Focusable {
 	#entries: readonly string[];
 	#selectedIndex = 0;
 	#status: string | undefined;
+	#saving = false;
 	#focused = false;
 
 	constructor(
@@ -190,6 +191,10 @@ class ModelPolicySurface implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
+		// Each change derives from the last persisted entries, so an overlapping
+		// save would overwrite the pending one; closing early would let the caller
+		// act on a policy that is not yet written.
+		if (this.#saving) return;
 		if (matchesKey(data, Key.escape)) {
 			this.#done();
 			return;
@@ -327,11 +332,16 @@ class ModelPolicySurface implements Component, Focusable {
 	}
 
 	async #commit(next: readonly string[]): Promise<void> {
+		this.#saving = true;
+		this.#status = "Saving…";
+		this.#tui.requestRender();
 		try {
 			this.#entries = [...(await this.#options.persist(next))];
 			this.#status = undefined;
 		} catch (error) {
 			this.#status = error instanceof Error ? error.message : String(error);
+		} finally {
+			this.#saving = false;
 		}
 		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, this.#rows().length - 1));
 		this.#tui.requestRender();

@@ -161,6 +161,46 @@ test("search scopes bulk ban and allow to the visible rows", async () => {
 	await opened;
 });
 
+test("a pending save blocks overlapping changes and dismissal", async () => {
+	const harness = surfaceHarness();
+	const persisted: Array<readonly string[]> = [];
+	let finishSave: () => void = () => {};
+	let closed = false;
+	const opened = openModelPolicySurface(harness.ui, {
+		availableModels: MODELS,
+		excludedModels: [],
+		persist(entries) {
+			persisted.push(entries);
+			return new Promise((resolve) => { finishSave = () => resolve(entries); });
+		},
+	}).then(() => { closed = true; });
+	await Promise.resolve();
+
+	harness.component.handleInput?.("\x1b[B");
+	harness.component.handleInput?.("\x1b[B");
+	harness.component.handleInput?.("\x1b[B");
+	harness.component.handleInput?.("\r");
+	harness.component.handleInput?.("\x1b[B");
+	harness.component.handleInput?.("\r");
+	harness.component.handleInput?.("\x1b");
+	await settle();
+	assert.deepEqual(persisted, [["openai-codex/gpt-5.6-luna"]]);
+	assert.equal(closed, false);
+
+	finishSave();
+	await settle();
+	harness.component.handleInput?.("\x1b[B");
+	harness.component.handleInput?.("\r");
+	await settle();
+	assert.deepEqual(persisted.at(-1), ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-6-astra"]);
+
+	finishSave();
+	await settle();
+	harness.component.handleInput?.("\x1b");
+	await opened;
+	assert.equal(closed, true);
+});
+
 test("a refused write keeps the previous state and reports the failure", async () => {
 	const harness = surfaceHarness();
 	let attempts = 0;
@@ -182,6 +222,12 @@ test("a refused write keeps the previous state and reports the failure", async (
 	await settle();
 	assert.match(render(harness.component), /could not be written/);
 	assert.match(lineWith(harness.component, "gpt-5.6-luna"), /✓/);
+
+	// A failed save releases the pending guard so the change can be retried.
+	harness.component.handleInput?.("\r");
+	await settle();
+	assert.equal(attempts, 2);
+	assert.doesNotMatch(lineWith(harness.component, "gpt-5.6-luna"), /✓/);
 
 	harness.component.handleInput?.("\x1b");
 	await opened;
