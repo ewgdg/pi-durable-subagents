@@ -2,6 +2,9 @@ import { indexedState, coordinationEntries } from "../transcript/retained-transc
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { deliveriesBySource } from "../protocol/message-delivery.ts";
+import { resolveCommittedAgentMessageInput } from "../protocol/message.ts";
+import { validateAgentMessageResultShape } from "../protocol/message-result-shape.ts";
+import { readCoordinationRecord } from "../protocol/replay-rejection.ts";
 import { EvidenceUnavailableError, type AgentRecord } from "./agent-record.ts";
 import { resolveAgentTarget, resolveIdentityCandidate } from "./agent-target.ts";
 
@@ -199,13 +202,25 @@ function inspectPersistedTargetResult(options: {
 		`${options.authorAgentId}\0${options.toolCallId}`,
 		entries.length,
 		(): CommittedAgentMessageTargetInspection => {
+			const { operation } = resolveCommittedAgentMessageInput({
+				agentId: options.authorAgentId,
+				transcript: options.transcript,
+				toolCallId: options.toolCallId,
+			});
 			const results = entries.filter(
 				(entry) =>
 					entry.type === "message" &&
 					entry.message.role === "toolResult" &&
 					entry.message.toolName === "agent_message" &&
 					entry.message.toolCallId === options.toolCallId,
-			);
+			).filter((entry) => {
+				if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError) return true;
+				const details = entry.message.details;
+				// A rejected receipt stays in the replay-rejection index but must not
+				// bind a target or count as a duplicate author result.
+				return readCoordinationRecord(options.transcript, options.authorAgentId, entry,
+					() => validateAgentMessageResultShape(details, operation), options.toolCallId).accepted;
+			});
 			if (results.length > 1) {
 				throw new Error(
 					`invariant_violation: Agent Message ${options.toolCallId} has multiple author results`,

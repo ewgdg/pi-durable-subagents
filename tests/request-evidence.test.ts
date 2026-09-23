@@ -773,3 +773,48 @@ test("an Answer author result rejected by shape cannot discharge a Request throu
 		);
 	}
 });
+
+test("a rejected Request receipt cannot block unrelated relationship refreshes", async () => {
+	const history = requestHistory();
+	const healthyRequestId = history.request();
+	const toolCallId = "malformed-request-receipt";
+	const entryId = history.requester.manager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_message", {
+			title: "Fixture request",
+			operation: "request",
+			targetAgent: history.responder.record.identity.agentId,
+			question: "Malformed receipt.",
+		}, { id: toolCallId }),
+		{ stopReason: "toolUse" },
+	));
+	history.requester.manager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Committed." }],
+		details: {
+			requestMessageId: deriveMessageIdentity({ agentId: "requester", entryId, toolCallId }),
+			targetAgentId: 42,
+			messageStatus: "sent",
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const warm = new RequestEvidence(history.agents);
+	for (const agent of history.agents.values()) await agent.transcript.refresh();
+
+	for (const evidence of [warm, new RequestEvidence(history.agents)]) {
+		await evidence.refreshRelationships();
+		assert.deepEqual(await evidence.refreshRelationshipsFor(history.responder.record), {
+			awaitingAnswerRequestIds: [],
+			answerOwedRequestIds: [healthyRequestId],
+		});
+		assert.ok((await evidence.refreshRelationshipsFor(history.requester.record))
+			.awaitingAnswerRequestIds.includes(healthyRequestId));
+	}
+	assert.deepEqual(
+		inspectCoordinationRejections(history.requester.record.transcript.inspect(), "requester")
+			.map(({ source }) => source.toolCallId),
+		[toolCallId],
+	);
+});

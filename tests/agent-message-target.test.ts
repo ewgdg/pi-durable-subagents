@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type JsonValue } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { resolveCommittedAgentMessageTargetId } from "../src/coordination/agent-message-target.ts";
@@ -11,6 +11,7 @@ import { RequestEvidence } from "../src/coordination/request-evidence.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
+import { inspectCoordinationRejections } from "../src/protocol/replay-rejection.ts";
 
 const agents = [
 	{ agentId: "workflow-owner-1111aaaa", label: "Owner" },
@@ -387,6 +388,72 @@ test("persisted selector results must name a known or quarantined full identity"
 		toolCallId,
 		targetAgent: "Researcher",
 	}), /invariant_violation: Agent Message author result names unknown target unknown-target/);
+});
+
+test("rejected Message receipts never bind or duplicate a persisted target", async (t) => {
+	const authorAgentId = "workflow-owner-1111aaaa";
+	const researcherId = "agent-research-2222bbbb";
+	const reviewerId = "agent-review-3333bbbb";
+	const valid = (messageId: string) => ({ messageId, targetAgentId: researcherId, messageStatus: "sent" });
+	const cases: Array<{
+		name: string;
+		results: (messageId: string) => Array<{ details: Record<string, unknown>; isError?: boolean }>;
+		expected: string | RegExp;
+		rejections: number;
+	}> = [
+		{ name: "numeric target", results: (id) => [{ details: { ...valid(id), targetAgentId: 42 } }], expected: researcherId, rejections: 1 },
+		{ name: "blank target", results: (id) => [{ details: { ...valid(id), targetAgentId: " " } }], expected: researcherId, rejections: 1 },
+		{ name: "misleading extra-field receipt", results: (id) => [{ details: { ...valid(id), targetAgentId: reviewerId, extra: true } }], expected: researcherId, rejections: 1 },
+		{ name: "malformed plus valid", results: (id) => [{ details: { ...valid(id), targetAgentId: 42 } }, { details: valid(id) }], expected: researcherId, rejections: 1 },
+		{ name: "duplicate accepted", results: (id) => [{ details: valid(id) }, { details: valid(id) }], expected: /multiple author results/, rejections: 0 },
+		{ name: "native error", results: () => [{ details: {}, isError: true }], expected: /not_created/, rejections: 0 },
+	];
+	for (const { name, results, expected, rejections } of cases) {
+		await t.test(name, () => {
+			const toolCallId = "receipt-under-test";
+			const authorSession = session(authorAgentId);
+			const entryId = authorSession.appendMessage(fauxAssistantMessage(
+				fauxToolCall("agent_message", {
+					operation: "send",
+					targetAgent: "Researcher",
+					content: "Bind only from accepted receipts.",
+				}, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			));
+			const messageId = deriveMessageIdentity({ agentId: authorAgentId, entryId, toolCallId });
+			for (const { details, isError = false } of results(messageId)) {
+				authorSession.appendMessage({
+					role: "toolResult",
+					toolCallId,
+					toolName: "agent_message",
+					content: [{ type: "text", text: "Receipt." }],
+					details: details as JsonValue,
+					isError,
+					timestamp: Date.now(),
+				});
+			}
+			const authorTranscript = transcriptFromSessionManager(authorSession).inspect();
+			const resolve = () => resolveCommittedAgentMessageTargetId({
+				agents: new Map([
+					[authorAgentId, record(authorAgentId, "Owner", authorSession)],
+					[researcherId, record(researcherId, "Researcher")],
+					[reviewerId, record(reviewerId, "Reviewer")],
+				]),
+				quarantinedWorkflowAgentIds: new Set(),
+				authorAgentId,
+				authorTranscript,
+				toolCallId,
+				targetAgent: "Researcher",
+			});
+			if (typeof expected === "string") assert.equal(resolve(), expected);
+			else assert.throws(resolve, expected);
+			assert.equal(
+				inspectCoordinationRejections(authorTranscript, authorAgentId)
+					.filter(({ recordKind }) => recordKind === "tool-result").length,
+				rejections,
+			);
+		});
+	}
 });
 
 function session(agentId: string): SessionManager {
