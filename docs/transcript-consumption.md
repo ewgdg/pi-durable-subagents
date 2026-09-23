@@ -132,3 +132,11 @@ enumerated 28,925 references over 89 calls. No records were excluded. These
 measurements are not an identical-fixture comparison with the earlier #93 replay.
 Raw measurements and the copied replay script remain with the task’s investigation
 artifacts; the synthetic benchmark is reproducible from this repository.
+
+## Further optimization work
+
+The [performance optimization inventory](research/performance-optimization-inventory.md)
+records new baseline measurements and proposed work above the existing transcript
+cursor: dirty-Agent routing, dependency-directed relationship updates, observation
+reuse, presentation caching, and bounded catch-up. Those proposals are not current
+runtime guarantees.
