@@ -162,7 +162,7 @@ for (const independentFinishesFirst of [false, true]) {
 	});
 }
 
-test("Owner stays active through terminal child failure and Moderator recovery, then settles when recovery needs a human", {
+test("Owner stays parked until a child provider error suspends it, then settles once without a Moderator", {
 	timeout: 10_000,
 }, async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
@@ -171,18 +171,14 @@ test("Owner stays active through terminal child failure and Moderator recovery, 
 	});
 	let failChild!: () => void;
 	const childGate = new Promise<void>((resolve) => { failChild = resolve; });
-	let askHuman!: () => void;
-	const recoveryGate = new Promise<void>((resolve) => { askHuman = resolve; });
-	t.after(() => { failChild(); askHuman(); });
+	t.after(() => failChild());
 	let moderatorStarted = false;
 	const lifecycle: string[] = [];
 	host.session.subscribe((event) => { if (event.type === "agent_settled") lifecycle.push(event.type); });
 	const routeResponse = async (context: Context) => {
 		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			moderatorStarted = true;
-			await recoveryGate;
-			return fauxAssistantMessage(fauxToolCall("ask_user", { question: "Recovery needs your decision." },
-				{ id: "recovery-needs-human" }), { stopReason: "toolUse" });
+			return fauxAssistantMessage("Unexpected Moderator.");
 		}
 		const serialized = JSON.stringify(context.messages);
 		if (hasDeliveredRequest(context) && !serialized.includes("spawn-to-fail")) {
@@ -198,15 +194,16 @@ test("Owner stays active through terminal child failure and Moderator recovery, 
 	host.model.setResponses(Array.from({ length: 12 }, () => routeResponse));
 	const prompt = host.session.prompt("Start background work.");
 	await waitUntil(() => ownerAssistantTexts(host).includes("The Owner has delegated the work."));
-	failChild();
-	await waitUntil(() => moderatorStarted);
 	assert.equal(host.session.isIdle, false);
-	assert.deepEqual(lifecycle, [], "failure-to-recovery handoff must not produce transient completion");
-	askHuman();
-	await withTimeout(prompt, 3_000, "Owner stayed parked after recovery required human input");
+	assert.deepEqual(lifecycle, []);
+	// A terminal provider error is a retained Run suspension, not a Run Failure:
+	// it stops workflow progress, so the Owner settles, and no Moderator starts.
+	failChild();
+	await withTimeout(prompt, 3_000, "Owner stayed parked after its only child was suspended");
 	assert.equal(host.session.isIdle, true);
 	assert.deepEqual(lifecycle, ["agent_settled"]);
-	assert.match(ownerDockText(host), /Recovery needs your decision/);
+	assert.match(ownerDockText(host), /Suspended · Runtime error/);
+	assert.equal(moderatorStarted, false);
 });
 
 test("terminating the last progressing child releases Owner parking without an Answer", { timeout: 10_000 }, async (t) => {
