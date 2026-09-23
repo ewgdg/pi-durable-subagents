@@ -70,7 +70,7 @@ const SELECTION_SPINNER_INTERVAL_MILLISECONDS = 80;
 // One physical wheel tick can arrive as several same-direction wheel events
 // (high-rate terminals, multiplexer re-emission). Repeats inside this window
 // collapse into a single step so one tick always moves exactly one entry.
-const WHEEL_TICK_WINDOW_MS = 50;
+const WHEEL_TICK_WINDOW_MS = 30;
 
 export type AgentSelectorAction =
 	| Readonly<{ kind: "open_report"; reportId: string }>
