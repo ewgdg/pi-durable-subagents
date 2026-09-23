@@ -82,8 +82,10 @@ export type AgentSelectorAction =
 export type AgentSelectorOptions = Readonly<{
 	live: readonly AgentRosterStatus[];
 	dormant: readonly AgentRosterStatus[];
+	quarantined?: readonly string[];
+	quarantinedCandidateCount?: number;
 	selectedAgentId: string;
-	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention" | "reports">) => void): () => void;
+	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "quarantined" | "quarantinedCandidateCount" | "humanAttention" | "operationalAttention" | "reports">) => void): () => void;
 	reports?: readonly ReportHistoryItem[];
 	setReportRead?(reportId: string, read: boolean): Promise<readonly ReportHistoryItem[]> | readonly ReportHistoryItem[];
 	humanAttention?: readonly HumanAttentionItem[];
@@ -124,7 +126,7 @@ export function openAgentSelectorSurface(
 
 type PointerAction =
 	| { kind: "root" }
-	| { kind: "tab"; tab: "live" | "dormant" | "reports" }
+	| { kind: "tab"; tab: "live" | "dormant" | "reports" | "quarantined" }
 	| { kind: "open"; value: string }
 	| { kind: "children"; value: string }
 	| { kind: "ancestor"; agentId: string; childId: string };
@@ -141,9 +143,9 @@ class AgentSelectorSurface implements Component {
 	#liveTree: readonly AgentRosterStatus[] = [];
 	#dormantRoster: readonly AgentRosterStatus[] = [];
 	#removeChangeHandler: (() => void) | undefined;
-	#activeTab: "live" | "dormant" | "reports" = "live";
+	#activeTab: "live" | "dormant" | "reports" | "quarantined" = "live";
 	#scopeAgentId: string;
-	#selectedValueByTab: { live?: string; dormant?: string; reports?: string };
+	#selectedValueByTab: { live?: string; dormant?: string; reports?: string; quarantined?: string };
 	#items: AgentSelectorItem[] = [];
 	#selectedIndex = 0;
 	#focusedAgentRow: { agentId: string; index: number } | undefined;
@@ -221,9 +223,10 @@ class AgentSelectorSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
-			const tabs = ["live", "dormant", "reports"] as const;
+			// The quarantined tab is optional: cycling skips it while hidden.
+			const tabs = this.#visibleTabs();
 			const direction = matchesKey(data, Key.shift("tab")) ? -1 : 1;
-			this.#activeTab = tabs[(tabs.indexOf(this.#activeTab) + direction + tabs.length) % tabs.length]!;
+			this.#activeTab = tabs[(tabs.indexOf(this.#activeTab) + direction + tabs.length) % tabs.length] ?? "live";
 			this.#list = this.#createList();
 			this.#tui.requestRender();
 			return;
@@ -438,7 +441,9 @@ class AgentSelectorSurface implements Component {
 			? this.#liveItems()
 			: this.#activeTab === "reports"
 				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), this.#ownerItem()]
-				: [...this.#dormantRoster.map((status) => this.#agentItem(status)), this.#ownerItem()];
+				: this.#activeTab === "quarantined"
+					? [...this.#quarantinedItems(), this.#ownerItem()]
+					: [...this.#dormantRoster.map((status) => this.#agentItem(status)), this.#ownerItem()];
 		const focused = this.#focusedAgentRow;
 		if (focused && !this.#items.some(({ value }) => value === focused.agentId)) {
 			const status = [...this.#options.live, ...this.#options.dormant].find(
@@ -633,6 +638,16 @@ class AgentSelectorSurface implements Component {
 		);
 	}
 
+	#visibleTabs(): ("live" | "dormant" | "reports" | "quarantined")[] {
+		return this.#quarantinedIds().length > 0
+			? ["live", "dormant", "reports", "quarantined"]
+			: ["live", "dormant", "reports"];
+	}
+
+	#quarantinedIds(): readonly string[] {
+		return this.#options.quarantined ?? [];
+	}
+
 	#liveItems(): AgentSelectorItem[] {
 		return [
 			...this.#attentionItems(),
@@ -716,6 +731,41 @@ class AgentSelectorSurface implements Component {
 				`${readAt === undefined ? "Unread" : `Read ${safeLine(readAt)}`} · ${this.#options.setReportRead ? "m Toggle read · " : ""}Enter opens report`,
 			],
 		};
+	}
+
+	#quarantinedItems(): AgentSelectorItem[] {
+		const ids = this.#quarantinedIds();
+		const total = this.#options.quarantinedCandidateCount ?? ids.length;
+		const rows: AgentSelectorItem[] = ids.map((agentId) => ({
+			value: "quarantined:" + agentId,
+			label: agentId,
+			description: "Quarantined · transcript excluded from recovery",
+			kind: "attention" as const,
+			// No action and no status: confirming the row is a no-op, never an admission.
+			detailLines: [
+				"Quarantined · transcript excluded from recovery",
+				"Agent " + agentId,
+				"Excluded from cold-start recovery as untrusted proof",
+				"Inspect the transcript directly · not selectable here",
+			],
+		}));
+		const overflow = Math.max(0, total - ids.length);
+		if (overflow > 0) {
+			const plural = overflow === 1 ? "" : "s";
+			rows.push({
+				value: "quarantined:unreadable",
+				label: "+ " + overflow + " unreadable candidate" + plural + " without recoverable ID",
+				description: "Quarantined · transcript excluded from recovery",
+				kind: "attention" as const,
+				detailLines: [
+					"Quarantined · transcript excluded from recovery",
+					overflow + " candidate" + plural + " without recoverable ID",
+					"Excluded from cold-start recovery as untrusted proof",
+					"Inspect the session directory directly · not selectable here",
+				],
+			});
+		}
+		return rows;
 	}
 
 	#agentItem(status: AgentRosterStatus): AgentSelectorItem {
@@ -809,7 +859,10 @@ class AgentSelectorSurface implements Component {
 		const listLines = this.#renderRosterViewport(width, startIndex, visibleItems);
 		const hasAgents = this.#items.some(({ kind }) => kind === "agent");
 		const reportHistory = this.#activeTab === "reports";
-		const showEmptyMessage = reportHistory
+		const quarantinedHistory = this.#activeTab === "quarantined";
+		const showEmptyMessage = reportHistory || quarantinedHistory
+			// The quarantined tab hides while empty; this only covers a live refresh
+			// that drains the list while it stays focused.
 			? this.#items.every(({ kind }) => kind === "owner")
 			: !hasAgents;
 		const visibleAttention = visibleItems.some(({ kind }) => kind === "decide" || kind === "attention");
@@ -823,7 +876,9 @@ class AgentSelectorSurface implements Component {
 		const attention: SelectorLine[] = [];
 		const agents: SelectorLine[] = [];
 		for (const [offset, item] of visibleItems.entries()) {
-			const lines = item.kind === "agent" ? agents : attention;
+			// Quarantined rows are attention-kind but belong under the Quarantined
+			// heading, not the Attention Inbox.
+			const lines = item.kind === "agent" || quarantinedHistory ? agents : attention;
 			let line = listLines[offset] ?? "";
 			let bodyText = line;
 			const regions: LineRegion[] = [];
@@ -850,7 +905,9 @@ class AgentSelectorSurface implements Component {
 				bodyText = line;
 				line += this.#theme.fg("dim", item.childControl);
 			}
-			if (item.action || item.status) {
+			// Quarantined rows carry no action: the region only moves keyboard/mouse
+			// focus, while confirmation stays a no-op.
+			if (item.action || item.status || quarantinedHistory) {
 				regions.push({ start: 0, end: bodyEnd, text: bodyText, action: { kind: "open", value: item.value } });
 			}
 			lines.push({ text: line, regions, roster: true });
@@ -863,10 +920,13 @@ class AgentSelectorSurface implements Component {
 		const rendered: SelectorLine[] = [
 			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "History" : "Attention Inbox")) }, ...attention] : []),
 			...(reportHistory ? [] : [this.#activeTab === "live"
-				? this.#scopeTitle(width) : { text: this.#theme.fg("toolTitle", "Agents") }]),
+				? this.#scopeTitle(width)
+				: quarantinedHistory
+					? { text: this.#theme.fg("toolTitle", "Quarantined") }
+					: { text: this.#theme.fg("toolTitle", "Agents") }]),
 			...agents,
 			...(showEmptyMessage ? [{ text: this.#theme.fg("dim", reportHistory
-				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : "  No dormant Agents") }] : []),
+				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : quarantinedHistory ? "  No quarantined Agents" : "  No dormant Agents") }] : []),
 		];
 		// Share one terminal-bounded budget across tabs, including optional headers,
 		// empty messages and scrolling, so content changes never move the frame.
@@ -1017,23 +1077,24 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#renderTabs(): SelectorLine {
-		const tab = (name: "Live" | "Dormant" | "Reports", active: boolean) =>
+		const tab = (name: "Live" | "Dormant" | "Reports" | "Quarantined", active: boolean) =>
 			active
-				? this.#theme.bg("selectedBg", this.#theme.fg("text", ` ${name} `))
-				: this.#theme.fg("muted", ` ${name} `);
-		const live = tab("Live", this.#activeTab === "live");
-		const dormant = tab("Dormant", this.#activeTab === "dormant");
-		const dormantStart = visibleWidth(live) + 1;
-		const reports = tab("Reports", this.#activeTab === "reports");
-		const reportsStart = dormantStart + visibleWidth(dormant) + 1;
-		return {
-			text: `${live} ${dormant} ${reports}`,
-			regions: [
-				{ start: 0, end: visibleWidth(live), text: live, action: { kind: "tab", tab: "live" } },
-				{ start: dormantStart, end: dormantStart + visibleWidth(dormant), text: dormant, action: { kind: "tab", tab: "dormant" } },
-				{ start: reportsStart, end: reportsStart + visibleWidth(reports), text: reports, action: { kind: "tab", tab: "reports" } },
-			],
-		};
+				? this.#theme.bg("selectedBg", this.#theme.fg("text", " " + name + " "))
+				: this.#theme.fg("muted", " " + name + " ");
+		const labels = { live: "Live", dormant: "Dormant", reports: "Reports", quarantined: "Quarantined" } as const;
+		let text = "";
+		const regions: LineRegion[] = [];
+		let column = 0;
+		for (const [index, name] of this.#visibleTabs().entries()) {
+			const rendered = tab(labels[name], this.#activeTab === name);
+			const width = visibleWidth(rendered);
+			// One unowned cell between independent controls, matching Owner rows.
+			if (index > 0) text += " ";
+			regions.push({ start: column, end: column + width, text: rendered, action: { kind: "tab", tab: name } });
+			text += rendered;
+			column += width + 1;
+		}
+		return { text, regions };
 	}
 
 	#selectListTheme(): SelectListTheme {

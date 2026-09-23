@@ -688,6 +688,9 @@ export const AgentSelectorSnapshotSchema = closed({
 	humanAttention: Type.Array(HumanAttentionItemSchema, { uniqueItems: true }),
 	operationalAttention: Type.Array(OperationalIncidentAttentionSchema, { uniqueItems: true }),
 	reports: Type.Array(ReportHistoryItemSchema),
+	// Optional for wire tolerance: older snapshots validate; the surface treats absence as empty.
+	quarantined: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
+	quarantinedCandidateCount: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 type DeepReadonly<T> = T extends readonly []
 	? readonly []

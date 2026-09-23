@@ -56,6 +56,8 @@ export function createAgentSelectorSnapshot(
 	return {
 		live: [...roster.live],
 		dormant: [...roster.dormant],
+		quarantined: [...roster.quarantined],
+		quarantinedCandidateCount: roster.quarantinedCandidateCount,
 		selectedAgentId,
 		humanAttention: [...view.humanAttention()],
 		operationalAttention: [...view.operationalAttention()],

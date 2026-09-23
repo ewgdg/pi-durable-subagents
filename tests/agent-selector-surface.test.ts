@@ -1655,3 +1655,104 @@ test("runtime report read toggle removes only inbox notification and preserves h
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "open_report", reportId: "failure" });
 });
+
+test("quarantined tab stays hidden while empty and Tab skips it", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [dormantAgentStatus("sleeper", "Sleeper", "owner")],
+		quarantined: [],
+		quarantinedCandidateCount: 0,
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+	const tabs = renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "";
+	assert.doesNotMatch(tabs, /Quarantined/);
+	for (let press = 0; press < 3; press += 1) {
+		harness.component.handleInput?.("\t");
+		assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Quarantined/);
+	}
+	assert.match(renderPanel(harness.component, 80).join("\n"), /No live Agents/);
+	harness.component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("quarantined tab lists excluded identities as informational rows", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [],
+		quarantined: ["zx-9", "ab-1"],
+		quarantinedCandidateCount: 2,
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	const component = harness.component!;
+	assert.match(renderPanel(component, 80).join("\n"), /Quarantined/);
+	component.handleInput?.("\t");
+	component.handleInput?.("\t");
+	component.handleInput?.("\t");
+	const quarantined = renderPanel(component, 80).join("\n");
+	assert.match(quarantined, /Quarantined/);
+	assert.match(quarantined, /zx-9/);
+	assert.match(quarantined, /ab-1/);
+	assert.match(quarantined, /transcript excluded from recovery/);
+	assert.doesNotMatch(quarantined, /Attention Inbox/);
+	component.handleInput?.("\r");
+	assert.equal(harness.resolved, false);
+	component.handleInput?.("l");
+	component.handleInput?.("h");
+	assert.match(renderPanel(component, 80).join("\n"), /zx-9/);
+	clickLabel(component, "Dormant");
+	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /zx-9/);
+	clickLabel(component, "Quarantined");
+	assert.match(renderPanel(component, 80).join("\n"), /zx-9/);
+	component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("quarantined overflow counts candidates without recoverable IDs", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [],
+		quarantined: ["zx-9"],
+		quarantinedCandidateCount: 3,
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	const component = harness.component!;
+	component.handleInput?.("\t");
+	component.handleInput?.("\t");
+	component.handleInput?.("\t");
+	assert.match(renderPanel(component, 80).join("\n"), /zx-9/);
+	assert.match(renderPanel(component, 80).join("\n"), /unreadable candidates/);
+	component.handleInput?.("j");
+	const rendered = renderPanel(component, 80).join("\n");
+	assert.match(rendered, /2 candidates without recoverable ID/);
+	component.handleInput?.("\r");
+	assert.equal(harness.resolved, false);
+	component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("a live refresh publishes quarantined identities to the selector", async () => {
+	const harness = surfaceHarness(30);
+	const owner = agentStatus("owner", "Owner", null);
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner], dormant: [], selectedAgentId: "owner",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	await Promise.resolve();
+	assert.doesNotMatch(renderPanel(harness.component!, 80).join("\n"), /Quarantined/);
+	publish({ live: [owner], dormant: [], quarantined: ["zx-9"], quarantinedCandidateCount: 1 });
+	assert.match(renderPanel(harness.component!, 80).join("\n"), /Quarantined/);
+	harness.component!.handleInput?.("\t");
+	harness.component!.handleInput?.("\t");
+	harness.component!.handleInput?.("\t");
+	assert.match(renderPanel(harness.component!, 80).join("\n"), /zx-9/);
+	harness.component!.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
