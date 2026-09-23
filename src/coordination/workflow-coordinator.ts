@@ -171,6 +171,8 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
+		quarantined: readonly string[];
+		quarantinedCandidateCount: number;
 	}>;
 	openAgentView(agentId: string): Promise<DurableAgentView | undefined>;
 	openAgentPresentation(agentId: string): Promise<AgentPresentationSelection>;
@@ -278,6 +280,7 @@ export class WorkflowCoordinator {
 	>();
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
+	readonly #quarantinedCandidateCount: number;
 	readonly #agentIdBySpawnSource: Map<string, string>;
 	#shutdownPromise: Promise<void> | undefined;
 	readonly #shutdownController = new AbortController();
@@ -314,6 +317,7 @@ export class WorkflowCoordinator {
 		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
 		this.#quarantinedWorkflowAgentIds =
 			options.recoveredWorkflow?.quarantinedWorkflowAgentIds ?? new Set();
+		this.#quarantinedCandidateCount = options.recoveredWorkflow?.quarantinedCandidateCount ?? 0;
 		this.#agentIdBySpawnSource = new Map(
 			options.recoveredWorkflow?.agentIdBySpawnSource ?? [],
 		);
@@ -1032,6 +1036,8 @@ export class WorkflowCoordinator {
 	#selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
+		quarantined: readonly string[];
+		quarantinedCandidateCount: number;
 	}> {
 		const authorityOrder = this.#agentAuthorityOrder();
 		const live: AgentRosterStatus[] = [];
@@ -1061,6 +1067,9 @@ export class WorkflowCoordinator {
 		return {
 			live,
 			dormant: dormant.map(({ status }) => status),
+			// One combined notification list; never split by workflow proof.
+			quarantined: [...this.#quarantinedAgentIds].sort(),
+			quarantinedCandidateCount: this.#quarantinedCandidateCount,
 		};
 	}
 

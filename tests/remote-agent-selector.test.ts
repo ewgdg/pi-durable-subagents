@@ -76,7 +76,7 @@ function presentationView(options: {
 	return {
 		refreshTranscriptFacts: options.refreshTranscriptFacts ?? (async () => undefined),
 		status: options.status ?? (() => childStatus),
-		selectionRoster: () => ({ live: [ownerStatus, childStatus], dormant: [] }),
+		selectionRoster: () => ({ live: [ownerStatus, childStatus], dormant: [], quarantined: [], quarantinedCandidateCount: 0 }),
 		humanAttention: options.humanAttention ?? (() => []),
 		operationalAttention: () => [],
 		reportHistory: () => [],
@@ -105,10 +105,27 @@ test("selector snapshot is one exact scoped presentation boundary value", () => 
 	assert.deepEqual(snapshot, {
 		live: [ownerStatus, childStatus],
 		dormant: [],
+		quarantined: [],
+		quarantinedCandidateCount: 0,
 		selectedAgentId: "child",
 		humanAttention: attention,
 		operationalAttention: [], reports: [],
 	});
+});
+
+test("selector snapshot passes quarantined identities and candidate count through", () => {
+	const snapshot = createAgentSelectorSnapshot({
+		...presentationView(),
+		selectionRoster: () => ({
+			live: [ownerStatus],
+			dormant: [],
+			quarantined: ["zx-9", "ab-1"],
+			quarantinedCandidateCount: 3,
+		}),
+	}, "owner");
+
+	assert.deepEqual(snapshot.quarantined, ["zx-9", "ab-1"]);
+	assert.equal(snapshot.quarantinedCandidateCount, 3);
 });
 
 test("local registered /agents owner returns through the authoritative selection path without transcript refresh", async () => {
@@ -154,7 +171,7 @@ test("remote presentation navigates existing Owner and Moderator identities with
 			opened.push(agentId);
 			return { kind: "selected" };
 		},
-	}), selectionRoster: () => ({ live: [ownerStatus, moderatorStatus], dormant: [] }) };
+	}), selectionRoster: () => ({ live: [ownerStatus, moderatorStatus], dormant: [], quarantined: [], quarantinedCandidateCount: 0 }) };
 	const presentation = createOwnerAgentPresentationHandlers(() => view, "moderator");
 	const snapshot = await presentation.snapshot();
 	assert.deepEqual(snapshot.live.map(({ agentId }) => agentId), ["owner", "moderator"]);

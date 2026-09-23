@@ -71,7 +71,7 @@ const view = {
 		resolveAnswer({ requestId: REQUEST_ID, answer: text });
 		return "submitted";
 	},
-	selectionRoster: () => ({ live: [], dormant: [] }),
+	selectionRoster: () => ({ live: [], dormant: [], quarantined: [], quarantinedCandidateCount: 0 }),
 	agentTemplateSnapshot: () => ({
 		templates: [],
 	}),
