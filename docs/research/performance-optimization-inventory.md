@@ -2,7 +2,7 @@
 
 Status: investigation and proposed work, not a claim that the entire inventory is implemented.
 
-The first implementation slice is documented in [Activity presentation](../activity-presentation.md#incremental-refresh-and-structural-order): known-Agent activity refreshes use dirty-source batches, authority order is cached across unchanged roster structure, and focused work counters/benchmarks cover both. Unscoped refreshes, global subscriptions, relationship-graph redesign, and the other inventory items remain separate work.
+The first implementation slice is documented in [Activity presentation](../activity-presentation.md#incremental-refresh-and-structural-order): known-Agent activity refreshes use dirty-source batches, authority order is cached across unchanged roster structure, and focused work counters/benchmarks cover both. The [first relationship increment](shared-relationship-sources.md) now shares source cursors and change collection, removing the warm quadratic cursor-map bookkeeping. Dependency-directed graph routing, admission deltas, whole-pass budgeting, unscoped refreshes, global subscriptions, and the other inventory items remain separate work. Measurements below retain their original baseline context.
 
 Inspected baseline: `e1d08de` on `main`, after withdrawing #129. Investigation date: 2026-09-22 in America/Vancouver (2026-09-23 UTC). Runtime used for the probes: Node `v24.21.0`.
 
@@ -77,7 +77,7 @@ A separate in-memory probe exercised the real `MessageCoordinator.refreshTranscr
 | 200 | 5.210 ms | 5.855 ms | 0 |
 | 400 | 21.760 ms | 22.863 ms | 0 |
 
-These are not full source-validated cold-recovery fixtures or an interactive lag reproduction. They isolate warm relationship refresh overhead in existing test scaffolding. The near-fourfold increase from 200 to 400 Agents is consistent with the nested roster scans visible in `RequestEvidence`: the outer refresh visits every Agent, and `#startRelationshipUpdate()` constructs and compares another full-roster observation/cursor map for each one. An unchanged pass therefore contains O(A²) roster bookkeeping despite zero new evidence. [S3, S8]
+These are not full source-validated cold-recovery fixtures or an interactive lag reproduction. They isolate warm relationship refresh overhead in existing test scaffolding. At the measured baseline, the near-fourfold increase from 200 to 400 Agents matched the nested roster scans in `RequestEvidence`: the outer refresh visited every Agent, and `#startRelationshipUpdate()` constructed and compared another full-roster observation/cursor map for each one. An unchanged pass therefore contained O(A²) roster bookkeeping despite zero new evidence. [S3, S8] That specific overhead is removed by [shared relationship source collection](shared-relationship-sources.md); the original table is retained as historical evidence.
 
 This is the strongest measured reason to prioritize dirty-Agent and dependency-directed processing rather than another JSON parsing cache.
 
@@ -100,7 +100,7 @@ Legend: **Observed** means the code path was inspected, not that its share of in
 | ID | Priority / evidence | Change to investigate | Intended gain and required constraint |
 | --- | --- | --- | --- |
 | B1 | First / Measured | Maintain reverse Request dependencies: a changed Request/source identifies its author, recipient, and any genuinely dependent relationships. [S2, S3] | Stop offering every changed Request to every Agent graph. Register negative and unresolved dependencies too, so later evidence can invalidate a previously absent result. |
-| B2 | First / Measured | Queue dirty relationship graphs; let an unchanged graph return its retained result without rebuilding an all-Agent cursor map. [S3] | Remove warm O(A²) roster bookkeeping. Keep existing Request-version resolution logic rather than creating a parallel authority. |
+| B2 | Partial / Measured | Shared source cursors and a shared Request-change journal now let unchanged graphs retain results without per-Agent roster maps. [Comparison](shared-relationship-sources.md). Dirty graph queuing remains open. | Warm O(A²) cursor-map bookkeeping is removed. Changed Requests still reach every graph; dependency routing is the next increment. Existing Request-version resolution remains authoritative. |
 | B3 | First / Observed | Track roster changes separately and process Agent admission as a structural delta. [S3] | Currently a roster mismatch clears retained membership/cursors and recollects sources. Adding one Agent should not normally rebuild unrelated old relationships. Identity replacement remains a different, stronger invalidation. |
 | B4 | Next / Observed | Split moderation dirtiness into host condition, Request graph, delivery progress, and operation-review changes. [S5] | Avoid whole-workflow evidence/condition scans for unrelated presentation changes. Dependency-cycle changes can affect an entire connected region; permit a conservative full graph pass when necessary. |
 | B5 | Next / Candidate | Index active Waits by captured Request IDs and share fallback observation across Waits. [S12] | Reconcile only Waits affected by an Answer/cancellation/delivery change. Retain the explicit Wait snapshot, exact recipient-Run fences, Hold semantics, and event-loss fallback. |
