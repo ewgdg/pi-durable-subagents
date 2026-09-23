@@ -199,7 +199,8 @@ class AgentSelectorSurface implements Component {
 				? { agentId: focused.value, index: this.#selectedIndex } : undefined;
 			this.#options = { ...this.#options, ...snapshot };
 			this.#partitionRoster();
-			this.#list = this.#createList(true);
+			// Wheel now moves selection, so live refresh keeps the selected row visible.
+			this.#list = this.#createList(true, true);
 			this.#tui.requestRender();
 		});
 	}
@@ -251,7 +252,7 @@ class AgentSelectorSurface implements Component {
 			(matchesKey(listInput, Key.up) && this.#selectedIndex === 0) ||
 			(matchesKey(listInput, Key.down) && this.#selectedIndex === this.#items.length - 1)
 		) {
-			// A boundary key still restores the selected row after wheel scrolling.
+			// Boundary keys stay put without wrapping.
 			this.#ensureSelectedVisible();
 			this.#tui.requestRender();
 			return;
@@ -279,15 +280,14 @@ class AgentSelectorSurface implements Component {
 			if (this.#rosterRows.has(event.y) &&
 				event.x >= this.#contentLeft && event.x < this.#contentLeft + this.#contentWidth &&
 				event.wheelDelta) {
-				// Wheel browses the visible roster independently from selection.
-				const delta = event.wheelDelta < 0 ? -1 : 1;
-				const maximumOffset = this.#maximumRosterScrollOffset();
-				const nextOffset = Math.max(0, Math.min(
-					maximumOffset, this.#rosterScrollOffset + delta,
-				));
-				const changed = nextOffset !== this.#rosterScrollOffset;
-				this.#rosterScrollOffset = nextOffset;
+				// SelectList's public wheel behavior scrolls by moving selection one row.
+				const beforeIndex = this.#selectedIndex;
+				const beforeOffset = this.#rosterScrollOffset;
+				this.#list.handleMouse(event);
+				this.#ensureSelectedVisible();
 				this.#hoveredAction = undefined;
+				const changed = this.#selectedIndex !== beforeIndex ||
+					this.#rosterScrollOffset !== beforeOffset;
 				return { handled: true, render: changed };
 			}
 			return { handled: true };
@@ -351,9 +351,8 @@ class AgentSelectorSurface implements Component {
 		// Resize changes the list's visible window as well as its hit regions.
 		const visibleRows = this.#maximumVisibleRows();
 		if (visibleRows !== this.#visibleRows) {
-			const selectedVisible = this.#selectedIndex >= this.#rosterScrollOffset &&
-				this.#selectedIndex < this.#rosterScrollOffset + this.#visibleRows;
-			this.#list = this.#createList(true, selectedVisible);
+			// Wheel now moves selection, so resize keeps the selected row visible.
+			this.#list = this.#createList(true, true);
 		}
 		const contentLines: SelectorLine[] = [
 			this.#renderTabs(),

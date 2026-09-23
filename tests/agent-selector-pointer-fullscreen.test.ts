@@ -135,129 +135,92 @@ test("hover highlights without moving keyboard selection; details and other butt
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "branch" });
 });
 
-test("wheel scrolls the roster viewport without changing selection", { timeout: 5_000 }, async (t) => {
+test("wheel scrolls the selected roster entry", { timeout: 5_000 }, async (t) => {
 	const live = [status("owner", "Owner", null), ...Array.from({ length: 25 }, (_, i) => status("agent-" + String(i).padStart(2, "0"), "Agent " + String(i).padStart(2, "0")))];
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const h = await harness(t, {
-		live, selectedAgentId: "agent-05",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
+	const h = await harness(t, { live, selectedAgentId: "agent-05" });
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 	assert.match((await h.frame()).join("\n"), /agent-05/);
-	const selected = await h.point("Agent 05");
+
+	// Chrome wheel is handled but does not move selection.
+	for (const target of ["Live", "Go to Owner", "agent-05", "Tab views"]) {
+		const p = await h.point(target);
+		h.terminal.mouse(65, p.x, p.y);
+		h.terminal.mouse(64, p.x, p.y);
+		await h.frame();
+		assert.match((await h.frame()).join("\n"), /→ Agent 05/);
+	}
+
+	// Wheel down moves selection one row per event; details follow the new selection.
+	let selected = await h.point("Agent 05");
 	for (let step = 0; step < 2; step++) h.terminal.mouse(65, selected.x, selected.y);
 	await h.frame();
-	const scrolled = (await h.frame()).join("\n");
-	assert.match(scrolled, /→ Agent 05/, "wheel keeps the selected Agent");
-	assert.match(scrolled, /agent-05/, "wheel keeps the selected Agent's details");
-	assert.doesNotMatch(scrolled, /Agent 00/, "wheel advances the visible roster window");
-	publish({
-		live: live.map((agent) => agent.agentId === "agent-05"
-			? { ...agent, description: "refreshed details" }
-			: agent),
-		dormant: [],
-	});
-	const refreshed = (await h.frame()).join("\n");
-	assert.match(refreshed, /refreshed details/, "live refresh updates visible Agent data");
-	assert.doesNotMatch(refreshed, /Agent 00/, "live refresh preserves the wheel viewport");
-	assert.match(refreshed, /agent-05/, "live refresh preserves selected Agent details");
+	assert.match((await h.frame()).join("\n"), /→ Agent 07/);
+	assert.match((await h.frame()).join("\n"), /agent-07/);
 
-	// Refresh and resize must preserve an offscreen selected Agent rather than
-	// recentering it into view. Enter still resolves that unchanged selection.
-	let publishOffscreen!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const offscreen = await harness(t, {
-		live, selectedAgentId: "agent-05",
-		addChangeHandler(handler) { publishOffscreen = handler; return () => {}; },
-	});
-	const offscreenTarget = await offscreen.point("Agent 05");
-	for (let step = 0; step < 8; step++) offscreen.terminal.mouse(65, offscreenTarget.x, offscreenTarget.y);
-	const beforeRefresh = (await offscreen.frame()).join("\n");
-	assert.doesNotMatch(beforeRefresh, /→ Agent 05/);
-	offscreen.terminal.resize(46, 15);
-	const beforePublish = (await offscreen.frame()).join("\n");
-	assert.doesNotMatch(beforePublish, /→ Agent 05/);
-	publishOffscreen({
-		live: live.map((agent) => agent.agentId === "agent-05"
-			? { ...agent, description: "offscreen refresh" }
-			: agent),
-		dormant: [],
-	});
-	const afterPublish = (await offscreen.frame()).join("\n");
-	assert.equal(afterPublish, beforePublish, "offscreen refresh preserves the visible roster range");
-	await offscreen.input("\r");
-	assert.deepEqual(await offscreen.result, { kind: "select_agent", agentId: "agent-05" });
-
-	// Wheel bounds do not move selection back to the top or bottom.
-	const target = await h.point("Agent 05");
-	for (let step = 0; step < 30; step++) h.terminal.mouse(65, target.x, target.y);
-	await h.frame();
-	assert.match((await h.frame()).join("\n"), /Agent 24/);
-	for (let step = 0; step < 30; step++) h.terminal.mouse(64, target.x, target.y);
+	// Wheel up moves selection back.
+	selected = await h.point("Agent 07");
+	for (let step = 0; step < 2; step++) h.terminal.mouse(64, selected.x, selected.y);
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
-	assert.match((await h.frame()).join("\n"), /Agent 00/);
+	assert.match((await h.frame()).join("\n"), /agent-05/);
 
-	// Down reaches the fixed footer; Up restores the final row after wheel browsing.
-	const boundary = await harness(t, { live, selectedAgentId: "agent-24" });
-	const boundaryTarget = await boundary.point("Agent 24");
-	for (let step = 0; step < 30; step++) boundary.terminal.mouse(64, boundaryTarget.x, boundaryTarget.y);
-	await boundary.frame();
-	assert.doesNotMatch((await boundary.frame()).join("\n"), /Agent 24/);
-	await boundary.input("\x1b[B");
-	assert.doesNotMatch((await boundary.frame()).join("\n"), /→ /);
-	await boundary.input("\x1b[A");
-	assert.match((await boundary.frame()).join("\n"), /→ Agent 24/);
-	await boundary.input("\x1b");
+	// Wheel at the top bound stays put without wrapping.
+	const top = await harness(t, { live, selectedAgentId: "agent-00" });
+	assert.match((await top.frame()).join("\n"), /→ Agent 00/);
+	const topPoint = await top.point("Agent 00");
+	for (let step = 0; step < 5; step++) top.terminal.mouse(64, topPoint.x, topPoint.y);
+	await top.frame();
+	assert.match((await top.frame()).join("\n"), /→ Agent 00/);
+	await top.input("\x1b");
 
-	// Keyboard selection still moves the selected row and keeps it visible.
-	const keyboard = await harness(t, { live, selectedAgentId: "agent-05" });
-	const keyboardTarget = await keyboard.point("Agent 05");
-	keyboard.terminal.mouse(65, keyboardTarget.x, keyboardTarget.y);
-	await keyboard.input("\x1b[B");
-	assert.match((await keyboard.frame()).join("\n"), /→ Agent 06/);
-	await keyboard.input("\x1b");
+	// Wheel at the bottom bound does not wrap to the top.
+	const bottom = await harness(t, { live, selectedAgentId: "agent-24" });
+	const bottomPoint = await bottom.point("Agent 24");
+	for (let step = 0; step < 5; step++) bottom.terminal.mouse(65, bottomPoint.x, bottomPoint.y);
+	await bottom.frame();
+	const bottomFrame = (await bottom.frame()).join("\n");
+	assert.ok(bottomFrame.includes("Go to Owner"), "bottom bound reaches Owner footer\n" + bottomFrame);
+	assert.doesNotMatch(bottomFrame, /→ Agent 00/);
+	await bottom.input("\x1b");
 
-	// Clicking a row revealed only by wheel selects that row.
-	const click = await harness(t, { live, selectedAgentId: "agent-05" });
-	const clickTarget = await click.point("Agent 05");
-	for (let step = 0; step < 8; step++) click.terminal.mouse(65, clickTarget.x, clickTarget.y);
-	await click.frame();
-	await click.click("Agent 15");
-	assert.deepEqual(await click.result, { kind: "select_agent", agentId: "agent-15" });
+	// Scrolling far moves selection and keeps hit targets correct after resizing.
+	for (let step = 0; step < 12; step++) {
+		const lines = await h.frame();
+		const row = lines.find((line) => line.includes("→ Agent"))!;
+		const q = await h.point(row.trim().replace(/^│\s*/, "").split("  ")[0]!);
+		h.terminal.mouse(65, q.x, q.y);
+		await h.frame();
+	}
+	assert.doesNotMatch((await h.frame()).join("\n"), /→ Agent 05/);
+	for (const [columns, rows] of [[46, 15], [24, 10], [120, 30]]) {
+		h.terminal.resize(columns!, rows!);
+		const lines = await h.frame();
+		const topIdx = lines.findIndex((line) => line.includes("┌"));
+		const bottomIdx = lines.findIndex((line) => line.includes("└"));
+		assert.ok(topIdx >= 1 && bottomIdx < rows! - 1, "panel retains terminal margins");
+		assert.ok(bottomIdx - topIdx + 1 <= Math.floor(rows! * 0.9));
+		const left = lines[topIdx]!.indexOf("┌");
+		const right = lines[topIdx]!.indexOf("┐");
+		assert.ok(right - left + 1 <= Math.min(80, columns!));
+		assert.equal(left, Math.floor((columns! - (right - left + 1)) / 2));
+	}
+	const lines = await h.frame();
+	const selectedLabel = lines.find((line) => line.includes("→ Agent"))!.match(/Agent (\d+)/)![1]!;
+	await h.click("Agent " + selectedLabel);
+	assert.equal(h.resolved, true);
+	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "agent-" + selectedLabel });
 
+	// Tiny rosters keep selection at the scroll bound.
 	const tiny = await harness(t, {
 		live: [status("owner", "Owner", null), status("tiny", "Tiny")],
 		selectedAgentId: "tiny",
 	});
 	const tinyTarget = await tiny.point("Tiny");
 	tiny.terminal.mouse(65, tinyTarget.x, tinyTarget.y);
+	tiny.terminal.mouse(64, tinyTarget.x, tinyTarget.y);
 	await tiny.frame();
 	assert.match((await tiny.frame()).join("\n"), /→ Tiny/, "tiny rosters keep their selection at the scroll bound");
 	await tiny.input("\x1b");
-
-	// Chrome wheel remains handled but does not scroll the roster.
-	for (const targetText of ["Live", "Owner", "refreshed details", "Tab views"]) {
-		const p = await h.point(targetText);
-		h.terminal.mouse(65, p.x, p.y);
-		await h.frame();
-		assert.match((await h.frame()).join("\n"), /→ Agent 05/);
-	}
-
-	for (const [columns, rows] of [[46, 15], [24, 10], [120, 30]]) {
-		h.terminal.resize(columns!, rows!);
-		const lines = await h.frame();
-		const top = lines.findIndex((line) => line.includes("┌"));
-		const bottom = lines.findIndex((line) => line.includes("└"));
-		assert.ok(top >= 1 && bottom < rows! - 1, "panel retains terminal margins");
-		assert.ok(bottom - top + 1 <= Math.floor(rows! * 0.9));
-		const left = lines[top]!.indexOf("┌");
-		const right = lines[top]!.indexOf("┐");
-		assert.ok(right - left + 1 <= Math.min(80, columns!));
-		assert.equal(left, Math.floor((columns! - (right - left + 1)) / 2));
-	}
-	await h.click("Agent 05");
-	assert.equal(h.resolved, true);
-	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "agent-05" });
 });
 
 test("async preparation retains keyboard focus and blocks pointer actions inside the panel", { timeout: 5_000 }, async (t) => {
