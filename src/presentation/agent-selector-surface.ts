@@ -876,7 +876,7 @@ class AgentSelectorSurface implements Component {
 		const attention: SelectorLine[] = [];
 		const agents: SelectorLine[] = [];
 		for (const [offset, item] of visibleItems.entries()) {
-			// Quarantined rows are attention-kind but belong under the Quarantined
+			// Quarantined rows are attention-kind but belong under the Agents
 			// heading, not the Attention Inbox.
 			const lines = item.kind === "agent" || quarantinedHistory ? agents : attention;
 			let line = listLines[offset] ?? "";
@@ -921,9 +921,7 @@ class AgentSelectorSurface implements Component {
 			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "History" : "Attention Inbox")) }, ...attention] : []),
 			...(reportHistory ? [] : [this.#activeTab === "live"
 				? this.#scopeTitle(width)
-				: quarantinedHistory
-					? { text: this.#theme.fg("toolTitle", "Quarantined") }
-					: { text: this.#theme.fg("toolTitle", "Agents") }]),
+				: { text: this.#theme.fg("toolTitle", "Agents") }]),
 			...agents,
 			...(showEmptyMessage ? [{ text: this.#theme.fg("dim", reportHistory
 				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : quarantinedHistory ? "  No quarantined Agents" : "  No dormant Agents") }] : []),
