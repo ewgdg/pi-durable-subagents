@@ -317,6 +317,7 @@ test("Agent Control rendering shows compact identities while collapsed and full 
 		},
 		{ expanded: false, isPartial: false },
 		plainTheme,
+		{ isError: false },
 		resolveAgentLabel,
 	).render(120).join("\n");
 	assert.match(result, /held · Researcher · 983c81e3/);
@@ -329,6 +330,7 @@ test("Agent Control rendering shows compact identities while collapsed and full 
 		},
 		{ expanded: true, isPartial: false },
 		plainTheme,
+		{ isError: false },
 		resolveAgentLabel,
 	).render(160).join("\n");
 	assert.match(expandedResult, new RegExp(`held · Researcher · ${agentId}`));
@@ -351,6 +353,7 @@ test("Agent Control renders a sent Resume receipt in the Message receipt languag
 		},
 		{ expanded: false, isPartial: false },
 		trackingTheme,
+		{ isError: false },
 		() => "Researcher",
 	).render(120).join("\n");
 

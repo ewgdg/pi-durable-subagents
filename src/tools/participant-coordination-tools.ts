@@ -778,8 +778,8 @@ export function registerParticipantCoordinationTools<
 		parameters: agentControlParameters,
 		renderCall: (args, theme, context) =>
 			renderAgentControlCall(args, theme, resolveAgentLabel, context.expanded),
-		renderResult: (result, options, theme) =>
-			renderAgentControlResult(result, options, theme, resolveAgentLabel),
+		renderResult: (result, options, theme, context) =>
+			renderAgentControlResult(result, options, theme, context, resolveAgentLabel),
 		async execute(toolCallId, parameters) {
 			return toolResult(await availableHandlers.control(toolCallId, parameters));
 		},

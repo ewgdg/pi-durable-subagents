@@ -56,10 +56,7 @@ export function renderWorkflowResumeResult(
 	theme: Theme,
 	context: Readonly<{ isError: boolean }>,
 ): Text {
-	if (context.isError) {
-		const error = toolResultText(result);
-		return new Text(theme.fg("error", options.expanded ? error : boundedToolPreview(error)), 0, 0);
-	}
+	if (context.isError) return renderToolError(result, options, theme);
 	if (options.isPartial || result.details === undefined) return pending(theme, "resuming Workflow");
 
 	const requests = result.details.outstandingRequests;
@@ -100,9 +97,10 @@ export function renderAgentWaitResult(
 	result: AgentToolResult<AgentWaitResult | AgentWaitProgress>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ state: AgentWaitRenderState }>,
+	context: Readonly<{ state: AgentWaitRenderState; isError: boolean }>,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Component {
+	if (!options.isPartial && context.isError) return renderToolError(result, options, theme);
 	if (options.isPartial) {
 		if (isAgentWaitProgress(result.details)) {
 			context.state.progress = result.details;
@@ -236,10 +234,7 @@ export function renderAgentObserveResult(
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Component {
 	if (options.isPartial) return pending(theme, "inspecting");
-	if (context.isError) {
-		const error = toolResultText(result);
-		return new Text(theme.fg("error", options.expanded ? error : boundedToolPreview(error)), 0, 0);
-	}
+	if (context.isError) return renderToolError(result, options, theme);
 	const details = asRecord(result.details);
 	if (context.args.operation === "obligations" && Array.isArray(details?.requests)) {
 		const requests = details.requests as readonly OpenIncomingRequest[];
@@ -295,8 +290,10 @@ export function renderAgentControlResult(
 	result: AgentToolResult<RunControlReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
+	context: Readonly<{ isError: boolean }>,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Text {
+	if (!options.isPartial && context.isError) return renderToolError(result, options, theme);
 	if (options.isPartial || result.details === undefined) return pending(theme, "controlling");
 	const details = result.details;
 	const disposition = "disposition" in details
@@ -377,7 +374,9 @@ export function renderModeratorControlResult(
 	result: AgentToolResult<ModeratorControlReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
+	context: Readonly<{ isError: boolean }>,
 ): Text {
+	if (!options.isPartial && context.isError) return renderToolError(result, options, theme);
 	if (options.isPartial || result.details === undefined) return pending(theme, "moderating");
 	return receipt(theme, result.details.disposition, result.details, options);
 }
@@ -500,6 +499,16 @@ function transcriptBlock(options: {
 		{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
 	));
 	return box;
+}
+
+/** A final native error carries its message in content, not in typed details. */
+export function renderToolError(
+	result: AgentToolResult<unknown>,
+	options: ToolRenderResultOptions,
+	theme: Theme,
+): Text {
+	const error = toolResultText(result);
+	return new Text(theme.fg("error", options.expanded ? error : boundedToolPreview(error)), 0, 0);
 }
 
 function toolResultText(result: AgentToolResult<unknown>): string {

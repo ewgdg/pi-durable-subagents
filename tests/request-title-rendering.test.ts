@@ -51,7 +51,7 @@ test("direct Request and Answer delivery display the originating Request title",
 
 test("Wait progress and both Answer outcomes retain the Request title", () => {
 	initTheme("dark");
-	const context = { state: {} };
+	const context = { state: {}, isError: false };
 	const progress = renderAgentWaitResult({
 		content: [], details: { waitingFor: [{
 			requestMessageId: answer.requestMessageId, responderAgentId: answer.fromAgentId, requestTitle,
