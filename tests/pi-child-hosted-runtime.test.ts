@@ -32,15 +32,19 @@ const CHILD_EXTENSION = fileURLToPath(
 	new URL("./fixtures/process-runtime-child-extension.ts", import.meta.url),
 );
 
-for (const scenario of ["evidence", "terminal-queue", "native-retry"]) {
-test(`real child bridge quota handling: ${scenario}`, {
+for (const scenario of [
+	"evidence", "terminal-queue", "native-retry", "error-signal-live", "error-signal-aborted",
+	"nonquota-terminal-queue", "nonquota-native-retry",
+]) {
+test(`real child bridge terminal handling: ${scenario}`, {
 	timeout: TEST_TIMEOUT_MS, skip: process.platform === "win32",
 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "quota-evidence-child-"));
 	const cwd = join(root, "work");
 	const agentDir = join(root, "agent");
 	await Promise.all([mkdir(cwd), mkdir(agentDir)]);
-	await writeFile(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: scenario === "native-retry", maxRetries: 1, baseDelayMs: 1 } }));
+	const retryEnabled = scenario === "native-retry" || scenario === "nonquota-native-retry";
+	await writeFile(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: retryEnabled, maxRetries: 1, baseDelayMs: 1 } }));
 	const sessionPath = join(root, "child.jsonl");
 	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000137";
 	await writeFile(sessionPath, JSON.stringify({ type: "session", version: 3, id: expectedSessionId, timestamp: new Date().toISOString(), cwd }) + "\n");
@@ -62,16 +66,39 @@ test(`real child bridge quota handling: ${scenario}`, {
 	try {
 		await runtime.ready;
 		if (scenario !== "evidence") {
-			await runtime.deliver({ kind: "user", content: "Exercise native quota continuation." }).completion;
+			await runtime.deliver({ kind: "user", content: "Exercise native failure continuation." }).completion;
 			await waitUntil(() => settlements === 1);
-			if (scenario === "native-retry") {
+			if (scenario === "error-signal-live" || scenario === "error-signal-aborted") {
+				assert.equal(ends.length, 1);
+				assert.equal(ends[0]!.outcome, scenario === "error-signal-aborted" ? "aborted" : "error",
+					"the exact native signal, not error text, distinguishes cancellation from failure");
+				assert.equal(runtime.cancellationSignal().aborted, scenario === "error-signal-aborted");
+				assert.equal(ends[0]!.quota, undefined);
+				assert.equal(ends[0]!.failure?.error, scenario === "error-signal-aborted" ? undefined : "This operation was aborted");
+			} else if (scenario === "native-retry") {
 				assert.equal(ends.length, 2, "configured Pi retry must complete before suspension");
 				assert.equal(ends[0]!.willRetry, true);
 				assert.ok(ends[0]!.quota);
 				assert.equal(ends[1]!.outcome, "completed");
+			} else if (scenario === "nonquota-native-retry") {
+				assert.ok(ends.length >= 2, "configured retry and native follow-up must finish normally");
+				assert.equal(ends[0]!.willRetry, true);
+				assert.equal(ends[0]!.quota, undefined);
+				assert.equal(ends.at(-1)!.outcome, "completed");
+				assert.ok(SessionManager.open(sessionPath).getEntries().some(entry =>
+					entry.type === "message" && entry.message.role === "user" &&
+					JSON.stringify(entry.message.content).includes("Retain this follow-up until explicit resume.")),
+				"retry must not capture or discard the queued native input");
+				assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
 			} else {
-				assert.equal(ends.length, 1, "terminal quota must not start queued follow-up generation");
-				assert.ok(ends[0]!.quota);
+				assert.equal(ends.length, 1, "terminal failure must not start queued follow-up generation");
+				assert.equal(ends[0]!.outcome, "error");
+				assert.equal(ends[0]!.willRetry, false);
+				if (scenario === "terminal-queue") assert.ok(ends[0]!.quota);
+				else {
+					assert.equal(ends[0]!.quota, undefined);
+					assert.equal(ends[0]!.failure?.error, "ordinary terminal provider failure");
+				}
 				assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: ["Retain this follow-up until explicit resume."] });
 				assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
 			}

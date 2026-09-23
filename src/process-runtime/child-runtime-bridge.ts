@@ -97,7 +97,7 @@ type DeliveryExecution = {
 type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
-	quotaQueue: RetainedRuntimeQueue;
+	retainedQueue: RetainedRuntimeQueue;
 	turnCompaction: ChildTurnCompactionGateway;
 	startupAdmission: SessionStartupAdmission;
 	nativeInputHandoff?: { submissionSequence: number; transfer: () => void; transferred: boolean };
@@ -594,7 +594,7 @@ export function createChildRuntimeBinding(
 	binding = {
 		context,
 		runtime,
-		quotaQueue: new RetainedRuntimeQueue(() => runtime.session.clearQueue()),
+		retainedQueue: new RetainedRuntimeQueue(() => runtime.session.clearQueue()),
 		turnCompaction,
 		startupAdmission,
 		reminderAdmission,
@@ -804,7 +804,7 @@ async function handleOwnerRequest(
 			const cleared = await binding.turnCompaction.admit(() =>
 				sequenceQueueIntention(state, () => {
 					requireReportedRun(state, request.payload.runId);
-					return binding.quotaQueue.clear();
+					return binding.retainedQueue.clear();
 				})
 			);
 			return { ...cleared, queuedInputCount: binding.runtime.session.pendingMessageCount };
@@ -1003,17 +1003,20 @@ async function reportRuntimeLifecycle(
 		const assistant = [...event.messages]
 			.reverse()
 			.find((message) => message.role === "assistant");
+		// Pi can publish request-setup cancellation as an error-shaped message.
+		// The exact native Run's aborted signal owns that stop, not provider failure.
 		state.currentRunOutcome = assistant?.role === "assistant" && assistant.stopReason === "aborted"
 			? "interrupted"
 			: assistant?.role === "assistant" && assistant.stopReason === "error"
-				? "failed"
+				? runtime.session.agent.signal?.aborted ? "interrupted" : "failed"
 				: "completed";
 		activity.setScopeFailed(state.currentRunOutcome === "failed");
 		const quota = state.currentRunOutcome === "failed" && assistant?.role === "assistant"
 			? classifyQuotaEvidence(assistant) : undefined;
 		// Session subscribers are synchronous: drain before the first transport await
-		// so Pi cannot consume follow-ups while the Owner learns of terminal quota.
-		if (quota && !event.willRetry) binding.quotaQueue.capture();
+		// so Pi cannot consume queued input before the Owner suspends a failed Run.
+		// Deliberate cancellation and configured retries keep their native behavior.
+		if (state.currentRunOutcome === "failed" && !event.willRetry) binding.retainedQueue.capture();
 		await state.channel.sendEvent("agent.end", {
 			runId: state.currentRunId,
 			outcome: state.currentRunOutcome,

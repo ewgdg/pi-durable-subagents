@@ -18,16 +18,33 @@ const extension: ExtensionFactory = (pi) => {
 			contextWindow: 16384, maxTokens: 256 }],
 	});
 	const scenario = process.env.QUOTA_FIXTURE_SCENARIO;
-	if (scenario === "terminal-queue" || scenario === "native-retry") {
+	if (scenario === "error-signal-live" || scenario === "error-signal-aborted") {
 		faux.setResponses([
-			fauxAssistantMessage([], { stopReason: "error", errorMessage: scenario === "native-retry"
-				? '429: {"code":"usage_limit_reached"}' : QUOTA_DIAGNOSTICS[0] }),
+			fauxAssistantMessage([], { stopReason: "error", errorMessage: "This operation was aborted" }),
+		]);
+		if (scenario === "error-signal-aborted") {
+			pi.on("agent_end", (_event, ctx) => {
+				// Reproduce Pi's error-shaped setup cancellation at the public native
+				// boundary, before session subscribers classify the exact Run signal.
+				// Awaiting abort here would wait for this same agent_end hook to finish.
+				void ctx.abort();
+			});
+		}
+	} else if (scenario === "terminal-queue" || scenario === "native-retry"
+		|| scenario === "nonquota-terminal-queue" || scenario === "nonquota-native-retry") {
+		const errorMessage = scenario === "native-retry" ? '429: {"code":"usage_limit_reached"}'
+			: scenario === "nonquota-native-retry" ? "429 Too Many Requests"
+				: scenario === "nonquota-terminal-queue" ? "ordinary terminal provider failure"
+					: QUOTA_DIAGNOSTICS[0];
+		faux.setResponses([
+			fauxAssistantMessage([], { stopReason: "error", errorMessage }),
 			fauxAssistantMessage("Native continuation completed."),
+			fauxAssistantMessage("Queued follow-up completed."),
 		]);
 	} else {
 		faux.setResponses(QUOTA_DIAGNOSTICS.map(errorMessage => fauxAssistantMessage([], { stopReason: "error", errorMessage })));
 	}
-	if (scenario === "terminal-queue") {
+	if (scenario === "terminal-queue" || scenario === "nonquota-terminal-queue" || scenario === "nonquota-native-retry") {
 		let queued = false;
 		pi.on("agent_start", async () => {
 			if (queued) return;
