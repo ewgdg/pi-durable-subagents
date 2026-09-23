@@ -223,7 +223,7 @@ class AgentSelectorSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
-			// The quarantined tab is optional: cycling skips it while hidden.
+			// The reports and quarantined tabs are optional: cycling skips them while hidden.
 			const tabs = this.#visibleTabs();
 			const direction = matchesKey(data, Key.shift("tab")) ? -1 : 1;
 			this.#activeTab = tabs[(tabs.indexOf(this.#activeTab) + direction + tabs.length) % tabs.length] ?? "live";
@@ -639,9 +639,10 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#visibleTabs(): ("live" | "dormant" | "reports" | "quarantined")[] {
-		return this.#quarantinedIds().length > 0
-			? ["live", "dormant", "reports", "quarantined"]
-			: ["live", "dormant", "reports"];
+		const tabs: ("live" | "dormant" | "reports" | "quarantined")[] = ["live", "dormant"];
+		if ((this.#options.reports ?? []).length > 0) tabs.push("reports");
+		if (this.#quarantinedIds().length > 0) tabs.push("quarantined");
+		return tabs;
 	}
 
 	#quarantinedIds(): readonly string[] {
@@ -861,7 +862,7 @@ class AgentSelectorSurface implements Component {
 		const reportHistory = this.#activeTab === "reports";
 		const quarantinedHistory = this.#activeTab === "quarantined";
 		const showEmptyMessage = reportHistory || quarantinedHistory
-			// The quarantined tab hides while empty; this only covers a live refresh
+			// The reports and quarantined tabs hide while empty; this only covers a live refresh
 			// that drains the list while it stays focused.
 			? this.#items.every(({ kind }) => kind === "owner")
 			: !hasAgents;

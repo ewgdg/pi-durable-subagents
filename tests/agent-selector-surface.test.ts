@@ -1363,9 +1363,10 @@ test("Reports pointer tab opens report summaries and keeps Owner available", asy
 	const ownerSelection = openAgentSelectorSurface(empty.ui, {
 		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
 	});
-	click(empty.component!, "Reports");
-	assert.match(renderPanel(empty.component!, 80).join("\n"), /│ History(?:\s|\x1b)/);
-	assert.match(renderPanel(empty.component!, 80).join("\n"), /No reports/);
+	// The Reports tab hides while empty.
+	const emptyTabs = renderPanel(empty.component!, 80).find((line) => line.includes("Live")) ?? "";
+	assert.doesNotMatch(emptyTabs, /Reports/);
+	assert.doesNotMatch(renderPanel(empty.component!, 80).join("\n"), /History|No reports/);
 	click(empty.component!, "Owner");
 	assert.deepEqual(await ownerSelection, { kind: "select_agent", agentId: "owner" });
 });
@@ -1669,9 +1670,32 @@ test("quarantined tab stays hidden while empty and Tab skips it", async () => {
 	assert.ok(harness.component);
 	const tabs = renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "";
 	assert.doesNotMatch(tabs, /Quarantined/);
-	for (let press = 0; press < 3; press += 1) {
+	assert.doesNotMatch(tabs, /Reports/);
+	for (let press = 0; press < 2; press += 1) {
 		harness.component.handleInput?.("\t");
 		assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Quarantined/);
+		assert.doesNotMatch(renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "", /Reports/);
+	}
+	assert.match(renderPanel(harness.component, 80).join("\n"), /No live Agents/);
+	harness.component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("reports tab stays hidden while empty and Tab skips it", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [dormantAgentStatus("sleeper", "Sleeper", "owner")],
+		reports: [],
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+	const tabs = renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "";
+	assert.doesNotMatch(tabs, /Reports/);
+	for (let press = 0; press < 2; press += 1) {
+		harness.component.handleInput?.("\t");
+		assert.doesNotMatch(renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "", /Reports/);
 	}
 	assert.match(renderPanel(harness.component, 80).join("\n"), /No live Agents/);
 	harness.component.handleInput?.("\x1b");
@@ -1690,7 +1714,7 @@ test("quarantined tab lists excluded identities as informational rows", async ()
 	await Promise.resolve();
 	const component = harness.component!;
 	assert.match(renderPanel(component, 80).join("\n"), /Quarantined/);
-	component.handleInput?.("\t");
+	assert.doesNotMatch(renderPanel(component, 80).find((line) => line.includes("Live")) ?? "", /Reports/);
 	component.handleInput?.("\t");
 	component.handleInput?.("\t");
 	const quarantined = renderPanel(component, 80).join("\n");
@@ -1725,7 +1749,6 @@ test("quarantined overflow counts candidates without recoverable IDs", async () 
 	const component = harness.component!;
 	component.handleInput?.("\t");
 	component.handleInput?.("\t");
-	component.handleInput?.("\t");
 	assert.match(renderPanel(component, 80).join("\n"), /zx-9/);
 	assert.match(renderPanel(component, 80).join("\n"), /unreadable candidates/);
 	component.handleInput?.("j");
@@ -1749,7 +1772,6 @@ test("a live refresh publishes quarantined identities to the selector", async ()
 	assert.doesNotMatch(renderPanel(harness.component!, 80).join("\n"), /Quarantined/);
 	publish({ live: [owner], dormant: [], quarantined: ["zx-9"], quarantinedCandidateCount: 1 });
 	assert.match(renderPanel(harness.component!, 80).join("\n"), /Quarantined/);
-	harness.component!.handleInput?.("\t");
 	harness.component!.handleInput?.("\t");
 	harness.component!.handleInput?.("\t");
 	assert.match(renderPanel(harness.component!, 80).join("\n"), /zx-9/);
