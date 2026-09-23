@@ -260,6 +260,12 @@ export class WorkflowCoordinator {
 	readonly #runSupervisor: RunSupervisor;
 	readonly #operationalIncidents: OperationalIncidentCoordinator;
 	readonly #agentActivityChangeHandlers = new Set<() => void>();
+	readonly #presentationWork = {
+		activityRefreshPasses: 0,
+		activitySourcesScheduled: 0,
+		authorityOrderBuilds: 0,
+	};
+	#cachedAuthorityOrder: readonly AgentRecord[] | undefined;
 	readonly #agentViewLane = new SerialLane();
 	readonly #postMortemAgentPresenter: PostMortemAgentPresenter | undefined;
 	#activeAgentView: ActiveDurableAgentView | undefined;
@@ -539,6 +545,15 @@ export class WorkflowCoordinator {
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
 	}
 
+	/** Work counters for profiling; source counts describe scheduled observations, not successful reads. */
+	presentationDiagnostics(): Readonly<{
+		activityRefreshPasses: number;
+		activitySourcesScheduled: number;
+		authorityOrderBuilds: number;
+	}> {
+		return { ...this.#presentationWork };
+	}
+
 	modelPolicy(): ModelPolicySnapshot {
 		return {
 			availableModels: this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().map(
@@ -682,7 +697,7 @@ export class WorkflowCoordinator {
 				this.#agentActivityChangeHandlers.add(handler);
 				return () => this.#agentActivityChangeHandlers.delete(handler);
 			},
-			refreshAgentActivity: () => this.#notifyAgentActivityChanged(),
+			refreshAgentActivity: () => this.#notifyAgentActivityChanged(agentId),
 			refreshTranscriptFacts: () => {
 				this.#assertAdmissionOpen();
 				return refreshAgentTranscripts(this.#agents.values());
@@ -994,17 +1009,23 @@ export class WorkflowCoordinator {
 		return target;
 	}
 
-	#agentAuthorityOrder(): AgentRecord[] {
+	#agentAuthorityOrder(): readonly AgentRecord[] {
+		if (this.#cachedAuthorityOrder) return this.#cachedAuthorityOrder;
+		this.#presentationWork.authorityOrderBuilds++;
 		const authorityOrder: AgentRecord[] = [];
-		const appendAuthoritySubtree = (agentId: string) => {
-			const record = this.#requireAgent(agentId);
+		const included = new Set<AgentRecord>();
+		const pending = [this.#ownerIdentity.agentId];
+		while (pending.length) {
+			const record = this.#requireAgent(pending.pop()!);
+			if (included.has(record)) throw new Error("invariant_violation: repeated Agent in authority tree");
+			included.add(record);
 			authorityOrder.push(record);
-			for (const childId of record.children) appendAuthoritySubtree(childId);
-		};
-		appendAuthoritySubtree(this.#ownerIdentity.agentId);
-		for (const record of this.#agents.values()) {
-			if (!authorityOrder.includes(record)) authorityOrder.push(record);
+			for (let index = record.children.length - 1; index >= 0; index--) pending.push(record.children[index]!);
 		}
+		for (const record of this.#agents.values()) {
+			if (!included.has(record)) authorityOrder.push(record);
+		}
+		this.#cachedAuthorityOrder = authorityOrder;
 		return authorityOrder;
 	}
 
@@ -1116,24 +1137,45 @@ export class WorkflowCoordinator {
 	}
 
 	#activityRefresh: Promise<void> | undefined;
-	#activityRefreshRequested = false;
-	#notifyAgentActivityChanged(): void {
+	readonly #activityDirtyAgentIds = new Set<string>();
+	#activityRefreshAll = false;
+	#notifyAgentActivityChanged(agentId?: string): void {
 		if (this.#shuttingDown) return;
-		this.#activityRefreshRequested = true;
-		this.#activityRefresh ??= (async () => {
-			do {
-				this.#activityRefreshRequested = false;
-				await refreshAgentTranscripts(this.#agents.values());
+		// Unknown sources retain a conservative full refresh. A host or model event
+		// already identifies its source and must not read unrelated dormant history.
+		if (agentId === undefined) this.#activityRefreshAll = true;
+		else this.#activityDirtyAgentIds.add(agentId);
+		this.#scheduleAgentActivityRefresh();
+		// The selector shares this subscription with activity docks. Preserve global,
+		// immediate host-state publication even when transcript refresh is scoped.
+		for (const handler of this.#agentActivityChangeHandlers) handler();
+	}
+
+	#scheduleAgentActivityRefresh(): void {
+		if (this.#activityRefresh || this.#shuttingDown) return;
+		// Defer collection so a synchronous burst shares one refresh and the pending
+		// promise is installed before observers can reenter this method.
+		this.#activityRefresh = Promise.resolve().then(async () => {
+			while (!this.#shuttingDown && (this.#activityRefreshAll || this.#activityDirtyAgentIds.size)) {
+				const records = this.#activityRefreshAll
+					? [...this.#agents.values()]
+					: [...this.#activityDirtyAgentIds].map(agentId => this.#requireAgent(agentId));
+				// Detach this batch before awaiting. Later events, including another
+				// change to the same Agent, belong to a fresh successor batch.
+				this.#activityRefreshAll = false;
+				this.#activityDirtyAgentIds.clear();
+				this.#presentationWork.activityRefreshPasses++;
+				this.#presentationWork.activitySourcesScheduled += records.length;
+				await refreshAgentTranscripts(records);
 				if (this.#shuttingDown) return;
 				for (const handler of this.#agentActivityChangeHandlers) handler();
-			} while (this.#activityRefreshRequested);
-		})()
+			}
+		})
 			.catch((error) => this.#reportAgentRuntimeReleaseError(error))
 			.finally(() => {
 				this.#activityRefresh = undefined;
-				if (this.#activityRefreshRequested) this.#notifyAgentActivityChanged();
+				if (this.#activityRefreshAll || this.#activityDirtyAgentIds.size) this.#scheduleAgentActivityRefresh();
 			});
-		for (const handler of this.#agentActivityChangeHandlers) handler();
 	}
 
 	#requireAgent(agentId: string): AgentRecord {
@@ -1163,13 +1205,16 @@ export class WorkflowCoordinator {
 	}
 
 	#integrateAgent(record: AgentRecord): void {
+		// Recovery, ordinary spawning, and Moderator admission all integrate after
+		// adding the record and its parent relationship. Run changes do not alter ancestry.
+		this.#cachedAuthorityOrder = undefined;
 		record.host.setRunSuspensionHandler((suspension, handle) => {
 			// Quota suspension is process-local: it stops this exact Run and releases its
 			// execution permit. Nothing durable has to be recorded or restored.
 			if (suspension) this.#releaseExecution(record.identity.agentId, handle);
 		});
-		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged());
-		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged());
+		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged(record.identity.agentId));
+		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged(record.identity.agentId));
 		record.host.addEndedHandler((handle) => {
 			// A terminal Runtime fault can bypass participant executionEnd. Tie the
 			// fallback release to the exact ended Run so it cannot affect a successor.
@@ -1188,7 +1233,7 @@ export class WorkflowCoordinator {
 		});
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
-		this.#notifyAgentActivityChanged();
+		this.#notifyAgentActivityChanged(record.identity.agentId);
 	}
 
 	#openAgentPresentation(agentId: string): Promise<AgentPresentationSelection> {
