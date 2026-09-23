@@ -659,7 +659,7 @@ class AgentSelectorSurface implements Component {
 	#visibleTabs(): ("live" | "dormant" | "reports" | "quarantined")[] {
 		const tabs: ("live" | "dormant" | "reports" | "quarantined")[] = ["live", "dormant"];
 		if ((this.#options.reports ?? []).length > 0) tabs.push("reports");
-		if (this.#quarantinedIds().length > 0) tabs.push("quarantined");
+		if (this.#quarantinedItems().length > 0) tabs.push("quarantined");
 		return tabs;
 	}
 

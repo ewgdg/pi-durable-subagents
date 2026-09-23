@@ -1760,6 +1760,29 @@ test("quarantined overflow counts candidates without recoverable IDs", async () 
 	assert.equal(await selection, undefined);
 });
 
+test("a quarantine with only unreadable candidates still shows its tab", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [],
+		quarantined: [],
+		quarantinedCandidateCount: 3,
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	const component = harness.component!;
+	component.handleInput?.("\t");
+	component.handleInput?.("\t");
+	assert.match(renderPanel(component, 80).join("\n"), /3 candidates without recoverable ID/);
+	component.handleInput?.("\r");
+	assert.equal(harness.resolved, false);
+	clickLabel(component, "Dormant");
+	clickLabel(component, "Quarantined");
+	assert.match(renderPanel(component, 80).join("\n"), /3 unreadable candidates/);
+	component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
 test("a live refresh publishes quarantined identities to the selector", async () => {
 	const harness = surfaceHarness(30);
 	const owner = agentStatus("owner", "Owner", null);
