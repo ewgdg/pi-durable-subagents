@@ -70,13 +70,16 @@ for (const explicitWait of [false, true]) {
 		assert.equal(host.session.isIdle, true);
 		assert.deepEqual(lifecycle, ["agent_settled"]);
 		assert.match(ownerDockText(host), /Which option should I use/);
+		// Human attention is volatile: a reload replaces the coordinator, the child's
+		// live ask_user call ends with it, and the question is not restored.
 		await host.session.reload();
-		await waitUntil(() => attentionEvents.length >= 3);
+		await waitUntil(() => attentionEvents.length >= 2);
+		await new Promise<void>((resolve) => setTimeout(resolve, 100));
 		assert.deepEqual(attentionEvents, [
 			{ active: true, label: "An agent needs your input" },
 			{ active: false },
-			{ active: true, label: "An agent needs your input" },
 		]);
+		assert.doesNotMatch(ownerDockText(host), /Which option should I use/);
 	});
 }
 
