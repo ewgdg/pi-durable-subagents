@@ -5,7 +5,11 @@ import type { HostedAgentRuntime, HostedRuntimeEvent } from "../src/runtime/host
 
 const evidence = { provider: "openai-codex", diagnostic: "Quota exhausted" };
 
-function fixture(options: { queued?: { steering: string[]; followUp: string[] }; runtimeUnavailable?: boolean } = {}) {
+function fixture(options: {
+	queued?: { steering: string[]; followUp: string[] };
+	runtimeUnavailable?: boolean;
+	onAbort?: () => void;
+} = {}) {
 	let emit!: (event: HostedRuntimeEvent) => void;
 	let starts = 0;
 	const delivered: unknown[] = [];
@@ -16,7 +20,7 @@ function fixture(options: { queued?: { steering: string[]; followUp: string[] };
 		hasPendingActivity: () => false,
 		queuedInputCount: () => 0,
 		clearQueue: async () => options.queued ?? { steering: [], followUp: [] },
-		abort: async () => undefined,
+		abort: async () => options.onAbort?.(),
 		waitForIdle: async () => undefined,
 		dispose: async () => undefined,
 		deliver(input: unknown) { delivered.push(input); return { completion: Promise.resolve() }; },
@@ -144,6 +148,21 @@ test("termination clears the live quota stop, but relationship cancellation alon
 	assert.equal(host.observe().phase, "dormant");
 	assert.equal(starts(), 1);
 	assert.equal(ended.length, 1);
+});
+
+test("terminating a suspended Run observes it as ending while the Runtime aborts", async () => {
+	let phaseDuringAbort: string | undefined;
+	let observe!: () => string;
+	const { host, emit } = fixture({ onAbort: () => { phaseDuringAbort = observe(); } });
+	observe = () => host.observe().phase;
+	await host.startInLane();
+	emit({ type: "agent_end", outcome: "error", willRetry: false, failure: terminalFailure });
+	assert.equal(host.currentRunSuspension()?.reason, "runtime_error");
+	// Abort lets the child settle, and its settlement boundary re-enters the Owner.
+	// It must see "ending" to stay off the lane termination already holds.
+	await host.lane.run(() => host.discardAndEndInLane("termination"));
+	assert.equal(phaseDuringAbort, "ending");
+	assert.equal(host.observe().phase, "dormant");
 });
 
 test("native queued input waits for the isolated explicit resume turn", async () => {

@@ -199,8 +199,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			};
 		}
 		const run = this.#runtime;
+		// A suspended Run being discarded is still ending: re-entrant settlement
+		// boundaries rely on that phase to stay off the lane termination holds.
 		if (this.#runSuspension) return {
-			phase: "live", work: "settled", attention: "none", retentionReasons,
+			phase: this.#ending ? "ending" : "live", work: "settled", attention: "none", retentionReasons,
 			suspension: this.#runSuspension,
 		};
 		if (!run?.admitted) return { phase: "dormant", retentionReasons: [] };
