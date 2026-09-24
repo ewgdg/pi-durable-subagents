@@ -2087,6 +2087,9 @@ test("shutdown before Moderator bootstrap prevents a post-snapshot Moderator adm
 	});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("I settled without answering the Creation Request."),
+		// The automatic Answer reminder runs once more before the obligation stalls;
+		// an exhausted model would suspend the Run instead of raising the incident.
+		fauxAssistantMessage("I remain settled after the Answer reminder."),
 	]);
 	await spawnFromView(
 		harness.host.session,
@@ -2246,13 +2249,7 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 		if (!getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I settled without answering the Creation Request.");
 		}
-		const input = context.messages.find((message) =>
-			message.role === "user" && JSON.stringify(message).includes('"trigger"')
-		);
-		if (JSON.stringify(input).includes('"previousAttempt"')) {
-			return fauxAssistantMessage("I am the replacement Moderator.");
-		}
-		return fauxAssistantMessage("The first Moderator Run fails terminally.", {
+		return fauxAssistantMessage("The Moderator Run fails terminally.", {
 			stopReason: "error",
 			errorMessage: "deterministic Moderator Run failure",
 		});
@@ -2264,12 +2261,23 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 		"spawn-failed-moderator-post-mortem-agent",
 		{ title: "Fixture request", request: "Settle with an Answer obligation." },
 	);
-	await waitForCondition(async () => (await findModerators(host)).length === 2);
-	const moderators = await findModerators(host);
-	const replacement = moderators.find(({ path }) => moderatorPreviousAttempt(path));
-	assert.ok(replacement);
-	const failedModeratorId = moderatorPreviousAttempt(replacement.path)?.agentId;
-	assert.ok(failedModeratorId);
+	await waitForCondition(async () => (await findModerators(host)).length === 1);
+	const [moderator] = await findModerators(host);
+	assert.ok(moderator);
+	const failedModeratorId = moderator.id;
+	// A terminal Moderator error suspends its Run; terminating that Run leaves the
+	// failed Moderator Dormant.
+	await waitForCondition(async () => {
+		const run = (await observeStatus(host, failedModeratorId)).run;
+		return run.phase === "live" && run.suspension?.reason === "runtime_error";
+	});
+	const termination = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-failed-moderator",
+		{ operation: "terminate", agentId: failedModeratorId },
+	);
+	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
 
 	// A Template is selected from current trusted discovery only at creation and its
 	// rules are captured atomically in the child Identity or Moderator Input
@@ -2607,6 +2615,8 @@ test("orderly shutdown closes exhausted Operational Attention", async (t) => {
 	});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("I settled without answering the Creation Request."),
+		// The automatic Answer reminder runs once more before the obligation stalls.
+		fauxAssistantMessage("I remain settled after the Answer reminder."),
 	]);
 	await spawnFromView(
 		harness.host.session,
