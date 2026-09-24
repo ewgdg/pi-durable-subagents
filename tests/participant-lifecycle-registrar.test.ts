@@ -681,7 +681,7 @@ test("participant lifecycle registrar preserves fail-fast handler errors", async
 		[
 			"turn_end",
 			"safeBoundaryReached",
-			{ type: "turn_end", turnIndex: 0, message: toolResultMessage, toolResults: [] },
+			{ type: "turn_end", turnIndex: 0, message: toolResultMessage, toolResults: [toolResultMessage] },
 		],
 		[
 			"agent_before_settle",

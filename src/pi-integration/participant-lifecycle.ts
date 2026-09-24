@@ -170,12 +170,15 @@ export function registerParticipantLifecycle(
 		})
 	);
 	// Pi awaits turn_end after the complete issued tool batch and before it builds
-	// the next model context, making this the Steer freeze boundary. Run disposal
+	// the next model context, making this the Steer freeze boundary. Only a turn
+	// with tool results continues to another model turn; a final turn leaves Steer
+	// to agent_before_settle, and awaiting the Owner there would keep the native
+	// session busy after the Owner already observes it settled. Run disposal
 	// cannot deadlock here: reachSafeBoundary skips the lane once a Run is ending
 	// or interrupting (see src/coordination/messages.ts).
 	pi.on("turn_end", async (event, ctx) => {
 		if (event.toolResults.some(deliveredAnswer)) answerDelivered = true;
-		await handlers.safeBoundaryReached();
+		if (event.toolResults.length > 0) await handlers.safeBoundaryReached();
 		const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
 		const frames = currentFrames(transcript, ctx.sessionManager.getSessionId());
 		const hides = resolvedAttentionEdits(transcript, frames, false);
