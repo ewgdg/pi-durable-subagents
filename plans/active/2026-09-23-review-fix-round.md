@@ -77,4 +77,13 @@ commit each coherent batch. Do not run the full integration suite.
   Wait capacity, operational-incidents (Owner suspension hang + 2), pi-child-
   process-runtime hidden child, process-model-broker, quota-lifecycle-integration
   hang. run-supervision human-retry test flakes ~2/30 on baseline and now alike.
+- Follow-up: all of those now pass (`9c39414..b1012b7`); fast suite and every
+  process file green. Two were product deadlocks: an in-process delivery commit
+  proof read its entry-count gate before Pi persisted the entry (`60c63d4`), and a
+  human resume carrying an image never matched Pi's normalized content (`1ed1355`);
+  both stalled the Owner's first resume while it held the Agent lane. The rest were
+  fixtures stale against Pi 0.87, plan 141 suspension, the tool withhold filter,
+  terminating Answers, and Identity seeding. The hang had masked one more stale
+  fixture (orderly shutdown with exhausted Attention), and a pre-existing quota
+  race (4/20) now waits for the owed Answer (0/20).
 - Possible follow-up (not built): read-only reminder for questions lost on reload.
