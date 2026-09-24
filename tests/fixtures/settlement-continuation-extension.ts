@@ -10,8 +10,6 @@ export const CONTINUATION_STARTED = "continuation-model-started";
 
 const extension: ExtensionFactory = (pi) => {
 	const releasePath = process.env.CONTINUATION_RELEASE_PATH!;
-	let modelStarted!: () => void;
-	const continuationStarted = new Promise<void>((resolve) => { modelStarted = resolve; });
 	const faux = createFauxCore({
 		api: CONTINUATION_PROVIDER,
 		provider: CONTINUATION_PROVIDER,
@@ -25,7 +23,6 @@ const extension: ExtensionFactory = (pi) => {
 		fauxAssistantMessage(fauxToolCall(CONTEXT_ROLLOVER_TOOL, {}, { id: "context-rollover" }), { stopReason: "toolUse" }),
 		async () => {
 			pi.appendEntry(CONTINUATION_STARTED, {});
-			modelStarted();
 			// The parent releases actual model work only after inspecting hosted status.
 			while (true) {
 				try { await access(releasePath); break; }
@@ -53,13 +50,12 @@ const extension: ExtensionFactory = (pi) => {
 		},
 	});
 	let continued = false;
-	pi.on("agent_settled", async () => {
+	pi.on("agent_settled", () => {
 		if (continued) return;
 		continued = true;
-		// Context-rollover extensions can start the successor from this awaited hook.
-		// Hold the old hook until its successor is running to expose event ordering.
+		// Context-rollover extensions start the successor from this hook. Pi defers
+		// that run until every settled handler finishes, so it follows the old settlement.
 		pi.sendUserMessage("Continue in the next context window.");
-		await continuationStarted;
 	});
 };
 export default extension;

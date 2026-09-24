@@ -15,6 +15,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
+import { writeChildSession } from "./support/child-session.ts";
 import { PI_TEST_AGENT_DIR } from "./support/pi-test-environment.ts";
 import { CONTINUATION_MODEL, CONTINUATION_PROVIDER, CONTINUATION_STARTED, CONTEXT_ROLLOVER_TOOL } from "./fixtures/settlement-continuation-extension.ts";
 
@@ -28,16 +29,18 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 	const sessionPath = join(root, "child.jsonl");
 	const releasePath = join(root, "release");
 	const agentId = "019a6b4d-1b22-7000-8000-000000000301";
-	await writeFile(sessionPath, JSON.stringify({
-		type: "session", version: 3, id: agentId,
-		timestamp: new Date().toISOString(), cwd,
-	}) + "\n");
+	await writeChildSession({
+		sessionPath, sessionId: agentId, cwd,
+		workflowId: "settlement-continuation-workflow",
+		directSpawnerAgentId: "settlement-continuation-workflow",
+		label: "Continuation child",
+	});
 	const launch = await PiChildProcessRuntime.launch({
 		workflowId: "settlement-continuation-workflow", agentId, role: "ordinary",
 		expectedSessionId: agentId, sessionPath, agentDir: PI_TEST_AGENT_DIR,
 		configuration: {
 			cwd, model: { provider: CONTINUATION_PROVIDER, modelId: CONTINUATION_MODEL },
-			thinking: "off", excludeTools: [CONTEXT_ROLLOVER_TOOL], skills: [],
+			thinking: "off", excludeTools: [], skills: [],
 			excludeSkills: [],
 			extensions: [fileURLToPath(new URL("./fixtures/settlement-continuation-extension.ts", import.meta.url))],
 			loadContextFiles: true,
