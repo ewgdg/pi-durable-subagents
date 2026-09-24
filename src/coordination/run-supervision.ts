@@ -249,9 +249,14 @@ export class RunSupervisor {
 			{
 				inspectCommit: () => {
 					const tail = record.transcript.inspect().entries.at(-1);
-					return tail?.type === "message" &&
-						tail.message.role === "user" &&
-						JSON.stringify(tail.message.content) === JSON.stringify(content);
+					if (tail?.type !== "message" || tail.message.role !== "user") return false;
+					// Pi normalizes prompt images (re-encoding or omitting them) and appends its
+					// image hints after the text, so only the leading submitted text is stable.
+					const committed = tail.message.content;
+					const committedText = typeof committed === "string"
+						? committed
+						: committed[0]?.type === "text" ? committed[0].text : undefined;
+					return committedText?.startsWith(text) === true;
 				},
 			},
 		);

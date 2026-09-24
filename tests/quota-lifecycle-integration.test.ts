@@ -65,10 +65,14 @@ for (const diagnostic of [
 		const { host, view, coordinator, call, spawn } = await harness(t);
 		host.model.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: diagnostic })]);
 		const agentId = await spawn();
-		await until(() => Boolean(suspension(view.status(agentId).run)), "quota suspension must become observable");
+		// The Request's commit proof and the Run's quota stop arrive as independent child
+		// events, so the owed Answer can attach just after the suspension is observable.
+		await until(() => {
+			const run = view.status(agentId).run;
+			return Boolean(suspension(run)) && run.retentionReasons.some(item => item.reason === "answer_owed");
+		}, "quota suspension must retain the owed Answer");
 		const suspended = view.status(agentId);
 		assert.equal(suspended.run.phase, "live");
-		assert.ok(suspended.run.retentionReasons.some(item => item.reason === "answer_owed"));
 		const obligations = coordinator.forAgent(agentId).obligationFrames();
 		assert.equal(obligations.length, 1);
 		const transcript = suspended.primaryEvidence.transcriptPath!;
@@ -136,8 +140,10 @@ test("native Workflow suspends structured quota without terminal failure", { tim
 	const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
 	await host.session.prompt("Continue after I changed the account", { source: "interactive", images: [image] });
 	await until(() => !suspension(view.status(identity.agentId).run), "explicit Owner resume");
+	// The fixture model is text-only, so Pi omits the forwarded image with a hint.
 	assert.ok(host.session.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "user" &&
-		JSON.stringify(entry.message.content) === JSON.stringify([{ type: "text", text: "Continue after I changed the account" }, image])));
+		JSON.stringify(entry.message.content) === JSON.stringify([{ type: "text",
+			text: "Continue after I changed the account\n\n[Image omitted: could not be resized below the inline image size limit.]" }])));
 });
 
 test("exact Codex diagnostic suspends through the real process Workflow", { timeout: 20_000 }, async t => {
