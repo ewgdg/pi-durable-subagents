@@ -232,10 +232,12 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 			rejectCommit = reject;
 		});
 		let settled = false;
+		const committedEntryCount = () => this.#session.sessionManager.getEntries().length;
+		const entriesBeforeDispatch = committedEntryCount();
 		const inspectAfterPersistence = () => queueMicrotask(() => {
 			if (settled) return;
 			try {
-				if (!inspectCommit()) return;
+				if (committedEntryCount() <= entriesBeforeDispatch || !inspectCommit()) return;
 				settled = true;
 				settleCommit(true);
 			} catch (error) {
@@ -244,18 +246,15 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 			}
 		});
 		// Turn-level entry IDs are not visible on the AgentSession event surface,
-		// so message_end is only a wake-up: the entry-count gate avoids calling inspectCommit
-		// on every event, but any concurrent append can open it. Per-delivery proof is
-		// inspectCommit() itself, which must still be true to confirm; for triggerTurn to
-		// an idle agent the injected message_end can precede persistence, so confirmation
-		// then falls back to run completion. Both directions stay safe at the cost of
-		// delaying transcriptCommit awaited by resume/moderator paths.
-		const committedEntryCount = () => this.#session.sessionManager.getEntries().length;
-		const entriesBeforeDispatch = committedEntryCount();
+		// so message_end is only a wake-up. Pi notifies listeners before it appends the
+		// entry in the same synchronous step, so the entry-count gate is read in the
+		// microtask after persistence; any concurrent append can open it. Per-delivery
+		// proof is inspectCommit() itself, which must still be true to confirm.
+		// Resume and Moderator paths await this proof while holding the Agent lane,
+		// so falling back to Run completion would deadlock the Run's own boundaries.
 		const unsubscribe = this.#session.subscribe((event) => {
 			if (
 				event.type === "message_end" &&
-				committedEntryCount() > entriesBeforeDispatch &&
 				(
 					(delivery.kind === "custom" && event.message.role === "custom") ||
 					(delivery.kind === "user" && event.message.role === "user")

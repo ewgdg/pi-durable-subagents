@@ -130,3 +130,35 @@ test("compaction end clears presentation before Pi releases its native controlle
  }
  assert.deepEqual(states, [true, false, true, false, true, false]);
 });
+
+test("a delivered user message confirms its commit before the Run completes", async () => {
+	const listeners = new Set<(event: unknown) => void>();
+	const entries: unknown[] = [{ type: "message", message: { role: "assistant" } }];
+	const session = {
+		isCompacting: false,
+		subscribe(listener: (event: unknown) => void) {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		sessionManager: { getEntries: () => entries },
+		// Pi publishes message_end to session listeners before it appends the entry,
+		// and the Run it starts outlives the commit proof.
+		sendUserMessage(content: string) {
+			const message = { role: "user", content };
+			for (const listener of listeners) listener({ type: "message_end", message });
+			entries.push({ type: "message", message });
+			return new Promise<void>(() => undefined);
+		},
+	} as unknown as AgentSession;
+	const runtime = new InProcessHostedRuntime({
+		session,
+		projection: undefined,
+		inspectSnapshot: () => snapshot,
+	});
+
+	const dispatch = runtime.deliver({ kind: "user", content: "Resume the Run." }, {
+		inspectCommit: () => JSON.stringify(entries.at(-1)).includes("Resume the Run."),
+	});
+
+	assert.equal(await dispatch.transcriptCommit, true);
+});
