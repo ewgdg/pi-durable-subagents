@@ -90,7 +90,8 @@ test("generated extension returns deterministic text, tool-call, and error messa
 		assert.equal(observed[0]?.options?.sessionId, "session-evidence");
 		assert.equal(observed[0]?.options?.maxTokens, 123);
 		assert.ok(observed[0]?.options?.signal instanceof AbortSignal);
-		assert.deepEqual(observed[0]?.model, broker.model);
+		// The model crosses the broker as JSON, which drops undefined optional fields.
+		assert.deepEqual(observed[0]?.model, JSON.parse(JSON.stringify(broker.model)));
 		assert.equal(observed[0]?.callCount, 1);
 	} finally {
 		await broker.close();
