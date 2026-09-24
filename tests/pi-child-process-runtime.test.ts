@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, lstat, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import xtermHeadless from "@xterm/headless";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
+import { writeChildSession } from "./support/child-session.ts";
 
 import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
@@ -48,48 +49,6 @@ const CHILD_DEFAULT_TOOL_SURFACE = [
 	"ask_user",
 	"runtime_sequential_probe",
 ] as const;
-
-/**
- * A child transcript is indexed by the Identity its Owner commits before launch
- * (src/coordination/spawning.ts). A directly started child needs that same entry,
- * or the bridge cannot bind the child's session to its own Identity.
- */
-async function writeChildSession(options: {
-	sessionPath: string;
-	sessionId: string;
-	cwd: string;
-	workflowId: string;
-	directSpawnerAgentId: string;
-	label: string;
-}): Promise<void> {
-	const timestamp = new Date().toISOString();
-	await writeFile(options.sessionPath, `${JSON.stringify({
-		type: "session",
-		version: 3,
-		id: options.sessionId,
-		timestamp,
-		cwd: options.cwd,
-	})}\n`, { mode: 0o600 });
-	await appendFile(options.sessionPath, `${JSON.stringify({
-		type: "custom",
-		id: "child-identity",
-		parentId: null,
-		timestamp,
-		customType: "agent-coordination.identity",
-		data: {
-			agentId: options.sessionId,
-			workflowId: options.workflowId,
-			directSpawnerAgentId: options.directSpawnerAgentId,
-			creationPreset: null,
-			spawnSource: {
-				agentId: options.directSpawnerAgentId,
-				entryId: "spawn-entry",
-				toolCallId: "spawn-call",
-			},
-			metadata: { label: options.label },
-		},
-	})}\n`);
-}
 
 test("real Pi CLI resolves unset Moderator thinking from the shared Pi default", {
 	timeout: TEST_TIMEOUT_MS,
@@ -1918,9 +1877,12 @@ test("hidden real child persists work without rendering and repeated attachment 
 	const sessionId = "019a6b4d-1b22-7000-8000-000000000095";
 	const sessionPath = join(root, "child.jsonl");
 	const probePath = join(root, "render-events.jsonl");
-	await writeFile(sessionPath, JSON.stringify({
-		type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd,
-	}) + "\n");
+	await writeChildSession({
+		sessionPath, sessionId, cwd,
+		workflowId: "visible-workflow",
+		directSpawnerAgentId: "019a6b4d-1b22-7000-8000-000000000001",
+		label: "Visible Child",
+	});
 	const runtime = await PiChildProcessRuntime.start({
 		workflowId: "visible-workflow", agentId: sessionId, role: "ordinary",
 		expectedSessionId: sessionId, sessionPath,
