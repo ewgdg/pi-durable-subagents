@@ -286,18 +286,19 @@ test("a child Agent Wait releases and reacquires child execution capacity", { ti
 			fauxToolCall("agent_wait", {}, { id: "wait-for-responder" }),
 			{ stopReason: "toolUse" },
 		),
-		(context) => fauxAssistantMessage(
-			fauxToolCall(
-				"agent_message",
-				{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The responder committed its Answer." },
-				{ id: "answer-waiting-child" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		async () => {
+		// A committed Answer ends the responder's model loop, so it holds the only
+		// execution slot before answering.
+		async (context) => {
 			secondChildHoldingCapacity();
 			await secondChildRelease;
-			return fauxAssistantMessage("The responder Run completed.");
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The responder committed its Answer." },
+					{ id: "answer-waiting-child" },
+				),
+				{ stopReason: "toolUse" },
+			);
 		},
 		(context) => {
 			firstChildResumed = true;
@@ -311,7 +312,6 @@ test("a child Agent Wait releases and reacquires child execution capacity", { ti
 				{ stopReason: "toolUse" },
 			);
 		},
-		fauxAssistantMessage("The waiting child Run completed."),
 	]);
 
 	await spawnChild(owner, host, "spawn-capacity-waiter");
