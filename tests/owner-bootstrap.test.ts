@@ -266,13 +266,7 @@ test("a Moderator bootstrap can recover through native /new", async (t) => {
 
 	await bindTestOwnerHost(host, "tui");
 
-	assert.equal(
-		host.ui.notifications.some(
-			({ message, type }) =>
-				type === "error" && message.includes("current Pi session is a Moderator"),
-		),
-		true,
-	);
+	assertBlockedAdmission(host, /current Pi session is a Moderator/);
 	assertOwnerToolsRegisteredButInactive(host);
 
 	const replacement = await host.runtime.newSession();
@@ -482,6 +476,7 @@ test("an invalid initial Workflow Policy prevents coordination runtime creation"
 				"Workflow Policy maxConcurrentAgentRuns must be a positive safe integer",
 		},
 	]);
+	assertBlockedAdmission(host, /maxConcurrentAgentRuns must be a positive safe integer/);
 	await host.runtime.dispose();
 });
 
@@ -507,14 +502,7 @@ test("an ambiguous public Owner extension fails before Identity commitment", asy
 		false,
 	);
 	assertOwnerToolsRegisteredButInactive(host);
-	assert.equal(
-		host.ui.notifications.some(
-			({ message, type }) =>
-				type === "error" &&
-				message.includes("cannot bind the Owner Agent extension"),
-		),
-		true,
-	);
+	assertBlockedAdmission(host, /cannot bind the Owner Agent extension/);
 	extensions.pop();
 	await host.runtime.dispose();
 });
@@ -668,15 +656,9 @@ test("a valid child Identity is not reclassified as Workflow Owner", async (t) =
 	});
 
 	await bindTestOwnerHost(host, "tui");
-	assert.equal(
-		host.ui.notifications.some(
-			({ message, type }) =>
-				type === "error" && message.includes("current Pi session is a child Agent"),
-		),
-		true,
-	);
+	assertBlockedAdmission(host, /current Pi session is a child Agent/);
 	assertOwnerToolsRegisteredButInactive(host);
-	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
+	assert.ok(host.session.extensionRunner.getCommand("agents"), "diagnostics stays reachable");
 	host.model.setResponses([fauxAssistantMessage("Child prompt completed.")]);
 	await host.session.prompt("Continue as the existing child Agent.");
 	assert.equal(
@@ -706,15 +688,8 @@ test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async (t)
 	);
 
 	await bindTestOwnerHost(host, "tui");
-	assert.equal(
-		host.ui.notifications.some(
-			({ message, type }) =>
-				type === "error" && message.includes("current Pi session is a Moderator"),
-		),
-		true,
-	);
+	assertBlockedAdmission(host, /current Pi session is a Moderator/);
 	assertOwnerToolsRegisteredButInactive(host);
-	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
 	await host.runtime.dispose();
 });
 
@@ -727,6 +702,17 @@ function createVoidDeferred(): Readonly<{
 		resolvePromise = resolve;
 	});
 	return { promise, resolve: resolvePromise };
+}
+
+/** Every failed admission shows its reason in the blockage widget instead of a raw handler error. */
+function assertBlockedAdmission(host: TestOwnerHost, reason: RegExp): void {
+	assert.deepEqual(host.ui.notifications.filter(({ type }) => type === "error"), []);
+	const widget = host.ui.widgets.get("agent-coordination.blockage");
+	assert.ok(widget);
+	const widgetText = (widget as { render(width: number): string[] }).render(200).join("\n");
+	assert.match(widgetText, /Subagent coordination blocked/);
+	assert.match(widgetText, reason);
+	assert.doesNotMatch(widgetText, /Saved coordination data is invalid/);
 }
 
 function assertOwnerToolsRegisteredButInactive(host: TestOwnerHost): void {

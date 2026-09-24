@@ -62,7 +62,7 @@ test("diagnostics exposes cleanup failure without interpreting evidence as termi
 	const h = harness(30);
 	const cleanupError = new Error("cleanup pending\x1b]52;c;attack\x07\x1b[2J");
 	const result = openOwnerDiagnostics(h.ui, new OwnerRecoveryError(failure.stage, failure.agentId,
-		failure.transcriptPath, failure.protocolError, cleanupError));
+		failure.transcriptPath, failure.admissionError, cleanupError));
 	assert.match(h.component.render(120).join("\n"), /cleanup also failed/);
 	h.component.handleInput?.("t");
 	h.component.render(120);
@@ -137,4 +137,27 @@ test("clearing blockage removes only its own widget", () => {
 	assert.ok(widgets.has("agent-coordination.blockage"));
 	showOwnerBlockage(ui, undefined);
 	assert.deepEqual([...widgets.keys()], ["unrelated"]);
+});
+
+test("non-protocol admission failure reports its own reason instead of invalid saved data", async () => {
+	const hostFailure = new OwnerRecoveryError("Owner admission", "owner", undefined,
+		new Error("Incompatible Pi host: cannot bind the Owner Agent extension"));
+	let widget!: Component;
+	showOwnerBlockage({ setWidget(_key: string, factory: unknown) {
+		widget = (factory as (tui: TUI, theme: Theme) => Component)({} as TUI,
+			{ fg: (_color: string, text: string) => text } as unknown as Theme);
+	} } as ExtensionUIContext, hostFailure);
+	const widgetText = widget.render(100).join("\n");
+	assert.match(widgetText, /cannot bind the Owner Agent extension/);
+	assert.doesNotMatch(widgetText, /Saved coordination data/);
+
+	const h = harness(40);
+	const result = openOwnerDiagnostics(h.ui, hostFailure);
+	const summary = h.component.render(120).join("\n");
+	assert.match(summary, /Reason: Incompatible Pi host/);
+	assert.doesNotMatch(summary, /protocol/i);
+	h.component.handleInput?.("t");
+	assert.match(h.component.render(120).join("\n"), /Stage: Owner admission/);
+	h.component.handleInput?.("q");
+	await result;
 });

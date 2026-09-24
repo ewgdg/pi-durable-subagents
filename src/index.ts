@@ -93,12 +93,10 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			ownerAdmissionState = "failed";
 			resolveOwnerView = undefined;
 			deactivateOwnerAgentTools(pi);
-			const failure = error instanceof OwnerRecoveryError ? error
-				: error instanceof ProtocolInvariantError ? new OwnerRecoveryError(
-					"Owner transcript recovery", ctx.sessionManager.getSessionId(),
-					ctx.sessionManager.getSessionFile(), error,
-				) : undefined;
-			if (!failure) throw error;
+			const failure = error instanceof OwnerRecoveryError ? error : new OwnerRecoveryError(
+				error instanceof ProtocolInvariantError ? "Owner transcript recovery" : "Owner admission",
+				ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile(), error,
+			);
 			// A blocked Owner has no coordinator-backed commands. Keep diagnostics
 			// independent of that failed admission and out of restored chat history.
 			registerAgentsCommand(pi, resolveAdmittedOwnerView, failure);

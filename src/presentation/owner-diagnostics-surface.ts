@@ -1,6 +1,7 @@
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, Text, matchesKey, truncateToWidth, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
+import { ProtocolInvariantError } from "../protocol/identities.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 
 const BLOCKAGE_WIDGET_KEY = "agent-coordination.blockage";
@@ -9,7 +10,7 @@ const PRESENTATION_ROWS = 2;
 export function showOwnerBlockage(ui: ExtensionUIContext, failure: OwnerRecoveryError | undefined): void {
 	ui.setWidget(BLOCKAGE_WIDGET_KEY, failure ? (_tui, theme) => {
 		const heading = new Text("⚠ Subagent coordination blocked", 0, 0);
-		const explanation = new Text("Saved coordination data is invalid; the protocol may have changed.", 0, 0);
+		const explanation = new Text(blockageExplanation(failure), 0, 0);
 		const hints = new Text("/agents diagnostics", 0, 0);
 		const renderBody = (width: number) => [
 			...heading.render(width).map((line) => theme.fg("warning", line)),
@@ -43,6 +44,12 @@ export function openOwnerDiagnostics(ui: ExtensionUIContext, failure?: OwnerReco
 	});
 }
 
+function blockageExplanation(failure: OwnerRecoveryError): string {
+	return failure.admissionError instanceof ProtocolInvariantError
+		? "Saved coordination data is invalid; the protocol may have changed."
+		: errorDescription(failure.admissionError).split("\n", 1)[0]!;
+}
+
 function errorDescription(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -59,12 +66,15 @@ function technicalError(error: unknown, seen = new Set<unknown>()): string {
 
 function summaryText(failure: OwnerRecoveryError | undefined): string {
 	if (!failure) return "No Owner admission failure is recorded in this attachment.\nThis is not an exhaustive audit of the Workflow.";
-	const error = failure.protocolError;
-	return [
-		"Problem",
+	const error = failure.admissionError;
+	const problem = error instanceof ProtocolInvariantError ? [
 		"Saved coordination evidence fails current protocol validation.",
 		`Reason: ${errorDescription(error.cause ?? error)}`,
 		"A protocol version change may explain the incompatibility.",
+	] : [`Reason: ${errorDescription(error)}`];
+	return [
+		"Problem",
+		...problem,
 		"This is the first encountered failure, not a complete list of problems.",
 		"",
 		"Impact",
@@ -84,11 +94,12 @@ function summaryText(failure: OwnerRecoveryError | undefined): string {
 
 function technicalText(failure: OwnerRecoveryError | undefined): string {
 	if (!failure) return summaryText(failure);
-	const source = failure.protocolError.source;
+	const error = failure.admissionError;
+	const source = error instanceof ProtocolInvariantError ? error.source : undefined;
 	// An admission scan can encounter another Agent's evidence. Do not label
 	// that source with the Owner's file merely because the Owner was bootstrapping.
-	const transcriptPath = failure.protocolError.transcriptPath !== undefined
-		? failure.protocolError.transcriptPath
+	const transcriptPath = error instanceof ProtocolInvariantError && error.transcriptPath !== undefined
+		? error.transcriptPath
 		: !source || source.agentId === failure.agentId ? failure.transcriptPath ?? null : undefined;
 	return [
 		`Stage: ${failure.stage}`,
@@ -96,7 +107,7 @@ function technicalText(failure: OwnerRecoveryError | undefined): string {
 		`Transcript: ${transcriptPath === null ? "Not file-backed" : transcriptPath ?? "Unavailable"}`,
 		...(source ? [`Entry: ${source.entryId}`, `Tool call: ${source.toolCallId}`] : []),
 		"",
-		technicalError(failure.protocolError),
+		technicalError(error),
 		...(failure.cleanupError === undefined ? [] : ["", "Cleanup failure:", technicalError(failure.cleanupError)]),
 	].join("\n");
 }

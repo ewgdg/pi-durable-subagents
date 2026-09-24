@@ -28,7 +28,6 @@ import {
 	installResolvedAgentActivityDock,
 } from "./agent-extension.ts";
 import { discoverColdWorkflow } from "./cold-host-discovery.ts";
-import { ProtocolInvariantError } from "../protocol/identities.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 import { OwnerRecoveryError } from "./owner-recovery-error.ts";
@@ -107,12 +106,8 @@ export async function initializeOwnerWorkflow(options: {
 		} catch (failure) {
 			cleanupError = failure;
 		}
-		if (error instanceof ProtocolInvariantError) {
-			throw new OwnerRecoveryError("Owner coordination initialization", identity.agentId,
-				runtime.session.sessionManager.getSessionFile(), error, cleanupError);
-		}
-		if (cleanupError !== undefined) throw new AggregateError([error, cleanupError], "Owner admission and cleanup failed");
-		throw error;
+		throw new OwnerRecoveryError("Owner coordination initialization", identity.agentId,
+			runtime.session.sessionManager.getSessionFile(), error, cleanupError);
 	}
 	let parkingBinding: OwnerSettlementParkingBinding | undefined;
 	let ownerReplacementPreparation: Promise<void> | undefined;
