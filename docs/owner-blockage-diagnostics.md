@@ -12,7 +12,7 @@ When required identity, membership, or other strict bootstrap evidence fails pro
 
 This is a genuine admission failure, not an ordinary rejected coordination record. Identity, membership, and bootstrap validation remain strict; the Owner boundary contains every admission failure, attempts partial-coordinator cleanup without disposing the native Pi session, and does not publish a healthy coordinator.
 
-Other admission failures — a child Agent or Moderator transcript opened as Owner, an incompatible Pi host, invalid Workflow Policy, or I/O errors — use the same widget and diagnostics. They are not reclassified as invalid saved data: the widget's explanation line shows the failure's own one-line reason instead.
+Other admission failures — a child Agent or Moderator transcript opened as Owner, an incompatible Pi host, or I/O errors — use the same widget and diagnostics. They are not reclassified as invalid saved data: the widget's explanation line shows the failure's own one-line reason instead.
 
 ## Inspecting the failure
 

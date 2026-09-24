@@ -20,7 +20,7 @@ The file is a strict UTF-8 JSON object. Its complete optional surface is:
 
 An omitted file or field uses the shown default. Unknown fields, duplicate keys, comments, trailing commas, wrong types, and invalid integers reject the complete file. Execution and delivery limits must be positive safe integers. `operationReviewIntervalMs` and `deliveryProgressIntervalMs` must each be an integer from `1000` through `2147483647` milliseconds. `excludedModels` defaults to an empty list.
 
-Invalid initial policy prevents coordination from creating the Workflow runtime. Owner resource reload reads the file again: a valid file atomically publishes one frozen complete snapshot, while an invalid file reports a diagnostic and preserves the previous snapshot. Reloading child resources does not reload Workflow Policy. Policy is volatile Owner-scoped configuration; it is not written to any Agent transcript.
+Invalid initial policy does not block admission: the Owner starts with the default policy, and a warning names the problem. Owner resource reload reads the file again: a valid file atomically publishes one frozen complete snapshot, while an invalid file warns and preserves the previous snapshot. Model-exclusion toggles still refuse to rewrite an invalid file. Reloading child resources does not reload Workflow Policy. Policy is volatile Owner-scoped configuration; it is not written to any Agent transcript.
 
 ## Child execution
 

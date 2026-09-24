@@ -2,7 +2,7 @@
 
 Loading `pi-durable-subagents` in an interactive Pi TUI establishes the current Pi session as the Workflow Owner. No separate start command is required. Coordination associates Pi's public Runtime registration and TUI session binding with the current `SessionManager`, then borrows that native Runtime without taking disposal authority.
 
-Before creating the coordination runtime, bootstrap loads and validates the optional user [Workflow Policy](workflow-policy.md). Invalid initial policy prevents runtime creation without appending Owner Identity.
+Before creating the coordination runtime, bootstrap loads and validates the optional user [Workflow Policy](workflow-policy.md). Invalid initial policy falls back to the default policy with a warning.
 
 On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session identity is both the Agent identity and Workflow identity, and Owner metadata is fixed to the canonical Owner role. Resolved Owner Runtime configuration and resources are not copied into Identity.
 

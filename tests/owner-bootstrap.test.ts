@@ -446,7 +446,7 @@ test("Owner prompts retain their prepared Template snapshot until resource reloa
 	assert.doesNotMatch(promptAfterReload, /first-delegate/);
 });
 
-test("an invalid initial Workflow Policy prevents coordination runtime creation", async (t) => {
+test("an invalid initial Workflow Policy admits the Owner with the default policy and a warning", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const policyPath = join(
 		host.services.agentDir,
@@ -458,25 +458,12 @@ test("an invalid initial Workflow Policy prevents coordination runtime creation"
 
 	await bindTestOwnerHost(host, "tui");
 
-	assert.equal(
-		host.session.sessionManager
-			.getEntries()
-			.some(
-				(entry) =>
-					entry.type === "custom" &&
-					entry.customType === "agent-coordination.identity",
-			),
-		false,
-	);
-	assertOwnerToolsRegisteredButInactive(host);
-	assert.deepEqual(host.services.diagnostics, [
-		{
-			type: "error",
-			message:
-				"Workflow Policy maxConcurrentAgentRuns must be a positive safe integer",
-		},
-	]);
-	assertBlockedAdmission(host, /maxConcurrentAgentRuns must be a positive safe integer/);
+	const reason = "Workflow Policy maxConcurrentAgentRuns must be a positive safe integer";
+	assert.ok(host.session.getActiveToolNames().includes("agent_spawn"));
+	assert.equal(host.ui.widgets.has("agent-coordination.blockage"), false);
+	assert.deepEqual(host.services.diagnostics, [{ type: "error", message: reason }]);
+	assert.ok(host.ui.notifications.some(({ message, type }) =>
+		type === "warning" && message === `${reason}. Using the default Workflow Policy.`));
 	await host.runtime.dispose();
 });
 

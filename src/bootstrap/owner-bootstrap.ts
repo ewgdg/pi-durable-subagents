@@ -20,6 +20,7 @@ import { OperationalIncidentSurface } from "../presentation/operational-incident
 import { OwnerPostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";
 import {
 	WorkflowPolicyStore,
+	DEFAULT_WORKFLOW_POLICY,
 	readWorkflowPolicy,
 } from "../policy/workflow-policy.ts";
 import {
@@ -71,10 +72,11 @@ export async function initializeOwnerWorkflow(options: {
 	const initialPolicy = await readWorkflowPolicy(runtime.services.agentDir);
 	if (!initialPolicy.ok) {
 		runtime.services.diagnostics.push(initialPolicy.diagnostic);
-		if (!existing) throw new Error(initialPolicy.diagnostic.message);
+		// Pi renders service diagnostics only at startup; say which policy stays in effect.
+		ctx.ui.notify(`${initialPolicy.diagnostic.message}. Using the ${existing ? "previous" : "default"} Workflow Policy.`, "warning");
 	}
 	const policy = new WorkflowPolicyStore(initialPolicy.ok
-		? initialPolicy.snapshot : existing!.policy.current());
+		? initialPolicy.snapshot : existing?.policy.current() ?? DEFAULT_WORKFLOW_POLICY);
 	// Admission always rebuilds projections, including when the host loader retains modules.
 	transcriptFromSessionManager(runtime.session.sessionManager, { fresh: true });
 	const identity = adoptOrValidateOwnerIdentity(runtime, {
