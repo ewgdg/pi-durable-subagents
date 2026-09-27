@@ -128,17 +128,14 @@ test("native Workflow suspends structured quota without terminal failure", { tim
 	assert.ok(suspension(view.status(identity.agentId).run));
 	let programmaticGenerations = 0;
 	host.model.setResponses([() => { programmaticGenerations++; return fauxAssistantMessage("PROGRAMMATIC_MUST_NOT_GENERATE"); }]);
-	for (const submit of [
-		() => host.session.sendUserMessage("Extension input must not resume quota"),
-		() => host.session.prompt("RPC input must not resume quota", { source: "rpc" }),
-	]) {
-		await submit().catch(error => assert.match(String(error), /run_suspended/));
-		assert.ok(suspension(view.status(identity.agentId).run));
-	}
+	await host.session.sendUserMessage("Extension input must not resume quota")
+		.catch(error => assert.match(String(error), /run_suspended/));
+	assert.ok(suspension(view.status(identity.agentId).run));
 	assert.equal(programmaticGenerations, 0);
 	host.model.setResponses([fauxAssistantMessage("Owner explicitly resumed")]);
 	const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
-	await host.session.prompt("Continue after I changed the account", { source: "interactive", images: [image] });
+	// An RPC client is the human of a headless Owner session.
+	await host.session.prompt("Continue after I changed the account", { source: "rpc", images: [image] });
 	await until(() => !suspension(view.status(identity.agentId).run), "explicit Owner resume");
 	// The fixture model is text-only, so Pi omits the forwarded image with a hint.
 	assert.ok(host.session.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "user" &&

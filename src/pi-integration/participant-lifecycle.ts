@@ -316,13 +316,21 @@ export function registerParticipantInputLifecycle(
 	);
 }
 
+/**
+ * Human intent is trusted input provenance. An RPC client is the human of its
+ * session: only a headless Owner can receive RPC input, because children are TUIs.
+ */
+export function isHumanInputSource(source: InputEvent["source"] | undefined): boolean {
+	return source === "interactive" || source === "rpc";
+}
+
 export function createParticipantInputHandler(
 	handlers: ParticipantLifecycleHandlers,
 	onDiscarded: () => Promise<void> = () => Promise.resolve(),
 	options: Readonly<{ deferPrimaryInputQueued?: boolean }> = {},
 ): (event: InputEvent, ctx: ExtensionContext) => Promise<InputEventResult> {
 	return async (event, ctx) => {
-		if (event.source !== "interactive" || event.streamingBehavior === "followUp") {
+		if (!isHumanInputSource(event.source) || event.streamingBehavior === "followUp") {
 			// Pi reports extension event errors without aborting native generation.
 			// Block unauthorised input here, before model work, not at agent_start.
 			return await handlers.humanInputMode() === "run_suspended"

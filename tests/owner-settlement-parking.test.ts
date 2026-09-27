@@ -340,7 +340,9 @@ test("Owner parks for ordinary background work even after every Request was answ
 	assert.equal(host.session.isIdle, true);
 });
 
-test("primary Owner input preempts Agent Wait before the next model turn", {
+// An RPC client is the human of a headless Owner session; its steer command
+// reaches Pi through AgentSession.steer rather than prompt().
+for (const route of ["interactive prompt", "RPC steer"] as const) test(`primary Owner input preempts Agent Wait before the next model turn (${route})`, {
 	timeout: 10_000,
 }, async (t) => {
 	const extensionWithLaterAsyncInputHandler: ExtensionFactory = async (pi) => {
@@ -459,9 +461,9 @@ test("primary Owner input preempts Agent Wait before the next model turn", {
 		entry.message.toolCallId === waitCallId
 	), false);
 
-	const directedPrompt = host.session.prompt(userDirection, {
-		streamingBehavior: "steer",
-	});
+	const directedPrompt = route === "RPC steer"
+		? host.session.steer(userDirection, undefined, { source: "rpc" })
+		: host.session.prompt(userDirection, { streamingBehavior: "steer" });
 	await waitUntil(() =>
 		ownerRanBeforeHumanInput ||
 		ownerAssistantTexts(host).includes(

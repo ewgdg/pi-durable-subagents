@@ -44,10 +44,10 @@ for (const route of ["interactive", "rpc", "extension", "sdk-default"] as const)
 		assert.equal(nativeInputs[0]!.source, route === "sdk-default" ? "interactive" : route);
 		assert.equal(nativeInputs[0]!.text, text);
 		assert.deepEqual(nativeInputs[0]!.images, images);
-		// Pi defaults direct SDK prompt() to interactive. Provenance is a
-		// trusted caller contract, not proof that a physical human typed input.
-		assert.deepEqual(submissions, route === "interactive" || route === "sdk-default"
-			? [{ text, images }] : []);
+		// Pi defaults direct SDK prompt() to interactive, and an RPC client is the
+		// human of its session. Provenance is a trusted caller contract, not proof
+		// that a physical human typed input.
+		assert.deepEqual(submissions, route === "extension" ? [] : [{ text, images }]);
 		assert.equal(host.session.sessionManager.getEntries().filter(entry => entry.type === "message").length, 0,
 			"handled input is not also appended as a second native user turn");
 	});
