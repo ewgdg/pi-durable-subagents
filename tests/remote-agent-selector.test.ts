@@ -147,7 +147,7 @@ test("local registered /agents owner returns through the authoritative selection
 	assert.deepEqual(command.getArgumentCompletions?.(""), [{ value: "owner", label: "owner" }]);
 	assert.deepEqual(command.getArgumentCompletions?.("o"), [{ value: "owner", label: "owner" }]);
 	assert.deepEqual(command.getArgumentCompletions?.("x"), null);
-	await command.handler("  owner  ", { ui } as unknown as ExtensionCommandContext);
+	await command.handler("  owner  ", { ui, mode: "tui" } as unknown as ExtensionCommandContext);
 
 	const ownerView = presentationView({
 		status: () => ownerStatus,
@@ -157,7 +157,7 @@ test("local registered /agents owner returns through the authoritative selection
 		},
 	});
 	const ownerCommand = captureCommand((pi) => registerAgentsCommand(pi, () => ownerView));
-	await ownerCommand.handler("owner", { ui } as unknown as ExtensionCommandContext);
+	await ownerCommand.handler("owner", { ui, mode: "tui" } as unknown as ExtensionCommandContext);
 
 	assert.deepEqual(opened, ["owner"]);
 });
@@ -209,7 +209,7 @@ test("remote registered /agents owner selects Owner without opening the selector
 		},
 	};
 
-	await command.handler(" owner ", { ui } as unknown as ExtensionCommandContext);
+	await command.handler(" owner ", { ui, mode: "tui" } as unknown as ExtensionCommandContext);
 
 	assert.equal(snapshotCalls, 1);
 	assert.deepEqual(actions, [{ kind: "select_agent", agentId: "owner" }]);
@@ -239,7 +239,7 @@ test("remote registered /agents owner selects a Dormant Owner instead of failing
 		},
 	};
 
-	await command.handler("owner", { ui } as unknown as ExtensionCommandContext);
+	await command.handler("owner", { ui, mode: "tui" } as unknown as ExtensionCommandContext);
 
 	assert.deepEqual(actions, [{ kind: "select_agent", agentId: "owner" }]);
 });
@@ -254,7 +254,7 @@ test("registered /agents rejects unsupported arguments before opening or selecti
 	});
 	const localCommand = captureCommand((pi) => registerAgentsCommand(pi, () => localView));
 	await assert.rejects(
-		localCommand.handler(" teammate ", {} as ExtensionCommandContext),
+		localCommand.handler(" teammate ", { mode: "tui" } as ExtensionCommandContext),
 		(error: unknown) => error instanceof Error && error.message === "Usage: /agents [owner]",
 	);
 	assert.deepEqual(localOpened, []);
@@ -277,7 +277,7 @@ test("registered /agents rejects unsupported arguments before opening or selecti
 		},
 	}));
 	await assert.rejects(
-		remoteCommand.handler(" teammate ", {} as ExtensionCommandContext),
+		remoteCommand.handler(" teammate ", { mode: "tui" } as ExtensionCommandContext),
 		(error: unknown) => error instanceof Error && error.message === "Usage: /agents [owner]",
 	);
 	assert.equal(remoteSnapshotCalls, 0);
@@ -561,7 +561,7 @@ test("remote selector uses completion delivered during snapshot acquisition, not
 			});
 		},
 	} as ExtensionUIContext;
-	await command.handler("", { ui } as ExtensionCommandContext);
+	await command.handler("", { ui, mode: "tui" } as ExtensionCommandContext);
 	assert.equal(removed, true);
 });
 
@@ -580,7 +580,7 @@ test("remote selector releases its subscription when snapshot acquisition fails"
 		},
 		async select() { return { kind: "selected" }; },
 	}));
-	await assert.rejects(command.handler("", {} as ExtensionCommandContext), /snapshot failed/);
+	await assert.rejects(command.handler("", { mode: "tui" } as ExtensionCommandContext), /snapshot failed/);
 	assert.equal(removed, true);
 });
 
@@ -642,7 +642,7 @@ test("local and child /agents open immutable reports before explicitly selecting
 			},
 			notify(message: string) { throw new Error(message); },
 		} as unknown as ExtensionUIContext;
-		await command.handler("", { ui } as ExtensionCommandContext);
+		await command.handler("", { ui, mode: "tui" } as ExtensionCommandContext);
 		assert.deepEqual(selected, [{ kind: "select_agent", agentId: "original-moderator" }], mode);
 		assert.equal(acknowledged, false, mode);
 		assert.equal(surfaces, 2, mode);
@@ -714,7 +714,7 @@ test("local and child View reporter retain focused report UI through delayed pre
 				},
 				notify(message: string) { throw new Error(message); },
 			} as unknown as ExtensionUIContext;
-			const completed = command.handler("", { ui } as ExtensionCommandContext);
+			const completed = command.handler("", { ui, mode: "tui" } as ExtensionCommandContext);
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			assert.ok(reportSurface);
 			reportSurface.handleInput?.("v");
@@ -824,7 +824,7 @@ test("local and child /agents toggle reports in place across inbox, history, and
 			},
 			notify(message: string) { throw new Error(message); },
 		} as unknown as ExtensionUIContext;
-		await command.handler("", { ui } as ExtensionCommandContext);
+		await command.handler("", { ui, mode: "tui" } as ExtensionCommandContext);
 		assert.deepEqual(selected, [{ kind: "select_agent", agentId: "original-moderator" }], mode);
 		assert.equal(acknowledged, true, mode);
 		assert.equal(surfaces, 2, mode);

@@ -4,6 +4,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { dirname, resolve } from "node:path";
 
+import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import { ChildLaunchContractGuard } from "../process-runtime/child-launch-contract.ts";
 
 import type { AgentRecord } from "../coordination/agent-record.ts";
@@ -116,6 +117,7 @@ export class ProcessChildSessionFactory {
 		role: AgentRuntimeRole,
 		agentId: string,
 	) => ParticipantHandlers;
+	readonly #interaction: WorkflowInteraction | undefined;
 
 	constructor(options: {
 		ownerRuntime: AgentSessionRuntime;
@@ -135,6 +137,7 @@ export class ProcessChildSessionFactory {
 			role: AgentRuntimeRole,
 			agentId: string,
 		): ParticipantHandlers;
+		interaction?: WorkflowInteraction;
 	}) {
 		this.#ownerRuntime = options.ownerRuntime;
 		this.#launchContract = new ChildLaunchContractGuard(undefined, options.onLaunchBlocked);
@@ -146,6 +149,7 @@ export class ProcessChildSessionFactory {
 		this.#resolveAgent = options.resolveAgent;
 		this.#modelExclusions = options.modelExclusions;
 		this.#ownerRequestHandlers = options.ownerRequestHandlers;
+		this.#interaction = options.interaction;
 	}
 
 	admitProcessRuntimePlatform(): void {
@@ -508,6 +512,7 @@ export class ProcessChildSessionFactory {
 				prepared.role,
 				identity.agentId,
 			) as StartPiChildProcessRuntimeOptions["ownerRequestHandlers"],
+			...(this.#interaction === undefined ? {} : { interaction: this.#interaction }),
 		});
 		const runtime = new PiChildHostedRuntime(
 			launch,

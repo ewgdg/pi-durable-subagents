@@ -1,12 +1,15 @@
 import { resumeWorkflow } from "./workflow-resume.ts";
+import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { isDeepStrictEqual } from "node:util";
+import { randomUUID } from "node:crypto";
 import { ModeratorReportStore } from "./moderator-reports.ts";
 import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
 import type { ObligationFrame } from "../protocol/obligation-focus.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
+import { createRunSuspensionNotice, inspectRunSuspensionNotice } from "../protocol/run-suspension-notice.ts";
 import { refreshAgentTranscripts } from "./agent-record.ts";
 import { indexedState } from "../transcript/retained-transcript.ts";
 import type {
@@ -45,6 +48,7 @@ import {
 import { AgentRuntimeSupervisor } from "../runtime/agent-runtime-supervisor.ts";
 import type {
 	AgentRunHandle,
+	AgentRunSuspension,
 	ProjectionInputSubmission,
 } from "../runtime/agent-runtime-host.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
@@ -286,6 +290,9 @@ export class WorkflowCoordinator {
 	readonly #shutdownController = new AbortController();
 	#shuttingDown = false;
 	readonly #pendingSpawns = new Set<Promise<unknown>>();
+	readonly #interaction: WorkflowInteraction;
+	// Pi reports one exact stop more than once while it drains the native queue.
+	readonly #noticedSuspensions = new WeakSet<AgentRunSuspension>();
 
 	constructor(
 		runtime: AgentSessionRuntime,
@@ -309,10 +316,13 @@ export class WorkflowCoordinator {
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
 			agentWaitBoundaryHooks?: AgentWaitBoundaryHooks;
 			agentWaitClock?: AgentWaitClock;
+			/** Defaults to a terminal Workflow. */
+			interaction?: WorkflowInteraction;
 		},
 	) {
 		this.#ownerDiagnostics = runtime.services.diagnostics;
 		this.#ownerRuntime = runtime;
+		this.#interaction = options.interaction ?? "terminal";
 		this.#postMortemAgentPresenter = options.postMortemAgentPresenter;
 		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
 		this.#quarantinedWorkflowAgentIds =
@@ -390,6 +400,7 @@ export class WorkflowCoordinator {
 			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
 			templateRoots: options.templateRoots,
 			resolveAgent: (agentId) => this.#agents.get(agentId),
+			interaction: this.#interaction,
 			ownerRequestHandlers: (role, agentId) => {
 				if (role === "ordinary") {
 					const resolveView = () => this.forAgent(agentId);
@@ -474,6 +485,7 @@ export class WorkflowCoordinator {
 			},
 			resumeExecution: (record) =>
 				this.#ensureExecution(record.identity.agentId),
+			rejectsSuspendedResponders: this.#interaction === "headless",
 		});
 		this.#humanRequests = new HumanRequestCoordinator({
 			agents: this.#agents,
@@ -1216,7 +1228,9 @@ export class WorkflowCoordinator {
 		record.host.setRunSuspensionHandler((suspension, handle) => {
 			// Quota suspension is process-local: it stops this exact Run and releases its
 			// execution permit. Nothing durable has to be recorded or restored.
-			if (suspension) this.#releaseExecution(record.identity.agentId, handle);
+			if (!suspension) return;
+			this.#releaseExecution(record.identity.agentId, handle);
+			if (this.#interaction === "headless") this.#noticeSupervisorOfSuspension(record, suspension);
 		});
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged(record.identity.agentId));
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged(record.identity.agentId));
@@ -1532,6 +1546,47 @@ export class WorkflowCoordinator {
 			type: "error",
 			message: `Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
 		});
+	}
+
+	/**
+	 * A headless Workflow has no human to resume a suspended Run, so a parked
+	 * supervisor would wait forever. Preempt its Wait and leave the choice to it.
+	 */
+	#noticeSupervisorOfSuspension(record: AgentRecord, suspension: AgentRunSuspension): void {
+		if (this.#noticedSuspensions.has(suspension)) return;
+		this.#noticedSuspensions.add(suspension);
+		const agentId = record.identity.agentId;
+		// The Owner has no supervisor; its RPC client sees the stopped Run directly.
+		// Runtime-created Moderators have no Direct Spawner, so the Owner supervises them.
+		if (agentId === this.#ownerIdentity.agentId) return;
+		const supervisorId = this.#isModerator(agentId)
+			? this.#ownerIdentity.agentId
+			: record.identity.directSpawnerAgentId;
+		const supervisor = supervisorId === null ? undefined : this.#agents.get(supervisorId);
+		if (!supervisor) return;
+		const notificationId = randomUUID();
+		const message = createRunSuspensionNotice({
+			notificationId,
+			agentId: record.identity.agentId,
+			suspension,
+		});
+		const inspectProof = () => inspectRunSuspensionNotice(
+			supervisor.identity.agentId, supervisor.transcript.inspect(), message,
+		);
+		void this.#messages.admitCustomDelivery(supervisor, {
+			messageId: notificationId,
+			deliveryMode: "deferred",
+			customMessage: message,
+			preemptsAgentWait: true,
+			inspectProof,
+			// A resumed or ended Run no longer needs its supervisor's decision.
+			isSuppressed: () => this.#shuttingDown || record.host.currentRunSuspension() !== suspension,
+		}).then((admission) => {
+			if (admission !== "pending") throw new Error(`Run suspension notice rejected: ${admission}`);
+		}).catch((error: unknown) => this.#ownerDiagnostics.push({
+			type: "error",
+			message: `Run suspension notice failed: ${error instanceof Error ? error.message : String(error)}`,
+		}));
 	}
 
 	#reportAgentRuntimeReleaseError(error: unknown): void {

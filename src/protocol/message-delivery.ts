@@ -14,6 +14,7 @@ import {
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
 	WORKFLOW_CONTINUATION_CUSTOM_TYPE,
 	DELIVERY_FAILURE_CUSTOM_TYPE,
+	RUN_SUSPENSION_NOTICE_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
 import {
 	deriveMessageIdentity,
@@ -267,7 +268,8 @@ function readMessageDeliveries(options: {
 					entry.customType === OBLIGATION_FOCUS_CUSTOM_TYPE ||
 					entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE ||
 					entry.customType === WORKFLOW_CONTINUATION_CUSTOM_TYPE ||
-					entry.customType === DELIVERY_FAILURE_CUSTOM_TYPE
+					entry.customType === DELIVERY_FAILURE_CUSTOM_TYPE ||
+					entry.customType === RUN_SUSPENSION_NOTICE_CUSTOM_TYPE
 				)
 					continue;
 				const parsed = readCoordinationRecord(transcript, recipientAgentId, entry, () => {

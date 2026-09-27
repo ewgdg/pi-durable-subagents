@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
 
+import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import { AgentControlAdmissionBroker } from "../control/agent-control-admission.ts";
 import {
 	FramedAgentControlChannel,
@@ -110,6 +111,8 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	ownerRequestHandlers?:
 		| OwnerParticipantRequestHandlers<"ordinary">
 		| OwnerParticipantRequestHandlers<"moderator">;
+	/** Defaults to a terminal Workflow, whose children may ask the human. */
+	interaction?: WorkflowInteraction;
 }>;
 
 /** Standalone Owner-side host for one real Pi CLI/TUI process. */
@@ -224,6 +227,7 @@ export class PiChildProcessRuntime {
 				agentId: requireIdentity("agentId", options.agentId),
 				role: options.role,
 				ownerPresentation: options.ownerRequestHandlers !== undefined,
+				interaction: options.interaction ?? "terminal",
 				// The child removes these names from its own runtime default surface.
 				excludedTools: [...options.configuration.excludeTools],
 				expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),

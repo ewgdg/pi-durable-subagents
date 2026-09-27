@@ -37,6 +37,13 @@ export function showOwnerBlockage(ui: ExtensionUIContext, failure: OwnerRecovery
 	} : undefined);
 }
 
+/** Headless modes have no widget or overlay, so they receive the complete diagnostics at once. */
+export function headlessOwnerDiagnostics(failure: OwnerRecoveryError | undefined): string {
+	return failure
+		? `⚠ Subagent coordination blocked\n\n${summaryText(failure)}\n\nTechnical details\n${technicalText(failure)}`
+		: summaryText(failure);
+}
+
 export function openOwnerDiagnostics(ui: ExtensionUIContext, failure?: OwnerRecoveryError): Promise<void> {
 	return ui.custom<void>((tui, theme, _keys, done) => new OwnerDiagnosticsSurface(tui, theme, failure, done), {
 		overlay: true,

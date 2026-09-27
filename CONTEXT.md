@@ -256,7 +256,10 @@ An ordinary free-form Agent Request from a Moderator to the Workflow Owner for t
 The bounded response when a Moderator Run terminally fails after Pi's user-configured native recovery behavior has finished: one fresh replacement Moderator continues the original handling with pointers to the first attempt. Failure of that replacement stops automatic attempts and creates a passive Workflow Owner Attention Inbox entry centered on the original condition and affected Agents rather than on Moderator recovery.
 
 **Human Request**:
-A blocking Request from an ordinary Agent or Moderator asking the human one free-form question. Each Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently; the Workflow Owner does not author Human Requests.
+A blocking Request from an ordinary Agent or Moderator asking the human one free-form question. Each Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently; the Workflow Owner does not author Human Requests. A Headless Workflow admits none.
+
+**Headless Workflow**:
+A Workflow whose Owner runs in a Pi mode without a terminal UI: print, JSON, or RPC. No human answers Human Requests or uses Agent views, so Agents escalate through their supervisors and a Run Suspension notifies the suspended Agent's Direct Spawner. An RPC client is the human of its Owner session.
 
 **Human Answer**:
 The human-authored free-form text that resolves one Human Request and allows its requesting Run to continue. It does not claim that its content is semantically sufficient.

@@ -455,7 +455,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			input: handleInput,
 			async completeStartup() {
 				try {
-					applyStartupToolFilter(pi, bootstrap.role, bootstrap.excludedTools, retained !== undefined);
+					applyStartupToolFilter(pi, bootstrap, retained !== undefined);
 					await binding.publishRuntimeSnapshot();
 					// Reload reports current state but does not re-enforce the initial selection.
 					if (!retained) {
@@ -871,20 +871,18 @@ async function handleOwnerRequest(
  */
 function applyStartupToolFilter(
 	pi: ExtensionAPI,
-	role: ChildProcessBootstrap["role"],
-	excludedTools: readonly string[],
+	bootstrap: Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">,
 	retained: boolean,
 ): void {
-	const roleTools = participantCoordinationToolNames[role];
-	if (retained) {
-		pi.setActiveTools([...new Set([...pi.getActiveTools(), ...roleTools])]);
-		return;
-	}
-	const excludedNames = new Set(excludedTools);
+	const roleTools = participantCoordinationToolNames[bootstrap.role];
+	// A headless Workflow has no human to answer, so a question would block forever.
+	// The Agent escalates through its supervisor with agent_message instead.
+	const withheldTools = new Set<string>(bootstrap.interaction === "headless" ? ["ask_user"] : []);
+	const excludedNames = new Set(retained ? [] : bootstrap.excludedTools);
 	pi.setActiveTools([...new Set([
 		...pi.getActiveTools().filter((name) => !excludedNames.has(name)),
 		...roleTools,
-	])]);
+	])].filter((name) => !withheldTools.has(name)));
 }
 
 async function runtimeSnapshot(

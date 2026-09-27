@@ -69,6 +69,7 @@ export class AgentWaitCoordinator {
 	readonly #clock: AgentWaitClock;
 	readonly #suspendExecution: (record: AgentRecord) => void;
 	readonly #resumeExecution: (record: AgentRecord) => Promise<void>;
+	readonly #rejectsSuspendedResponders: boolean;
 	readonly #pendingByKey = new Map<string, PendingAgentWait>();
 	#shuttingDown = false;
 
@@ -79,6 +80,8 @@ export class AgentWaitCoordinator {
 		clock?: AgentWaitClock;
 		suspendExecution(record: AgentRecord): void;
 		resumeExecution(record: AgentRecord): Promise<void>;
+		/** A headless Workflow has no human to resume a suspended responder. */
+		rejectsSuspendedResponders?: boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#messages = options.messages;
@@ -86,6 +89,7 @@ export class AgentWaitCoordinator {
 		this.#clock = options.clock ?? SYSTEM_AGENT_WAIT_CLOCK;
 		this.#suspendExecution = options.suspendExecution;
 		this.#resumeExecution = options.resumeExecution;
+		this.#rejectsSuspendedResponders = options.rejectsSuspendedResponders ?? false;
 	}
 
 	async wait(
@@ -127,6 +131,7 @@ export class AgentWaitCoordinator {
 			callerAgentId,
 			requestMessageIds,
 		);
+		if (!completed) this.#assertNoSuspendedResponder(callerAgentId, requestMessageIds);
 		const handle = caller.host.currentHandle();
 		if (!handle) throw new Error("Agent Run is unavailable");
 		const key = waitKey(callerAgentId, toolCallId);
@@ -189,6 +194,21 @@ export class AgentWaitCoordinator {
 			void this.#reconcile(pending);
 		}
 		return result;
+	}
+
+	/**
+	 * The suspension notice preempts a Wait only once. Waiting again on the same
+	 * stop would park forever when no human can resume it, so fail fast instead.
+	 */
+	#assertNoSuspendedResponder(callerAgentId: string, requestMessageIds: readonly string[]): void {
+		if (!this.#rejectsSuspendedResponders) return;
+		const suspended = this.#messages.unansweredRequestRelationships(callerAgentId, requestMessageIds)
+			.map(({ targetAgentId }) => targetAgentId)
+			.filter((agentId) => this.#agents.get(agentId)?.host.currentRunSuspension() !== undefined);
+		if (suspended.length === 0) return;
+		throw new Error(
+			`responder_suspended: ${[...new Set(suspended)].join(", ")} ${suspended.length === 1 ? "is" : "are"} suspended and no human will resume ${suspended.length === 1 ? "it" : "them"} in this headless Workflow. Resume with agent_control operation "resume", terminate, or cancel the Request instead of waiting.`,
+		);
 	}
 
 	preemptForInboundRequest(
