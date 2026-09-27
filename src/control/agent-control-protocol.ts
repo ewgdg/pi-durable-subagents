@@ -16,6 +16,7 @@ import {
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
 	WORKFLOW_CONTINUATION_CUSTOM_TYPE,
 	DELIVERY_FAILURE_CUSTOM_TYPE,
+	RUN_SUSPENSION_NOTICE_CUSTOM_TYPE,
 } from "../protocol/custom-entry-types.ts";
 import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import { MODERATOR_ROUTINE_START_INSTRUCTION } from "../protocol/moderator-input.ts";
@@ -562,6 +563,11 @@ const AgentRuntimeDeliverySchema = Type.Union([
 			}),
 			closed({
 				customType: Type.Literal(DELIVERY_FAILURE_CUSTOM_TYPE),
+				content: Type.String(),
+				display: Type.Literal(true),
+			}),
+			closed({
+				customType: Type.Literal(RUN_SUSPENSION_NOTICE_CUSTOM_TYPE),
 				content: Type.String(),
 				display: Type.Literal(true),
 			}),

@@ -5,8 +5,10 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 	getCurrentTools,
+	type Context,
 } from "@earendil-works/pi-ai";
 
+import piAgentCoordination from "../src/index.ts";
 import type { WorkflowInteraction } from "../src/pi-integration/workflow-interaction.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -63,4 +65,40 @@ test("a headless Workflow's children cannot ask the absent human", async (t) => 
 
 test("a terminal Workflow's children keep ask_user", async (t) => {
 	assert.equal((await childToolsFor(t, "terminal")).includes("ask_user"), true);
+});
+
+test("a headless Owner parked in agent_wait learns that its child suspended", { timeout: 30_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	await bindTestOwnerHost(host, "rpc");
+	const ownerPrompt = "Delegate the quota work.";
+	const spawnCallId = "spawn-quota-child";
+	const waitCallId = "wait-for-quota-child";
+	let ownerSawSuspension = false;
+	const route = (context: Context) => {
+		const serialized = JSON.stringify(context.messages);
+		if (!serialized.includes(ownerPrompt)) {
+			return fauxAssistantMessage([], { stopReason: "error", errorMessage: '{"error":{"code":"usage_limit_reached"}}' });
+		}
+		if (!serialized.includes(spawnCallId)) {
+			return fauxAssistantMessage(
+				fauxToolCall("agent_spawn", { title: "Quota work", request: "Do the work." }, { id: spawnCallId }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		if (!serialized.includes(waitCallId)) {
+			return fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: waitCallId }), { stopReason: "toolUse" });
+		}
+		ownerSawSuspension = serialized.includes('\\"reason\\":\\"provider_quota\\"') &&
+			serialized.includes('\\"disposition\\":\\"preempted\\"');
+		return fauxAssistantMessage("The Owner handled the suspended child.");
+	};
+	host.model.setResponses(Array.from({ length: 6 }, () => route));
+
+	await host.session.prompt(ownerPrompt, { source: "rpc" });
+
+	assert.equal(host.session.getLastAssistantText(), "The Owner handled the suspended child.");
+	assert.equal(ownerSawSuspension, true);
 });
