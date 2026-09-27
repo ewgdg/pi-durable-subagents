@@ -14,17 +14,17 @@ Select a subagent to enter its complete Pi session and interact with it directly
 
 ### Coordination and supervision
 
-- **Owner-directed Workflows:** the current interactive Pi session becomes the durable Workflow Owner. The Owner can fork or clone copied conversation into a fresh, independent Workflow.
-- **Durable child Agents:** ordinary Agents can create configurable context-isolated children with `agent_spawn`.
-- **Messaging and Requests:** `agent_message` supports immutable titled Requests, explicitly targeted Answers, retrieval, and cancellation. Deferred Requests enter in admission order when the recipient waits or settles; Steer retains priority. Background Messages and Requests wait until settlement with no Answers owed and no eligible higher-priority work. Agents choose their Answer order. `agent_wait` joins all outstanding outbound Request Answers or selected IDs/unique suffixes without consuming child execution capacity while parked.
-- **Visible obligations:** `agent_observe` lists your outstanding Requests by ID, requester, and title, or retrieves the exact full Request by ID/unique suffix. Answer receipts identify the originating Request by title and ID.
-- **Human decisions for spawned Agents:** `ask_user` lets a spawned Agent block its exact Run on one free-form Human Answer. The full request stays in the Agent transcript, while background requests appear as passive `DECIDE` attention.
-- **Run supervision:** Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe`, then interrupt, explicitly resume, or terminate exact Runs with `agent_control`.
-- **Operational incident handling:** one bounded runtime reminder recovers simple forgotten Answers before isolated Moderators handle persistent Obligation Stalls, overdue answer obligations, answer-obligated Run Failures, closed live Dependency Deadlocks, and stalled deliveries blocking upstream obligations. Review renewal, Run control, Owner escalation, and Resolution are policy-bounded and mechanically gated.
-- **Durable recovery:** a fresh host reconstructs verified authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work.
-- **Model policy:** `/agents models` toggles one durable deny list of models that child Runtime preparation may not use, covering Agent Template candidates and explicit `agent_spawn` configuration.
+- **Owner-directed Workflows:** the current Pi session, in the TUI or a headless mode, becomes the durable Workflow Owner. Fork or clone it into a fresh, independent Workflow. See [Owner Workflow](docs/owner-workflow.md).
+- **Durable child Agents:** Agents create configurable, context-isolated children with `agent_spawn`. See [Agent spawning](docs/agent-spawning.md).
+- **Messaging and Requests:** `agent_message` sends Messages and titled Requests; `agent_wait` joins their Answers without holding child execution capacity. See [Agent messaging](docs/agent-messaging.md).
+- **Visible obligations:** `agent_observe` lists and retrieves your outstanding Requests.
+- **Human decisions:** in the TUI, a spawned Agent can block on one free-form Human Answer with `ask_user`. See [Human Requests](docs/human-requests.md).
+- **Run supervision:** Owners and Direct Spawners inspect, interrupt, resume, or terminate exact Runs with `agent_observe` and `agent_control`. See [Run supervision](docs/run-supervision.md).
+- **Incident handling:** a runtime reminder recovers forgotten Answers; isolated Moderators handle persistent stalls, deadlocks, and failures under policy bounds. See [Operational Incident moderation](docs/operational-incident-moderation.md).
+- **Durable recovery:** a fresh host rebuilds authority and pending Requests from Pi transcripts. See [Cold host recovery](docs/cold-host-recovery.md).
+- **Model policy:** `/agents models` maintains a durable deny list of models children may not use. See [Workflow Policy](docs/workflow-policy.md).
 
-Coordination does not override Pi's user-configured compaction, retry, provider-retry, or transport behavior. One failed Moderator may be replaced once; a second failure creates passive, Owner-only Operational Attention.
+Coordination does not override Pi's compaction, retry, or transport settings.
 
 ## Installation
 
@@ -58,9 +58,7 @@ In a headless Workflow, Agents cannot use `ask_user`; they escalate through thei
 
 ## Suggested agent templates
 
-See [Agent Templates](docs/agent-spawning.md#agent-templates) for configuration details.
-
-Templates are creation presets: selecting one at spawn captures its rules in the new Agent's durable bootstrap. Later Runtime preparation uses that captured preset with the canonical spawn `config` and current resources; it does not re-select the original template. Template edits take effect for future spawns after resource reload, without changing existing Agents' presets.
+Templates are creation presets: edits apply to future spawns only. See [Agent Templates](docs/agent-spawning.md#agent-templates) for configuration details.
 
 ### `cheap-delegate`
 
@@ -87,7 +85,7 @@ models:
 
 ### `moderator`
 
-Use a cheaper model for incident handling. The `moderator` template is used automatically for incident handling.
+Used automatically for incident handling; point it at a cheaper model.
 
 Save as `~/.agents/agents/moderator.md`:
 
@@ -105,31 +103,7 @@ models:
 
 ## Compatibility
 
-Pi supplies the package's Pi peer modules. Compatibility is defined jointly by a fail-fast structural gate against the running host module world and the native behavioral conformance suite. The Pi version is diagnostic only.
-
-Process-isolated Agent Runtimes select local IPC internally: Unix-domain sockets on Unix platforms and native named pipes on Windows. This transport choice is not user-configurable.
-
-Maintainers can run the focused compatibility gate with:
-
-```bash
-npm run test:conformance
-```
-
-`npm test` remains the complete regression suite. Use the supervised npm entry points for all development runs: `test:fast` (four concurrent files), `test:process` (serial), and `test:conformance` (serial). Direct `node --test` execution bypasses containment and is not supported for development runs.
-
-Select one file and optionally a test name without bypassing supervision:
-
-```bash
-npm run test:process -- --file=agent-request.test.ts --test-name-pattern='request'
-npm run test:fast -- --file=host-shape.test.ts
-npm run test:conformance -- --file=host-shape.test.ts --list
-```
-
-Node's file timeout is 5 seconds for fast tests and 120 seconds for process/conformance tests. Independently, the supervisor starts a wall-clock timer when it launches the Node runner: `ceil(selected files / suite concurrency) × file timeout + 5 seconds`. A focused process file therefore gets 125 seconds; a name filter does not reduce that budget. Expiry reports the deadline, sends SIGTERM, then uses existing descendant force-kill cleanup after at most 100 ms of termination grace, and exits with code 124. Startup before launch and cleanup add time beyond that budget. This timer remains responsive when a test worker spins synchronously.
-
-For a deliberately different budget, append `--deadline-ms=10000`. It must be an integer from 1 through 2147483647; zero cannot disable containment. Forwarded Node flags do not alter the independently calculated suite budget; use the explicit deadline override when changing concurrency or Node timeouts.
-
-On Linux with writable cgroup-v2 support, the existing cgroup and guardian contain Node/PTY descendants even if the supervisor is killed. Otherwise cleanup is best-effort: Linux tracks observed descendants via `/proc` (short-lived/reparented processes can escape observation); other Unix systems kill the runner process group, and Windows kills only the root process. The deadline requires the supervisor itself to remain alive and responsive; it is not a machine-level resource limit.
+Pi supplies the package's Pi peer modules; compatibility is checked structurally against the running host, not by Pi version. See [Development](docs/development.md) for the conformance gate and supervised test runs.
 
 ## Trust and persistence
 
@@ -139,7 +113,7 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 
 ## Documentation
 
-- [Owner Workflow](docs/owner-workflow.md) — activation and compatibility behavior
+- [Owner Workflow](docs/owner-workflow.md) — activation, headless Workflows, and compatibility behavior
 - [Owner blockage diagnostics](docs/owner-blockage-diagnostics.md) — persistent admission failure status and `/agents diagnostics`
 - [Transcript repair design](docs/workflow-transcript-repair-design.md) — proposed Workflow-owned repair Moderator and validated replacement; not implemented
 - [Operational Incident moderation](docs/operational-incident-moderation.md) — trigger detection, bounded handling, Moderator authority, Resolution, and recovery
@@ -151,3 +125,4 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 - [Agent selector](docs/agent-selector.md) — Live hierarchy, Dormant recency, attention, and keyboard navigation
 - [Interactive Agent view acceptance](docs/agent-view-acceptance.md) — complete-mode rendering, input, transitions, isolation, and lifecycle evidence
 - [Run supervision](docs/run-supervision.md) — observation, interruption, resumption, termination, and Agent-view retention
+- [Development](docs/development.md) — compatibility gate, supervised test runs, and deadlines
