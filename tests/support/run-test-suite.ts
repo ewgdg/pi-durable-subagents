@@ -32,6 +32,7 @@ const PROCESS_TEST_FILES = new Set([
 	"execution-scheduler.test.ts",
 	"human-request-pty.test.ts",
 	"headless-workflow.test.ts",
+	"headless-owner-process.test.ts",
 	"human-request.test.ts",
 	"interactive-host-conformance.test.ts",
 	"message.test.ts",
