@@ -29,7 +29,7 @@ import {
 } from "./participant-coordination-tools.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
-import { openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
+import { headlessOwnerDiagnostics, openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
 import { openModelPolicySurface } from "../presentation/model-policy-surface.ts";
 
 type AgentCoordinatorView =
@@ -58,6 +58,10 @@ export function deactivateOwnerAgentTools(pi: ExtensionAPI): void {
 	);
 }
 
+const HEADLESS_AGENTS_COMMAND_MESSAGE =
+	"The Agents selector, Agent views, reports, and model policy need Pi's terminal UI. " +
+	"Reopen this session interactively (pi --session <file>) to use them.";
+
 export function registerAgentsCommand(
 	pi: ExtensionAPI,
 	resolveView: () => HumanPresentationCoordinatorView,
@@ -78,12 +82,18 @@ export function registerAgentsCommand(
 		},
 		handler: async (args, ctx) => {
 			if (ownerAdmission && args.trim() === "diagnostics") {
-				if (ctx.mode !== "tui") return;
+				if (ctx.mode !== "tui") {
+					ctx.ui.notify(headlessOwnerDiagnostics(admissionFailure), admissionFailure ? "error" : "info");
+					return;
+				}
 				await openOwnerDiagnostics(ctx.ui, admissionFailure);
 				return;
 			}
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify(HEADLESS_AGENTS_COMMAND_MESSAGE, "warning");
+				return;
+			}
 			if (admittedOwnerView && args.trim() === "models") {
-				if (ctx.mode !== "tui") return;
 				const view = admittedOwnerView();
 				await openModelPolicySurface(ctx.ui, {
 					...view.modelPolicy(),

@@ -10,6 +10,7 @@ import {
 	WorkflowCoordinator,
 } from "../coordination/workflow-coordinator.ts";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
+import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import {
 	installOwnerSettlementParker,
 	type OwnerSettlementParkingBinding,
@@ -50,15 +51,17 @@ export async function initializeOwnerWorkflow(options: {
 	pi: ExtensionAPI;
 	ctx: ExtensionContext;
 	bridge: InteractiveHostBridge;
+	interaction: WorkflowInteraction;
 	entryModulePath: string;
 	event: SessionStartEvent;
 	onOwnerIdentified(): void;
-}): Promise<() => OrdinaryAgentCoordinatorView> {
-	const { pi, ctx, bridge, entryModulePath, event } = options;
-	const { runtime } = await bridge.capture(
-		ctx.sessionManager as AgentSession["sessionManager"],
-		ctx.ui,
-	);
+}): Promise<(() => OrdinaryAgentCoordinatorView) | undefined> {
+	const { pi, ctx, bridge, interaction, entryModulePath, event } = options;
+	const sessionManager = ctx.sessionManager as AgentSession["sessionManager"];
+	const runtime = interaction === "terminal"
+		? (await bridge.capture(sessionManager, ctx.ui)).runtime
+		: bridge.captureHeadless(sessionManager);
+	if (!runtime) return undefined;
 	const existing = initializedWorkflows.get(runtime.session);
 	if (existing) {
 		// Shutdown closes ordinary admission before its first await and joins all
@@ -121,9 +124,11 @@ export async function initializeOwnerWorkflow(options: {
 		return ownerReplacementPreparation;
 	};
 	const resolveView = () => coordinator.forAgent(identity.agentId);
-	installResolvedAgentActivityDock(ctx.ui, resolveView, {
-		openAgentsMenu: extensionCommandAction(pi, "/agents"),
-	});
+	if (interaction === "terminal") {
+		installResolvedAgentActivityDock(ctx.ui, resolveView, {
+			openAgentsMenu: extensionCommandAction(pi, "/agents"),
+		});
+	}
 	bindHiddenOwnerAgentExtension({
 		pi,
 		runtime,

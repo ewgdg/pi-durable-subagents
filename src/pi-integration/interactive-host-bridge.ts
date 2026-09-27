@@ -46,15 +46,22 @@ type BridgeState = {
 	validate(runtime: AgentSessionRuntime): AgentSessionRuntime;
 };
 
+type RuntimePresentation = Readonly<{
+	setPresentationVisible(visible: boolean): void;
+	setNativeEditorRequired(required: boolean): void;
+}>;
+
 export type InteractiveHostBridge = {
+	/** Capture a TUI Runtime together with its native terminal presentation. */
 	capture(
 		sessionManager: SessionManager,
 		ui: ExtensionUIContext,
-	): Promise<Readonly<{
-		runtime: AgentSessionRuntime;
-		setPresentationVisible(visible: boolean): void;
-		setNativeEditorRequired(required: boolean): void;
-	}>>;
+	): Promise<Readonly<{ runtime: AgentSessionRuntime } & RuntimePresentation>>;
+	/**
+	 * Return the captured headless Runtime, or undefined for an SDK host that binds
+	 * without one. RPC, print, and JSON have no terminal to present.
+	 */
+	captureHeadless(sessionManager: SessionManager): AgentSessionRuntime | undefined;
 };
 
 const BRIDGE_REGISTRY_KEY = "__piAgentCoordinationInteractiveHostBridge";
@@ -76,24 +83,20 @@ export function installInteractiveHostBridge(hostValue: unknown): InteractiveHos
 	}
 
 	return {
-		capture(sessionManager, ui) {
+		async capture(sessionManager, ui) {
+			const captured = state.runtimesBySessionManager.get(sessionManager);
+			const runtime = captured
+				? state.validate(captured)
+				: await new Promise<AgentSessionRuntime>((resolve, reject) =>
+					state.waiters.push({ sessionManager, resolve, reject })
+				);
+			return bindInteractivePresentation(state, runtime, ui);
+		},
+		captureHeadless(sessionManager) {
+			// Pi's headless modes publish the Runtime before binding, and replacement
+			// sessions before session_start, so there is nothing to wait for.
 			const runtime = state.runtimesBySessionManager.get(sessionManager);
-			if (runtime) {
-				try {
-					return Promise.resolve(bindInteractivePresentation(
-						state,
-						state.validate(runtime),
-						ui,
-					));
-				} catch (error) {
-					return Promise.reject(error);
-				}
-			}
-			return new Promise<AgentSessionRuntime>((resolve, reject) =>
-				state.waiters.push({ sessionManager, resolve, reject })
-			).then((capturedRuntime) =>
-				bindInteractivePresentation(state, capturedRuntime, ui)
-			);
+			return runtime && state.validate(runtime);
 		},
 	};
 }
@@ -153,18 +156,23 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 		this: AgentSession,
 		bindings,
 	): Promise<void> {
-		if (bindings.mode === "tui") {
-			const runtime = state.runtimesBySessionManager.get(this.sessionManager);
-			if (!runtime) {
-				const error = new IncompatiblePiHostError(
-					"AgentSessionRuntime interactive capture",
-					host.VERSION,
-				);
-				rejectInteractiveAdmission(error);
-				throw error;
-			}
-			state.validate(runtime);
+		// Every Pi CLI mode installs its Runtime rebind callback before binding. A TUI
+		// without a capture is an incompatible host; an SDK host may bind headless
+		// sessions without any Runtime and then simply hosts no Owner.
+		const runtime = state.runtimesBySessionManager.get(this.sessionManager);
+		if (!runtime && bindings.mode !== "tui") {
+			await originalBindExtensions.call(this, bindings);
+			return;
 		}
+		if (!runtime) {
+			const error = new IncompatiblePiHostError(
+				"AgentSessionRuntime interactive capture",
+				host.VERSION,
+			);
+			rejectInteractiveAdmission(error);
+			throw error;
+		}
+		state.validate(runtime);
 		await originalBindExtensions.call(this, bindings);
 	};
 	state.validate = (runtime) => {
@@ -172,8 +180,6 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 			assertRuntimeInstanceShape(runtime, host.VERSION);
 			return runtime;
 		} catch (error) {
-			// Structural validation belongs to interactive admission. Headless modes
-			// may call the observed public setter but never inspect their Runtime.
 			rejectInteractiveAdmission(error, runtime);
 			throw error;
 		}

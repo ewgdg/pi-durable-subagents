@@ -11,7 +11,7 @@ import type {
 import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
 import { OwnerRecoveryError } from "./bootstrap/owner-recovery-error.ts";
 import { ProtocolInvariantError } from "./protocol/identities.ts";
-import { showOwnerBlockage } from "./presentation/owner-diagnostics-surface.ts";
+import { headlessOwnerDiagnostics, showOwnerBlockage } from "./presentation/owner-diagnostics-surface.ts";
 import type { OrdinaryAgentCoordinatorView } from "./coordination/workflow-coordinator.ts";
 import {
 	assertExtensionApiShape,
@@ -23,6 +23,7 @@ import {
 import { registerHerdrQuestionAttention } from "./pi-integration/herdr-question-attention.ts";
 import { registerSessionStartup } from "./pi-integration/session-startup.ts";
 import { installInteractiveHostBridge } from "./pi-integration/interactive-host-bridge.ts";
+import { workflowInteractionForMode } from "./pi-integration/workflow-interaction.ts";
 import { registerMessageDeliveryRenderer } from "./tools/message-delivery-renderer.ts";
 import {
 	activateOwnerAgentTools,
@@ -47,7 +48,8 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 		(agentId) => resolveOwnerView?.().agentLabel(agentId),
 	);
 	const bridge = installInteractiveHostBridge(hostPi);
-	type OwnerAdmissionState = "pending" | "admitted" | "failed";
+	// "inactive" is an SDK host that binds a headless session without a Runtime.
+	type OwnerAdmissionState = "pending" | "admitted" | "failed" | "inactive";
 	let ownerAdmissionState: OwnerAdmissionState = "pending";
 	let ownerIdentified = false;
 	let settleOwnerAdmission: () => void = () => {};
@@ -71,16 +73,22 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 		ownerAdmissionState = "pending";
 		ownerIdentified = false;
 		deactivateOwnerAgentTools(pi);
+		const interaction = workflowInteractionForMode(ctx.mode);
 		try {
-			if (ctx.mode !== "tui" || !ctx.hasUI) return;
-			resolveOwnerView = await initializeOwnerWorkflow({
+			const ownerView = await initializeOwnerWorkflow({
 				pi,
 				ctx,
 				bridge,
+				interaction,
 				entryModulePath: ENTRY_MODULE_PATH,
 				event,
 				onOwnerIdentified: () => { ownerIdentified = true; },
 			});
+			if (!ownerView) {
+				ownerAdmissionState = "inactive";
+				return;
+			}
+			resolveOwnerView = ownerView;
 			registerOwnerAgentTools(
 				pi,
 				resolveAdmittedOwnerView,
@@ -88,7 +96,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			);
 			activateOwnerAgentTools(pi);
 			ownerAdmissionState = "admitted";
-			showOwnerBlockage(ctx.ui, undefined);
+			if (interaction === "terminal") showOwnerBlockage(ctx.ui, undefined);
 		} catch (error) {
 			ownerAdmissionState = "failed";
 			resolveOwnerView = undefined;
@@ -100,15 +108,17 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			// A blocked Owner has no coordinator-backed commands. Keep diagnostics
 			// independent of that failed admission and out of restored chat history.
 			registerAgentsCommand(pi, resolveAdmittedOwnerView, failure);
-			showOwnerBlockage(ctx.ui, failure);
+			if (interaction === "terminal") showOwnerBlockage(ctx.ui, failure);
+			else if (ctx.hasUI) ctx.ui.notify(headlessOwnerDiagnostics(failure), "error");
+			// Print and JSON have no UI; stderr keeps the blockage out of their stdout result.
+			else process.stderr.write(`${headlessOwnerDiagnostics(failure)}\n`);
 		} finally {
 			settleOwnerAdmission();
 		}
 	};
 	pi.on("session_start", bootstrapOwner);
 	pi.on("session_before_fork", (_event, ctx) => {
-		if (ctx.mode !== "tui" || !ctx.hasUI) return;
-		if (ownerAdmissionState === "admitted") return;
+		if (ownerAdmissionState === "admitted" || ownerAdmissionState === "inactive") return;
 		// A failed protocol scan must not trap an identified Owner. The native
 		// replacement path still owns shutdown and the fresh Workflow cutoff.
 		if (ownerAdmissionState === "failed" && ownerIdentified) return;
@@ -120,8 +130,8 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 		}
 		return { cancel: true };
 	});
-	pi.on("session_before_switch", (event, ctx) => {
-		if (ctx.mode !== "tui" || !ctx.hasUI) return;
+	pi.on("session_before_switch", (event) => {
+		if (ownerAdmissionState === "inactive") return;
 		// A failed bootstrap must not trap the user in a session that cannot host
 		// coordination. Keep native /resume fenced until admission succeeds,
 		// but let native /new create a clean Owner transcript for recovery.

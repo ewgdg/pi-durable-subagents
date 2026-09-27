@@ -353,17 +353,34 @@ export async function bindTestOwnerHost(
 	mode: "tui" | "rpc" | "json" | "print",
 ): Promise<void> {
 	const bindSession = (session: AgentSession) => session.bindExtensions({
-		uiContext: host.ui,
+		// Print and JSON bind no UI context, so Pi supplies its no-op one (hasUI false).
+		...(mode === "tui" ? { uiContext: host.ui } : mode === "rpc" ? { uiContext: rpcUiContext(host.ui) } : {}),
 		mode,
 		onError: (error) => host.ui.notify(error.error, "error"),
 	});
-	if (mode === "tui") {
-		// InteractiveMode installs these callbacks before it binds extensions. Using
-		// the real runtime here preserves that observable startup order without a TTY.
-		host.runtime.setBeforeSessionInvalidate(() => undefined);
-		host.runtime.setRebindSession(bindSession);
-	}
+	// Every Pi mode installs its rebind callback before it binds extensions. Using
+	// the real runtime here preserves that observable startup order without a TTY.
+	if (mode === "tui") host.runtime.setBeforeSessionInvalidate(() => undefined);
+	host.runtime.setRebindSession(bindSession);
 	await bindSession(host.session);
+}
+
+/**
+ * Pi's RPC UI context forwards dialogs and text widgets to the client but has no
+ * terminal: custom() resolves undefined and widget component factories are dropped.
+ */
+function rpcUiContext(ui: TestUi): ExtensionUIContext {
+	return Object.assign({ ...ui } as ExtensionUIContext, {
+		custom: async () => undefined,
+		setWidget: (key: string, value: unknown) => {
+			if (value === undefined) ui.setWidget(key, undefined);
+			else if (Array.isArray(value)) ui.setWidget(key, value as string[]);
+		},
+		onTerminalInput: () => () => undefined,
+		setEditorComponent: () => undefined,
+		setFooter: () => undefined,
+		setHeader: () => undefined,
+	});
 }
 
 function createTestUi(): TestUi {
