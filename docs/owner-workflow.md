@@ -1,6 +1,6 @@
 # Owner Workflow
 
-Loading `pi-durable-subagents` in an interactive Pi TUI establishes the current Pi session as the Workflow Owner. No separate start command is required. Coordination associates Pi's public Runtime registration and TUI session binding with the current `SessionManager`, then borrows that native Runtime without taking disposal authority.
+Loading `pi-durable-subagents` in Pi establishes the current Pi session as the Workflow Owner, in the TUI and in the headless print, JSON, and RPC modes. No separate start command is required. Coordination associates Pi's public Runtime registration and session binding with the current `SessionManager`, then borrows that native Runtime without taking disposal authority. Only the TUI also captures the native terminal presentation.
 
 Before creating the coordination runtime, bootstrap loads and validates the optional user [Workflow Policy](workflow-policy.md). Invalid initial policy falls back to the default policy with a warning.
 
@@ -69,7 +69,18 @@ See [Human Requests](human-requests.md) for the request and Answer shapes, trans
 
 ## Activation modes
 
-Coordination activates only when Pi reports interactive TUI mode with UI support. Print, JSON, RPC, and rejected interactive sessions retain the registered tool definitions for transcript rendering but keep them inactive; they register no coordination command and create no coordinator. During interactive admission, the Owner tools remain inactive until the identity-bound coordinator is ready. A factory-time `before_agent_start` gate holds any model turn launched by an earlier extension's `session_start` handler until that admission outcome settles, so the turn sees either the complete Owner coordination surface or inactive Owner tools.
+Coordination activates in every Pi mode. TUI admission captures both the Runtime and the native terminal presentation; print, JSON, and RPC admission captures the Runtime alone. An SDK host that binds a headless session without an `AgentSessionRuntime` hosts no Owner: its tool definitions stay registered for transcript rendering but inactive. During admission, the Owner tools remain inactive until the identity-bound coordinator is ready. A factory-time `before_agent_start` gate holds any model turn launched by an earlier extension's `session_start` handler until that admission outcome settles, so the turn sees either the complete Owner coordination surface or inactive Owner tools. Native fork and switch guards apply in every mode.
+
+## Headless Workflows
+
+Print, JSON, and RPC Workflows are headless: nobody is at a terminal to answer a question or use an Agent view. They keep the complete Agent protocol (spawn, Requests, Answers, `agent_wait`, supervision, `workflow_resume`, and recovery) and change only what depends on a present human.
+
+- **No `ask_user`.** The Owner launches each child with the Workflow interaction, and a headless child or Moderator keeps every coordination tool except `ask_user`. It escalates through its supervisor with `agent_message` instead. Children stay full TUI Pi processes in their own PTYs.
+- **Suspension goes to the supervisor.** When a child's Run suspends (see [Run supervision](run-supervision.md#run-suspension)), its Direct Spawner receives a model-visible `agent-coordination.run-suspension-notice` that preempts `agent_wait`. The supervisor resumes with `agent_control` `resume`, terminates, or cancels its Request. The notice takes no action itself and is suppressed if the Run is resumed or ends first. TUI Workflows do not send it.
+- **The RPC client is the human.** RPC input (`source: "rpc"`) counts as human input for the Owner: it resumes a suspended Owner Run, and an RPC `steer` preempts `agent_wait` like a TUI steer. Print prompts use Pi's default `interactive` provenance.
+- **Lifetime.** Owner settlement parking keeps a print or JSON prompt open while children can still make progress, so asynchronous Answers arrive before the process exits. If nothing can progress, for example because a suspended child's supervisor chose not to resume it, the turn ends and the process exits instead of hanging. Shutdown and native session replacement stop every Agent process.
+- **Terminal surfaces.** The Agents selector, Agent views, Moderator reports, model policy, and activity dock are TUI-only. In RPC, `/agents` says so instead of doing nothing, and `/agents diagnostics` returns the complete text. Reports stay durable in the session file; reopen the session in the TUI to read them.
+- **Blockage.** A failed Owner admission is reported through an error notification in RPC and through stderr in print and JSON, so it never pollutes the result on stdout.
 
 ## Host compatibility
 

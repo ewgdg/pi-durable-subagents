@@ -39,12 +39,21 @@ Focused suites only (the full suite is slow): activation, owner bootstrap, human
 ## Progress
 
 - Reconnaissance done (blockers listed in the issue confirmed; Pi 0.87 RPC/print mode source read).
+- Admission layer: every mode admits the Owner; TUI-only presentation capture; headless blockage and `/agents` messages (`tests/activation.test.ts`).
+- Human availability: child bootstrap `interaction` (protocol 11) withholds `ask_user` in headless Workflows (`tests/headless-workflow.test.ts`).
+- RPC provenance: `rpc` input is human; RPC `steer` preempts `agent_wait` (`tests/quota-human-input-source.test.ts`, `tests/owner-settlement-parking.test.ts`).
+- Suspension notice to the Direct Spawner in headless Workflows; a headless Owner parked in `agent_wait` no longer hangs (`tests/headless-workflow.test.ts`).
+- Real processes: Pi's own `runRpcMode` and `runPrintMode` complete spawn → `agent_wait` → asynchronous Answer, and leave no Agent process after RPC `new_session` or shutdown (`tests/headless-owner-process.test.ts`).
+- Docs: README, owner workflow, human requests, run supervision, CONTEXT.
+- `npm run test:fast` passes.
 
 ## Surprises and discoveries
 
 - Plain "park for a human" would hang `pi -p` forever: `agent_wait` only returns on committed Answers or inbound preemption, and moderation is suppressed along a suspended path.
 - Print mode's `session.prompt()` defaults to `source: "interactive"`, so print prompts already count as human; only RPC uses `source: "rpc"`.
 - RPC `steer` calls `session.steer()`, not `session.prompt()`, so primary steering must observe both.
+- Validating Runtime shape for every headless binding would break SDK hosts that bind without an `AgentSessionRuntime`; they now stay inactive instead.
+- Unit tests that invoke `/agents` with a context lacking `mode` read as headless; Pi always supplies `mode`, so those test contexts now pass `mode: "tui"`.
 
 ## Decisions
 

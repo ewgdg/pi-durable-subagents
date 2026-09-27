@@ -101,6 +101,6 @@ A Run fence after submission but before result commitment defeats the candidate,
 
 ## Availability and lifetime
 
-Human Requests require an interactive TUI with an available Agent editor. Without one, the tool call fails before establishing `input_required` attention; the system never admits a request the human cannot answer.
+Human Requests require an interactive TUI with an available Agent editor. Without one, the tool call fails before establishing `input_required` attention; the system never admits a request the human cannot answer. In a [headless Workflow](owner-workflow.md#headless-workflows) no Agent is given `ask_user` at all.
 
 Human attention, Answer mode, and uncommitted editor state are volatile. They are not reconstructed for a successor Run or after host loss. The Pi transcript remains authoritative for the committed Human Request and any terminal native tool result.
