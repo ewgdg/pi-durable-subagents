@@ -67,7 +67,7 @@ test("a terminal Workflow's children keep ask_user", async (t) => {
 	assert.equal((await childToolsFor(t, "terminal")).includes("ask_user"), true);
 });
 
-test("a headless Owner parked in agent_wait learns that its child suspended", { timeout: 30_000 }, async (t) => {
+test("a headless Owner learns once that its child suspended and cannot wait on it again", { timeout: 30_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
@@ -76,6 +76,7 @@ test("a headless Owner parked in agent_wait learns that its child suspended", { 
 	const ownerPrompt = "Delegate the quota work.";
 	const spawnCallId = "spawn-quota-child";
 	const waitCallId = "wait-for-quota-child";
+	const rewaitCallId = "wait-again-for-quota-child";
 	let ownerSawSuspension = false;
 	const route = (context: Context) => {
 		const serialized = JSON.stringify(context.messages);
@@ -91,14 +92,31 @@ test("a headless Owner parked in agent_wait learns that its child suspended", { 
 		if (!serialized.includes(waitCallId)) {
 			return fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: waitCallId }), { stopReason: "toolUse" });
 		}
-		ownerSawSuspension = serialized.includes('\\"reason\\":\\"provider_quota\\"') &&
-			serialized.includes('\\"disposition\\":\\"preempted\\"');
+		if (!serialized.includes(rewaitCallId)) {
+			ownerSawSuspension = serialized.includes('\\"reason\\":\\"provider_quota\\"') &&
+				serialized.includes('\\"disposition\\":\\"preempted\\"');
+			// A model that ignores the notice must not park forever on the same stop.
+			return fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: rewaitCallId }), { stopReason: "toolUse" });
+		}
 		return fauxAssistantMessage("The Owner handled the suspended child.");
 	};
-	host.model.setResponses(Array.from({ length: 6 }, () => route));
+	host.model.setResponses(Array.from({ length: 8 }, () => route));
 
 	await host.session.prompt(ownerPrompt, { source: "rpc" });
 
 	assert.equal(host.session.getLastAssistantText(), "The Owner handled the suspended child.");
 	assert.equal(ownerSawSuspension, true);
+	const entries = host.session.sessionManager.getEntries();
+	assert.equal(
+		entries.filter((entry) =>
+			entry.type === "custom_message" && entry.customType === "agent-coordination.run-suspension-notice"
+		).length,
+		1,
+	);
+	const rewait = entries.find((entry) =>
+		entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === rewaitCallId
+	);
+	assert.ok(rewait?.type === "message" && rewait.message.role === "toolResult");
+	assert.equal(rewait.message.isError, true);
+	assert.match(JSON.stringify(rewait.message.content), /responder_suspended/);
 });

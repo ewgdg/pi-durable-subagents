@@ -23,7 +23,7 @@ export function createRunSuspensionNotice(notice: RunSuspensionNotice): ModelVis
 		customType: RUN_SUSPENSION_NOTICE_CUSTOM_TYPE,
 		display: true,
 		content: JSON.stringify({ ...notice, guidance:
-			"This Agent's exact Run stopped on the error above and waits for explicit resumption. This Workflow is headless, so no human will resume it. Its Requests and Answer obligations are retained. After addressing the cause, resume it with agent_control operation \"resume\", terminate it with agent_control, or cancel your Request and delegate elsewhere. This notice took no action itself.",
+			"This Agent's exact Run stopped on the suspension in this notice and waits for explicit resumption. This Workflow is headless, so no human will resume it. Its Requests and Answer obligations are retained. After addressing the cause, resume it with agent_control operation \"resume\", terminate it with agent_control, or cancel your Request and delegate elsewhere. agent_wait rejects Requests whose responder stays suspended. This notice took no action itself.",
 		}),
 	};
 }

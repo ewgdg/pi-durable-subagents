@@ -291,6 +291,8 @@ export class WorkflowCoordinator {
 	#shuttingDown = false;
 	readonly #pendingSpawns = new Set<Promise<unknown>>();
 	readonly #interaction: WorkflowInteraction;
+	// Pi reports one exact stop more than once while it drains the native queue.
+	readonly #noticedSuspensions = new WeakSet<AgentRunSuspension>();
 
 	constructor(
 		runtime: AgentSessionRuntime,
@@ -483,6 +485,7 @@ export class WorkflowCoordinator {
 			},
 			resumeExecution: (record) =>
 				this.#ensureExecution(record.identity.agentId),
+			rejectsSuspendedResponders: this.#interaction === "headless",
 		});
 		this.#humanRequests = new HumanRequestCoordinator({
 			agents: this.#agents,
@@ -1550,9 +1553,16 @@ export class WorkflowCoordinator {
 	 * supervisor would wait forever. Preempt its Wait and leave the choice to it.
 	 */
 	#noticeSupervisorOfSuspension(record: AgentRecord, suspension: AgentRunSuspension): void {
-		const supervisorId = record.identity.directSpawnerAgentId;
-		const supervisor = supervisorId === null ? undefined : this.#agents.get(supervisorId);
+		if (this.#noticedSuspensions.has(suspension)) return;
+		this.#noticedSuspensions.add(suspension);
+		const agentId = record.identity.agentId;
 		// The Owner has no supervisor; its RPC client sees the stopped Run directly.
+		// Runtime-created Moderators have no Direct Spawner, so the Owner supervises them.
+		if (agentId === this.#ownerIdentity.agentId) return;
+		const supervisorId = this.#isModerator(agentId)
+			? this.#ownerIdentity.agentId
+			: record.identity.directSpawnerAgentId;
+		const supervisor = supervisorId === null ? undefined : this.#agents.get(supervisorId);
 		if (!supervisor) return;
 		const notificationId = randomUUID();
 		const message = createRunSuspensionNotice({
