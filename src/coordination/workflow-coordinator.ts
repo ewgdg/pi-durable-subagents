@@ -1,4 +1,5 @@
 import { resumeWorkflow } from "./workflow-resume.ts";
+import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { isDeepStrictEqual } from "node:util";
 import { ModeratorReportStore } from "./moderator-reports.ts";
@@ -309,6 +310,8 @@ export class WorkflowCoordinator {
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
 			agentWaitBoundaryHooks?: AgentWaitBoundaryHooks;
 			agentWaitClock?: AgentWaitClock;
+			/** Defaults to a terminal Workflow. */
+			interaction?: WorkflowInteraction;
 		},
 	) {
 		this.#ownerDiagnostics = runtime.services.diagnostics;
@@ -390,6 +393,7 @@ export class WorkflowCoordinator {
 			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
 			templateRoots: options.templateRoots,
 			resolveAgent: (agentId) => this.#agents.get(agentId),
+			...(options.interaction === undefined ? {} : { interaction: options.interaction }),
 			ownerRequestHandlers: (role, agentId) => {
 				if (role === "ordinary") {
 					const resolveView = () => this.forAgent(agentId);

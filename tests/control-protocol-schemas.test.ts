@@ -17,7 +17,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 10, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 11, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control observe and presentation rosters preserve a retained Run stop", () => {
 	const suspension = { reason: "provider_quota", evidence: {
@@ -83,13 +83,14 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 10,
+		protocolVersion: 11,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
 		agentId: "agent",
 		role: "ordinary",
 		ownerPresentation: true,
+		interaction: "terminal",
 		excludedTools: [],
 		expectedSessionId: "session",
 	} as const;
@@ -685,15 +686,15 @@ test("Control snapshots carry runtime diagnostic reports but reject invented too
 
 test("bootstrap incompatibility diagnostics distinguish versions and safe field failures", () => {
 	const descriptor = {
-		protocolVersion: 10,
+		protocolVersion: 11,
 		endpoint: { transport: "unix", address: "/tmp/control.sock" },
 		connectionToken: "SECRET-TOKEN", workflowId: "workflow", agentId: "agent",
-		role: "ordinary", ownerPresentation: true, excludedTools: [], expectedSessionId: "session",
+		role: "ordinary", ownerPresentation: true, interaction: "terminal", excludedTools: [], expectedSessionId: "session",
 	};
 	assert.doesNotThrow(() => validateChildProcessBootstrap(descriptor));
 	for (const [value, pattern] of [
-		[{ ...descriptor, protocolVersion: 9, excludedTools: undefined }, /protocol_mismatch: the loaded child launch contract is version 10, the received bootstrap descriptor is version 9; missing descriptor fields: excludedTools/],
-		[{ ...descriptor, excludedTools: undefined }, /schema_drift: the loaded child launch contract is version 10, the received bootstrap descriptor is version 10; missing descriptor fields: excludedTools/],
+		[{ ...descriptor, protocolVersion: 10, interaction: undefined }, /protocol_mismatch: the loaded child launch contract is version 11, the received bootstrap descriptor is version 10; missing descriptor fields: interaction/],
+		[{ ...descriptor, excludedTools: undefined }, /schema_drift: the loaded child launch contract is version 11, the received bootstrap descriptor is version 11; missing descriptor fields: excludedTools/],
 		[{ ...descriptor, excludedTools: 42 }, /schema_drift.*invalid descriptor fields: excludedTools/],
 		[{ ...descriptor, protocolVersion: "SECRET-TOKEN" }, /invalid descriptor fields: protocolVersion/],
 	] as const) {

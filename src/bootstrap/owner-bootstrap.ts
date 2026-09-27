@@ -99,6 +99,7 @@ export async function initializeOwnerWorkflow(options: {
 		postMortemAgentPresenter: new OwnerPostMortemAgentPresenter(ctx.ui),
 		workflowPolicy: policy,
 		recoveredWorkflow,
+		interaction,
 	});
 	try {
 		await coordinator.initialize();

@@ -3,7 +3,8 @@
 // Version 8 made the required initial tools selection an incompatible contract.
 // Version 9 replaces that selection with a required exclusion filter: the child
 // keeps its own runtime default surface plus its role coordination tools.
-export const AGENT_CONTROL_PROTOCOL_VERSION = 10 as const;
+// Version 11 adds the required Workflow interaction, which withholds ask_user headless.
+export const AGENT_CONTROL_PROTOCOL_VERSION = 11 as const;
 
 const NonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 
@@ -35,7 +36,7 @@ export const ChildProcessBootstrapSchema = {
 	type: "object",
 	required: [
 		"protocolVersion", "endpoint", "connectionToken", "workflowId", "agentId",
-		"role", "ownerPresentation", "excludedTools", "expectedSessionId",
+		"role", "ownerPresentation", "interaction", "excludedTools", "expectedSessionId",
 	],
 	properties: {
 		protocolVersion: { type: "number", const: AGENT_CONTROL_PROTOCOL_VERSION },
@@ -45,6 +46,8 @@ export const ChildProcessBootstrapSchema = {
 		agentId: NonEmptyStringSchema,
 		role: { anyOf: [{ type: "string", const: "ordinary" }, { type: "string", const: "moderator" }] },
 		ownerPresentation: { type: "boolean" },
+		// A headless Workflow has no human to answer ask_user.
+		interaction: { anyOf: [{ type: "string", const: "terminal" }, { type: "string", const: "headless" }] },
 		// Names removed from the child's own runtime default surface. Role
 		// coordination tools always stay active, and absent names are ignored.
 		excludedTools: { type: "array", items: NonEmptyStringSchema, uniqueItems: true },
