@@ -84,7 +84,7 @@ test("Workflow Resume reports an empty outbound-request view explicitly", () => 
 });
 
 test("Workflow Resume renders pending and tool errors rather than undefined JSON", () => {
-	assert.match(rendered(undefined, false, true), /<warning>.*resuming Workflow/);
+	assert.match(rendered(undefined, false, true), /<accent>.*resuming Workflow/);
 	const output = rendered(undefined, false, false, "admission_closed: shutting down");
 	assert.match(output, /<error>/);
 	assert.match(output, /admission_closed: shutting down/);

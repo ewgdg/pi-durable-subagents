@@ -110,7 +110,7 @@ export function renderAgentWaitResult(
 					theme.fg("muted", ` · ${formatAgentIdentity(responderAgentId, resolveAgentLabel)}`)
 			);
 			return new Text([
-				theme.fg("warning", `waiting for ${count} Answer${count === 1 ? "" : "s"}…`),
+				theme.fg("accent", `waiting for ${count} Answer${count === 1 ? "" : "s"}…`),
 				...identities.map((identity) => `• ${identity}`),
 			].join("\n"), 0, 0);
 		}
@@ -394,8 +394,9 @@ function toolCall(
 	return new Text(text, 0, 0);
 }
 
+// In-flight coordination needs no user action, so it must not borrow the warning role.
 function pending(theme: Theme, label: string): Text {
-	return new Text(theme.fg("warning", `${label}…`), 0, 0);
+	return new Text(theme.fg("accent", `${label}…`), 0, 0);
 }
 
 function receipt(

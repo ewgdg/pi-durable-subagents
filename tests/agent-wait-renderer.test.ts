@@ -127,3 +127,24 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 	);
 	assert.doesNotMatch(completed, /answerSource/);
 });
+
+test("in-flight Agent Wait progress uses a calm role, not a warning", () => {
+	const taggedTheme = {
+		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+	const render = (details: unknown) => renderAgentWaitResult(
+		{ content: [{ type: "text", text: "waiting" }], details } as never,
+		{ expanded: false, isPartial: true },
+		taggedTheme,
+		renderContext(),
+		resolveAgentLabel,
+	).render(120).join("\n");
+
+	const progress = {
+		waitingFor: [{ requestTitle: "Fixture request", requestMessageId: "request-research", responderAgentId: "research-agent" }],
+	};
+	assert.match(render(progress), /<accent>waiting for 1 Answer…<\/accent>/);
+	assert.match(render(undefined), /<accent>waiting for Answers…<\/accent>/);
+	assert.doesNotMatch(render(progress) + render(undefined), /<warning>/);
+});
