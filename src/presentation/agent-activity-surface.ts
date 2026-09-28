@@ -21,6 +21,7 @@ import {
 	formatOperationalIncidentHeadline,
 } from "./operational-incident-surface.ts";
 import {
+	agentWorkStatusRole,
 	formatAgentWorkStatus,
 	formatSelectedAgentIdentity,
 	selectedAgentWorkStatus,
@@ -246,7 +247,7 @@ export class AgentActivityDock implements Component {
 			]!;
 			return this.#theme.fg("accent", frame);
 		}
-		if (status.kind === "waiting" || status.kind === "suspended") return this.#theme.fg("warning", "■");
+		if (status.kind === "waiting" || status.kind === "suspended") return this.#theme.fg(agentWorkStatusRole(status), "■");
 		if (status.kind === "failed") return this.#theme.fg("error", "×");
 		return this.#theme.fg("dim", "○");
 	}

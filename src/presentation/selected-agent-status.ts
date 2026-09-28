@@ -68,16 +68,18 @@ export function formatAgentWorkStatus(
 		: status.kind === "waiting"
 		? `waiting (${status.reason})`
 		: status.kind;
-	const role = status.kind === "active"
-		? "success"
-		: status.kind === "waiting" || status.kind === "suspended"
-			? "warning"
-			: (status.kind === "starting" || status.kind === "compacting")
-				? "accent"
-				: status.kind === "failed"
-					? "error"
-					: "dim";
-	return theme.fg(role, label);
+	return theme.fg(agentWorkStatusRole(status), label);
+}
+
+export function agentWorkStatusRole(status: AgentWorkStatus): "success" | "warning" | "accent" | "error" | "dim" {
+	if (status.kind === "active") return "success";
+	// Waiting on another agent's Answer is normal coordination progress; only waits
+	// that need the user (input, resumption) or a stopped Run warrant a warning.
+	if (status.kind === "waiting") return status.reason === "agent answer" ? "accent" : "warning";
+	if (status.kind === "suspended") return "warning";
+	if (status.kind === "starting" || status.kind === "compacting") return "accent";
+	if (status.kind === "failed") return "error";
+	return "dim";
 }
 
 /** One wording per stop reason; both stay visibly "Suspended". */
