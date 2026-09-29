@@ -1127,11 +1127,6 @@ test("Answer commitment survives lost scheduling confirmation", async (t) => {
 	await waitForCondition(
 		() => retentionCount(harness.view.status(harness.childId).run, "answer_owed") === 0,
 	);
-	assert.equal(
-		retentionCount(harness.view.status().run, "awaiting_answer"),
-		1,
-		"the unresolved Creation Request must keep the requester retained",
-	);
 	await waitForCondition(() =>
 		harness.host.session.sessionManager.getEntries().some(
 			(entry) =>
@@ -1148,6 +1143,17 @@ test("Answer commitment survives lost scheduling confirmation", async (t) => {
 						],
 					}),
 		),
+	);
+	// The requester releases the answered Request only once its Delivery commits,
+	// which can land after the responder's Answer result; then only the Creation
+	// Request remains.
+	await waitForCondition(() =>
+		retentionCount(harness.view.status().run, "awaiting_answer") <= 1,
+	);
+	assert.equal(
+		retentionCount(harness.view.status().run, "awaiting_answer"),
+		1,
+		"the unresolved Creation Request must keep the requester retained",
 	);
 	const lateCancelCallId = "cancel-after-answer-delivery";
 	const lateCancelInput = {
