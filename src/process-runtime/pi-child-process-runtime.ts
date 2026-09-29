@@ -78,8 +78,8 @@ const SCREEN_VIEW_FRAME_TIMEOUT_DIAGNOSTIC =
 const BRIDGE_EXTENSION_PATH = fileURLToPath(
 	new URL("./child-runtime-bridge.ts", import.meta.url),
 );
-const INPUT_EXTENSION_PATH = fileURLToPath(
-	new URL("./child-runtime-input.ts", import.meta.url),
+const CHILD_ENTRY_PATH = fileURLToPath(
+	new URL("./pi-child-entry.mjs", import.meta.url),
 );
 
 export type PiChildRuntimeSnapshot = Static<typeof RuntimeSnapshotSchema>;
@@ -107,9 +107,8 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	columns?: number;
 	rows?: number;
 	startupTimeoutMilliseconds?: number;
-	cliPath?: string;
+	piModulePath?: string;
 	bridgeExtensionPath?: string;
-	inputExtensionPath?: string;
 	ownerRequestHandlers?:
 		| OwnerParticipantRequestHandlers<"ordinary">
 		| OwnerParticipantRequestHandlers<"moderator">;
@@ -247,14 +246,13 @@ export class PiChildProcessRuntime {
 				flag: "wx",
 			});
 			const bridgeExtensionPath = options.bridgeExtensionPath ?? BRIDGE_EXTENSION_PATH;
-			const inputExtensionPath = options.inputExtensionPath ?? INPUT_EXTENSION_PATH;
 			const childLaunch = buildPiChildCliLaunch({
-				cliPath: options.cliPath ?? resolveInstalledPiCliPath(),
+				piModulePath: options.piModulePath ?? resolveInstalledPiModulePath(),
 				sessionPath: options.sessionPath,
 				configuration: options.configuration,
 				skillPaths: options.skillPaths,
 				bridgeExtensionPath,
-				inputExtensionPath,
+				childEntryPath: CHILD_ENTRY_PATH,
 				...(systemPromptArtifactPath === undefined
 					? {}
 					: { systemPromptArtifactPath }),
@@ -792,7 +790,8 @@ export class PiChildProcessLaunch {
 	}
 }
 
-export function resolveInstalledPiCliPath(): string {
+/** The installed Pi's public ESM entry, whose main() the child entry runs. */
+export function resolveInstalledPiModulePath(): string {
 	const packageDir = getPackageDir();
 	const packageJsonPath = join(packageDir, "package.json");
 	let packageMetadata: unknown;
@@ -805,14 +804,15 @@ export function resolveInstalledPiCliPath(): string {
 		);
 	}
 
-	const bin = isRecord(packageMetadata) ? packageMetadata.bin : undefined;
-	const piExecutable = isRecord(bin) ? bin.pi : undefined;
-	if (typeof piExecutable !== "string" || piExecutable.length === 0) {
+	const packageExports = isRecord(packageMetadata) ? packageMetadata.exports : undefined;
+	const rootExport = isRecord(packageExports) ? packageExports["."] : undefined;
+	const publicImport = isRecord(rootExport) ? rootExport.import : undefined;
+	if (typeof publicImport !== "string" || publicImport.length === 0) {
 		throw new Error(
-			`invalid_pi_package_metadata: package.json bin.pi must be a non-empty string at ${packageJsonPath}`,
+			`invalid_pi_package_metadata: package.json exports["."].import must be a non-empty string at ${packageJsonPath}`,
 		);
 	}
-	return join(packageDir, piExecutable);
+	return join(packageDir, publicImport);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

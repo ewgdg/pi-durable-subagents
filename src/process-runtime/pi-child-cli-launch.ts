@@ -10,31 +10,31 @@ export type PiChildCliLaunch = Readonly<{
 }>;
 
 export function buildPiChildCliLaunch(options: {
-	cliPath: string;
+	piModulePath: string;
 	sessionPath: string;
 	configuration: AgentRunLaunchConfiguration;
 	skillPaths: readonly string[];
 	bridgeExtensionPath: string;
-	inputExtensionPath: string;
+	childEntryPath: string;
 	systemPromptArtifactPath?: string;
 	projectTrusted: boolean;
 }): PiChildCliLaunch {
 	const {
-		cliPath,
+		piModulePath,
 		sessionPath,
 		configuration,
 		skillPaths,
 		bridgeExtensionPath,
-		inputExtensionPath,
+		childEntryPath,
 		systemPromptArtifactPath,
 		projectTrusted,
 	} = options;
 	for (const [field, path] of [
-		["Pi CLI", cliPath],
+		["Pi module", piModulePath],
+		["child entry", childEntryPath],
 		["session", sessionPath],
 		["working directory", configuration.cwd],
 		["bridge extension", bridgeExtensionPath],
-		["input extension", inputExtensionPath],
 		...(systemPromptArtifactPath === undefined
 			? []
 			: [["System prompt", systemPromptArtifactPath]]),
@@ -63,14 +63,6 @@ export function buildPiChildCliLaunch(options: {
 			"invalid_child_launch: bridge extension must not also be an inherited extension",
 		);
 	}
-	if (configuration.extensions.includes(inputExtensionPath)) {
-		throw new Error(
-			"invalid_child_launch: input extension must not also be an inherited extension",
-		);
-	}
-	if (inputExtensionPath === bridgeExtensionPath) {
-		throw new Error("invalid_child_launch: bridge and input extensions must be distinct");
-	}
 	if ((systemPromptArtifactPath === undefined) !== (configuration.systemPrompt === undefined)) {
 		throw new Error(
 			"invalid_child_launch: system prompt artifact and configuration must agree",
@@ -78,7 +70,10 @@ export function buildPiChildCliLaunch(options: {
 	}
 
 	const argumentsList = [
-		cliPath,
+		// The entry runs Pi's public main() with the coordination input tail as an
+		// inline extension, which Pi loads after every path extension, built-ins included.
+		childEntryPath,
+		piModulePath,
 		"--session",
 		sessionPath,
 		"--model",
@@ -94,11 +89,6 @@ export function buildPiChildCliLaunch(options: {
 		"--extension",
 		bridgeExtensionPath,
 		...configuration.extensions.flatMap((path) => ["--extension", path]),
-		// Pi awaits session_start and dispatches input in extension load order.
-		// This tail marks startup complete and runs after inherited input preflights.
-		// Pi still loads inherited `builtin:` paths after it; see input-tail-order.ts.
-		"--extension",
-		inputExtensionPath,
 		"--no-skills",
 		...skillPaths.flatMap((path) => ["--skill", path]),
 		...(configuration.loadContextFiles ? [] : ["--no-context-files"]),

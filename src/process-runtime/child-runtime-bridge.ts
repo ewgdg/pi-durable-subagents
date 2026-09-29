@@ -81,10 +81,8 @@ import {
 import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
 import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
-import { assertInputTailHandlesInputLast } from "./input-tail-order.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
-const INPUT_MODULE_PATH = fileURLToPath(new URL("./child-runtime-input.ts", import.meta.url));
 
 type ChildChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
 
@@ -391,8 +389,8 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		);
 		currentState.currentBinding = binding;
 		currentState.shutdownStarted = false;
-		// The tail extension is last in Pi load order. Replace its delegates on
-		// every bridge generation while keeping lifecycle and Control available first.
+		// The entry's inline input tail loads after every Pi extension. Replace its delegates
+		// on every bridge generation while keeping lifecycle and Control available first.
 		const participantInput = createParticipantInputHandler(
 			participantLifecycle,
 			completeDiscardedInput,
@@ -457,7 +455,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			input: handleInput,
 			async completeStartup() {
 				try {
-					await assertLoadedInputTailOrder(binding.runtime);
 					applyStartupToolFilter(pi, bootstrap, retained !== undefined);
 					await binding.publishRuntimeSnapshot();
 					// Reload reports current state but does not re-enforce the initial selection.
@@ -894,7 +891,6 @@ async function runtimeSnapshot(
 ) {
 	const session = runtime.session;
 	const bridgePath = await canonicalFilePath(ENTRY_MODULE_PATH, runtime.cwd);
-	const inputPath = await canonicalFilePath(INPUT_MODULE_PATH, runtime.cwd);
 	const extensions = await Promise.all(
 		runtime.services.resourceLoader.getExtensions().extensions
 			.map((extension) => extension.resolvedPath)
@@ -961,7 +957,7 @@ async function runtimeSnapshot(
 		tools,
 		skills: skillSources.map(({ name }) => name),
 		skillSources,
-		extensions: extensions.filter((path) => path !== bridgePath && path !== inputPath),
+		extensions: extensions.filter((path) => path !== bridgePath),
 		projectTrusted: runtime.services.settingsManager.isProjectTrusted(),
 		sessionId: session.sessionId,
 		sessionPath,
@@ -1262,21 +1258,9 @@ async function canonicalFilePath(path: string, cwd: string): Promise<string> {
 	return realpath(isAbsolute(path) ? path : resolve(cwd, path));
 }
 
-/** Pi built-in and inline extension paths name no file and are already canonical. */
+/** Pi built-in extension paths name no file and are already canonical. */
 function canonicalExtensionPath(path: string, cwd: string): Promise<string> | string {
-	return isBuiltinExtensionPath(path) || path.startsWith("<inline:")
-		? path
-		: canonicalFilePath(path, cwd);
-}
-
-async function assertLoadedInputTailOrder(runtime: AgentSessionRuntime): Promise<void> {
-	const extensions = await Promise.all(
-		runtime.services.resourceLoader.getExtensions().extensions.map(async (extension) => ({
-			resolvedPath: await canonicalExtensionPath(extension.resolvedPath, runtime.cwd),
-			handlers: extension.handlers,
-		})),
-	);
-	assertInputTailHandlesInputLast(extensions, await canonicalFilePath(INPUT_MODULE_PATH, runtime.cwd));
+	return isBuiltinExtensionPath(path) ? path : canonicalFilePath(path, cwd);
 }
 
 

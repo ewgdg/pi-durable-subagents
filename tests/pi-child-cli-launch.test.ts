@@ -6,24 +6,24 @@ import { join } from "node:path";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 
 import { buildPiChildCliLaunch } from "../src/process-runtime/pi-child-cli-launch.ts";
-import { resolveInstalledPiCliPath } from "../src/process-runtime/pi-child-process-runtime.ts";
+import { resolveInstalledPiModulePath } from "../src/process-runtime/pi-child-process-runtime.ts";
 
-test("installed Pi CLI path follows the package-declared pi executable", () => {
+test("installed Pi module path follows the package-declared public import", () => {
 	const packageManifest = JSON.parse(
 		readFileSync(join(getPackageDir(), "package.json"), "utf8"),
-	) as { bin?: { pi?: unknown } };
-	const piExecutable = packageManifest.bin?.pi;
-	assert.equal(typeof piExecutable, "string");
+	) as { exports?: { "."?: { import?: unknown } } };
+	const publicImport = packageManifest.exports?.["."]?.import;
+	assert.equal(typeof publicImport, "string");
 	assert.equal(
-		resolveInstalledPiCliPath(),
-		join(getPackageDir(), piExecutable as string),
+		resolveInstalledPiModulePath(),
+		join(getPackageDir(), publicImport as string),
 	);
 });
 
 test("Pi child CLI launch uses the exact session and immutable explicit resources", () => {
 	assert.deepEqual(
 		buildPiChildCliLaunch({
-			cliPath: "/package/pi/dist/cli.js",
+			piModulePath: "/package/pi/dist/index.js",
 			sessionPath: "/sessions/child.jsonl",
 			configuration: {
 				cwd: "/work/project",
@@ -38,7 +38,7 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 			},
 			skillPaths: ["/skills/review/SKILL.md", "/skills/testing/SKILL.md"],
 			bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
-			inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
+			childEntryPath: "/package/src/process-runtime/pi-child-entry.mjs",
 			systemPromptArtifactPath: "/runtime/system-prompt.md",
 			projectTrusted: true,
 		}),
@@ -46,7 +46,10 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 			command: process.execPath,
 			cwd: "/work/project",
 			arguments: [
-				"/package/pi/dist/cli.js",
+				// The entry runs Pi's public main() with the coordination input tail
+				// loaded after every Pi extension, built-ins included.
+				"/package/src/process-runtime/pi-child-entry.mjs",
+				"/package/pi/dist/index.js",
 				"--session", "/sessions/child.jsonl",
 				"--model", "anthropic/claude-test",
 				"--thinking", "high",
@@ -56,8 +59,6 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 				"--extension", "/package/src/process-runtime/child-runtime-bridge.ts",
 				"--extension", "/extensions/first.ts",
 				"--extension", "/extensions/second.ts",
-				// Input coordination runs after inherited extension preflights.
-				"--extension", "/package/src/process-runtime/child-runtime-input.ts",
 				"--no-skills",
 				"--skill", "/skills/review/SKILL.md",
 				"--skill", "/skills/testing/SKILL.md",
@@ -71,7 +72,7 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 
 test("Pi child CLI launch lets Pi select its default thinking when preparation leaves it unset", () => {
 	const launch = buildPiChildCliLaunch({
-		cliPath: "/package/pi/dist/cli.js",
+		piModulePath: "/package/pi/dist/index.js",
 		sessionPath: "/sessions/moderator.jsonl",
 		configuration: {
 			cwd: "/work/project",
@@ -84,7 +85,7 @@ test("Pi child CLI launch lets Pi select its default thinking when preparation l
 		},
 		skillPaths: [],
 		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
-		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
+		childEntryPath: "/package/src/process-runtime/pi-child-entry.mjs",
 		projectTrusted: true,
 	});
 
@@ -93,7 +94,7 @@ test("Pi child CLI launch lets Pi select its default thinking when preparation l
 
 test("Pi child CLI launch fails before spawn when resolved resources are ambiguous", () => {
 	const common = {
-		cliPath: "/package/pi/dist/cli.js",
+		piModulePath: "/package/pi/dist/index.js",
 		sessionPath: "/sessions/child.jsonl",
 		configuration: {
 			cwd: "/work/project",
@@ -106,7 +107,7 @@ test("Pi child CLI launch fails before spawn when resolved resources are ambiguo
 			loadContextFiles: true,
 		},
 		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
-		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
+		childEntryPath: "/package/src/process-runtime/pi-child-entry.mjs",
 		projectTrusted: false,
 	};
 
@@ -122,19 +123,11 @@ test("Pi child CLI launch fails before spawn when resolved resources are ambiguo
 		}),
 		/bridge extension.*inherited extension/i,
 	);
-	assert.throws(
-		() => buildPiChildCliLaunch({
-			...common,
-			skillPaths: ["/skills/review/SKILL.md"],
-			inputExtensionPath: "/extensions/first.ts",
-		}),
-		/input extension.*inherited extension/i,
-	);
 });
 
 test("Pi child CLI launch isolates project context and replaces the base prompt independently", () => {
 	const launch = buildPiChildCliLaunch({
-		cliPath: "/package/pi/dist/cli.js",
+		piModulePath: "/package/pi/dist/index.js",
 		sessionPath: "/sessions/child.jsonl",
 		configuration: {
 			cwd: "/work/project",
@@ -149,7 +142,7 @@ test("Pi child CLI launch isolates project context and replaces the base prompt 
 		},
 		skillPaths: [],
 		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
-		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
+		childEntryPath: "/package/src/process-runtime/pi-child-entry.mjs",
 		systemPromptArtifactPath: "/runtime/system-prompt.md",
 		projectTrusted: false,
 	});
@@ -170,7 +163,7 @@ test("Pi child CLI launch isolates project context and replaces the base prompt 
 
 test("Pi child CLI launch can suppress native context without an explicit prompt", () => {
 	const launch = buildPiChildCliLaunch({
-		cliPath: "/package/pi/dist/cli.js",
+		piModulePath: "/package/pi/dist/index.js",
 		sessionPath: "/sessions/child.jsonl",
 		configuration: {
 			cwd: "/work/project",
@@ -184,7 +177,7 @@ test("Pi child CLI launch can suppress native context without an explicit prompt
 		},
 		skillPaths: [],
 		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
-		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
+		childEntryPath: "/package/src/process-runtime/pi-child-entry.mjs",
 		projectTrusted: false,
 	});
 
