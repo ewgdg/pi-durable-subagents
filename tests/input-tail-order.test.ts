@@ -7,7 +7,7 @@ const TAIL = "/runtime/child-runtime-input.ts";
 const extension = (path: string, events: readonly string[] = []) => ({
 	path,
 	resolvedPath: path,
-	handlers: new Map(events.map((event) => [event, [() => undefined]])),
+	handlers: new Map(events.map((event) => [event, [async () => undefined]])),
 });
 
 test("Pi built-ins may load after the input tail while none handles input", () => {

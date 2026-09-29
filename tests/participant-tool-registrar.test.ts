@@ -162,6 +162,10 @@ test("participant registrar exposes the exact closed sequential role tool sets",
 				host.session.getActiveToolNames().sort(),
 				[...roleToolNames[role]].sort(),
 			);
+			const callableFromTools = host.session.getCallableToolNames();
+			for (const toolName of roleToolNames[role]) {
+				assert.ok(!callableFromTools.includes(toolName), `${toolName} must not be callable from codemode`);
+			}
 			for (const toolName of roleToolNames[role]) {
 				const tool = host.session.getToolDefinition(toolName);
 				assert.ok(tool, toolName);

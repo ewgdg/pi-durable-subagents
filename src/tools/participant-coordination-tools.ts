@@ -8,6 +8,7 @@ import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type {
 	AgentToolResult,
 	ExtensionAPI,
+	ToolExposure,
 } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 
@@ -89,6 +90,15 @@ export const participantCoordinationToolNames = {
 		"moderator_control",
 	],
 } as const satisfies Record<ParticipantCoordinationRole, readonly string[]>;
+
+/**
+ * Coordination durability resolves each call from its committed top-level
+ * assistant toolCall (identities derive from agentId/entryId/toolCallId). Calls a
+ * codemode script makes through `ctx.executeTool()` never enter the transcript,
+ * so they could not commit; `model-only` keeps the tools declared to the model
+ * but off codemode's callable set.
+ */
+const COORDINATION_TOOL_EXPOSURE: ToolExposure = "model-only";
 
 const AGENT_MESSAGE_PROMPT_GUIDE = `<agent_message>
 For send and request, targetAgent accepts an exact Agent label, full Agent ID, or unique Agent ID suffix. Full IDs and suffixes resolve Workflow-wide. Labels resolve only among the caller, its Direct Spawner, and its direct children; Owner and Moderator labels resolve Workflow-wide. An ambiguous target is rejected rather than guessed.
@@ -632,6 +642,7 @@ export function registerParticipantCoordinationTools<
 				"Interrupted tools and volatile Wait calls are not restored; inspect side effects before repeating interrupted work.",
 			],
 			executionMode: "sequential",
+			exposure: COORDINATION_TOOL_EXPOSURE,
 			parameters: workflowResumeParameters,
 			renderCall: renderWorkflowResumeCall,
 			renderResult: renderWorkflowResumeResult,
@@ -653,6 +664,7 @@ export function registerParticipantCoordinationTools<
 			AGENT_DELEGATION_PROMPT_GUIDE,
 		],
 		executionMode: "sequential",
+		exposure: COORDINATION_TOOL_EXPOSURE,
 		parameters: agentMessageParameters,
 		renderCall: (args, _theme, context) =>
 			renderAgentMessageCall(
@@ -691,6 +703,7 @@ export function registerParticipantCoordinationTools<
 			"Wait for all your outstanding outbound Requests, or select requestMessageIds by full ID or unique suffix.",
 		promptGuidelines: [AGENT_WAIT_PROMPT_GUIDE],
 		executionMode: "sequential",
+		exposure: COORDINATION_TOOL_EXPOSURE,
 		parameters: agentWaitParameters,
 		renderCall: (args, theme, context) => renderAgentWaitCall(args, theme, context.expanded),
 		renderResult: (result, options, theme, context) =>
@@ -735,6 +748,7 @@ export function registerParticipantCoordinationTools<
 					: [renderAgentTemplatePromptGuide(agentTemplateSnapshot)]),
 			],
 			executionMode: "sequential",
+			exposure: COORDINATION_TOOL_EXPOSURE,
 			parameters: agentSpawnParameters,
 			renderCall: (args, theme, context) =>
 				renderAgentSpawnCall(args, theme, context.expanded),
@@ -756,6 +770,7 @@ export function registerParticipantCoordinationTools<
 			: "Observe Agent status/search and inspect Request obligations.",
 		promptGuidelines: [AGENT_OBSERVE_PROMPT_GUIDE],
 		executionMode: "sequential",
+		exposure: COORDINATION_TOOL_EXPOSURE,
 		parameters: agentObserveParameters,
 		renderCall: (args, theme, context) =>
 			renderAgentObserveCall(args, theme, resolveAgentLabel, context.expanded),
@@ -775,6 +790,7 @@ export function registerParticipantCoordinationTools<
 			: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
 		promptGuidelines: [AGENT_CONTROL_PROMPT_GUIDE],
 		executionMode: "sequential",
+		exposure: COORDINATION_TOOL_EXPOSURE,
 		parameters: agentControlParameters,
 		renderCall: (args, theme, context) =>
 			renderAgentControlCall(args, theme, resolveAgentLabel, context.expanded),
@@ -793,6 +809,7 @@ export function registerParticipantCoordinationTools<
 			promptSnippet:
 				"Block until the human supplies judgment through this Agent's native editor.",
 			executionMode: "sequential",
+			exposure: COORDINATION_TOOL_EXPOSURE,
 			parameters: askUserParameters,
 			renderShell: "self",
 			renderCall: renderHumanRequestCall,
@@ -823,6 +840,7 @@ export function registerParticipantCoordinationTools<
 				"Use report_to_user, not ask_user, for end-of-investigation runtime defect reporting. Reporting never resolves an unresolved incident or discharges an Answer obligation; use moderator_control only when its resolution predicates clear.",
 			],
 			executionMode: "sequential",
+			exposure: COORDINATION_TOOL_EXPOSURE,
 			parameters: reportToUserParameters,
 			renderCall: (args, theme) => new Text(theme.fg("toolTitle", "Report to User") + " " + boundedToolPreview(args.symptom ?? ""), 0, 0),
 			renderResult: (result, _options, theme, context) => new Text(theme.fg(
@@ -843,6 +861,7 @@ export function registerParticipantCoordinationTools<
 			promptSnippet:
 				"Renew an exact reviewed call deliberately, or resolve immediately when the original condition clears.",
 			executionMode: "sequential",
+			exposure: COORDINATION_TOOL_EXPOSURE,
 			parameters: moderatorControlParameters,
 			renderCall: renderModeratorControlCall,
 			renderResult: renderModeratorControlResult,
