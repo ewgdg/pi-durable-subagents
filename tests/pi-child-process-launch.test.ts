@@ -10,6 +10,7 @@ import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/nati
 import xtermHeadless from "@xterm/headless";
 import { PhysicalTerminalAttachment } from "../src/presentation/physical-terminal-attachment.ts";
 import { stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
 import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import {
@@ -39,11 +40,12 @@ test("launch projects the real startup PTY through runtime admission", {
 		launch = await PiChildProcessRuntime.launch(options);
 		const projection = createPiChildProcessProjection(launch);
 		const readiness = projection.ready();
-		await waitForFrame(launch, "pi v");
+		// Pi's startup header shows its version beside the logo.
+		await waitForFrame(launch, `v${PI_VERSION}`);
 		const startupFrame = projection.presentation.render(80)
 			.map(stripTerminalSequences)
 			.join("\n");
-		assert.match(startupFrame, /pi v/);
+		assert.ok(startupFrame.includes(`v${PI_VERSION}`), startupFrame);
 		projection.resize(100, 30);
 		assert.deepEqual(
 			launch.dimensions(),

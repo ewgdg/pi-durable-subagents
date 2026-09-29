@@ -1934,9 +1934,13 @@ test("hidden real child persists work without rendering and repeated attachment 
 		const disconnect = await runtime.beginPhysicalTerminalAttachment(data => display.write(data));
 		const screen = () => Array.from({ length: rows }, (_, row) =>
 			display.buffer.active.getLine(display.buffer.active.viewportY + row)?.translateToString(true) ?? "").join("\n");
-		await waitUntil(() => screen().includes("VISIBILITY_WIDGET_" + turn));
+		// The redraw can reach the display in several writes; wait for the whole
+		// current UI rather than asserting on a frame that is still being drawn.
+		await waitUntil(() =>
+			screen().includes("VISIBILITY_WIDGET_" + turn) &&
+			screen().includes("VISIBILITY_EDITOR_" + turn)
+		);
 		assert.match(screen(), new RegExp(PROCESS_RUNTIME_TEST_RESPONSE));
-		assert.match(screen(), new RegExp("VISIBILITY_EDITOR_" + turn));
 		assert.deepEqual(runtime.dimensions(), { columns, rows });
 		runtime.writeInput("\x15/runtime-probe attached-" + turn + "\r");
 		await waitUntil(() => screen().includes("INPUT=attached-" + turn));
