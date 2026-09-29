@@ -133,8 +133,9 @@ export async function prepareChildRuntime(
 	const configuration: AgentRunLaunchConfiguration = {
 		...launchConfiguration,
 		// Built-ins belong to the parent's Pi runtime rather than its inheritable
-		// extension choice, so `extensions: none` keeps them. They follow the files
-		// because Pi loads file extensions first and the startup snapshot is ordered.
+		// extension choice, so `extensions: none` keeps them. Pi loads built-ins after
+		// every file extension whatever the CLI order, so they are listed last to
+		// match the child's ordered startup snapshot.
 		extensions: [
 			...launchConfiguration.extensions,
 			...options.parentRuntime.configuration.extensions.filter(isBuiltinExtensionPath),

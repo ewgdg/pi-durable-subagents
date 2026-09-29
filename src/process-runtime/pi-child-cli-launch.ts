@@ -96,6 +96,7 @@ export function buildPiChildCliLaunch(options: {
 		...configuration.extensions.flatMap((path) => ["--extension", path]),
 		// Pi awaits session_start and dispatches input in extension load order.
 		// This tail marks startup complete and runs after inherited input preflights.
+		// Pi still loads inherited `builtin:` paths after it; see input-tail-order.ts.
 		"--extension",
 		inputExtensionPath,
 		"--no-skills",

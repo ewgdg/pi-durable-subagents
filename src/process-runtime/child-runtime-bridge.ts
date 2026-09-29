@@ -81,6 +81,7 @@ import {
 import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
 import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
+import { assertInputTailHandlesInputLast } from "./input-tail-order.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
 const INPUT_MODULE_PATH = fileURLToPath(new URL("./child-runtime-input.ts", import.meta.url));
@@ -456,6 +457,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			input: handleInput,
 			async completeStartup() {
 				try {
+					await assertLoadedInputTailOrder(binding.runtime);
 					applyStartupToolFilter(pi, bootstrap, retained !== undefined);
 					await binding.publishRuntimeSnapshot();
 					// Reload reports current state but does not re-enforce the initial selection.
@@ -897,7 +899,7 @@ async function runtimeSnapshot(
 		runtime.services.resourceLoader.getExtensions().extensions
 			.map((extension) => extension.resolvedPath)
 			.filter((path) => !path.startsWith("<inline:"))
-			.map((path) => isBuiltinExtensionPath(path) ? path : canonicalFilePath(path, runtime.cwd)),
+			.map((path) => canonicalExtensionPath(path, runtime.cwd)),
 	);
 	const explicitSystemPromptModeValue = process.env[
 		CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE
@@ -1258,6 +1260,23 @@ function requireModel(model: AgentSessionRuntime["session"]["model"]) {
 
 async function canonicalFilePath(path: string, cwd: string): Promise<string> {
 	return realpath(isAbsolute(path) ? path : resolve(cwd, path));
+}
+
+/** Pi built-in and inline extension paths name no file and are already canonical. */
+function canonicalExtensionPath(path: string, cwd: string): Promise<string> | string {
+	return isBuiltinExtensionPath(path) || path.startsWith("<inline:")
+		? path
+		: canonicalFilePath(path, cwd);
+}
+
+async function assertLoadedInputTailOrder(runtime: AgentSessionRuntime): Promise<void> {
+	const extensions = await Promise.all(
+		runtime.services.resourceLoader.getExtensions().extensions.map(async (extension) => ({
+			resolvedPath: await canonicalExtensionPath(extension.resolvedPath, runtime.cwd),
+			handlers: extension.handlers,
+		})),
+	);
+	assertInputTailHandlesInputLast(extensions, await canonicalFilePath(INPUT_MODULE_PATH, runtime.cwd));
 }
 
 

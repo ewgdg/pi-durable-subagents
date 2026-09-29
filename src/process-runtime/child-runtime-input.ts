@@ -5,7 +5,8 @@ import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
 /** Runs after inherited input preflights while delegating to the current bridge generation. */
 const childRuntimeInput: ExtensionFactory = (pi) => {
 	// Pi awaits session_start handlers in extension load order. The bridge stays
-	// first for startup UI/Control, while this last extension marks settled startup.
+	// first for startup UI/Control, while this last file extension marks settled
+	// startup. Pi built-ins load after it; startup checks none of them handles input.
 	pi.on("session_start", async (_event, ctx) => {
 		const handler = childRuntimeInputs.get(ctx.sessionManager);
 		if (!handler) {
