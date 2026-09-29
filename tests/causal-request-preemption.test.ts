@@ -162,7 +162,7 @@ for (const oldestFirst of [true, false]) test(`either delivered Request may be a
 		fauxToolCall("agent_wait", {}, { id: "batched-wait" }),
 	], { stopReason: "toolUse" }));
 	await assert.rejects(host.session.getToolDefinition("agent_message")!.execute(
-		"batched-answer", answerInput as never, undefined, undefined, host.session.extensionRunner.createContext(),
+		"batched-answer", answerInput as never, undefined, undefined, host.session.extensionRunner.createToolContext("batched-answer", undefined),
 	), /only tool call/);
 	const result = await execute(host.session, "agent_message", "resolve-first", answerInput);
 	assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(result.details) }]);
@@ -170,7 +170,7 @@ for (const oldestFirst of [true, false]) test(`either delivered Request may be a
 	assert.equal((result.details as { requestMessageId: string }).requestMessageId, firstId);
 	assert.deepEqual(frames().map(frame => frame.requestId), [remainingId]);
 	const answerTool = host.session.getToolDefinition("agent_message")!;
-	const replay = await answerTool.execute("resolve-first", answerInput as never, undefined, undefined, host.session.extensionRunner.createContext());
+	const replay = await answerTool.execute("resolve-first", answerInput as never, undefined, undefined, host.session.extensionRunner.createToolContext("resolve-first", undefined));
 	assert.equal((replay.details as { disposition: string }).disposition, "already_answered");
 	await assert.rejects(executeRegisteredTool(host.session, "agent_message", "stale-first", answerInput), /unresolved|already|resolved/);
 	assert.deepEqual(frames().map(frame => frame.requestId), [remainingId]);

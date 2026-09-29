@@ -40,8 +40,9 @@ export function bindPrimarySteeringAdmission(
 			return originalSteer(text, images, options);
 		}
 		const pendingMessageCountBeforeSteer = session.pendingMessageCount;
-		await originalSteer(text, images, options);
+		const disposition = await originalSteer(text, images, options);
 		notifyWhenQueued(pendingMessageCountBeforeSteer);
+		return disposition;
 	};
 	session.prompt = observedPrompt;
 	session.steer = observedSteer;

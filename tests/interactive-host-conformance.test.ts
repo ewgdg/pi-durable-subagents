@@ -416,12 +416,13 @@ async function agentRunStatus(
 ): Promise<ObservedAgentRun> {
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
+	const toolCallId = `observe-terminated-view-${Date.now()}`;
 	const status = await observe.execute(
-		`observe-terminated-view-${Date.now()}`,
+		toolCallId,
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	return (status.details as { run: ObservedAgentRun }).run;
 }

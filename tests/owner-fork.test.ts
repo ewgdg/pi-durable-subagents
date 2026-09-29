@@ -797,7 +797,7 @@ async function waitForOnlyChild(
 			{ operation: "search", scope: { directSpawnerAgentId: agentId } },
 			undefined,
 			undefined,
-			host.session.extensionRunner.createContext(),
+			host.session.extensionRunner.createToolContext(`wait-for-nested-child-${attempt}`, undefined),
 		);
 		const matches = (result.details as { matches: Array<{ agentId: string }> }).matches;
 		if (matches.length === 1) return matches[0]!.agentId;
@@ -822,7 +822,7 @@ async function waitForAgentTranscript(
 			{ operation: "status", agentId },
 			undefined,
 			undefined,
-			host.session.extensionRunner.createContext(),
+			host.session.extensionRunner.createToolContext(`wait-for-agent-transcript-${agentId}-${attempt}`, undefined),
 		);
 		const transcriptPath = (result.details as {
 			primaryEvidence: { transcriptPath: string | null };
@@ -913,7 +913,7 @@ async function assertSourceIdentityIsUnavailable(
 				candidate.input,
 				undefined,
 				undefined,
-				session.extensionRunner.createContext(),
+				session.extensionRunner.createToolContext(toolCallId, undefined),
 			),
 			/unknown_identity|wrong_workflow|wrong_participant/,
 		);

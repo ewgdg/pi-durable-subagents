@@ -39,7 +39,7 @@ export async function executeRegisteredTool(
 		input as never,
 		undefined,
 		undefined,
-		session.extensionRunner.createContext(),
+		session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 }
 

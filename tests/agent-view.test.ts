@@ -2157,12 +2157,13 @@ async function hasRetention(
 ): Promise<boolean> {
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
+	const toolCallId = `observe-${reason}-${Date.now()}`;
 	const result = await observe.execute(
-		`observe-${reason}-${Date.now()}`,
+		toolCallId,
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	return (result.details as {
 		run: { retentionReasons: Array<{ reason: string }> };
@@ -2179,12 +2180,13 @@ async function currentRunState(
 ): Promise<{ phase: string; work?: string; suspension?: { reason: string } }> {
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
+	const toolCallId = `observe-run-state-${Date.now()}`;
 	const status = await observe.execute(
-		`observe-run-state-${Date.now()}`,
+		toolCallId,
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	return (status.details as {
 		run: { phase: string; work?: string; suspension?: { reason: string } };
@@ -2194,12 +2196,13 @@ async function currentRunState(
 async function childEntries(host: TestOwnerHost, agentId: string) {
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
+	const toolCallId = `locate-child-transcript-${Date.now()}`;
 	const status = await observe.execute(
-		`locate-child-transcript-${Date.now()}`,
+		toolCallId,
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	const transcriptPath = (status.details as {
 		primaryEvidence: { transcriptPath: string | null };

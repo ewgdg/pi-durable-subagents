@@ -202,7 +202,7 @@ async function waitForAgentPhase(agentId: string, phase: string): Promise<void> 
 			{ operation: "status", agentId },
 			undefined,
 			undefined,
-			ownerSession.extensionRunner.createContext(),
+			ownerSession.extensionRunner.createToolContext(`observe-phase-${agentId}`, undefined),
 		);
 		if ((status.details as { run: { phase: string } }).run.phase === phase) return;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -220,7 +220,7 @@ async function waitForAgentSuspension(agentId: string): Promise<void> {
 			{ operation: "status", agentId },
 			undefined,
 			undefined,
-			ownerSession.extensionRunner.createContext(),
+			ownerSession.extensionRunner.createToolContext(`observe-suspension-${agentId}`, undefined),
 		);
 		if ((status.details as { run: { suspension?: { reason: string } } }).run.suspension?.reason === "runtime_error") return;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -247,7 +247,7 @@ async function transcriptPathFor(agentId: string): Promise<string> {
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
-		ownerSession.extensionRunner.createContext(),
+		ownerSession.extensionRunner.createToolContext(`observe-${agentId}`, undefined),
 	);
 	const transcriptPath = (status.details as {
 		primaryEvidence: { transcriptPath: string | null };
@@ -332,7 +332,7 @@ async function executeCommittedTool(session: AgentSession, source: ToolSource) {
 		source.input as never,
 		undefined,
 		undefined,
-		session.extensionRunner.createContext(),
+		session.extensionRunner.createToolContext(source.toolCallId, undefined),
 	);
 	session.sessionManager.appendMessage({
 		role: "toolResult",

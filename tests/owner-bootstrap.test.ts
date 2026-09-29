@@ -160,7 +160,7 @@ test("an existing Owner Identity without a description is canonicalized without 
 		{ operation: "status" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("observe-canonical-owner-metadata", undefined),
 	);
 	assert.equal((status.details as { description?: string }).description, "Workflow Owner");
 	assert.ok(host.session.getToolDefinition("agent_observe"));
@@ -222,7 +222,7 @@ test("an Owner Identity repairs a stale id with a current bootstrap", async (t) 
 		{ operation: "status" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("observe-repaired-owner-metadata", undefined),
 	);
 	assert.equal((status.details as { description: string }).description, "Workflow Owner");
 	await host.runtime.dispose();
@@ -309,7 +309,7 @@ test("a resumed Owner admits coordination evidence after its Identity cutoff", a
 		},
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("owner-self-message-before-reopen", undefined),
 	);
 	await host.session.waitForIdle();
 	const sessionFile = host.session.sessionManager.getSessionFile();
@@ -379,9 +379,9 @@ test("cold Owner admission skips off-branch invalid coordination and retains ind
 		assert.deepEqual(reopened.services.diagnostics.filter(item => item.type === "error"), [], phase);
 		assert.equal(reopened.ui.notifications.some(({ message }) => /unavailable|blocked|quarantined|admission.*fail/i.test(message)), false, phase);
 		const observe = reopened.session.getToolDefinition("agent_observe")!;
-		const obligations = await observe.execute(`obligations-${phase}`, { operation: "obligations" }, undefined, undefined, reopened.session.extensionRunner.createContext());
+		const obligations = await observe.execute(`obligations-${phase}`, { operation: "obligations" }, undefined, undefined, reopened.session.extensionRunner.createToolContext(`obligations-${phase}`, undefined));
 		assert.deepEqual(obligations.details, { requests: [{ requestMessageId, requesterAgentId: childId, title: "Preserved recipient work" }] });
-		const status = await observe.execute(`child-${phase}`, { operation: "status", agentId: childId }, undefined, undefined, reopened.session.extensionRunner.createContext());
+		const status = await observe.execute(`child-${phase}`, { operation: "status", agentId: childId }, undefined, undefined, reopened.session.extensionRunner.createToolContext(`child-${phase}`, undefined));
 		assert.equal((status.details as { run: { phase: string } }).run.phase, "dormant");
 		assert.equal(await readFile(child.getSessionFile()!, "utf8"), originalChildEvidence);
 	}
@@ -742,7 +742,7 @@ async function executeOwnerTool(
 		input,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	host.session.sessionManager.appendMessage({
 		role: "toolResult", toolName, toolCallId, content: result.content,
@@ -914,7 +914,7 @@ for (const invalidate of [false, true]) {
 		}) as { agentId: string; requestMessageId: string };
 		await entered.promise;
 		const observe = host.session.getToolDefinition("agent_observe")!;
-		const before = await observe.execute("before-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createContext());
+		const before = await observe.execute("before-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createToolContext("before-reload", undefined));
 		const path = (before.details as { primaryEvidence: { transcriptPath: string } }).primaryEvidence.transcriptPath;
 		const staleMessage = host.session.getToolDefinition("agent_message")!;
 		if (invalidate) {
@@ -923,7 +923,7 @@ for (const invalidate of [false, true]) {
 			await executeOwnerTool(host, "agent_message", "reload-cached-request", {
 				operation: "request", targetAgent: spawned.agentId, title: "Previously valid", question: "A saved Request",
 			});
-			await observe.execute("prime-validation", { operation: "status" }, undefined, undefined, host.session.extensionRunner.createContext());
+			await observe.execute("prime-validation", { operation: "status" }, undefined, undefined, host.session.extensionRunner.createToolContext("prime-validation", undefined));
 			const source = host.session.sessionManager.getEntries().find((entry) =>
 				entry.type === "message" && entry.message.role === "assistant" &&
 				entry.message.content.some((part) => part.type === "toolCall" && part.id === "reload-cached-request"));
@@ -940,14 +940,14 @@ for (const invalidate of [false, true]) {
 		assert.equal(modelCalls, 1, "reload must not restart or replay child work");
 		await assert.rejects(() => staleMessage.execute("stale-send", {
 			operation: "send", targetAgent: spawned.agentId, content: "A stale callback",
-		}, undefined, undefined, host.session.extensionRunner.createContext()), /shutting_down/);
+		}, undefined, undefined, host.session.extensionRunner.createToolContext("stale-send", undefined)), /shutting_down/);
 		assert.equal(host.ui.widgets.has("agent-coordination.blockage"), false);
 		assert.ok(host.session.getActiveToolNames().includes("workflow_resume"));
 		assert.equal(host.ui.notifications.some(({ message }) => message.includes("Workflow revalidated")), false);
 		const freshObserve = host.session.getToolDefinition("agent_observe")!;
-		const after = await freshObserve.execute("after-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createContext());
+		const after = await freshObserve.execute("after-reload", { operation: "status", agentId: spawned.agentId }, undefined, undefined, host.session.extensionRunner.createToolContext("after-reload", undefined));
 		assert.equal((after.details as { run: { phase: string } }).run.phase, "dormant");
-		const request = await freshObserve.execute("request-after-reload", { operation: "request", requestId: spawned.requestMessageId }, undefined, undefined, host.session.extensionRunner.createContext());
+		const request = await freshObserve.execute("request-after-reload", { operation: "request", requestId: spawned.requestMessageId }, undefined, undefined, host.session.extensionRunner.createToolContext("request-after-reload", undefined));
 		assert.match(JSON.stringify(request.details), /Keep working while the Owner reloads/);
 		await host.runtime.dispose();
 	});

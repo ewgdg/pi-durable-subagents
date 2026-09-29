@@ -115,7 +115,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-recovered-children", undefined),
 	);
 	const matches = (childrenResult.details as {
 		matches: Array<{ agentId: string; label: string; run: { phase: string } }>;
@@ -135,7 +135,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		{ operation: "search", scope: { directSpawnerAgentId: spawned.agentId } },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-recovered-nested-children", undefined),
 	);
 	assert.deepEqual(
 		(nestedChildren.details as { matches: Array<{ agentId: string; run: { phase: string } }> })
@@ -160,7 +160,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 			{ operation: "status", agentId: spawned.agentId },
 			undefined,
 			undefined,
-			reopened.session.extensionRunner.createContext(),
+			reopened.session.extensionRunner.createToolContext("observe-still-dormant", undefined),
 		).then((result) => result.details as { run: { phase: string } })).run.phase,
 		"dormant",
 	);
@@ -174,7 +174,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
-		reopenedAgain.session.extensionRunner.createContext(),
+		reopenedAgain.session.extensionRunner.createToolContext("observe-freshly-recovered-children", undefined),
 	);
 	assert.deepEqual(
 		(secondChildren.details as { matches: Array<{ agentId: string }> }).matches.map(
@@ -225,7 +225,7 @@ test("historical child fork evidence is quarantined without rewriting either tra
 	assert.ok(observe);
 	await assert.rejects(observe.execute("historical-fork-status", {
 		operation: "status", agentId: childId,
-	}, undefined, undefined, reopened.session.extensionRunner.createContext()), /evidence_unavailable/);
+	}, undefined, undefined, reopened.session.extensionRunner.createToolContext("historical-fork-status", undefined)), /evidence_unavailable/);
 	assert.equal(await readFile(childPath, "utf8"), childBefore);
 	assert.equal(await readFile(ownerPath, "utf8"), ownerBefore);
 	await reopened.runtime.dispose();
@@ -430,7 +430,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-independent-recovery", undefined),
 	);
 	assert.deepEqual(
 		(result.details as { matches: Array<{ agentId: string }> }).matches.map(
@@ -443,7 +443,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		{ operation: "status" },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-owner-quarantined-request-retention", undefined),
 	);
 	const ownerRun = (ownerStatus.details as {
 		run: { retentionReasons: Array<{ reason: string; count: number }> };
@@ -480,7 +480,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 				{ operation: "status", agentId: unavailableAgentId },
 				undefined,
 				undefined,
-				reopened.session.extensionRunner.createContext(),
+				reopened.session.extensionRunner.createToolContext(`observe-quarantined-${unavailableAgentId}`, undefined),
 			),
 			/evidence_unavailable/,
 		);
@@ -556,7 +556,7 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 			{ operation: "status", agentId: spawned.agentId },
 			undefined,
 			undefined,
-			reopened.session.extensionRunner.createContext(),
+			reopened.session.extensionRunner.createToolContext(toolCallId, undefined),
 		);
 		return (result.details as { run: { phase: string } }).run.phase;
 	};
@@ -621,7 +621,7 @@ test("cold successor retains captured template rules after rename and recovers r
 		{ operation: "status" },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-recovered-owner-retention", undefined),
 	);
 	assert.equal(
 		retentionCount(
@@ -636,7 +636,7 @@ test("cold successor retains captured template rules after rename and recovers r
 		{ operation: "status", agentId: spawned.agentId },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-residual-child-before-start", undefined),
 	);
 	assert.deepEqual(
 		(dormantStatus.details as { run: { phase: string; retentionReasons: unknown[] } }).run,
@@ -670,7 +670,7 @@ test("cold successor retains captured template rules after rename and recovers r
 			{ operation: "status", agentId: spawned.agentId },
 			undefined,
 			undefined,
-			reopened.session.extensionRunner.createContext(),
+			reopened.session.extensionRunner.createToolContext("observe-started-residual-child", undefined),
 		);
 		return (status.details as { run: { attention?: string } }).run.attention === "input_required";
 	});
@@ -679,7 +679,7 @@ test("cold successor retains captured template rules after rename and recovers r
 		{ operation: "status", agentId: spawned.agentId },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-recovered-child-obligation", undefined),
 	);
 	assert.equal(
 		retentionCount(
@@ -742,7 +742,7 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 		{ operation: "status" },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-branch-residuals", undefined),
 	);
 	const reopenedRun = (reopenedStatus.details as {
 		run: { retentionReasons: Array<{ reason: string; count: number }> };
@@ -768,7 +768,7 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 		{ operation: "status" },
 		undefined,
 		undefined,
-		reopenedAgain.session.extensionRunner.createContext(),
+		reopenedAgain.session.extensionRunner.createToolContext("observe-resolved-branch-residuals", undefined),
 	);
 	const resolvedRun = (resolvedStatus.details as {
 		run: { retentionReasons: Array<{ reason: string; count: number }> };
@@ -823,7 +823,7 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-physical-child-order-after-reopen", undefined),
 	);
 	assert.deepEqual(
 		(children.details as { matches: Array<{ agentId: string }> }).matches.map(
@@ -887,7 +887,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 		{ operation: "status", agentId: moderator.agentId },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-recovered-moderator", undefined),
 	);
 	const status = statusResult.details as {
 		agentId: string;
@@ -916,7 +916,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
-		reopened.session.extensionRunner.createContext(),
+		reopened.session.extensionRunner.createToolContext("observe-children-with-standalone-moderator", undefined),
 	);
 	assert.equal(
 		(children.details as { matches: Array<{ agentId: string }> }).matches.some(
@@ -987,7 +987,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 			{ operation: "status", agentId: moderator.agentId },
 			undefined,
 			undefined,
-			reopened.session.extensionRunner.createContext(),
+			reopened.session.extensionRunner.createToolContext("observe-stopped-recovered-moderator", undefined),
 		);
 		const run = (result.details as {
 			run: { phase: string; suspension?: { reason: string; evidence: { error: string } } };
@@ -1037,12 +1037,13 @@ test("host loss removes a stopped Moderator Run and attempt handling", async (t)
 	const moderatorRun = async (owner: TestOwnerHost, agentId: string) => {
 		const tool = owner.session.getToolDefinition("agent_observe");
 		assert.ok(tool);
+		const toolCallId = `observe-moderator-run-${agentId}-${Date.now()}`;
 		const result = await tool.execute(
-			`observe-moderator-run-${agentId}-${Date.now()}`,
+			toolCallId,
 			{ operation: "status", agentId },
 			undefined,
 			undefined,
-			owner.session.extensionRunner.createContext(),
+			owner.session.extensionRunner.createToolContext(toolCallId, undefined),
 		);
 		return (result.details as {
 			run: { phase: string; suspension?: { reason: string; evidence: { error: string } } };
@@ -1176,7 +1177,7 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 			{ operation: "status", agentId: malformedAgentId },
 			undefined,
 			undefined,
-			reopened.session.extensionRunner.createContext(),
+			reopened.session.extensionRunner.createToolContext("observe-malformed-moderator", undefined),
 		),
 		/evidence_unavailable/,
 	);
@@ -1299,7 +1300,7 @@ for (const boundary of ["before_request_delivery", "after_answer_commitment"] as
 		assert.ok(JSON.stringify(deliveries).includes(spawned.requestMessageId));
 		if (boundary === "after_answer_commitment") {
 			const tool = reopened.session.getToolDefinition("agent_observe")!;
-			const status = await tool.execute("completed-responder", { operation: "status", agentId: spawned.agentId }, undefined, undefined, reopened.session.extensionRunner.createContext());
+			const status = await tool.execute("completed-responder", { operation: "status", agentId: spawned.agentId }, undefined, undefined, reopened.session.extensionRunner.createToolContext("completed-responder", undefined));
 			assert.equal((status.details as { run: { phase: string } }).run.phase, "dormant");
 		}
 		await reopened.runtime.dispose();

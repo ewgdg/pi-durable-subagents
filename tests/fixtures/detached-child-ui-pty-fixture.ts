@@ -86,7 +86,7 @@ async function executeCommittedTool(session: AgentSession, source: ToolSource) {
 		source.input as never,
 		undefined,
 		undefined,
-		session.extensionRunner.createContext(),
+		session.extensionRunner.createToolContext(source.toolCallId, undefined),
 	);
 	session.sessionManager.appendMessage({
 		role: "toolResult",

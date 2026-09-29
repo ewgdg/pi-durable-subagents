@@ -110,7 +110,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 		sourceInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	assert.deepEqual(result.details, {
 		messageId: expectedMessageId,
@@ -168,7 +168,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 		{ messageId: expectedMessageId, operation: "poll" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(pollToolCallId, undefined),
 	);
 	assert.deepEqual(pollResult.details, {
 		disposition: "delivered",
@@ -188,7 +188,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 		{ messageId: expectedMessageId, operation: "retry" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(retryToolCallId, undefined),
 	);
 	assert.deepEqual(retryResult.details, {
 		disposition: "delivered",
@@ -286,7 +286,7 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 		pollAbsentInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(pollAbsentId, undefined),
 	);
 	assert.equal(
 		(notObserved.details as { disposition: string }).disposition,
@@ -349,7 +349,7 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 		pollUnresolvedInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(pollUnresolvedId, undefined),
 	);
 	assert.deepEqual(indeterminate.details, {
 		disposition: "indeterminate",
@@ -460,7 +460,7 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 		sendInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(sendToolCallId, undefined),
 	);
 	host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -489,7 +489,7 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 				input,
 				undefined,
 				undefined,
-				host.session.extensionRunner.createContext(),
+				host.session.extensionRunner.createToolContext(toolCallId, undefined),
 			),
 		),
 	);
@@ -2125,7 +2125,7 @@ test("Request cancellation accepts a suffix and reconstructs its full relationsh
 	});
 	const tool = reopened.session.getToolDefinition("agent_message");
 	assert.ok(tool);
-	const result = await tool.execute("poll-suffix-cancellation", poll, undefined, undefined, reopened.session.extensionRunner.createContext());
+	const result = await tool.execute("poll-suffix-cancellation", poll, undefined, undefined, reopened.session.extensionRunner.createToolContext("poll-suffix-cancellation", undefined));
 	assert.equal((result.details as { messageId?: string }).messageId, receipt.messageId);
 
 });

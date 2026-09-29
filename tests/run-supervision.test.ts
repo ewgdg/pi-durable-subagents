@@ -1017,7 +1017,7 @@ test("the registered agent_control tool authenticates structural committed input
 		spawnInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(spawnToolCallId, undefined),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 
@@ -1036,7 +1036,7 @@ test("the registered agent_control tool authenticates structural committed input
 		{ agentId: childAgentId, operation: "interrupt" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	assert.deepEqual(result.details, {
 		agentId: childAgentId,
@@ -1073,7 +1073,7 @@ test("/agents retains only the viewed exact Run and keeps Owner bound through cl
 		spawnInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(spawnToolCallId, undefined),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 	const ownerSession = host.runtime.session;
@@ -1086,7 +1086,7 @@ test("/agents retains only the viewed exact Run and keeps Owner bound through cl
 		{ operation: "status", agentId: childAgentId },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	assert.equal(
 		((await status("observe-open-agent-view")).details as {

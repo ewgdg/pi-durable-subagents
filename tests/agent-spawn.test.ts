@@ -231,7 +231,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("observe-children", undefined),
 	);
 	const children = (childrenResult.details as { matches: Array<Record<string, unknown>> })
 		.matches;
@@ -650,7 +650,7 @@ test("invalid default-child metadata fails before Agent Identity", async (t) => 
 		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("observe-no-children", undefined),
 	);
 	assert.deepEqual(result.details, { matches: [], hasMore: false });
 
@@ -1348,7 +1348,7 @@ async function agentTranscriptEntries(
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(`locate-agent-transcript-${agentId}-${attempt}`, undefined),
 	);
 	const transcriptPath = (status.details as {
 		primaryEvidence: { transcriptPath: string | null };

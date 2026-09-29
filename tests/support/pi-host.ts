@@ -233,6 +233,7 @@ async function createUnboundTestOwnerHostWithRuntime(
 					extensions: loaded.extensions.filter(
 						(candidate) =>
 							candidate.path.startsWith("<inline:") ||
+							candidate.path.startsWith("builtin:") ||
 							retainedExtensionPaths.has(candidate.resolvedPath),
 					),
 				}),

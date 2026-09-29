@@ -449,7 +449,7 @@ for (const route of ["interactive prompt", "RPC steer"] as const) test(`primary 
 		{ operation: "status" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("observe-wait-after-explicit-follow-up", undefined),
 	);
 	assert.equal(
 		(waitingStatus.details as { run: { attention: string } }).run.attention,
@@ -498,7 +498,7 @@ for (const route of ["interactive prompt", "RPC steer"] as const) test(`primary 
 		{ operation: "status" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("observe-request-preserved-after-human-preemption", undefined),
 	);
 	assert.deepEqual(
 		(status.details as { run: { retentionReasons: Array<{ reason: string }> } })

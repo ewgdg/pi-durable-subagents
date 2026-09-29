@@ -65,7 +65,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		{ operation: "status" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("observe-owner", undefined),
 	);
 	assert.deepEqual(statusResult.details, {
 		agentId: host.session.sessionId,
@@ -149,7 +149,7 @@ test("native Owner replacement closes every retained source Workflow process", a
 		spawnInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(spawnToolCallId, undefined),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 
@@ -164,7 +164,7 @@ test("native Owner replacement closes every retained source Workflow process", a
 			{ operation: "status", agentId: childAgentId },
 			undefined,
 			undefined,
-			host.runtime.session.extensionRunner.createContext(),
+			host.runtime.session.extensionRunner.createToolContext("observe-replaced-workflow-child", undefined),
 		),
 		/unknown_identity/,
 	);
@@ -195,7 +195,7 @@ test("shutdown with an open Agent view closes it without rebinding stopped inter
 		spawnInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(spawnToolCallId, undefined),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 	const opened = await openLiveAgentView(host, childAgentId);
@@ -238,7 +238,7 @@ test("orderly shutdown disposes retained child and Moderator processes plus Owne
 		spawnInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(spawnToolCallId, undefined),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 	const moderatorAgentId = await waitForModeratorAgentId(host);
@@ -297,7 +297,7 @@ test("child AgentSession patches cannot affect process shutdown or Owner disposa
 		spawnInput,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(spawnToolCallId, undefined),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 	const nativeAbort = AgentSession.prototype.abort;

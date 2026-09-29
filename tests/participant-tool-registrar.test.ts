@@ -769,7 +769,7 @@ async function executeTool(
 		input,
 		signal,
 		onUpdate,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 }
 

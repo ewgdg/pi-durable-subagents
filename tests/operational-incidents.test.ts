@@ -193,7 +193,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		{ operation: "status", agentId: moderator.id },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext("observe-created-moderator", undefined),
 	);
 	assert.deepEqual(
 		{
@@ -3038,7 +3038,7 @@ async function sendOwnerMessage(
 		input,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -3071,7 +3071,7 @@ async function controlAsOwner(
 		input,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 }
 
@@ -3133,7 +3133,7 @@ async function answerAsOwner(
 		input,
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(toolCallId, undefined),
 	);
 	host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -3174,7 +3174,7 @@ async function observeStatus(
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createToolContext(`observe-${agentId}`, undefined),
 	);
 	return result.details as Awaited<ReturnType<typeof observeStatus>>;
 }
