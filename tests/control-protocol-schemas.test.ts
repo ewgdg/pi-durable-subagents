@@ -708,3 +708,43 @@ test("bootstrap incompatibility diagnostics distinguish versions and safe field 
 		});
 	}
 });
+
+// Pi adds optional message fields across releases (0.99 added assistant
+// thinkingLevel and toolResult nestedCalls; Anthropic sets providerThinkingLevel).
+// The trust-based protocol must carry them instead of failing the child's guard.
+test("runtime.guardToolResult carries Pi message fields the protocol does not name", () => {
+	const usage = {
+		input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		futureUsageField: 1,
+	};
+	const assistant = {
+		role: "assistant",
+		content: [{ type: "text", text: "done", futureContentField: true }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-opus-5-5",
+		providerThinkingLevel: "high",
+		thinkingLevel: "medium",
+		endTurn: true,
+		usage,
+		stopReason: "stop",
+		timestamp: 1,
+	};
+	const toolResult = {
+		role: "toolResult",
+		toolCallId: "call-1",
+		toolName: "read",
+		content: [{ type: "text", text: "ok" }],
+		nestedCalls: { calls: [{ id: "call-1/1", name: "read", status: "ok" }], complete: true },
+		isError: false,
+		timestamp: 1,
+	};
+	const guard = agentControlMethods["runtime.guardToolResult"];
+	for (const message of [assistant, toolResult]) {
+		assert.equal(Check(guard.request, { message }), true, message.role);
+		assert.equal(Check(guard.response, { result: { message } }), true, message.role);
+	}
+	assert.equal(Check(guard.request, { message: { ...toolResult, role: "unknown" } }), false);
+	assert.equal(Check(guard.request, { message: assistant, extra: true }), false);
+});

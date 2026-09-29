@@ -31,6 +31,12 @@ import {
 
 const closed = <const P extends Parameters<typeof Type.Object>[0]>(properties: P) =>
 	Type.Object(properties, { additionalProperties: false });
+// Pi owns message, content, and usage shapes and adds optional fields across
+// releases (for example providerThinkingLevel, thinkingLevel, nestedCalls). The
+// trust-based protocol checks the fields it relies on and carries the rest, so a
+// Pi upgrade cannot fail a child's guard over a field this package never reads.
+const piOwned = <const P extends Parameters<typeof Type.Object>[0]>(properties: P) =>
+	Type.Object(properties);
 const EmptySchema = closed({});
 const NonEmptyStringSchema = Type.String({ minLength: 1 });
 const PreparationErrorSchema = Type.String({ minLength: 1, maxLength: 2_000 });
@@ -47,12 +53,12 @@ const DeliveryModeSchema = Type.Union([
 	Type.Literal("steer"),
 	Type.Literal("followUp"),
 ]);
-const TextContentSchema = closed({
+const TextContentSchema = piOwned({
 	type: Type.Literal("text"),
 	text: Type.String(),
 	textSignature: Type.Optional(Type.String()),
 });
-const ImageContentSchema = closed({
+const ImageContentSchema = piOwned({
 	type: Type.Literal("image"),
 	data: Type.String(),
 	mimeType: NonEmptyStringSchema,
@@ -69,20 +75,20 @@ const ToolCallPointerSchema = closed({
 	toolCallId: NonEmptyStringSchema,
 });
 const ToolContentSchema = Type.Union([TextContentSchema, ImageContentSchema]);
-const ThinkingContentSchema = closed({
+const ThinkingContentSchema = piOwned({
 	type: Type.Literal("thinking"),
 	thinking: Type.String(),
 	thinkingSignature: Type.Optional(Type.String()),
 	redacted: Type.Optional(Type.Boolean()),
 });
-const NativeToolCallSchema = closed({
+const NativeToolCallSchema = piOwned({
 	type: Type.Literal("toolCall"),
 	id: NonEmptyStringSchema,
 	name: NonEmptyStringSchema,
 	arguments: Type.Record(Type.String(), Type.Unknown()),
 	thoughtSignature: Type.Optional(Type.String()),
 });
-const UsageSchema = closed({
+const UsageSchema = piOwned({
 	input: Type.Number(),
 	output: Type.Number(),
 	cacheRead: Type.Number(),
@@ -90,7 +96,7 @@ const UsageSchema = closed({
 	cacheWrite1h: Type.Optional(Type.Number()),
 	reasoning: Type.Optional(Type.Number()),
 	totalTokens: Type.Number(),
-	cost: closed({
+	cost: piOwned({
 		input: Type.Number(),
 		output: Type.Number(),
 		cacheRead: Type.Number(),
@@ -100,19 +106,19 @@ const UsageSchema = closed({
 });
 // Pi 0.86 carries a leading system message plus mid-conversation prompt and tool
 // updates in the transcript, so `message_end` fires for role "system" too.
-const ToolDeclarationSchema = closed({
+const ToolDeclarationSchema = piOwned({
 	name: NonEmptyStringSchema,
 	description: Type.String(),
 	parameters: Type.Record(Type.String(), Type.Unknown()),
 	constrainedSampling: Type.Optional(Type.Unknown()),
 });
-const ToolReferenceSchema = closed({ name: NonEmptyStringSchema });
+const ToolReferenceSchema = piOwned({ name: NonEmptyStringSchema });
 const PromptSectionsSchema = Type.Record(
 	Type.String(),
 	Type.Union([Type.String(), Type.Null()]),
 );
 const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
-	closed({
+	piOwned({
 		role: Type.Literal("system"),
 		content: Type.Union([Type.String(), Type.Array(TextContentSchema)]),
 		sections: Type.Optional(PromptSectionsSchema),
@@ -120,12 +126,12 @@ const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
 		toolsRemoved: Type.Optional(Type.Array(ToolReferenceSchema)),
 		timestamp: Type.Number(),
 	}),
-	closed({
+	piOwned({
 		role: Type.Literal("user"),
 		content: Type.Union([Type.String(), Type.Array(ToolContentSchema)]),
 		timestamp: Type.Number(),
 	}),
-	closed({
+	piOwned({
 		role: Type.Literal("assistant"),
 		content: Type.Array(Type.Union([TextContentSchema, ThinkingContentSchema, NativeToolCallSchema])),
 		api: NonEmptyStringSchema,
@@ -145,7 +151,7 @@ const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
 		rawStopReason: Type.Optional(Type.String()),
 		timestamp: Type.Number(),
 	}),
-	closed({
+	piOwned({
 		role: Type.Literal("toolResult"),
 		toolCallId: NonEmptyStringSchema,
 		toolName: NonEmptyStringSchema,
@@ -156,7 +162,7 @@ const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
 		isError: Type.Boolean(),
 		timestamp: Type.Number(),
 	}),
-	closed({
+	piOwned({
 		role: Type.Literal("bashExecution"),
 		command: Type.String(),
 		output: Type.String(),
@@ -167,7 +173,7 @@ const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
 		timestamp: Type.Number(),
 		excludeFromContext: Type.Optional(Type.Boolean()),
 	}),
-	closed({
+	piOwned({
 		role: Type.Literal("custom"),
 		customType: NonEmptyStringSchema,
 		content: Type.Union([Type.String(), Type.Array(ToolContentSchema)]),
@@ -175,13 +181,13 @@ const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
 		details: Type.Optional(Type.Unknown()),
 		timestamp: Type.Number(),
 	}),
-	closed({
+	piOwned({
 		role: Type.Literal("branchSummary"),
 		summary: Type.String(),
 		fromId: NonEmptyStringSchema,
 		timestamp: Type.Number(),
 	}),
-	closed({
+	piOwned({
 		role: Type.Literal("compactionSummary"),
 		summary: Type.String(),
 		tokensBefore: Type.Number(),
