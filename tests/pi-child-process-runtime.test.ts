@@ -1404,7 +1404,7 @@ test("inherited child input preflights run before coordination consumes transfor
 	}
 });
 
-test("startup snapshot binds selected skills and file-backed launch inputs exactly", {
+test("startup snapshot binds selected skills, Pi built-ins, and file-backed launch inputs exactly", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
 }, async () => {
@@ -1451,7 +1451,7 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 				excludeTools: [],
 				excludeSkills: [],
 				skills: ["review"],
-				extensions: [CHILD_EXTENSION],
+				extensions: [CHILD_EXTENSION, "builtin:llama.cpp"],
 				systemPrompt: { mode: "append", body: systemPromptBody },
 				loadContextFiles: true,
 			},
@@ -1473,7 +1473,7 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			tools: expectedTools,
 			skills: ["review"],
 			skillSources: [{ name: "review", filePath: skillPath }],
-			extensions: [CHILD_EXTENSION],
+			extensions: [CHILD_EXTENSION, "builtin:llama.cpp"],
 			projectTrusted: false,
 			sessionId: expectedSessionId,
 			sessionPath,

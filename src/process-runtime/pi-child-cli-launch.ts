@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 
 import type { AgentRunLaunchConfiguration } from "../templates/agent-configuration.ts";
+import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
 
 export type PiChildCliLaunch = Readonly<{
 	command: string;
@@ -41,7 +42,9 @@ export function buildPiChildCliLaunch(options: {
 		requireAbsolutePath(field, path);
 	}
 	for (const extensionPath of configuration.extensions) {
-		requireAbsolutePath("inherited extension", extensionPath);
+		if (!isBuiltinExtensionPath(extensionPath)) {
+			requireAbsolutePath("inherited extension", extensionPath);
+		}
 	}
 	for (const skillPath of skillPaths) requireAbsolutePath("skill", skillPath);
 	if (skillPaths.length !== configuration.skills.length) {

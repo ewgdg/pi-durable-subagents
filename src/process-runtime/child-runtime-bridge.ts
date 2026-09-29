@@ -80,6 +80,7 @@ import {
 } from "./remote-participant-control.ts";
 import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
 import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
+import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
 const INPUT_MODULE_PATH = fileURLToPath(new URL("./child-runtime-input.ts", import.meta.url));
@@ -896,7 +897,7 @@ async function runtimeSnapshot(
 		runtime.services.resourceLoader.getExtensions().extensions
 			.map((extension) => extension.resolvedPath)
 			.filter((path) => !path.startsWith("<inline:"))
-			.map((path) => canonicalFilePath(path, runtime.cwd)),
+			.map((path) => isBuiltinExtensionPath(path) ? path : canonicalFilePath(path, runtime.cwd)),
 	);
 	const explicitSystemPromptModeValue = process.env[
 		CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE

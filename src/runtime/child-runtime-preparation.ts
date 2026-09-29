@@ -24,6 +24,7 @@ import type {
 	AgentCreationPreset,
 	AgentTemplateCatalogueSnapshot,
 } from "../templates/agent-templates.ts";
+import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
 
 export type AgentRuntimeRole = "ordinary" | "moderator";
 
@@ -131,6 +132,13 @@ export async function prepareChildRuntime(
 	);
 	const configuration: AgentRunLaunchConfiguration = {
 		...launchConfiguration,
+		// Built-ins belong to the parent's Pi runtime rather than its inheritable
+		// extension choice, so `extensions: none` keeps them. They follow the files
+		// because Pi loads file extensions first and the startup snapshot is ordered.
+		extensions: [
+			...launchConfiguration.extensions,
+			...options.parentRuntime.configuration.extensions.filter(isBuiltinExtensionPath),
+		],
 		skills: selectedSkills.map(({ name }) => name),
 	};
 	const preparedFields: PreparedRuntimeFields = {

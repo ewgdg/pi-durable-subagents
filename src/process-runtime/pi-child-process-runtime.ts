@@ -50,6 +50,8 @@ import {
 	type PtyTerminalProjection,
 	type TerminalProjectionFrame,
 } from "./pty-terminal-projection.ts";
+import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
+
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
 /**
@@ -841,7 +843,9 @@ async function assertRuntimeSnapshot(
 			name,
 			filePath: await realpath(skillPaths[index]!),
 		}))),
-		extensions: await Promise.all(expected.extensions.map((path) => realpath(path))),
+		extensions: await Promise.all(expected.extensions.map((path) =>
+			isBuiltinExtensionPath(path) ? path : realpath(path)
+		)),
 		projectTrusted,
 		sessionId: expectedSessionId,
 		sessionPath,

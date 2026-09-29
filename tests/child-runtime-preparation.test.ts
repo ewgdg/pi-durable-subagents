@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -168,6 +168,41 @@ test("extensions none does not inspect or carry inherited extension paths", asyn
 	});
 
 	assert.deepEqual(preparation.configuration.extensions, []);
+});
+
+// Pi 0.99's --no-extensions also disables built-ins, so a child keeps the
+// parent's built-ins only when preparation carries them explicitly.
+test("carries the parent's Pi built-in extensions under inherit and none", async () => {
+	const fixture = await mkdtemp(join(tmpdir(), "child-run-builtin-extensions-"));
+	const agentDir = join(fixture, "agent");
+	const cwd = join(fixture, "workspace");
+	const extensionPath = join(fixture, "parent-extension.ts");
+	await Promise.all([
+		mkdir(agentDir, { recursive: true }),
+		mkdir(cwd, { recursive: true }),
+	]);
+	await writeFile(extensionPath, "export default function () {}\n");
+	const prepare = (extensions: "inherit" | "none") => prepareChildRuntime({
+		agentId: `builtin-${extensions}-child`,
+		role: "ordinary",
+		agentDir,
+		parentRuntime: {
+			configuration: {
+				cwd,
+				model: { provider: "test", modelId: "model" },
+				thinking: "off",
+				extensions: ["builtin:mcp", "<inline:parent-factory>", extensionPath, "builtin:llama.cpp"],
+			},
+			projectTrusted: true,
+		},
+		overrides: { extensions },
+	});
+
+	assert.deepEqual(
+		(await prepare("inherit")).configuration.extensions,
+		[await realpath(extensionPath), "builtin:mcp", "builtin:llama.cpp"],
+	);
+	assert.deepEqual((await prepare("none")).configuration.extensions, ["builtin:mcp", "builtin:llama.cpp"]);
 });
 
 test("uses current parent trust for the same cwd and saved or global trust for a new cwd", async () => {
