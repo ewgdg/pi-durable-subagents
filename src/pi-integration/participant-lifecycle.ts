@@ -163,12 +163,16 @@ export function registerParticipantLifecycle(
 		}
 		return guarded.message ? { message: guarded.message } : undefined;
 	});
-	pi.on("tool_execution_start", (event) =>
-		handlers.toolExecutionStarted({
+	pi.on("tool_execution_start", async (event) => {
+		// Calls a tool makes through ctx.executeTool() (e.g. codemode scripts) carry
+		// parentToolCallId and never enter the transcript. They run inside their
+		// model-issued parent, which was already admitted and reviewed as one call.
+		if (event.parentToolCallId !== undefined) return;
+		await handlers.toolExecutionStarted({
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
-		})
-	);
+		});
+	});
 	// Pi awaits turn_end after the complete issued tool batch and before it builds
 	// the next model context, making this the Steer freeze boundary. Only a turn
 	// with tool results continues to another model turn; a final turn leaves Steer

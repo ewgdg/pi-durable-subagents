@@ -390,6 +390,14 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		toolName: "read",
 		args: { path: "README.md" },
 	}, context);
+	// A codemode script's nested call never appears in the transcript.
+	await pi.emit("tool_execution_start", {
+		type: "tool_execution_start",
+		toolCallId: "tool-call-1/1",
+		toolName: "write",
+		args: { path: "notes.md", content: "" },
+		parentToolCallId: "tool-call-1",
+	}, context);
 	await pi.emit("turn_end", {
 		type: "turn_end",
 		turnIndex: 0,
