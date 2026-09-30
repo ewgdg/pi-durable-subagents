@@ -203,7 +203,7 @@ function ownerHandlers(agentId: string, sessionPath: string, humanInput: () => v
 			executionStarted: async () => [],
 			humanInputSubmitted: async () => { humanInput(); return "continue"; },
 			primaryInputQueued: async () => {}, humanInputMode: async () => "agent",
-			toolResultCommitting: async () => undefined, toolExecutionStarted: async () => {},
+			toolResultCommitting: async () => undefined, rootToolExecutionStarted: async () => {},
 			safeBoundaryReached: async () => {}, executionEnded: async () => {},
 		},
 		coordination: {

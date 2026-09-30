@@ -56,7 +56,7 @@ function handlers(currentFrames: () => readonly ObligationFrame[]): ParticipantL
 		async primaryInputQueued() {},
 		async humanInputMode() { return "agent"; },
 		async toolResultCommitting() {},
-		async toolExecutionStarted() {},
+		async rootToolExecutionStarted() {},
 		async safeBoundaryReached() {},
 		async executionEnded() {},
 	};

@@ -141,7 +141,7 @@ async function recoveredObligationContext(evidence: RequestEvidence, responder: 
 		async primaryInputQueued() {},
 		async humanInputMode() { return "agent"; },
 		async toolResultCommitting() {},
-		async toolExecutionStarted() {},
+		async rootToolExecutionStarted() {},
 		async safeBoundaryReached() {},
 		async executionEnded() {},
 	}, { registerInput: false });

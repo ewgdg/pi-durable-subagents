@@ -333,7 +333,7 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		async toolResultCommitting(input) {
 			calls.push(["human-result", input]);
 		},
-		async toolExecutionStarted(input) {
+		async rootToolExecutionStarted(input) {
 			calls.push(["tool-started", input]);
 		},
 		async safeBoundaryReached() {
@@ -678,7 +678,7 @@ test("participant lifecycle registrar preserves fail-fast handler errors", async
 		],
 		[
 			"tool_execution_start",
-			"toolExecutionStarted",
+			"rootToolExecutionStarted",
 			{
 				type: "tool_execution_start",
 				toolCallId: "tool-call-failure",
@@ -760,7 +760,7 @@ function lifecycleHandlers(
 		},
 		async primaryInputQueued() {},
 		async toolResultCommitting() {},
-		async toolExecutionStarted() {},
+		async rootToolExecutionStarted() {},
 		async safeBoundaryReached() {},
 		async executionEnded() {},
 		...overrides,

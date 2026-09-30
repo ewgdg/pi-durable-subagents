@@ -28,7 +28,7 @@ export type ParticipantToolResult = Readonly<{
 	message: MessageEndEvent["message"];
 }>;
 
-export type ParticipantToolExecution = Readonly<{
+export type ParticipantRootToolExecution = Readonly<{
 	toolCallId: string;
 	toolName: string;
 }>;
@@ -47,7 +47,7 @@ export type ParticipantLifecycleHandlers = Readonly<{
 	toolResultCommitting(
 		input: ParticipantToolResult,
 	): Promise<GuardedParticipantToolResult | undefined>;
-	toolExecutionStarted(input: ParticipantToolExecution): Promise<void>;
+	rootToolExecutionStarted(input: ParticipantRootToolExecution): Promise<void>;
 	safeBoundaryReached(): Promise<void>;
 	executionEnded(): Promise<void>;
 }>;
@@ -168,7 +168,7 @@ export function registerParticipantLifecycle(
 		// parentToolCallId and never enter the transcript. They run inside their
 		// model-issued parent, which was already admitted and reviewed as one call.
 		if (event.parentToolCallId !== undefined) return;
-		await handlers.toolExecutionStarted({
+		await handlers.rootToolExecutionStarted({
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
 		});

@@ -842,7 +842,7 @@ async function handleOwnerRequest(
 		case "runtime.primaryInputQueued":
 		case "runtime.humanInputMode":
 		case "runtime.guardToolResult":
-		case "runtime.toolExecutionStart":
+		case "runtime.rootToolExecutionStart":
 		case "runtime.safeBoundary":
 		case "runtime.executionEnd":
 		case "coordination.observe":

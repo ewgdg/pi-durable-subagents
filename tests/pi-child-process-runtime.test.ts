@@ -1754,7 +1754,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 			async primaryInputQueued() {},
 			async humanInputMode() { return "agent"; },
 			async toolResultCommitting() { return undefined; },
-			async toolExecutionStarted() {},
+			async rootToolExecutionStarted() {},
 			async safeBoundaryReached() {},
 			async executionEnded() {},
 		},

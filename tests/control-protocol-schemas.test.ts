@@ -154,7 +154,7 @@ test("every version-nine method and event has TypeBox payload/result schemas", (
 		"runtime.primaryInputQueued",
 		"runtime.humanInputMode",
 		"runtime.guardToolResult",
-		"runtime.toolExecutionStart",
+		"runtime.rootToolExecutionStart",
 		"runtime.safeBoundary",
 		"runtime.executionEnd",
 		"coordination.observe",

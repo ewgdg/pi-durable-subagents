@@ -1002,7 +1002,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 			async primaryInputQueued() {},
 			async humanInputMode() { return "agent"; },
 			async toolResultCommitting() { return undefined; },
-			async toolExecutionStarted() {},
+			async rootToolExecutionStarted() {},
 			async safeBoundaryReached() {},
 			async executionEnded() {},
 		},

@@ -92,7 +92,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	assert.equal(await proxies.lifecycle.toolResultCommitting({
 		message: { role: "user", content: "candidate", timestamp: 1 },
 	}), undefined);
-	await proxies.lifecycle.toolExecutionStarted({ toolCallId: "tool-1", toolName: "read" });
+	await proxies.lifecycle.rootToolExecutionStarted({ toolCallId: "tool-1", toolName: "read" });
 	await proxies.lifecycle.safeBoundaryReached();
 	await proxies.lifecycle.executionEnded();
 	assert.equal(await proxies.coordination.observe({ operation: "status" }), status);
@@ -141,7 +141,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		["runtime.guardToolResult", {
 			message: { role: "user", content: "candidate", timestamp: 1 },
 		}, undefined],
-		["runtime.toolExecutionStart", { toolCallId: "tool-1", toolName: "read" }, undefined],
+		["runtime.rootToolExecutionStart", { toolCallId: "tool-1", toolName: "read" }, undefined],
 		["runtime.safeBoundary", {}, undefined],
 		["runtime.executionEnd", {}, undefined],
 		["coordination.observe", { operation: "status" }, undefined],
@@ -244,7 +244,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 			async primaryInputQueued() { calls.push(["input-queued"]); },
 			async humanInputMode() { calls.push(["mode"]); return "agent"; },
 			async toolResultCommitting(input) { calls.push(["guard", input]); return undefined; },
-			async toolExecutionStarted(input) { calls.push(["tool", input]); },
+			async rootToolExecutionStarted(input) { calls.push(["tool", input]); },
 			async safeBoundaryReached() { calls.push(["boundary"]); },
 			async executionEnded() { calls.push(["end"]); },
 		},

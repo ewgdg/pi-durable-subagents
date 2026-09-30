@@ -190,7 +190,7 @@ export function participantLifecycleHandlers(
 		},
 		// A previous sequential tool result is committed before Pi admits the next
 		// sibling. Reconcile here so input-required attention cannot cross that barrier.
-		async toolExecutionStarted(input) {
+		async rootToolExecutionStarted(input) {
 			await resolveView().refreshTranscriptFacts();
 			resolveView().reconcileHumanToolResults();
 			resolveView().reconcileCommittedToolResults();
@@ -202,7 +202,7 @@ export function participantLifecycleHandlers(
 		// this execution permit; re-admitting here would hold quota while settled
 		// (starving maxConcurrentAgentRuns) and make the continuation agent_start
 		// beginExecution throw already-holds-capacity. Per-turn sibling admission
-		// stays in toolExecutionStarted above.
+		// stays in rootToolExecutionStarted above.
 		async safeBoundaryReached() {
 			await resolveView().refreshTranscriptFacts();
 			resolveView().reconcileHumanToolResults();

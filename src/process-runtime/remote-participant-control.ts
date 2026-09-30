@@ -136,8 +136,8 @@ export function createControlBackedChildParticipantHandlers(
 		async toolResultCommitting(input) {
 			return (await request("runtime.guardToolResult", input)).result ?? undefined;
 		},
-		async toolExecutionStarted(input) {
-			await request("runtime.toolExecutionStart", input);
+		async rootToolExecutionStarted(input) {
+			await request("runtime.rootToolExecutionStart", input);
 		},
 		async safeBoundaryReached() {
 			await request("runtime.safeBoundary", {});
@@ -229,8 +229,8 @@ export async function dispatchParticipantRequestToOwner(
 				}) ?? null,
 			};
 			break;
-		case "runtime.toolExecutionStart":
-			await handlers.lifecycle.toolExecutionStarted(request.payload);
+		case "runtime.rootToolExecutionStart":
+			await handlers.lifecycle.rootToolExecutionStarted(request.payload);
 			response = {};
 			break;
 		case "runtime.safeBoundary":

@@ -24,7 +24,7 @@ for (const route of ["interactive", "rpc", "extension", "sdk-default"] as const)
 			async primaryInputQueued() {},
 			async humanInputMode() { return "agent"; },
 			async toolResultCommitting() {},
-			async toolExecutionStarted() {},
+			async rootToolExecutionStarted() {},
 			async safeBoundaryReached() {},
 			async executionEnded() {},
 		};

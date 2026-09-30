@@ -792,7 +792,7 @@ export const agentControlMethods = {
 		request: closed({ message: AgentMessageSchema }),
 		response: closed({ result: Type.Union([GuardedHumanToolResultSchema, Type.Null()]) }),
 	},
-	"runtime.toolExecutionStart": {
+	"runtime.rootToolExecutionStart": {
 		request: closed({ toolCallId: NonEmptyStringSchema, toolName: NonEmptyStringSchema }),
 		response: EmptyResponseSchema,
 	},
