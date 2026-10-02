@@ -26,6 +26,12 @@ Select a subagent to enter its complete Pi session and interact with it directly
 
 Coordination does not override Pi's compaction, retry, or transport settings.
 
+### Requests outlive Runs
+
+![A Request becomes an Answer obligation delivered to the Responder; only an Answer or the requester's Cancellation closes it. A Host watcher reminds a stalled Responder, then starts a Moderator that can intervene or escalate to the Workflow Owner.](docs/images/request-obligation.svg)
+
+A Request creates an Answer obligation that the responder owes until it commits an Answer or receives the requester's Cancellation. Stopping, resuming, or failing the Run, or a human typing into the child, leaves it open, and a plain Message creates none. When an obligated Agent stalls, the host sends one reminder, then starts a Moderator that can intervene or escalate to the Workflow Owner. See [ADR 0004](docs/adr/0004-bind-requests-to-obligations-not-task-lifetime.md) and [Operational Incident moderation](docs/operational-incident-moderation.md).
+
 ## Installation
 
 Install directly from the Git repository:

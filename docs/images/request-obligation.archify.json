@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Requests and Answer obligations",
+    "output": ".archify/architecture-request-obligation-20261001-165833/request-obligation.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ewgdg/pi-durable-subagents",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "deb70f777c55c1e50c2a56a9b816d580ccaeed99"
+    },
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "backend": {
+          "label": "Agent"
+        },
+        "messagebus": {
+          "label": "Durable obligation"
+        },
+        "cloud": {
+          "label": "Host runtime"
+        },
+        "security": {
+          "label": "Incident-scoped Agent"
+        },
+        "external": {
+          "label": "Human"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "requester",
+      "type": "backend",
+      "label": "Requester",
+      "sublabel": "any Agent",
+      "pos": [
+        80,
+        400
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docs/agent-messaging.md",
+          "line": 156,
+          "label": "Outbound Requests"
+        }
+      ]
+    },
+    {
+      "id": "obligation",
+      "type": "messagebus",
+      "label": "Answer obligation",
+      "sublabel": "survives Run stop, resume, failure",
+      "pos": [
+        380,
+        220
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "docs/adr/0004-bind-requests-to-obligations-not-task-lifetime.md",
+          "line": 7,
+          "label": "ADR 0004"
+        },
+        {
+          "path": "docs/agent-messaging.md",
+          "line": 382,
+          "label": "Rebuilt by successor Run"
+        }
+      ]
+    },
+    {
+      "id": "responder",
+      "type": "backend",
+      "label": "Responder",
+      "sublabel": "any Agent",
+      "pos": [
+        780,
+        400
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docs/agent-messaging.md",
+          "line": 170,
+          "label": "Answer commitment"
+        }
+      ]
+    },
+    {
+      "id": "owner",
+      "type": "backend",
+      "label": "Workflow Owner",
+      "sublabel": "or Direct Spawner",
+      "pos": [
+        1080,
+        400
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "README.md",
+          "line": 22,
+          "label": "Run supervision"
+        }
+      ]
+    },
+    {
+      "id": "human",
+      "type": "external",
+      "label": "Human",
+      "sublabel": "TUI user",
+      "icon": "person",
+      "pos": [
+        780,
+        580
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docs/human-requests.md",
+          "label": "Human Requests"
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "type": "cloud",
+      "label": "Host watcher",
+      "sublabel": "detects blocked obligations",
+      "pos": [
+        380,
+        40
+      ],
+      "size": [
+        200,
+        84
+      ],
+      "sources": [
+        {
+          "path": "docs/operational-incident-moderation.md",
+          "line": 3,
+          "label": "Incident triggers"
+        }
+      ]
+    },
+    {
+      "id": "moderator",
+      "type": "security",
+      "label": "Moderator",
+      "sublabel": "fresh per incident",
+      "pos": [
+        1080,
+        50
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "CONTEXT.md",
+          "line": 240,
+          "label": "Moderator"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "request",
+      "from": "requester",
+      "to": "obligation",
+      "label": "Request",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "delivered",
+      "from": "obligation",
+      "to": "responder",
+      "label": "delivered",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "answer",
+      "from": "responder",
+      "to": "requester",
+      "label": "Answer closes it",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "id": "message",
+      "from": "requester",
+      "to": "responder",
+      "label": "Message: no obligation",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cancellation",
+      "from": "requester",
+      "to": "obligation",
+      "label": "Cancellation closes it",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "watches",
+      "from": "host",
+      "to": "obligation",
+      "label": "watches",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "reminder",
+      "from": "host",
+      "to": "responder",
+      "label": "first stall: reminder",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "incident",
+      "from": "host",
+      "to": "moderator",
+      "label": "stall persists or Run fails",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "intervene",
+      "from": "moderator",
+      "to": "responder",
+      "label": "inspect, nudge, interrupt",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "escalate",
+      "from": "moderator",
+      "to": "owner",
+      "label": "escalation Request",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "supervise",
+      "from": "owner",
+      "to": "responder",
+      "label": "supervises Runs",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "steps-in",
+      "from": "human",
+      "to": "responder",
+      "label": "steps in, answers ask_user",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "Closing an obligation",
+      "items": [
+        "Only an Answer commit or a delivered Cancellation ends it",
+        "Run stop, resume, failure, and human input leave it open",
+        "A successor Run rebuilds it from transcripts"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Moderator triggers",
+      "items": [
+        "Obligation Stall after one reminder",
+        "Run Failure, Dependency Deadlock, Delivery Stall",
+        "Operation Review of an overdue tool call"
+      ]
+    }
+  ]
+}
