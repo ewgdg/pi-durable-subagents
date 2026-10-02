@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "license": "MIT",
   "description": "Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ewgdg/pi-durable-subagents.git"
+  },
+  "homepage": "https://github.com/ewgdg/pi-durable-subagents#readme",
+  "bugs": {
+    "url": "https://github.com/ewgdg/pi-durable-subagents/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
