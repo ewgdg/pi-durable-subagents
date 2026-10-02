@@ -55,9 +55,9 @@ The package adopts the current session as the Workflow Owner; no separate activa
 Headless modes host the Owner too, with no human in the loop:
 
 ```bash
-pi -p "Delegate the review to two agents and summarize their answers"   # print
-pi --mode json "..."                                                     # JSONL events
-pi --mode rpc                                                            # long-lived RPC client
+pi -p "Delegate the review to two agents and summarize their answers"
+pi --mode json "..."
+pi --mode rpc
 ```
 
 In a headless Workflow, Agents cannot use `ask_user`; they escalate through their supervisor instead. When a child's Run suspends, its supervisor is notified. The Agents selector, Agent views, and activity dock need the TUI. Reports are stored in the session, so reopen it interactively (`pi --session <file>`) to read them. See [Headless Workflows](docs/owner-workflow.md#headless-workflows).
