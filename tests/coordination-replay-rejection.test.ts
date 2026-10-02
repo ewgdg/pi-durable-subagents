@@ -103,12 +103,12 @@ test("Wait and retrieval history with a rejected Request source cannot restore a
 });
 
 test("secondary reminder and recovery readers share record rejection without suppressing valid suffixes", async () => {
- const {inspectObligationReminder,createModelVisibleObligationReminder}=await import("../src/protocol/obligation-reminder.ts");
+ const {obligationReminderEntryIds,createModelVisibleObligationReminder}=await import("../src/protocol/obligation-reminder.ts");
  const {manager,inspect}=fixture();
  manager.appendCustomMessageEntry("agent-coordination.obligation-reminder","not JSON",true);
  const reminder=createModelVisibleObligationReminder({requestMessageId:"q",requestTitle:"Keep"});
  const entryId=manager.appendCustomMessageEntry(reminder.customType,reminder.content,true);
- assert.deepEqual(inspectObligationReminder({recipientAgentId:"reader",transcript:inspect(),requestMessageId:"q",requestTitle:"Keep"}),{agentId:"reader",entryId});
+ assert.deepEqual(obligationReminderEntryIds({recipientAgentId:"reader",transcript:inspect(),requestMessageId:"q",requestTitle:"Keep"}),[entryId]);
  assert.equal(inspectCoordinationRejections(inspect(),"reader").length,1);
 });
 

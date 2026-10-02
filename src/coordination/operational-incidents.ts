@@ -27,8 +27,8 @@ import {
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import {
 	createModelVisibleObligationReminder,
-	inspectObligationReminder,
 	obligationReminderDeliveryId,
+	obligationReminderEntryIds,
 } from "../protocol/obligation-reminder.ts";
 import {
 	createModelVisibleRunFailureRecovery,
@@ -181,6 +181,14 @@ export class OperationalIncidentCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #messages: MessageCoordinator;
+	/**
+	 * Agents a human typed into whose latest settlement happened while still selected.
+	 * Volatile by design: the free reminder it earns is a concession to a live human
+	 * diversion, not a durable obligation fact.
+	 */
+	readonly #humanInterruptedAgentIds = new Set<string>();
+	/** Per Request, indexes among its committed reminders that were free. Volatile. */
+	readonly #freeReminderIndexesByRequest = new Map<string, Set<number>>();
 	readonly #integrateAgent: (record: AgentRecord) => void;
 	readonly #isShuttingDown: () => boolean;
 	readonly #reportError: (error: unknown) => void;
@@ -268,6 +276,11 @@ export class OperationalIncidentCoordinator {
 		this.#integratedAgentIds.add(record.identity.agentId);
 		record.host.addSettledHandler((_handle, settlement) => {
 			if (settlement !== "settled") return;
+			// Only a Stall that begins while the human still has the Agent selected
+			// earns a free reminder; settling after deselection is the Agent's own lapse.
+			if (!record.host.hasRetentionReason("interactive_selection")) {
+				this.#humanInterruptedAgentIds.delete(record.identity.agentId);
+			}
 			this.#scheduleReconciliationAfterHostLane(record);
 		});
 		record.host.addEndedHandler((handle, cause, failure) => this.#containEvidenceInspection(() => {
@@ -433,6 +446,11 @@ export class OperationalIncidentCoordinator {
 		if (!source) return;
 		this.#appendRuntimeReportFinding(source, finding);
 		this.#onAttentionChanged();
+	}
+
+	/** Human input that reached the Agent itself, not a Human Answer. */
+	noteHumanInterruption(agentId: string): void {
+		this.#humanInterruptedAgentIds.add(agentId);
 	}
 
 	deliveryProgressChanged(): void {
@@ -850,18 +868,36 @@ export class OperationalIncidentCoordinator {
 		}
 		const recipient = this.#requireAgent(snapshot.agentId);
 		const requestTitle = this.#messages.requestTitle(requestId);
-		const inspectProof = () => inspectObligationReminder({
+		const reminderEntryIds = () => obligationReminderEntryIds({
 			recipientAgentId: snapshot.agentId,
 			transcript: recipient.transcript.inspect(),
 			requestMessageId: requestId,
 			requestTitle,
 		});
+		let freeIndexes = this.#freeReminderIndexesByRequest.get(requestId);
+		// A Stall that began during human interruption gets a free reminder that
+		// leaves the Request's one standing reminder unused.
+		const freeReminderIndex = this.#humanInterruptedAgentIds.delete(snapshot.agentId)
+			? reminderEntryIds().length
+			: undefined;
+		if (freeReminderIndex !== undefined) {
+			if (!freeIndexes) this.#freeReminderIndexesByRequest.set(requestId, (freeIndexes = new Set()));
+			freeIndexes.add(freeReminderIndex);
+		}
+		const isStanding = (_entryId: string, index: number) => !freeIndexes?.has(index);
+		const inspectProof = () => {
+			const entryIds = reminderEntryIds();
+			const entryId = freeReminderIndex === undefined
+				? entryIds.find(isStanding)
+				: entryIds[freeReminderIndex];
+			return entryId === undefined ? undefined : { agentId: snapshot.agentId, entryId };
+		};
 		if (inspectProof()) return false;
 		// Settlement reconciliation can run while the affected Agent lane is held.
 		// Schedule admission without awaiting that lane so the reminder cannot
 		// deadlock behind the reconciliation that requested it.
 		void this.#messages.admitCustomDelivery(recipient, {
-			messageId: obligationReminderDeliveryId(requestId),
+			messageId: obligationReminderDeliveryId(requestId, freeReminderIndex),
 			deliveryMode: "deferred",
 			customMessage: createModelVisibleObligationReminder({
 				requestMessageId: requestId,

@@ -7,7 +7,7 @@ import { transcriptFromSessionManager } from "../src/pi-integration/session-mana
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
 import {
 	createModelVisibleObligationReminder,
-	inspectObligationReminder,
+	obligationReminderEntryIds,
 	OBLIGATION_REMINDER_GUIDANCE,
 	obligationReminderDeliveryId,
 } from "../src/protocol/obligation-reminder.ts";
@@ -39,9 +39,13 @@ test("Obligation Reminder contains the exact Request title and durable correlati
 		obligationReminderDeliveryId("request-1"),
 		JSON.stringify(["obligation_reminder", "request-1"]),
 	);
+	assert.equal(
+		obligationReminderDeliveryId("request-1", 1),
+		JSON.stringify(["obligation_reminder", "request-1", "after_human_interruption", 1]),
+	);
 });
 
-test("Obligation Reminder inspection proves one exact runtime-authored Delivery", () => {
+test("Obligation Reminder entries list each runtime-authored Delivery in transcript order", () => {
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
@@ -51,36 +55,18 @@ test("Obligation Reminder inspection proves one exact runtime-authored Delivery"
 		requestMessageId: "request-2",
 		requestTitle: "Provide the exact Answer now.",
 	});
-	sessionManager.appendCustomMessageEntry(
-		reminder.customType,
-		reminder.content,
-		reminder.display,
-	);
-	const delivery = sessionManager.getLeafEntry();
-	assert.ok(delivery);
-
-	assert.deepEqual(inspectObligationReminder({
+	const appendReminder = () =>
+		sessionManager.appendCustomMessageEntry(reminder.customType, reminder.content, reminder.display);
+	const entryIds = () => obligationReminderEntryIds({
 		recipientAgentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		requestMessageId: "request-2",
 		requestTitle: "Provide the exact Answer now.",
-	}), {
-		agentId: recipientAgentId,
-		entryId: delivery.id,
 	});
 
-	sessionManager.appendCustomMessageEntry(
-		reminder.customType,
-		reminder.content,
-		reminder.display,
-	);
-	assert.throws(
-		() => inspectObligationReminder({
-			recipientAgentId,
-			transcript: transcriptFromSessionManager(sessionManager).inspect(),
-			requestMessageId: "request-2",
-			requestTitle: "Provide the exact Answer now.",
-		}),
-		/duplicate Deliveries/,
-	);
+	assert.deepEqual(entryIds(), []);
+	const first = appendReminder();
+	// Free reminders after human interruption make several Deliveries legitimate.
+	const second = appendReminder();
+	assert.deepEqual(entryIds(), [first, second]);
 });

@@ -9,7 +9,6 @@ import { OBLIGATION_REMINDER_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import {
 	ProtocolInvariantError,
 } from "./identities.ts";
-import type { EntryPointer } from "./moderator-input.ts";
 
 export { OBLIGATION_REMINDER_CUSTOM_TYPE } from "./custom-entry-types.ts";
 
@@ -39,16 +38,32 @@ export function createModelVisibleObligationReminder(options: {
 	};
 }
 
-export function obligationReminderDeliveryId(requestMessageId: string): string {
-	return JSON.stringify(["obligation_reminder", requestMessageId]);
+/**
+ * A free reminder is keyed by its position among the Request's reminders, so it
+ * is not deduplicated against the standing reminder or an earlier free one.
+ */
+export function obligationReminderDeliveryId(
+	requestMessageId: string,
+	freeReminderIndex?: number,
+): string {
+	return JSON.stringify(
+		freeReminderIndex === undefined
+			? ["obligation_reminder", requestMessageId]
+			: ["obligation_reminder", requestMessageId, "after_human_interruption", freeReminderIndex],
+	);
 }
 
-export function inspectObligationReminder(options: {
+/**
+ * Committed reminders for one Request, in transcript order. A Request may have
+ * several: free reminders after human interruption are tracked only in memory,
+ * so the transcript alone cannot tell them from the standing reminder.
+ */
+export function obligationReminderEntryIds(options: {
 	recipientAgentId: string;
 	transcript: TranscriptInspection;
 	requestMessageId: string;
 	requestTitle: string;
-}): EntryPointer | undefined {
+}): string[] {
 	const expected = reminderFor(options);
 	const matches: string[] = [];
 	for (const entry of coordinationEntries(options.transcript, options.recipientAgentId, `custom:${OBLIGATION_REMINDER_CUSTOM_TYPE}`)) {
@@ -63,12 +78,7 @@ export function inspectObligationReminder(options: {
 		}
 		matches.push(entry.id);
 	}
-	if (matches.length > 1) {
-		throw new ProtocolInvariantError("Obligation Reminder has duplicate Deliveries");
-	}
-	return matches[0]
-		? { agentId: options.recipientAgentId, entryId: matches[0] }
-		: undefined;
+	return matches;
 }
 
 function reminderFor(options: {

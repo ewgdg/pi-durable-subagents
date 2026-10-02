@@ -1720,6 +1720,9 @@ export class WorkflowCoordinator {
 		if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
 			return Promise.resolve("submitted");
 		}
+		// Mark before submission: the settlement this input causes must observe the mark
+		// so a Stall after deselection can clear it.
+		this.#operationalIncidents.noteHumanInterruption(agentId);
 		return this.#agentViewLane.run(async () => {
 			const active = this.#activeAgentView;
 			if (!active || active.record.identity.agentId !== agentId) {

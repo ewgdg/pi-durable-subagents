@@ -389,6 +389,245 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 	}
 });
 
+test("human input after a used reminder grants one more reminder before Obligation Stall moderation", async (t) => {
+	let markReminderTurnStarted!: () => void;
+	const reminderTurnStarted = new Promise<void>((resolve) => {
+		markReminderTurnStarted = resolve;
+	});
+	let releaseReminderTurn!: () => void;
+	const reminderTurnGate = new Promise<void>((resolve) => {
+		releaseReminderTurn = resolve;
+	});
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		physicalDisplay: true,
+		implicitModeratorResponses: false,
+	});
+	try {
+		host.model.setResponses([
+			fauxAssistantMessage("I settled without answering the Creation Request."),
+			async () => {
+				markReminderTurnStarted();
+				await reminderTurnGate;
+				return fauxAssistantMessage("I settled while selected after the first reminder.");
+			},
+			fauxAssistantMessage("Answering the human question about my status."),
+			fauxAssistantMessage("I remained settled after the second reminder."),
+			fauxAssistantMessage("I will inspect the stalled Agent."),
+		]);
+		const spawn = await executeAndCommitRegisteredTool(
+			host.session,
+			"agent_spawn",
+			"spawn-human-input-reminder",
+			{
+				title: "Fixture request",
+				request: "Settle twice without answering, with a human question in between.",
+				label: "Human Input Reminder Worker",
+			},
+		);
+		const agentId = (spawn.details as { agentId: string }).agentId;
+		await reminderTurnStarted;
+		const opened = await openLiveAgentView(host, agentId);
+		releaseReminderTurn();
+		await waitForCondition(async () => {
+			const status = await observeStatus(host, agentId);
+			return status.run.phase === "live" && status.run.work === "settled";
+		});
+
+		const humanQuestion = "What is your status?";
+		for (const character of humanQuestion) opened.view.handleInput?.(character);
+		await waitForCondition(() =>
+			stripTerminalSequences(opened.view.render(80).join("\n")).includes(humanQuestion)
+		);
+		opened.view.handleInput?.("\r");
+		const sessionPath = await sessionPathFor(host, agentId);
+		await waitForTranscriptEntry(sessionPath, (entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			JSON.stringify(entry.message.content).includes("Answering the human question")
+		);
+		await waitForCondition(async () => {
+			const status = await observeStatus(host, agentId);
+			return status.run.phase === "live" && status.run.work === "settled";
+		});
+		assert.equal((await findModerators(host)).length, 0);
+
+		await returnAgentViewToOwner(host, opened);
+		const moderator = await waitForModeratorKind(host, "obligation_stall");
+		assert.equal(moderatorAffectedAgentId(moderator.path), agentId);
+		const reminders = SessionManager.open(sessionPath).getEntries().filter(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.obligation-reminder",
+		);
+		assert.equal(reminders.length, 2);
+	} finally {
+		releaseReminderTurn();
+		await host.runtime.dispose();
+	}
+});
+
+test("the reminder after human input is free and leaves the standing reminder for later", async (t) => {
+	let markChildStarted!: () => void;
+	const childStarted = new Promise<void>((resolve) => {
+		markChildStarted = resolve;
+	});
+	let releaseChild!: () => void;
+	const childGate = new Promise<void>((resolve) => {
+		releaseChild = resolve;
+	});
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		physicalDisplay: true,
+		implicitModeratorResponses: false,
+	});
+	try {
+		host.model.setResponses([
+			async () => {
+				markChildStarted();
+				await childGate;
+				return fauxAssistantMessage("I settled while selected without answering.");
+			},
+			fauxAssistantMessage("Answering the human question about my status."),
+			fauxAssistantMessage("I remained settled after the free reminder."),
+			fauxAssistantMessage("I remained settled after the standing reminder."),
+			fauxAssistantMessage("I will inspect the stalled Agent."),
+		]);
+		const spawn = await executeAndCommitRegisteredTool(
+			host.session,
+			"agent_spawn",
+			"spawn-free-reminder",
+			{
+				title: "Fixture request",
+				request: "Settle without answering, with a human question first.",
+				label: "Free Reminder Worker",
+			},
+		);
+		const agentId = (spawn.details as { agentId: string }).agentId;
+		await childStarted;
+		const opened = await openLiveAgentView(host, agentId);
+		releaseChild();
+		await waitForCondition(async () => {
+			const status = await observeStatus(host, agentId);
+			return status.run.phase === "live" && status.run.work === "settled";
+		});
+
+		const humanQuestion = "What is your status?";
+		for (const character of humanQuestion) opened.view.handleInput?.(character);
+		await waitForCondition(() =>
+			stripTerminalSequences(opened.view.render(80).join("\n")).includes(humanQuestion)
+		);
+		opened.view.handleInput?.("\r");
+		const sessionPath = await sessionPathFor(host, agentId);
+		await waitForTranscriptEntry(sessionPath, (entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			JSON.stringify(entry.message.content).includes("Answering the human question")
+		);
+		await waitForCondition(async () => {
+			const status = await observeStatus(host, agentId);
+			return status.run.phase === "live" && status.run.work === "settled";
+		});
+
+		await returnAgentViewToOwner(host, opened);
+		const moderator = await waitForModeratorKind(host, "obligation_stall");
+		assert.equal(moderatorAffectedAgentId(moderator.path), agentId);
+		const reminders = SessionManager.open(sessionPath).getEntries().filter(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.obligation-reminder",
+		);
+		assert.equal(reminders.length, 2);
+	} finally {
+		releaseChild();
+		await host.runtime.dispose();
+	}
+});
+
+test("human input earns no free reminder when the Agent stalls after deselection", async (t) => {
+	let markChildStarted!: () => void;
+	const childStarted = new Promise<void>((resolve) => {
+		markChildStarted = resolve;
+	});
+	let releaseChild!: () => void;
+	const childGate = new Promise<void>((resolve) => {
+		releaseChild = resolve;
+	});
+	let markHumanAnswerStarted!: () => void;
+	const humanAnswerStarted = new Promise<void>((resolve) => {
+		markHumanAnswerStarted = resolve;
+	});
+	let releaseHumanAnswer!: () => void;
+	const humanAnswerGate = new Promise<void>((resolve) => {
+		releaseHumanAnswer = resolve;
+	});
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		physicalDisplay: true,
+		implicitModeratorResponses: false,
+	});
+	try {
+		host.model.setResponses([
+			async () => {
+				markChildStarted();
+				await childGate;
+				return fauxAssistantMessage("I settled while selected without answering.");
+			},
+			async () => {
+				markHumanAnswerStarted();
+				await humanAnswerGate;
+				return fauxAssistantMessage("Answering the human question after deselection.");
+			},
+			fauxAssistantMessage("I remained settled after the standing reminder."),
+			fauxAssistantMessage("I will inspect the stalled Agent."),
+		]);
+		const spawn = await executeAndCommitRegisteredTool(
+			host.session,
+			"agent_spawn",
+			"spawn-unselected-stall-after-human-input",
+			{
+				title: "Fixture request",
+				request: "Settle without answering after a human question.",
+				label: "Unselected Stall Worker",
+			},
+		);
+		const agentId = (spawn.details as { agentId: string }).agentId;
+		await childStarted;
+		const opened = await openLiveAgentView(host, agentId);
+		releaseChild();
+		await waitForCondition(async () => {
+			const status = await observeStatus(host, agentId);
+			return status.run.phase === "live" && status.run.work === "settled";
+		});
+
+		const humanQuestion = "What is your status?";
+		for (const character of humanQuestion) opened.view.handleInput?.(character);
+		await waitForCondition(() =>
+			stripTerminalSequences(opened.view.render(80).join("\n")).includes(humanQuestion)
+		);
+		opened.view.handleInput?.("\r");
+		await humanAnswerStarted;
+		await returnAgentViewToOwner(host, opened);
+		releaseHumanAnswer();
+
+		const moderator = await waitForModeratorKind(host, "obligation_stall");
+		assert.equal(moderatorAffectedAgentId(moderator.path), agentId);
+		const reminders = SessionManager.open(await sessionPathFor(host, agentId)).getEntries().filter(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.obligation-reminder",
+		);
+		assert.equal(reminders.length, 1);
+	} finally {
+		releaseChild();
+		releaseHumanAnswer();
+		await host.runtime.dispose();
+	}
+});
+
 test("an overdue root call starts a Moderator outside full child capacity", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-"));
 	const toolStartedPath = join(cwd, "execution-gate.started");

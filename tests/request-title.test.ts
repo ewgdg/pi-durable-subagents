@@ -12,7 +12,7 @@ import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { obligationStack } from "../src/protocol/obligation-focus.ts";
 import { resolveCreationRequest } from "../src/protocol/creation-request.ts";
-import { createModelVisibleObligationReminder, inspectObligationReminder, OBLIGATION_REMINDER_GUIDANCE } from "../src/protocol/obligation-reminder.ts";
+import { createModelVisibleObligationReminder, obligationReminderEntryIds, OBLIGATION_REMINDER_GUIDANCE } from "../src/protocol/obligation-reminder.ts";
 
 test("obligation reminders use the exact Request title, not a body excerpt", () => {
 	const requestTitle = "Confirm checkpoint constants";
@@ -22,8 +22,8 @@ test("obligation reminders use the exact Request title, not a body excerpt", () 
 	const recipient = SessionManager.inMemory(process.cwd(), { id: "recipient" });
 	recipient.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: "recipient" });
 	recipient.appendCustomMessageEntry(reminder.customType, reminder.content, reminder.display);
-	const inspect = (title: string) => inspectObligationReminder({ recipientAgentId: "recipient", transcript: transcriptFromSessionManager(recipient).inspect(), requestMessageId: "request", requestTitle: title });
-	assert.ok(inspect(requestTitle));
+	const inspect = (title: string) => obligationReminderEntryIds({ recipientAgentId: "recipient", transcript: transcriptFromSessionManager(recipient).inspect(), requestMessageId: "request", requestTitle: title });
+	assert.equal(inspect(requestTitle).length, 1);
 	assert.throws(() => inspect("A different request"), /contradicts/);
 });
 
