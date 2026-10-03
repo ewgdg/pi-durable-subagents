@@ -70,8 +70,11 @@ models:
     thinking: high
   - id: deepseek/deepseek-v4-flash
     thinking: medium
-skills:
-  - research
+excludeTools:
+  - edit
+  - write
+excludeSkills:
+  - tdd
 extensions: inherit
 systemPromptMode: append
 loadContextFiles: true
