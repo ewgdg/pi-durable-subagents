@@ -3,6 +3,7 @@ import * as hostPi from "@earendil-works/pi-coding-agent";
 import * as hostTui from "@earendil-works/pi-tui";
 import * as hostTypebox from "typebox";
 import type {
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionHandler,
 	SessionStartEvent,
@@ -69,7 +70,15 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	// official tool definitions now so historical calls receive their renderers.
 	registerOwnerAgentTools(pi, resolveAdmittedOwnerView);
 
+	let bootstrappedSessionManager: ExtensionContext["sessionManager"] | undefined;
 	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
+		// Pi's RPC mode binds a replaced session's extensions twice (e.g. on
+		// switch_session), repeating session_start with no session_shutdown between.
+		// Re-admitting would shut down the live Workflow while handlers bound to it
+		// stay registered, so a repeat for the same session is a no-op. Genuine
+		// replacements and reloads always bring a new session manager or extension instance.
+		if (ctx.sessionManager === bootstrappedSessionManager) return;
+		bootstrappedSessionManager = ctx.sessionManager;
 		ownerAdmissionState = "pending";
 		ownerIdentified = false;
 		deactivateOwnerAgentTools(pi);

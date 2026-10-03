@@ -96,6 +96,42 @@ test("an RPC Owner completes spawn, agent_wait, and asynchronous Answer Delivery
 	await assertNoneAlive(agentPids);
 });
 
+test("an RPC Owner keeps admitting prompts after resuming its own session", { timeout: 60_000 }, async (t) => {
+	const child = launch("rpc");
+	t.after(() => { child.kill("SIGKILL"); });
+	let stdout = "";
+	child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+	const ownerDoneCount = () => stdout.split("\n").filter((line) =>
+		line.startsWith('{"type":"message_end"') && line.includes(OWNER_DONE)).length;
+	const until = async (description: string, condition: () => boolean) => {
+		const deadline = Date.now() + EXIT_TIMEOUT_MS;
+		while (!condition()) {
+			assert.ok(child.exitCode === null, `RPC fixture exited while waiting for ${description}:\n${stdout}`);
+			assert.ok(Date.now() < deadline, `Timed out waiting for ${description}:\n${stdout}`);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	};
+	const send = (command: Record<string, unknown>) => child.stdin.write(`${JSON.stringify(command)}\n`);
+
+	send({ id: "prompt-1", type: "prompt", message: OWNER_PROMPT });
+	await until("the first Owner turn", () => ownerDoneCount() === 1);
+	send({ id: "state-1", type: "get_state" });
+	await until("the session state", () => stdout.includes('"id":"state-1"'));
+	const stateLine = stdout.split("\n").find((line) => line.includes('"id":"state-1"'))!;
+	const sessionFile = (JSON.parse(stateLine) as { data: { sessionFile: string } }).data.sessionFile;
+
+	// Hosts such as T3 Code resume the live session file when a thread's model
+	// changes. Pi's RPC mode binds the resumed session's extensions twice.
+	send({ id: "switch-1", type: "switch_session", sessionPath: sessionFile });
+	await until("the session switch", () => stdout.includes('"id":"switch-1","type":"response","command":"switch_session","success":true'));
+	send({ id: "prompt-2", type: "prompt", message: OWNER_PROMPT });
+	await until("the resumed Owner turn", () => ownerDoneCount() === 2 || stdout.includes("Agent input failed"));
+	assert.deepEqual(stdout.match(/Agent input failed[^"]*/g) ?? [], []);
+
+	child.stdin.end();
+	assert.equal(await exitCode(child), 0);
+});
+
 test("a print-mode Owner joins and receives asynchronous Answers before it exits", { timeout: 60_000 }, async () => {
 	const child = launch("print");
 	let stdout = "";
