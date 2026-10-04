@@ -45,6 +45,7 @@ import {
 	renderHumanRequestResult,
 	renderModeratorControlCall,
 	renderModeratorControlResult,
+	renderToolError,
 } from "./coordination-renderers.ts";
 import {
 	renderAgentMessageCall,
@@ -676,7 +677,11 @@ export function registerParticipantCoordinationTools<
 					? resolveAnswerTargetAgent?.(context.toolCallId)
 					: undefined,
 			),
-		renderResult: renderAgentMessageResult,
+		// A thrown call (e.g. an Answer that is not the turn's only tool call) has no receipt details.
+		renderResult: (result, options, theme, context) =>
+			!options.isPartial && context.isError
+				? renderToolError(result, options, theme)
+				: renderAgentMessageResult(result, options, theme),
 		async execute(toolCallId, parameters, _signal, _onUpdate, ctx) {
 			if (parameters.operation !== "answer") return toolResult(await availableHandlers.message(toolCallId, parameters));
 			const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();

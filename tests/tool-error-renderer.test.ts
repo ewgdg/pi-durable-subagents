@@ -18,7 +18,7 @@ const theme = {
 } as Theme;
 const errorText = "invalid_input: requested operation rejected";
 
-for (const name of ["agent_spawn", "agent_wait", "agent_control", "moderator_control"]) {
+for (const name of ["agent_spawn", "agent_message", "agent_wait", "agent_control", "moderator_control"]) {
 	test(`${name} shows a final native error instead of a pending or receipt summary`, () => {
 		const tool = tools.get(name);
 		assert.ok(tool?.renderResult, `${name} is registered with a result renderer`);
