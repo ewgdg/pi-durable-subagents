@@ -198,6 +198,10 @@ _Avoid_: Agent termination
 **Run Failure**:
 The unexpected terminal end of one exact Agent Run after Pi's user-configured native recovery behavior has finished, when the Runtime could not retain the Run — a child Runtime that is already unavailable, a coordination fence, or a startup failure. A terminal error from a still-usable Runtime is a Run Suspension instead. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically. An open Interactive Selection keeps the same Agent Runtime and presentation while the Agent becomes Dormant; later input or coordination may admit a successor in that Runtime.
 
+**Progress Verdict**:
+The single classification of an Agent's progress shared by every Operational Incident detector and Owner Settlement Parking: Progressing, Waiting, Stalled, or Inactive. Progressing means execution or deliverable work will advance it; Waiting means it is parked on a legitimate external condition such as human attention, Interactive Selection, a Hold, Run Suspension, or execution capacity; Inactive means dormant or failed. A settled Agent takes the best verdict among its unanswered outgoing Requests, so one Progressing or Waiting dependency keeps it from being Stalled.
+_Avoid_: progress source check, exclusion
+
 **Dependency Deadlock**:
 A live closed component of settled Agent Runs whose unanswered Agent-owned outbound dependencies remain within the component, with no actionable input or external progress source. A committed Answer removes its dependency edge even while requester-side Answer Delivery remains outstanding for Wait. Ineligible queued Delivery and upstream dependants are not progress. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.
 
