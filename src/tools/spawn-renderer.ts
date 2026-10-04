@@ -50,7 +50,7 @@ export function renderAgentSpawnResult(
 ): Text {
 	if (!options.isPartial && context.isError) return renderToolError(result, options, theme);
 	if (options.isPartial || result.details === undefined) {
-		return new Text(theme.fg("warning", "resolving configuration…"), 0, 0);
+		return new Text(theme.fg("accent", "resolving configuration…"), 0, 0);
 	}
 	const receipt = result.details;
 	let text = theme.fg(spawnStatusColor(receipt.spawnStatus), receipt.spawnStatus);

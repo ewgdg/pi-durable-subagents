@@ -174,7 +174,7 @@ export function renderAgentMessageResult(
 ): Component {
 	const container = new Container();
 	if (options.isPartial) {
-		container.addChild(new Text(theme.fg("warning", "scheduling…"), 0, 0));
+		container.addChild(new Text(theme.fg("accent", "scheduling…"), 0, 0));
 		return container;
 	}
 	const receipt = result.details;

@@ -13,7 +13,7 @@ import {
 	renderAgentMessageCall,
 	renderAgentMessageResult,
 } from "../src/tools/message-renderer.ts";
-import { renderAgentSpawnCall } from "../src/tools/spawn-renderer.ts";
+import { renderAgentSpawnCall, renderAgentSpawnResult } from "../src/tools/spawn-renderer.ts";
 import { renderMessageProjection } from "../src/tools/message-delivery-renderer.ts";
 
 const plainTheme = {
@@ -402,4 +402,19 @@ for (const expanded of [false, true]) test(`Answer uses the ordinary messaging r
 		details: receipt }, { expanded, isPartial: false }, plainTheme).render(100).join("\n");
 	assert.equal(rendered.split("\n")[0]?.trimEnd(), "sent · Fixture request · answer");
 	assert.equal(rendered.includes('"requestMessageId"'), expanded);
+});
+
+test("in-flight Message and Spawn progress uses a calm role, not a warning", () => {
+	const taggedTheme = {
+		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+	const partial = { expanded: false, isPartial: true };
+	const pending = { content: [], details: undefined } as never;
+	const message = renderAgentMessageResult(pending, partial, taggedTheme).render(120).join("\n");
+	const spawn = renderAgentSpawnResult(pending, partial, taggedTheme, { args: {} as never, isError: false })
+		.render(120).join("\n");
+
+	assert.match(message, /<accent>scheduling…<\/accent>/);
+	assert.match(spawn, /<accent>resolving configuration…<\/accent>/);
 });
