@@ -214,6 +214,44 @@ test("Live keeps Dormant ancestors as browsing paths and Dormant keeps only full
 			[], { tab: "live", rows: ["→ parent(1)*", "owner"] }],
 		["a Dormant Owner is only the Owner destination", { live: [], dormant: [dormant("owner", null), dormant("worker")] },
 			[{ kind: "next_tab" }], { rows: ["→ worker", "owner*"] }],
+		...(["starting", "ending"] as const).map((phase): Scenario => [
+			`a Dormant ancestor of a ${phase} Agent stays on Live`,
+			{ live: [owner, { ...live("child", "parent"), run: { phase, attention: "none", retentionReasons: [] } }], dormant: [dormant("parent")] },
+			[], { tab: "live", rows: ["→ parent(1)", "owner*"] },
+		]),
+		["going to the root focuses a Dormant top-level ancestor", {
+			live: [owner, live("root"), live("leaf", "sleeping")], dormant: [dormant("sleeping")],
+			selectedAgentId: "leaf", humanAttention: [human("request", "leaf")],
+		}, [{ kind: "go_to_root" }], { path: "", rows: ["decide:request", "root", "→ sleeping(1)", "owner"] }],
+	]);
+});
+
+test("a refresh moves a branch between Live and Dormant once its last live descendant changes", () => {
+	const parentAndChild = { live: [owner, live("parent"), live("child", "parent")] };
+	const branchEnds = refresh({ live: [owner], dormant: [dormant("parent"), dormant("child", "parent")] });
+	const childResumes = refresh({ live: [owner, live("child", "parent")], dormant: [dormant("parent")] });
+	assertScenarios([
+		["the focused Dormant parent stays while its branch ends", parentAndChild, [branchEnds],
+			{ tab: "live", rows: ["→ parent", "owner*"] }],
+		["leaving it moves the whole branch to Dormant", parentAndChild, [branchEnds, { kind: "focus_next" }],
+			{ rows: ["→ owner*"], empty: "no_live_agents" }],
+		["the ended branch is listed on Dormant", parentAndChild, [branchEnds, { kind: "focus_next" }, { kind: "next_tab" }],
+			{ tab: "dormant", rows: ["→ parent", "child", "owner*"] }],
+		["a resumed child leaves the focused parent on Dormant until focus leaves", parentAndChild,
+			[branchEnds, { kind: "focus_next" }, { kind: "next_tab" }, childResumes],
+			{ tab: "dormant", rows: ["→ parent", "owner*"] }],
+		["leaving it empties Dormant", parentAndChild,
+			[branchEnds, { kind: "focus_next" }, { kind: "next_tab" }, childResumes, { kind: "focus_next" }],
+			{ rows: ["→ owner*"], empty: "no_dormant_agents" }],
+		["a resumed child takes the branch back to Live", parentAndChild,
+			[branchEnds, { kind: "focus_next" }, { kind: "next_tab" }, childResumes, { kind: "focus_next" }, { kind: "previous_tab" }],
+			{ tab: "live", rows: ["parent(1)", "→ owner*"] }],
+		["the resumed branch browses from its Dormant parent", parentAndChild,
+			[branchEnds, { kind: "focus_next" }, { kind: "next_tab" }, childResumes, { kind: "previous_tab" }, { kind: "focus_previous" }, { kind: "open_children" }],
+			{ path: "parent", rows: ["→ child", "owner*"] }],
+		["a refresh publishes quarantined identities", {},
+			[refresh({ live: [owner], dormant: [], quarantined: ["zx-9"], quarantinedCandidateCount: 1 })],
+			{ tabs: "live dormant quarantined" }],
 	]);
 });
 
