@@ -16,7 +16,8 @@ This matrix records the production process-backed Agent-view contract and its re
 - `src/presentation/physical-terminal-attachment.ts` — Owner TUI suspension, atomic handoff buffering, physical-output backpressure, direct raw child PTY routing, retargeting, terminal reset, and Owner restoration.
 - `src/presentation/agent-view-surface.ts` — attachment lifecycle, failure handling, and host-close integration.
 - `src/coordination/durable-agent-view.ts` — one retargetable Workflow attachment.
-- `src/coordination/workflow-coordinator.ts` — view authority, retention, retargeting, Human Attention focus, and shutdown.
+- `src/coordination/interactive-selection.ts` — Interactive Selection: the view lane and single active view, `interactive_selection` retention, retargeting, Human Attention focus, selected-view human input, and native quit of the selected child.
+- `src/coordination/workflow-coordinator.ts` — the participant view facade over Interactive Selection, and Workflow shutdown.
 
 ## Process and terminal isolation
 

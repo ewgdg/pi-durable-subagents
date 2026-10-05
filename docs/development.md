@@ -6,6 +6,12 @@ Pi supplies the package's Pi peer modules. Compatibility is defined jointly by a
 
 Process-isolated Agent Runtimes select local IPC internally: Unix-domain sockets on Unix platforms and native named pipes on Windows. This transport choice is not user-configurable.
 
+## Coordination module wiring
+
+The Workflow Coordinator is a composition root. It constructs coordination modules in dependency order: Message coordination, Agent Wait, Human Requests, Run Supervision, Operational Incident detection, Interactive Selection, then the Spawner. It holds no closure that reads a module constructed after it; callbacks into its own steps (Agent integration, begin shutdown, participant view resolution) are allowed.
+
+A protocol link is one whose absence changes coordination outcomes: Delivery, waits, incidents, Operation Review, or shutdown. Each one is either a required constructor argument, for commands a module issues, or a subscription the consuming module makes in its own constructor, for notifications it consumes. For example, Operational Incident detection subscribes to Message coordination's Delivery progress and to Human Requests' human waiting, and Interactive Selection subscribes to native quit of child Runtimes. A test that hand-wires these modules therefore gets the production glue, and omitting a link is a type error. Optional callbacks remain only for clocks, boundary hooks used by tests, presentation adapters, and the Agent activity change notification.
+
 ## Running tests
 
 `npm test` is the complete regression suite. Use the supervised npm entry points for all development runs: `test:fast` (four concurrent files), `test:process` (serial), and `test:conformance` (serial, the focused compatibility gate). Direct `node --test` execution bypasses containment and is not supported for development runs.
