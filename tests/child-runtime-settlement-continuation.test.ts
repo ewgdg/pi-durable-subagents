@@ -1,55 +1,54 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { MessageDeliveryScheduler } from "../src/coordination/message-delivery-scheduler.ts";
 import { createWorkflowContinuation } from "../src/protocol/workflow-continuation.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { selectedAgentWorkStatus } from "../src/presentation/selected-agent-status.ts";
-import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
-import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
-import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
-import { writeChildSession } from "./support/child-session.ts";
-import { PI_TEST_AGENT_DIR } from "./support/pi-test-environment.ts";
-import { CONTINUATION_MODEL, CONTINUATION_PROVIDER, CONTINUATION_STARTED, CONTEXT_ROLLOVER_TOOL } from "./fixtures/settlement-continuation-extension.ts";
+import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
+import { createChildControlLoopback } from "./support/child-control-loopback.ts";
 
-test("an earlier settlement cannot mark a running child continuation idle", {
-	// A real process must initialize Pi and its PTY before exercising the boundary.
-	timeout: 15_000, skip: process.platform === "win32",
-}, async () => {
-	const root = await mkdtemp(join(tmpdir(), "child-settlement-continuation-"));
-	const cwd = join(root, "work");
-	await mkdir(cwd);
-	const sessionPath = join(root, "child.jsonl");
-	const releasePath = join(root, "release");
-	const agentId = "019a6b4d-1b22-7000-8000-000000000301";
-	await writeChildSession({
-		sessionPath, sessionId: agentId, cwd,
-		workflowId: "settlement-continuation-workflow",
-		directSpawnerAgentId: "settlement-continuation-workflow",
-		label: "Continuation child",
-	});
-	const launch = await PiChildProcessRuntime.launch({
-		workflowId: "settlement-continuation-workflow", agentId, role: "ordinary",
-		expectedSessionId: agentId, sessionPath, agentDir: PI_TEST_AGENT_DIR,
-		configuration: {
-			cwd, model: { provider: CONTINUATION_PROVIDER, modelId: CONTINUATION_MODEL },
-			thinking: "off", excludeTools: [], skills: [],
-			excludeSkills: [],
-			extensions: [fileURLToPath(new URL("./fixtures/settlement-continuation-extension.ts", import.meta.url))],
-			loadContextFiles: true,
+const CONTEXT_ROLLOVER_TOOL = "context_rollover";
+
+test("an earlier settlement cannot mark a running child continuation idle", { timeout: 5_000 }, async (t) => {
+	const continuationStarted = signal();
+	const releaseContinuation = signal();
+	t.after(() => releaseContinuation.resolve());
+	const loopback = await createChildControlLoopback(t, { configure: (pi) => {
+		pi.registerTool({
+			name: CONTEXT_ROLLOVER_TOOL, label: "Context rollover",
+			description: "End the current model loop before its context continuation.",
+			parameters: Type.Object({}), executionMode: "sequential",
+			async execute(_id, _input, _signal, _update, ctx) {
+				// Match new_context: abort without awaiting this tool's own settlement.
+				ctx.abort();
+				return { terminate: true, content: [{ type: "text", text: "New context prepared." }], details: {} };
+			},
+		});
+		let continued = false;
+		pi.on("agent_settled", () => {
+			if (continued) return;
+			continued = true;
+			// Context-rollover extensions start the successor from this hook. Pi defers
+			// that run until every settled handler finishes, so it follows the old settlement.
+			pi.sendUserMessage("Continue in the next context window.");
+		});
+	} });
+	const { proxy: runtime, host: childHost } = loopback;
+	childHost.model.setResponses([
+		fauxAssistantMessage(fauxToolCall(CONTEXT_ROLLOVER_TOOL, {}, { id: "context-rollover" }), { stopReason: "toolUse" }),
+		async () => {
+			continuationStarted.resolve();
+			// The parent releases actual model work only after inspecting hosted status.
+			await releaseContinuation.promise;
+			return fauxAssistantMessage("Continuation completed.");
 		},
-		skillPaths: [], projectTrusted: true, runtimeDirectory: root,
-		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1", CONTINUATION_RELEASE_PATH: releasePath },
-	});
-	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
+	]);
+	const agentId = "019a6b4d-1b22-7000-8000-000000000301";
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId, startSession: async () => ({ runtime, ready: runtime.ready }),
 	});
@@ -60,7 +59,7 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 			spawnSource: { agentId: "settlement-continuation-workflow", entryId: "spawn", toolCallId: "spawn" },
 			creationPreset: null, metadata: { label: "Continuation child" },
 		},
-		host, transcript: transcriptFromSessionManager(SessionManager.open(sessionPath)), children: [],
+		host, transcript: transcriptFromSessionManager(childHost.session.sessionManager), children: [],
 	};
 	const clock = new ControllableOperationReviewClock();
 	const policy = new WorkflowPolicyStore();
@@ -71,20 +70,17 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 		scheduleDeliveryDispatch: () => { dispatchAttempts += 1; },
 		scheduleReleaseEvaluation: () => {},
 	});
-	const events: string[] = [];
-	launch.onEvent((event) => { events.push(event.event); });
+	const events = () => JSON.stringify(loopback.events.map(({ event }) => event));
 	try {
 		await host.lane.run(() => host.startInLane());
 		let deliveryCompleted = false;
 		const completion = runtime.deliver({ kind: "user", content: "Start the first context window." }).completion
 			.then(() => { deliveryCompleted = true; });
 		// Observe a fresh snapshot sent after the old settled callback returned:
-		// reading native transcript alone could race transport publication.
-		await waitUntil(() => SessionManager.open(sessionPath).getEntries().some(
-			(entry) => entry.type === "custom" && entry.customType === CONTINUATION_STARTED,
-		));
+		// the continuation's model call alone could race transport publication.
+		await continuationStarted.promise;
 		await runtime.synchronizeState();
-		assert.equal(runtime.workState(), "active", JSON.stringify(events));
+		assert.equal(runtime.workState(), "active", events());
 		const run = host.observe();
 		assert.ok(run.phase === "live");
 		assert.equal(run.work, "active", "explicit Agent status must agree with native model work");
@@ -98,7 +94,7 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 		assert.deepEqual(scheduler.blockedDeliveries(), [], "active continuation cannot accrue an eligible Delivery Stall");
 		assert.equal(dispatchAttempts, 0, "Deferred delivery cannot dispatch into active native work");
 		assert.equal(deliveryCompleted, false, "the earlier settlement cannot complete an active delivery cycle");
-		await writeFile(releasePath, "");
+		releaseContinuation.resolve();
 		await completion;
 		await runtime.waitForIdle();
 		assert.equal(runtime.workState(), "settled");
@@ -110,15 +106,20 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 		}], "genuinely settled pending delivery still receives its normal deadline");
 	} finally {
 		scheduler.shutdownProgress();
-		await writeFile(releasePath, "");
-		await runtime.dispose();
+		releaseContinuation.resolve();
 	}
 });
 
+function signal(): { promise: Promise<void>; resolve: () => void } {
+	let resolve!: () => void;
+	const promise = new Promise<void>((done) => { resolve = done; });
+	return { promise, resolve };
+}
+
 async function waitUntil(predicate: () => boolean): Promise<void> {
-	const deadline = Date.now() + 5000;
+	const deadline = Date.now() + 2_000;
 	while (!predicate()) {
-		if (Date.now() >= deadline) throw new Error("continuation did not start");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		if (Date.now() >= deadline) throw new Error("Delivery was not dispatched");
+		await new Promise((resolve) => setTimeout(resolve, 5));
 	}
 }

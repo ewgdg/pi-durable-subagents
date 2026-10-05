@@ -21,7 +21,6 @@ const PROCESS_TEST_FILES = new Set([
 	"child-launch-contract-containment.test.ts",
 	"background-delivery-process.test.ts",
 	"causal-request-preemption.test.ts",
-	"child-runtime-settlement-continuation.test.ts",
 	"agent-request.test.ts",
 	"agent-spawn.test.ts",
 	"agent-view.test.ts",
