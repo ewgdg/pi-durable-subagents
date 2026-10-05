@@ -236,6 +236,10 @@ A Report authored directly by the Workflow runtime when moderation is unavailabl
 **Report Read State**:
 The human's explicit, reversible acknowledgement of a Report notification. Unread brings the Report to the Attention Inbox; Read removes only that notification, preserving history and all independent live conditions. Opening, copying, or closing a Report does not change its Read State.
 
+**Attention Inbox**:
+The Workflow Owner's list of items waiting on the human: pending Human Requests, unread Reports, and exhausted Operational Incident handling that no Report covers yet. Continuing live conditions such as Moderation Unavailable show beside it rather than in it, so reading a Report never hides them.
+_Avoid_: notification list, attention list
+
 **Operational Incident**:
 A predefined suspicious live coordination condition blocking at least one unresolved Answer Obligation and starting Moderator handling. It is a transient occurrence rather than a durable aggregate or lifecycle; unnecessary review is preferable to silently stranded obligated work.
 
