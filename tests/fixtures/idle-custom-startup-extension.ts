@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 export const STARTUP_PROBE_ENVIRONMENT = "PI_TEST_IDLE_CUSTOM_STARTUP_PROBE";
@@ -7,16 +7,16 @@ export const STARTUP_TOOL = "idle_startup_probe";
 export const STARTUP_GUIDANCE = "Use idle_startup_probe to read the fixed startup marker.";
 export const STARTUP_TOOL_RESULT = "IDLE_STARTUP_TOOL_EXECUTED";
 
+export type StartupProbeEvent =
+	| Readonly<{ phase: "input"; text: string; source: string }>
+	| Readonly<{ phase: "prepare"; inputs: number; preparations: number }>
+	| Readonly<{ phase: "tool" }>;
+
 // The fixture supplies the input-time setup and before-start guidance that real
 // extensions need, without relying on a particular conversion extension.
-const fixture: ExtensionFactory = pi => {
+export function registerStartupProbe(pi: ExtensionAPI, record: (event: StartupProbeEvent) => void): void {
 	let inputs = 0;
 	let preparations = 0;
-	const record = (event: Record<string, unknown>) => {
-		const path = process.env[STARTUP_PROBE_ENVIRONMENT];
-		if (!path) throw new Error("Missing idle custom startup probe path");
-		appendFileSync(path, JSON.stringify(event) + "\n");
-	};
 	pi.on("input", event => {
 		inputs++;
 		record({ phase: "input", text: event.text, source: event.source });
@@ -38,6 +38,13 @@ const fixture: ExtensionFactory = pi => {
 			return { content: [{ type: "text", text: STARTUP_TOOL_RESULT }], details: {} };
 		},
 	});
-};
+}
+
+/** The process child records to the file its Owner names in the environment. */
+const fixture: ExtensionFactory = pi => registerStartupProbe(pi, event => {
+	const path = process.env[STARTUP_PROBE_ENVIRONMENT];
+	if (!path) throw new Error("Missing idle custom startup probe path");
+	appendFileSync(path, JSON.stringify(event) + "\n");
+});
 
 export default fixture;
