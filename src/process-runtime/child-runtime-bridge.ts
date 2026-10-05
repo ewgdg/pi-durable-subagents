@@ -1206,25 +1206,19 @@ function matchesDeliveryMessage(
 			);
 	}
 	if (message.role !== "user" || !("content" in message)) return false;
-	const content = typeof delivery.content === "string"
-		? [{ type: "text", text: delivery.content }]
-		: normalizeUserContent(delivery.content);
-	return isDeepStrictEqual(message.content, content);
+	// Pi normalizes prompt images (resizing, re-encoding, or omitting them) and
+	// appends its image hints after the text, so only the leading text is stable.
+	const committed = message.content;
+	const committedText = typeof committed === "string"
+		? committed
+		: Array.isArray(committed) && committed[0]?.type === "text" ? committed[0].text : undefined;
+	return typeof committedText === "string" && committedText.startsWith(submittedUserText(delivery.content));
 }
 
-function normalizeUserContent(
-	content: Extract<AgentRuntimeDelivery, { kind: "user" }>["content"] & readonly unknown[],
-): readonly unknown[] {
-	const text = content
-		.filter((part): part is Extract<(typeof content)[number], { type: "text" }> =>
-			typeof part === "object" && part !== null && "type" in part && part.type === "text"
-		)
-		.map((part) => part.text)
-		.join("\n");
-	const images = content.filter((part) =>
-		typeof part === "object" && part !== null && "type" in part && part.type === "image"
-	);
-	return [{ type: "text", text }, ...images];
+function submittedUserText(content: Extract<AgentRuntimeDelivery, { kind: "user" }>["content"]): string {
+	return typeof content === "string"
+		? content
+		: content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
 }
 
 function requireModel(model: AgentSessionRuntime["session"]["model"]) {

@@ -11,6 +11,7 @@ import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { NativeInputSubmissionIdentity } from "../src/process-runtime/native-input-submission-identity.ts";
 import { TerminalInputSubmissionAcknowledger } from "../src/process-runtime/terminal-input-submission-acknowledger.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
+import { oversizedPngImage } from "./support/test-images.ts";
 
 test("pending Delivery does not reserve a native execution identity; queued completion waits for settlement", { timeout: 5000 }, async t => {
 	let context!: ExtensionContext;
@@ -107,6 +108,28 @@ async function attachRuntime(host: Awaited<ReturnType<typeof createTestOwnerHost
 
 	return { parent, binding, events, state };
 }
+
+test("human input carrying an image Pi resizes proves its commit through the child path", { timeout: 5000 }, async t => {
+	let context!: ExtensionContext;
+	const host = await createTestOwnerHost(t, pi => {
+		pi.on("session_start", (_event, ctx) => { context = ctx; });
+	});
+	host.model.setResponses([fauxAssistantMessage("Image received.")]);
+	const { parent, binding } = await attachRuntime(host, context);
+	t.after(async () => { binding.dispose(); await parent.dispose(); });
+	const image = oversizedPngImage();
+	const delivery = parent.deliver(
+		{ kind: "user", content: [{ type: "text", text: "Look at this screenshot." }, image] },
+		{ inspectCommit: () => true },
+	);
+	assert.equal(await delivery.transcriptCommit, true);
+	await delivery.completion;
+	const [committed] = host.session.messages.filter(message => message.role === "user");
+	assert.ok(committed && Array.isArray(committed.content));
+	const [text, persistedImage] = committed.content;
+	assert.ok(text?.type === "text" && text.text.startsWith("Look at this screenshot.\n\n"), "Pi appends its resize hint");
+	assert.ok(persistedImage?.type === "image" && persistedImage.data !== image.data, "Pi persists the resized image");
+});
 
 test("interrupt cancels pending preflight without reserving an execution cycle", { timeout: 5000 }, async t => {
 	let context!: ExtensionContext;
