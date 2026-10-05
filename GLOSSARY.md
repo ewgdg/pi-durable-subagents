@@ -13,6 +13,10 @@ The canonical interpretation of ordinary Identity evidence using the live Pi ses
 **Owner Fork**:
 A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
 
+**Owner Admission**:
+The one-time attempt, per Owner extension attachment, to bind its Pi session to a verified Workflow as the Workflow Owner. It is Pending until it settles as Admitted (coordination available), Blocked (coordination disabled, failure evidence retained, and native fork allowed only if Owner role identification completed first), or Inactive (the host bound no Runtime, so no Owner exists); model turns wait until it settles.
+_Avoid_: Owner bootstrap (that is the Identity record), failed admission (say Blocked)
+
 **Context-only Coordination**:
 Coordination material presented as information rather than current protocol-authoring input: Invalid when it fails declared record validation, or Inherited when it belongs to another Agent's copied scope. These distinct marks neither grant authority nor cancel an obligation established by valid records.
 
