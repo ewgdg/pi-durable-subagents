@@ -277,7 +277,17 @@ export class RequestEvidence {
 		throw new Error(`unknown_identity: Request ${requestId}`);
 	}
 
+	/** The responder's Answer, including one admitted in its lane whose tool result has not committed. */
 	findLocalAnswer(responder: AgentRecord, requestId: string): Answer | undefined {
+		const canonical = this.#findCanonicalLocalAnswer(responder, requestId);
+		const admitted = this.#admittedAnswersByRequest.get(requestId);
+		if (canonical && admitted && canonical.messageId !== admitted.messageId) {
+			throw new Error(`invariant_violation: Request ${requestId} has conflicting admitted and canonical Answers`);
+		}
+		return canonical ?? admitted;
+	}
+
+	#findCanonicalLocalAnswer(responder: AgentRecord, requestId: string): Answer | undefined {
 		const transcript = responder.transcript.inspect();
 		const delivered = deliveriesForRequest({ recipientAgentId: responder.identity.agentId, transcript, requestId })
 			.find(delivery => delivery.projection.kind === "request");
@@ -291,11 +301,7 @@ export class RequestEvidence {
 			return answer?.kind === "answer" ? [answer] : [];
 		});
 		if (canonical.length > 1) throw new Error(`invariant_violation: Request ${requestId} has multiple canonical Answers`);
-		const admitted = this.#admittedAnswersByRequest.get(requestId);
-		if (canonical[0] && admitted && canonical[0].messageId !== admitted.messageId) {
-			throw new Error(`invariant_violation: Request ${requestId} has conflicting admitted and canonical Answers`);
-		}
-		return canonical[0] ?? admitted;
+		return canonical[0];
 	}
 
 	isLocalCancellationDelivered(responder: AgentRecord, requestId: string): boolean {
@@ -446,7 +452,9 @@ export class RequestEvidence {
 			} else {
 				validateDeliveredMessageEvidence(delivery);
 				const cancelled = this.isLocalCancellationDelivered(agent, requestId);
-				owed = !this.findLocalAnswer(agent, requestId) && !cancelled;
+				// An admitted Answer is only a reservation until its tool result commits,
+				// and Run failure can still discard it, so only a canonical Answer ends the stake.
+				owed = !this.#findCanonicalLocalAnswer(agent, requestId) && !cancelled;
 			}
 		}
 		return { awaiting, owed };

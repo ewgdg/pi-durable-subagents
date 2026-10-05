@@ -430,6 +430,22 @@ test("the projection follows each Request evidence state", () => {
 	}
 });
 
+test("with the requester absent, an admitted Answer never ends the incoming stake", () => {
+	type Row = [name: string, arrange: (h: ReturnType<typeof relationshipHistory>, requestId: string) => void, owed: boolean];
+	const rows: Row[] = [
+		["a delivered Request stays owed", () => undefined, true],
+		["an admitted Answer leaves it owed", (h, requestId) => h.admitAnswer(requestId), true],
+	];
+	for (const [name, arrange, owed] of rows) {
+		const h = relationshipHistory();
+		const requestId = h.history.request();
+		arrange(h, requestId);
+		// Recovery reads only the responder's transcript when the requester's record is gone.
+		h.history.agents.delete("requester");
+		assert.deepEqual(h.stake(h.responder, requestId), { awaiting: false, owed }, name);
+	}
+});
+
 test("a Creation Request is outgoing once the child exists and owed once it is delivered", () => {
 	for (const delivered of [false, true]) {
 		const h = relationshipHistory();
