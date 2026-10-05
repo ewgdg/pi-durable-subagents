@@ -162,6 +162,9 @@ A responder's explicit decision, after receiving Request Cancellation, to cancel
 **Agent Runtime**:
 The volatile Pi session, configured resources, and interactive presentation currently hosted for one durable Agent Identity. A Runtime can be prepared while its Agent is Dormant and can remain available across successive Runs while interactively selected. Preparing it executes ordinary extension lifecycle behavior without censoring extension effects; any effect that initiates Agent work admits a Run normally.
 
+**Native Session Driver**:
+The single module that drives one Pi session binding generation for both the Owner's in-process Agent Runtime and each child bridge. It classifies Run ends (`completed`, `aborted`, `error`), retains queued input on a terminal error before any listener runs, dispatches Deliveries through startup admission or Pi's prompt, retries a busy custom startup outside the turn admission it was given, proves transcript commitment against Pi's persisted form, and commits an idle model-starting custom message only when nothing else could own the turn. The child passes its Turn Compaction Gateway as turn admission; the Owner passes none.
+
 **Turn Compaction Gateway**:
 The child-local, Runtime-generation-bound admission boundary that serializes only turn preparation and commitment. It cancels unused post-Run threshold compaction, recomputes threshold preparation before later idle work, preserves Pi-native manual and overflow compaction, and releases before the model cycle. Deferral is not durable state and does not retain a Run or Agent Runtime.
 
