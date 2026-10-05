@@ -31,6 +31,9 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
+import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
+import type { AgentRecord } from "../src/coordination/agent-record.ts";
+import { isModeratorIdentity } from "../src/protocol/moderator-input.ts";
 import type { AgentRunState } from "../src/runtime/agent-runtime-host.ts";
 import {
 	WorkflowPolicyStore,
@@ -3898,6 +3901,65 @@ async function retryRequestFromView(
 		timestamp: Date.now(),
 	});
 }
+
+test("a starting Moderator keeps no requester progressing for Owner parking", async (t) => {
+	const records = new Map<string, AgentRecord>();
+	const integrate = OperationalIncidentCoordinator.prototype.integrate;
+	t.mock.method(OperationalIncidentCoordinator.prototype, "integrate", function (
+		this: OperationalIncidentCoordinator, ...args: Parameters<typeof integrate>
+	) {
+		records.set(args[0].identity.agentId, args[0]);
+		return integrate.apply(this, args);
+	});
+	const { host, owner, coordinator } = await createIncidentBoundaryHarness(t);
+	// The first Moderator, the one the child asks.
+	const moderatorRecord = () => [...records.values()].find(({ identity }) => isModeratorIdentity(identity));
+	const CHECK_IN = "Moderator check-in: what blocks you?";
+	// The Moderator first runs long after the spawn below returns.
+	let childAgentId = "";
+	// Only the first Moderator checks in; the child's Request to it clears and
+	// re-raises the Stall, and a later Moderator must not restart that cycle.
+	let checkedIn = false;
+	// Responses route by caller, because the child and its Moderator share one model.
+	const route = (context: Context) => {
+		const transcript = JSON.stringify(context.messages);
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
+			if (checkedIn) return fauxAssistantMessage("Investigating the affected Agent.");
+			checkedIn = true;
+			return fauxAssistantMessage(fauxToolCall("agent_message", { operation: "send", targetAgent: childAgentId, content: CHECK_IN },
+					{ id: "moderator-check-in" }), { stopReason: "toolUse" });
+		}
+		return transcript.includes(CHECK_IN) && !transcript.includes("child-asks-moderator")
+			? fauxAssistantMessage(fauxToolCall("agent_message", {
+				operation: "request", title: "Fixture request", targetAgent: moderatorRecord()!.identity.agentId,
+				question: "Which Answer should I give?",
+			}, { id: "child-asks-moderator" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage("Settled without the owed Answer.");
+	};
+	host.model.setResponses(Array.from({ length: 200 }, () => route));
+	const child = await spawnFromView(host.session, owner, "moderator-requester-parent", "Settle without Answer.");
+	childAgentId = child.agentId;
+	await waitForCondition(() => {
+		const moderator = moderatorRecord();
+		const run = owner.status(child.agentId).run;
+		return moderator !== undefined && run.phase === "live" && run.work === "settled" &&
+			run.retentionReasons.some(({ reason }) => reason === "awaiting_answer") &&
+			!coordinator.hasAutonomousWorkflowProgress();
+	});
+	const moderator = moderatorRecord()!;
+	const observed = moderator.host.observe();
+	// Stand in for a Moderator whose later Run startup hangs: only the bounded
+	// recovery inspection may count Moderator startup as Workflow progress.
+	const starting = t.mock.method(moderator.host, "observe", (): AgentRunState => ({
+		phase: "starting", attention: "none", retentionReasons: observed.retentionReasons,
+	}));
+	try {
+		assert.equal(coordinator.hasAutonomousWorkflowProgress(), false,
+			"a Request to a starting Moderator must not keep the Owner parked");
+	} finally {
+		starting.mock.restore();
+	}
+});
 
 test("a settled Moderator receives one handling reminder turn and releases when the incident clears", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {

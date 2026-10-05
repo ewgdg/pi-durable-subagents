@@ -780,11 +780,8 @@ export class WorkflowCoordinator {
 		if (this.#shuttingDown) return false;
 		// The entire Workflow matters: a waiting parent contributes no execution,
 		// but its progressing descendant (or a recovering Moderator) still does.
-		const progressing = this.#operationalIncidents.progressingNonOwnerAgentIds().some((agentId) =>
-			// Moderator startup belongs to the bounded recovery inspection below.
-			// A hung startup must stop counting when that inspection times out.
-			!(this.#isModerator(agentId) && this.#requireAgent(agentId).host.observe().phase === "starting"));
-		return progressing || this.#messages.hasAutonomousDeliveryProgress() ||
+		return this.#operationalIncidents.hasProgressingAgentForOwnerParking() ||
+			this.#messages.hasAutonomousDeliveryProgress() ||
 			this.#operationalIncidents.hasAutonomousRecoveryProgress();
 	}
 

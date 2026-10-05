@@ -471,15 +471,18 @@ export class OperationalIncidentCoordinator {
 	}
 
 	/**
-	 * Owner Settlement Parking input. The parked Owner keeps its native prompt
-	 * active, so it stays out of the snapshot: a child awaiting the Owner's Answer
-	 * must not inherit that prompt as progress and keep the Owner parked forever.
+	 * Owner Settlement Parking input. Agents left out of the snapshot are no
+	 * progress source, for themselves or for the Agents awaiting them:
+	 * - The parked Owner keeps its native prompt active, so a child awaiting the
+	 *   Owner's Answer must not inherit that prompt and keep the Owner parked forever.
+	 * - Moderator startup counts only through the bounded recovery inspection, so a
+	 *   hung startup stops keeping the Owner parked once that inspection times out.
 	 */
-	progressingNonOwnerAgentIds(): readonly string[] {
-		const assessment = this.#assess([...this.#agents.values()].filter(
-			(record) => record.identity.agentId !== this.#ownerIdentity.agentId,
-		));
-		return [...assessment.verdicts].flatMap(([agentId, verdict]) => verdict === "progressing" ? [agentId] : []);
+	hasProgressingAgentForOwnerParking(): boolean {
+		const assessment = this.#assess([...this.#agents.values()].filter((record) =>
+			record.identity.agentId !== this.#ownerIdentity.agentId &&
+			!(this.#isModerator(record) && record.host.observe().phase === "starting")));
+		return [...assessment.verdicts.values()].includes("progressing");
 	}
 
 	hasAutonomousRecoveryProgress(): boolean {
