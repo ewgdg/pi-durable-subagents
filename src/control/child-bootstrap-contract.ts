@@ -4,7 +4,7 @@
 // Version 9 replaces that selection with a required exclusion filter: the child
 // keeps its own runtime default surface plus its role coordination tools.
 // Version 11 adds the required Workflow interaction, which withholds ask_user headless.
-export const AGENT_CONTROL_PROTOCOL_VERSION = 11 as const;
+export const AGENT_CONTROL_PROTOCOL_VERSION = 12 as const;
 
 const NonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 

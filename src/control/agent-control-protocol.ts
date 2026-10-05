@@ -1,6 +1,7 @@
 import { Type, type Static, type TSchema } from "typebox";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 
+import { NATIVE_RUN_OUTCOMES } from "../pi-integration/native-session-driver.ts";
 import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 import type { AgentControlProtocol } from "./agent-control-channel.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
@@ -44,11 +45,7 @@ const StringListSchema = Type.Array(NonEmptyStringSchema, { uniqueItems: true })
 const StringQueueSchema = Type.Array(Type.String());
 const AcknowledgementSchema = closed({ accepted: Type.Boolean() });
 const QueuedInputCountSchema = Type.Integer({ minimum: 0 });
-const RunOutcomeSchema = Type.Union([
-	Type.Literal("completed"),
-	Type.Literal("interrupted"),
-	Type.Literal("failed"),
-]);
+const RunOutcomeSchema = Type.Enum(NATIVE_RUN_OUTCOMES);
 const DeliveryModeSchema = Type.Union([
 	Type.Literal("steer"),
 	Type.Literal("followUp"),
@@ -925,14 +922,13 @@ export const agentControlEvents = {
 			outcome: RunOutcomeSchema,
 			willRetry: Type.Boolean(),
 			queuedInputCount: QueuedInputCountSchema,
-			error: Type.Optional(Type.String()),
+			failure: Type.Optional(RunFailureEvidenceSchema),
 			quota: Type.Optional(QuotaEvidenceSchema),
 		}),
 	},
 	"agent.settled": {
 		payload: closed({
 			runId: NonEmptyStringSchema,
-			outcome: RunOutcomeSchema,
 			queuedInputCount: QueuedInputCountSchema,
 		}),
 	},

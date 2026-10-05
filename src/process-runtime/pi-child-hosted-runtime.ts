@@ -338,19 +338,13 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			return;
 		}
 		if (event.event === "agent.end") {
-			if (event.payload.outcome === "interrupted") this.#cancellation.abort();
+			// The child's Native Session Driver classified this Run end; adopt it unchanged.
+			const { outcome, willRetry, failure, quota } = event.payload;
+			if (outcome === "aborted") this.#cancellation.abort();
 			this.#emit({
-				type: "agent_end",
-				outcome: event.payload.outcome === "completed"
-					? "completed"
-					: event.payload.outcome === "interrupted"
-						? "aborted"
-						: "error",
-				willRetry: event.payload.willRetry,
-				...(event.payload.outcome === "failed" && event.payload.error !== undefined
-					? { failure: { stage: "model", error: event.payload.error, provenance: "pi-child-hosted-runtime" } }
-					: {}),
-				...(event.payload.outcome === "failed" && event.payload.quota ? { quota: event.payload.quota } : {}),
+				type: "agent_end", outcome, willRetry,
+				...(failure ? { failure } : {}),
+				...(quota ? { quota } : {}),
 			});
 			return;
 		}

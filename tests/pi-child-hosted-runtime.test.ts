@@ -484,10 +484,10 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 	const cancellation = runtime.cancellationSignal();
 	emit(controlEvent("agent.end", {
 		runId: "hosted-run-1",
-		outcome: "failed",
+		outcome: "error",
 		willRetry: true,
 		queuedInputCount: 0,
-		error: "retryable",
+		failure: { stage: "model", error: "retryable", provenance: "native-session-driver" },
 	}));
 	assert.equal(cancellation.aborted, false);
 	emit(controlEvent("agent.start", { runId: "hosted-run-1", queuedInputCount: 0 }));
@@ -502,7 +502,6 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 	emit(controlEvent("message.dispatch.completed", { deliveryId: "delivery-1" }));
 	emit(controlEvent("agent.settled", {
 		runId: "hosted-run-1",
-		outcome: "completed",
 		queuedInputCount: 0,
 	}));
 	await completion;
@@ -624,7 +623,7 @@ for (const scenario of [
 			// Settle work normally first; disposal owns the later transport exit.
 			for (const handler of handlers) handler(controlEvent("message.dispatch.completed", { deliveryId: "delivery-1" }));
 			for (const handler of handlers) handler(controlEvent("agent.settled", {
-				runId: "hosted-run-1", queuedInputCount: 0, outcome: "completed",
+				runId: "hosted-run-1", queuedInputCount: 0,
 			}));
 			assert.equal(await completion, "completed");
 			await runtime.projection.dispose();
@@ -956,7 +955,6 @@ test("hosted child reminder busy does not create speculative Run id", { timeout:
 		for (const handler of eventHandlers) {
 			handler(controlEvent("agent.settled", {
 				runId: "native-after-busy",
-				outcome: "completed",
 				queuedInputCount: 0,
 			}));
 		}

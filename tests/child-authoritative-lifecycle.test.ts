@@ -64,7 +64,6 @@ async function attachRuntime(host: Awaited<ReturnType<typeof createTestOwnerHost
 	const state: ControlState = {
 		channel,
 		waitProgressHandlers: new Map(),
-		currentRunOutcome: "completed",
 		nativeRunSequence: 0,
 		queueIntentionTail: Promise.resolve(),
 		shutdownStarted: false,

@@ -1,6 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { classifyQuotaEvidence } from "../runtime/quota-evidence.ts";
-import { RetainedRuntimeQueue } from "../runtime/retained-runtime-queue.ts";
 import { ModeratorReminderAdmission } from "./moderator-reminder-admission.ts";
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-mode.ts";
@@ -8,7 +6,6 @@ import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-
 import * as hostPi from "@earendil-works/pi-coding-agent";
 import type {
 	AgentSession,
-	AgentSessionEvent,
 	AgentSessionRuntime,
 	ExtensionAPI,
 	ExtensionContext,
@@ -17,7 +14,6 @@ import type {
 import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 
 import { FramedAgentControlChannel } from "../control/agent-control-channel.ts";
 import {
@@ -34,10 +30,13 @@ import {
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
+	NativeSessionDriver,
+	type NativeSessionEvent,
+	type TurnAdmission,
+} from "../pi-integration/native-session-driver.ts";
+import {
 	bindSessionStartup,
-	isStartupPreparationBusy,
 	registerSessionStartup,
-	waitForStartupRelease,
 	type SessionStartupAdmission,
 } from "../pi-integration/session-startup.ts";
 import {
@@ -57,7 +56,6 @@ import {
 	registerCoordinationTools,
 } from "../tools/coordination-tools.ts";
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
-import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
 import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
 import {
@@ -97,7 +95,7 @@ type DeliveryExecution = {
 type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
-	retainedQueue: RetainedRuntimeQueue;
+	driver: NativeSessionDriver;
 	turnCompaction: ChildTurnCompactionGateway;
 	startupAdmission: SessionStartupAdmission;
 	nativeInputHandoff?: { submissionSequence: number; transfer: () => void; transferred: boolean };
@@ -121,7 +119,6 @@ type ChildControlState = {
 	currentBinding?: ChildRuntimeBinding;
 	currentRunId?: string;
 	latestRunId?: string;
-	currentRunOutcome: "completed" | "interrupted" | "failed";
 	nativeRunSequence: number;
 	queueIntentionTail: Promise<void>;
 	shutdownStarted: boolean;
@@ -198,7 +195,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		if (!current.currentRunId) {
 			current.currentRunId = nativeRunId(++current.nativeRunSequence);
 			current.latestRunId = current.currentRunId;
-			current.currentRunOutcome = "completed";
 		}
 		current.currentBinding?.turnCompaction.completeNativeTurn(sequence);
 	});
@@ -316,7 +312,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			state = {
 				channel,
 				waitProgressHandlers: new Map(),
-				currentRunOutcome: "completed",
 				nativeRunSequence: 0,
 				queueIntentionTail: Promise.resolve(),
 				shutdownStarted: false,
@@ -530,37 +525,19 @@ export function createChildRuntimeBinding(
 		runtime.session,
 		(message) => context.ui.notify(message, "warning"),
 	);
+	const driver = new NativeSessionDriver(runtime.session);
 	const reminderAdmission = new ModeratorReminderAdmission({
 		admit: operation => turnCompaction.admit(operation),
 		prepare: () => turnCompaction.prepareIdleCustomTurn(),
-		isIdle: () => runtime.session.isIdle && !startupAdmission.isPreparing,
-		async commit(signal) {
-			const delivery = {
-				kind: "custom" as const,
-				message: createModelVisibleModeratorObligationReminder(),
-				triggerTurn: true,
-			};
-			const proof = observeDeliveryCommit(runtime, context.sessionManager, delivery, signal);
-			const { completion } = startupAdmission.dispatchCustom(delivery.message, { triggerTurn: true }, () => {
-				signal.throwIfAborted();
-				turnCompaction.signal.throwIfAborted();
-			});
-			void completion.then(
-				() => queueMicrotask(() => proof.settle(false)),
-				error => proof.reject(error),
-			);
-			// Proof is child-local: no Owner reconciliation or host lane is needed.
-			if (!await proof.result) throw new Error("moderator_reminder_commit_missing");
-		},
+		isIdle: () => driver.canStartIdleTurn(),
+		// Proof is child-local: no Owner reconciliation or host lane is needed. The
+		// reservation already holds the gateway admission, so only its generation fences.
+		commit: signal => driver.commitIdleCustom(createModelVisibleModeratorObligationReminder(), {
+			signal,
+			admission: { admit: attempt => attempt(() => turnCompaction.signal.throwIfAborted()) },
+		}),
 	});
-	const removeLifecycleSubscription = runtime.session.subscribe((event) => {
-		if (event.type === "compaction_start") {
-			void state.channel.sendEvent("runtime.compaction.started", {}).catch(() => undefined);
-		}
-		// Pi emits this edge for success, failure, and cancellation alike.
-		if (event.type === "compaction_end") {
-			void state.channel.sendEvent("runtime.compaction.completed", {}).catch(() => undefined);
-		}
+	const removeLifecycleSubscription = driver.subscribe((event) => {
 		void reportRuntimeLifecycle(state, binding, event).catch((error: unknown) =>
 			reportFault(state.channel, "runtime_lifecycle_failed", error)
 		);
@@ -574,7 +551,7 @@ export function createChildRuntimeBinding(
 	binding = {
 		context,
 		runtime,
-		retainedQueue: new RetainedRuntimeQueue(() => runtime.session.clearQueue()),
+		driver,
 		turnCompaction,
 		startupAdmission,
 		reminderAdmission,
@@ -605,7 +582,7 @@ export function createChildRuntimeBinding(
 			reminderAdmission.cancel();
 			turnCompaction.dispose();
 			removeNativeStartupObserver();
-			startupAdmission.dispose();
+			driver.dispose();
 			deliveryExecution.disable();
 			removeInputLifecycleObserver();
 			inputSubmissionAcknowledgment.dispose();
@@ -650,13 +627,11 @@ async function handleOwnerRequest(
 		}
 		case "message.deliver": {
 			const { deliveryId, delivery } = request.payload;
-			let commit: ReturnType<typeof observeDeliveryCommit> | undefined;
 			const execution: DeliveryExecution = { admitted: false, finished: false, started: false };
 			const admissionCancellation = new AbortController();
 			const admissionSignal = AbortSignal.any([
 				request.signal, binding.turnCompaction.signal, admissionCancellation.signal,
 			]);
-			let startupCancellation: AbortSignal | undefined;
 			let completionTracked = false;
 			const finish = () => {
 				execution.finished = true;
@@ -666,7 +641,6 @@ async function handleOwnerRequest(
 			const cancel = async () => {
 				admissionCancellation.abort(new Error(`child_turn_admission_cancelled: ${deliveryId}`));
 				binding.turnCompaction.cancelDelivery(deliveryId);
-				if (request.signal.aborted) commit?.reject(requestCancellationError(request.signal));
 				if (!execution.signal) return;
 				await sequenceQueueIntention(state, async () => {
 					// Native signal identity covers awaited start hooks as well as
@@ -682,95 +656,30 @@ async function handleOwnerRequest(
 			binding.pendingDeliveries.set(deliveryId, cancel);
 			request.signal.addEventListener("abort", onAbort, { once: true });
 			try {
-				const admitDelivery = () => binding.turnCompaction.admitDelivery(deliveryId, async checkpoint => {
-					admissionSignal.throwIfAborted();
-					startupCancellation?.throwIfAborted();
-					await binding.turnCompaction.waitForCompaction();
-					checkpoint();
-					if (binding.runtime.session.isIdle && delivery.kind === "custom" && delivery.triggerTurn) {
-						await binding.turnCompaction.prepareIdleCustomTurn(delivery.workingZonePreparation);
-					}
-					checkpoint();
-					admissionSignal.throwIfAborted();
-					// Pi's manual compaction calls abort() itself. Capture native input
-					// cancellation only after that separate preparation phase finishes.
-					startupCancellation = binding.startupAdmission.signal;
-					const dispatchSignal = AbortSignal.any([admissionSignal, startupCancellation]);
-					const dispatchCommit = observeDeliveryCommit(binding.runtime, binding.context.sessionManager, delivery, binding.turnCompaction.signal);
-					commit = dispatchCommit;
-					const dispatchCheckpoint = () => {
-						checkpoint();
-						dispatchSignal.throwIfAborted();
-					};
-					const dispatch = () => {
-						dispatchCheckpoint();
-						execution.checkpoint = dispatchCheckpoint;
-						// Active queue admission belongs to this actual native execution.
-						execution.signal = binding.runtime.session.agent.signal;
-						execution.admitted = delivery.kind === "custom" && !binding.runtime.session.isIdle;
-						return binding.deliveryExecution.run(execution, () =>
-							// Pi reports preflight acceptance only after it has taken the submission
-							// into its own steering/follow-up queue, or begun that submission's own
-							// Run. Only the pre-dispatch fence may consult the session-wide startup
-							// cancellation: an unrelated abort() (Pi's manual compaction, a sibling
-							// Run interruption) poisons startupAdmission.signal, and re-checking it
-							// here would reject an input Pi already owns and will still deliver.
-							dispatchDelivery(binding, delivery, () => {
-								checkpoint();
-								admissionSignal.throwIfAborted();
-								execution.admitted = true;
-							})
-						);
-					};
-					const dispatched = binding.runtime.session.isIdle
-						? dispatch()
-						: await sequenceQueueIntention(state, dispatch);
-					// Native queue acceptance is not execution completion. Capture the
-					// session's settlement after dispatch, never preparation's earlier cycle.
-					const completion = dispatched.completion.then(() => binding.runtime.session.waitForIdle());
-					void completion.catch(error => dispatchCommit.reject(error));
-					await Promise.race([dispatched.preflight, completion]);
-					checkpoint();
-					return { completion, commit: dispatchCommit, modelCycleStarted: !binding.runtime.session.isIdle };
+				const dispatch = binding.driver.deliver(delivery, {
+					proveCommit: true,
+					signal: admissionSignal,
+					admission: childTurnAdmission(state, binding, request.payload, execution, admissionSignal),
 				});
-				let admission: Awaited<ReturnType<typeof admitDelivery>>;
-				for (;;) {
-					try {
-						admission = await admitDelivery();
-						break;
-					} catch (error) {
-						if (delivery.kind !== "custom" || !isStartupPreparationBusy(error)) throw error;
-						commit?.settle(false);
-						commit = undefined;
-						// Native input may own startup while waiting for this compaction
-						// gate. Release the gate before waiting, then preserve the original
-						// custom queue mode when retrying this uncommitted admission.
-						await waitForStartupRelease(error.whenReleased,
-							AbortSignal.any([admissionSignal, startupCancellation!]));
-					}
-				}
-				const { completion } = admission;
+				const { runActive } = await dispatch.preflight;
+				// Native queue acceptance is not execution completion. Capture the
+				// session's settlement after dispatch, never preparation's earlier cycle.
+				const completion = dispatch.completion.then(() => binding.runtime.session.waitForIdle());
 				completionTracked = true;
-				commit = admission.commit;
 				void completion.then(
-					() => {
-						queueMicrotask(() => commit?.settle(false));
-						return state.channel.sendEvent("message.dispatch.completed", { deliveryId });
-					},
-					error => {
-						commit?.reject(error);
-						return state.channel.sendEvent("message.dispatch.completed", { deliveryId, error: errorMessage(error) });
-					},
+					() => state.channel.sendEvent("message.dispatch.completed", { deliveryId }),
+					error => state.channel.sendEvent("message.dispatch.completed", { deliveryId, error: errorMessage(error) }),
 				).catch(error => reportFault(state.channel, "delivery_completion_failed", error)).finally(finish);
 				return {
 					accepted: true,
-					transcriptCommitted: await commit.result,
-					modelCycleStarted: admission.modelCycleStarted,
-					queuedInputCount: binding.runtime.session.pendingMessageCount,
+					// Only this request's own cancellation abandons the proof: message.cancel
+					// after commit must not turn a committed Delivery into a failed request.
+					transcriptCommitted: await unlessRequestCancelled(dispatch.transcriptCommit!, request.signal),
+					modelCycleStarted: runActive,
+					queuedInputCount: binding.driver.queuedInputCount(),
 				};
 			} finally {
 				request.signal.removeEventListener("abort", onAbort);
-				commit?.settle(false);
 				if (!completionTracked) finish();
 			}
 		}
@@ -784,10 +693,10 @@ async function handleOwnerRequest(
 			const cleared = await binding.turnCompaction.admit(() =>
 				sequenceQueueIntention(state, () => {
 					requireReportedRun(state, request.payload.runId);
-					return binding.retainedQueue.clear();
+					return binding.driver.clearQueue();
 				})
 			);
-			return { ...cleared, queuedInputCount: binding.runtime.session.pendingMessageCount };
+			return { ...cleared, queuedInputCount: binding.driver.queuedInputCount() };
 		}
 		case "run.interrupt": {
 			binding.reminderAdmission.cancel();
@@ -958,61 +867,46 @@ async function runtimeSnapshot(
 async function reportRuntimeLifecycle(
 	state: ChildControlState,
 	binding: ChildRuntimeBinding,
-	event: AgentSessionEvent,
+	event: NativeSessionEvent,
 ): Promise<void> {
 	if (state.currentBinding !== binding) return;
-	const { runtime, activity } = binding;
-	if (event.type === "agent_start") {
+	const { driver, activity } = binding;
+	if (event.type === "compaction_changed") {
+		await state.channel.sendEvent(event.compacting ? "runtime.compaction.started" : "runtime.compaction.completed", {});
+		return;
+	}
+	if (event.type === "run_started") {
 		activity.setScopeFailed(false);
 		// Only actual Pi execution owns transport cycle identity; Delivery admission does not.
 		state.currentRunId ??= nativeRunId(++state.nativeRunSequence);
 		state.latestRunId = state.currentRunId;
 		await state.channel.sendEvent("agent.start", {
 			runId: state.currentRunId,
-			queuedInputCount: runtime.session.pendingMessageCount,
+			queuedInputCount: driver.queuedInputCount(),
 		});
 		return;
 	}
-	if (event.type === "agent_end") {
+	if (event.type === "run_ended") {
 		if (!state.currentRunId) return;
-		const assistant = [...event.messages]
-			.reverse()
-			.find((message) => message.role === "assistant");
-		// Pi can publish request-setup cancellation as an error-shaped message.
-		// The exact native Run's aborted signal owns that stop, not provider failure.
-		state.currentRunOutcome = assistant?.role === "assistant" && assistant.stopReason === "aborted"
-			? "interrupted"
-			: assistant?.role === "assistant" && assistant.stopReason === "error"
-				? runtime.session.agent.signal?.aborted ? "interrupted" : "failed"
-				: "completed";
-		activity.setScopeFailed(state.currentRunOutcome === "failed");
-		const quota = state.currentRunOutcome === "failed" && assistant?.role === "assistant"
-			? classifyQuotaEvidence(assistant) : undefined;
-		// Session subscribers are synchronous: drain before the first transport await
-		// so Pi cannot consume queued input before the Owner suspends a failed Run.
-		// Deliberate cancellation and configured retries keep their native behavior.
-		if (state.currentRunOutcome === "failed" && !event.willRetry) binding.retainedQueue.capture();
+		const { type: _type, ...runEnd } = event;
+		activity.setScopeFailed(runEnd.outcome === "error");
+		// The driver already retained queued input of a terminal error, before this
+		// listener's first transport await could let Pi consume it.
 		await state.channel.sendEvent("agent.end", {
 			runId: state.currentRunId,
-			outcome: state.currentRunOutcome,
-			willRetry: event.willRetry,
-			...(quota ? { quota } : {}),
-			queuedInputCount: runtime.session.pendingMessageCount,
-			...(assistant?.role === "assistant" && assistant.errorMessage
-				? { error: assistant.errorMessage }
-				: {}),
+			...runEnd,
+			queuedInputCount: driver.queuedInputCount(),
 		});
 		return;
 	}
-	if (event.type !== "agent_settled" || !state.currentRunId) return;
+	if (event.type !== "run_settled" || !state.currentRunId) return;
 	// Pi awaits extension settlement hooks before notifying session listeners.
 	// A hook can already have started a successor; the old edge cannot settle it.
-	if (runtime.session.isStreaming) return;
+	if (binding.runtime.session.isStreaming) return;
 	const runId = state.currentRunId;
 	await state.channel.sendEvent("agent.settled", {
 		runId,
-		outcome: state.currentRunOutcome,
-		queuedInputCount: runtime.session.pendingMessageCount,
+		queuedInputCount: driver.queuedInputCount(),
 	});
 	if (state.currentBinding !== binding) return;
 	if (state.currentRunId === runId) state.currentRunId = undefined;
@@ -1067,158 +961,63 @@ function sequenceQueueIntention<T>(
 	return result;
 }
 
-function dispatchDelivery(
+/**
+ * The child's turn admission for one Delivery: the Turn Compaction Gateway holds
+ * its gate per attempt, and the native submission keeps queue-intention order and
+ * the per-Delivery execution context that native startup observes.
+ */
+function childTurnAdmission(
+	state: ChildControlState,
 	binding: ChildRuntimeBinding,
-	delivery: AgentRuntimeDelivery,
-	checkpoint: () => void,
-): Readonly<{ completion: Promise<void>; preflight: Promise<void> }> {
-	if (delivery.kind === "custom") {
-		return binding.startupAdmission.dispatchCustom(delivery.message, {
-			triggerTurn: delivery.triggerTurn,
-			...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
-		}, checkpoint);
-	}
-	const content = typeof delivery.content === "string"
-		? [{ type: "text" as const, text: delivery.content }]
-		: [...delivery.content];
-	const text = content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
-	const images = content.flatMap((part) => part.type === "image" ? [part] : []);
-	let resolvePreflight!: () => void;
-	const preflight = new Promise<void>((resolve) => {
-		resolvePreflight = resolve;
-	});
-	const handoff = binding.nativeInputHandoff;
-	if (handoff && !handoff.transferred && delivery.forwardedInput?.submissionSequence === handoff.submissionSequence) {
-		checkpoint();
-		handoff.transfer();
-		handoff.transferred = true;
-	}
+	{ deliveryId, delivery }: Readonly<{ deliveryId: string; delivery: Parameters<NativeSessionDriver["deliver"]>[0] }>,
+	execution: DeliveryExecution,
+	admissionSignal: AbortSignal,
+): TurnAdmission {
+	const session = binding.runtime.session;
 	return {
-		completion: binding.runtime.session.prompt(text, {
-			expandPromptTemplates: false,
-			source: "extension",
-			...(images.length === 0 ? {} : { images }),
-			...(delivery.deliverAs === undefined
-				? {}
-				: { streamingBehavior: delivery.deliverAs }),
-			preflightResult() {
-				try {
-					checkpoint();
-				} catch (error) {
-					resolvePreflight();
-					throw error;
-				}
-				resolvePreflight();
-			},
+		admit: attempt => binding.turnCompaction.admitDelivery(deliveryId, async checkpoint => {
+			admissionSignal.throwIfAborted();
+			await binding.turnCompaction.waitForCompaction();
+			checkpoint();
+			if (session.isIdle && delivery.kind === "custom" && delivery.triggerTurn) {
+				await binding.turnCompaction.prepareIdleCustomTurn(delivery.workingZonePreparation);
+			}
+			checkpoint();
+			admissionSignal.throwIfAborted();
+			return attempt(checkpoint);
 		}),
-		preflight,
+		submit(submission, fence) {
+			const submit = () => {
+				fence();
+				execution.checkpoint = fence;
+				// Active queue admission belongs to this actual native execution.
+				execution.signal = session.agent.signal;
+				execution.admitted = delivery.kind === "custom" && !session.isIdle;
+				const handoff = binding.nativeInputHandoff;
+				if (
+					delivery.kind === "user" && handoff && !handoff.transferred &&
+					delivery.forwardedInput?.submissionSequence === handoff.submissionSequence
+				) {
+					handoff.transfer();
+					handoff.transferred = true;
+				}
+				return binding.deliveryExecution.run(execution, submission);
+			};
+			return session.isIdle ? submit() : sequenceQueueIntention(state, submit);
+		},
+		accepted() {
+			execution.admitted = true;
+		},
 	};
 }
 
-function observeDeliveryCommit(
-	runtime: AgentSessionRuntime,
-	sessionManager: ExtensionContext["sessionManager"],
-	delivery: AgentRuntimeDelivery,
-	generationSignal: AbortSignal,
-): Readonly<{
-	result: Promise<boolean>;
-	settle(committed: boolean): void;
-	reject(error: unknown): void;
-}> {
-	let settleResult!: (committed: boolean) => void;
-	let rejectResult!: (error: unknown) => void;
-	let settled = false;
-	let unsubscribe: () => void = () => undefined;
-	const existingEntryIds = new Set(
-		sessionManager.getEntries().map((entry) => entry.id),
-	);
-	const finish = (settlement: () => void) => {
-		if (settled) return;
-		settled = true;
-		unsubscribe();
-		generationSignal.removeEventListener("abort", invalidate);
-		settlement();
-	};
-	const invalidate = () => finish(() => rejectResult(
-		new Error("child_turn_compaction_gateway_disposed"),
-	));
-	const result = new Promise<boolean>((resolve, reject) => {
-		settleResult = resolve;
-		rejectResult = reject;
+function unlessRequestCancelled<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(requestCancellationError(signal));
+	return new Promise<T>((resolve, reject) => {
+		const abort = () => reject(requestCancellationError(signal));
+		signal.addEventListener("abort", abort, { once: true });
+		operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
 	});
-	// Dispatch/preflight can reject before admission reaches its commit await.
-	void result.catch(() => undefined);
-	generationSignal.addEventListener("abort", invalidate, { once: true });
-	unsubscribe = runtime.session.subscribe((event) => {
-		if (
-			event.type === "message_end" &&
-			matchesDeliveryMessage(delivery, event.message)
-		) {
-			// AgentSession notifies listeners immediately before its synchronous
-			// SessionManager append. Verify the writer's new exact entry after that edge;
-			// the lifecycle event alone is not durable transcript evidence.
-			queueMicrotask(() => finish(() => settleResult(
-				sessionManager.getEntries().some((entry) =>
-					!existingEntryIds.has(entry.id) && matchesDeliveryEntry(delivery, entry)
-				),
-			)));
-		}
-		if (event.type === "agent_settled") finish(() => settleResult(false));
-	});
-	if (generationSignal.aborted) invalidate();
-	return {
-		result,
-		settle: (committed) => finish(() => settleResult(committed)),
-		reject: (error) => finish(() => rejectResult(error)),
-	};
-}
-
-function matchesDeliveryEntry(
-	delivery: AgentRuntimeDelivery,
-	entry: ReturnType<ExtensionContext["sessionManager"]["getEntries"]>[number],
-): boolean {
-	if (delivery.kind === "custom") {
-		return entry.type === "custom_message" &&
-			entry.customType === delivery.message.customType &&
-			isDeepStrictEqual(entry.content, delivery.message.content) &&
-			entry.display === delivery.message.display &&
-			isDeepStrictEqual(
-				entry.details,
-				"details" in delivery.message ? delivery.message.details : undefined,
-			);
-	}
-	return entry.type === "message" && matchesDeliveryMessage(delivery, entry.message);
-}
-
-function matchesDeliveryMessage(
-	delivery: AgentRuntimeDelivery,
-	message: unknown,
-): boolean {
-	if (!message || typeof message !== "object" || !("role" in message)) return false;
-	if (delivery.kind === "custom") {
-		return message.role === "custom" &&
-			"customType" in message && message.customType === delivery.message.customType &&
-			"content" in message && isDeepStrictEqual(message.content, delivery.message.content) &&
-			"display" in message && message.display === delivery.message.display &&
-			isDeepStrictEqual(
-				"details" in message ? message.details : undefined,
-				"details" in delivery.message ? delivery.message.details : undefined,
-			);
-	}
-	if (message.role !== "user" || !("content" in message)) return false;
-	// Pi normalizes prompt images (resizing, re-encoding, or omitting them) and
-	// appends its image hints after the text, so only the leading text is stable.
-	const committed = message.content;
-	const committedText = typeof committed === "string"
-		? committed
-		: Array.isArray(committed) && committed[0]?.type === "text" ? committed[0].text : undefined;
-	return typeof committedText === "string" && committedText.startsWith(submittedUserText(delivery.content));
-}
-
-function submittedUserText(content: Extract<AgentRuntimeDelivery, { kind: "user" }>["content"]): string {
-	return typeof content === "string"
-		? content
-		: content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
 }
 
 function requireModel(model: AgentSessionRuntime["session"]["model"]) {

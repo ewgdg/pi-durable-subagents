@@ -225,7 +225,7 @@ test("an unrelated terminal failure suspends the exact Run instead of reporting 
 		evidence: {
 			stage: "model",
 			error: "400 unrelated terminal failure",
-			provenance: "in-process-hosted-runtime",
+			provenance: "native-session-driver",
 		},
 	});
 	assert.deepEqual(view.reportHistory(), [], "a Runtime error stop publishes no report");
@@ -270,7 +270,7 @@ test("quota dependency quiets its blocked parent without hiding an unrelated sto
 		evidence: {
 			stage: "model",
 			error: "400 unrelated failure alongside suspended dependency",
-			provenance: "in-process-hosted-runtime",
+			provenance: "native-session-driver",
 		},
 	});
 	assert.equal(view.reportHistory().length, reportCount, "neither stop publishes a report");

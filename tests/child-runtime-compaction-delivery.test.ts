@@ -141,7 +141,6 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 		const state: ControlState = {
 			channel,
 			waitProgressHandlers: new Map(),
-			currentRunOutcome: "completed",
 			nativeRunSequence: 0,
 			queueIntentionTail: Promise.resolve(),
 			shutdownStarted: false,
@@ -455,7 +454,7 @@ async function createBoundChildFixture(
 	const inputSubmissionAcknowledger = new TerminalInputSubmissionAcknowledger(() => {});
 	const state: ControlState = {
 		channel: { async sendEvent(event: string, payload: unknown) { events.push({ event, payload }); } } as ControlState["channel"],
-		waitProgressHandlers: new Map(), currentRunOutcome: "completed", nativeRunSequence: 0,
+		waitProgressHandlers: new Map(), nativeRunSequence: 0,
 		queueIntentionTail: Promise.resolve(), shutdownStarted: false, inputSubmissionAcknowledger,
 		nativeInputIdentity: new NativeInputSubmissionIdentity(),
 	};

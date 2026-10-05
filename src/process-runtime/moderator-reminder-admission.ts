@@ -13,13 +13,14 @@ export class ModeratorReminderAdmission {
 	readonly #admit: (operation: () => Promise<void>) => Promise<void>;
 	readonly #prepare: () => Promise<void>;
 	readonly #isIdle: () => boolean;
-	readonly #commit: (signal: AbortSignal) => Promise<void>;
+	readonly #commit: (signal: AbortSignal) => Promise<"busy" | "committed">;
 
 	constructor(options: {
 		admit(operation: () => Promise<void>): Promise<void>;
 		prepare(): Promise<void>;
 		isIdle(): boolean;
-		commit(signal: AbortSignal): Promise<void>;
+		/** Rechecks idleness itself: a busy session never receives the reminder. */
+		commit(signal: AbortSignal): Promise<"busy" | "committed">;
 	}) {
 		this.#admit = options.admit;
 		this.#prepare = options.prepare;
@@ -58,9 +59,7 @@ export class ModeratorReminderAdmission {
 			const commit = await decision.promise;
 			abort.signal.throwIfAborted();
 			if (!commit) { outcome = "suppressed"; return; }
-			if (!this.#isIdle()) return;
-			await this.#commit(abort.signal);
-			outcome = "committed";
+			outcome = await this.#commit(abort.signal);
 		};
 		const admitted = Promise.resolve().then(() => this.#admit(() => {
 			started = true;

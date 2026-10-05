@@ -10,24 +10,6 @@ import type {
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 
-test("child Control preserves normalized quota evidence without changing retry semantics", async () => {
-	for (const willRetry of [true, false]) {
-		const { runtime, emit } = createFakeRuntime();
-		const events: HostedRuntimeEvent[] = [];
-		runtime.subscribe(event => events.push(event));
-		await runtime.ready;
-		const quota = { diagnostic: "Codex error: The usage limit has been reached", provider: "openai-codex", model: "gpt-5", resetAt: "2030-01-01T00:00:00.000Z" };
-		emit(controlEvent("agent.start", { runId: "quota", queuedInputCount: 0 }));
-		emit(controlEvent("agent.end", { runId: "quota", outcome: "failed", willRetry, queuedInputCount: 0, error: quota.diagnostic, quota }));
-		const event = events.find(event => event.type === "agent_end");
-		assert.equal(event?.type, "agent_end");
-		if (event?.type !== "agent_end") throw new Error("missing end");
-		assert.deepEqual(event.quota, quota);
-		assert.equal(event.willRetry, willRetry);
-		await runtime.dispose();
-	}
-});
-
 test("an authenticated native child lifecycle adopts its transport identity without a dispatched cycle", async () => {
 	const { runtime, emit } = createFakeRuntime();
 	const hostedEvents: HostedRuntimeEvent[] = [];
@@ -47,7 +29,6 @@ test("an authenticated native child lifecycle adopts its transport identity with
 	}));
 	emit(controlEvent("agent.settled", {
 		runId: "native-run-1",
-		outcome: "completed",
 		queuedInputCount: 0,
 	}));
 
@@ -58,23 +39,6 @@ test("an authenticated native child lifecycle adopts its transport identity with
 		{ type: "state_changed" },
 		{ type: "agent_settled" },
 	]);
-	await runtime.dispose();
-});
-
-test("child model errors preserve the original provider text", async () => {
-	const { runtime, emit } = createFakeRuntime();
-	const events: HostedRuntimeEvent[] = [];
-	runtime.subscribe((event) => events.push(event));
-	await runtime.ready;
-	emit(controlEvent("agent.start", { runId: "model-failure", queuedInputCount: 0 }));
-	emit(controlEvent("agent.end", {
-		runId: "model-failure", outcome: "failed", willRetry: false, queuedInputCount: 0,
-		error: "provider rejected model identifier",
-	}));
-	assert.deepEqual(events.find((event) => event.type === "agent_end"), {
-		type: "agent_end", outcome: "error", willRetry: false,
-		failure: { stage: "model", error: "provider rejected model identifier", provenance: "pi-child-hosted-runtime" },
-	});
 	await runtime.dispose();
 });
 
@@ -375,7 +339,7 @@ for (const dispatchFinishesFirst of [true, false]) {
 		void second.completion.then(() => { secondCompleted = true; });
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		const settle = () => emit(controlEvent("agent.settled", {
-			runId: "native-run-1", queuedInputCount: 0, outcome: "completed",
+			runId: "native-run-1", queuedInputCount: 0,
 		}));
 		const dispatch = () => emit(controlEvent("message.dispatch.completed", { deliveryId: requestedDeliveryIds[0] }));
 		if (dispatchFinishesFirst) dispatch(); else settle();
@@ -418,7 +382,7 @@ test("orderly disposal drains supervisor dispatch tracking without lifecycle", {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	emit(controlEvent("agent.start", { runId: "hosted-run-1", queuedInputCount: 0 }));
 	emit(controlEvent("agent.settled", {
-		runId: "hosted-run-1", queuedInputCount: 0, outcome: "completed",
+		runId: "hosted-run-1", queuedInputCount: 0,
 	}));
 	const events: HostedRuntimeEvent[] = [];
 	runtime.subscribe((event) => events.push(event));

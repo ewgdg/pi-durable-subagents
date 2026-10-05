@@ -10,12 +10,12 @@ function deferred<T = void>() {
 function admission(overrides: Partial<ConstructorParameters<typeof ModeratorReminderAdmission>[0]> = {}) {
 	return new ModeratorReminderAdmission({
 		admit: operation => operation(), prepare: async () => {}, isIdle: () => true,
-		commit: async () => {}, ...overrides,
+		commit: async () => "committed", ...overrides,
 	});
 }
 test("commit and suppression release reservations", { timeout: 1000 }, async () => {
 	let commits = 0;
-	const subject = admission({ commit: async () => { commits++; } });
+	const subject = admission({ commit: async () => { commits++; return "committed"; } });
 	assert.equal(await subject.prepare("one"), true);
 	await assert.rejects(subject.prepare("duplicate"), /already_reserved/);
 	assert.throws(() => subject.finish("wrong", true), /reservation_missing/);
@@ -84,7 +84,7 @@ test("cancellation releases a stuck preparation and prevents late commit", { tim
 	let stall = true;
 	const subject = admission({
 		prepare: async () => { if (stall) { started.resolve(); await preparation.promise; } },
-		commit: async () => { commits++; },
+		commit: async () => { commits++; return "committed"; },
 	});
 	const preparing = subject.prepare("one");
 	const rejected = assert.rejects(preparing, /admission_cancelled/);
@@ -118,14 +118,13 @@ test("asynchronous admission failure releases reservation", { timeout: 1000 }, a
 	await assert.rejects(subject.prepare("one"), /admission failed/);
 	await assert.rejects(subject.prepare("two"), /admission failed/);
 });
-test("busy at commit suppresses commit and releases reservation", { timeout: 1000 }, async () => {
+test("busy at commit reports busy and releases reservation", { timeout: 1000 }, async () => {
 	let idle = true;
-	let commits = 0;
-	const subject = admission({ isIdle: () => idle, commit: async () => { commits++; } });
+	// The native commit rechecks idleness itself and never dispatches into a busy session.
+	const subject = admission({ isIdle: () => idle, commit: async () => idle ? "committed" : "busy" });
 	assert.equal(await subject.prepare("one"), true);
 	idle = false;
 	assert.equal(await subject.finish("one", true), "busy");
-	assert.equal(commits, 0);
 	assert.equal(await subject.prepare("two"), false);
 });
 test("cancelled commit waits for native gate cleanup before releasing reservation", { timeout: 1000 }, async () => {
@@ -140,6 +139,7 @@ test("cancelled commit waits for native gate cleanup before releasing reservatio
 		commit: async signal => {
 			commitStarted.resolve();
 			await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+			return "committed";
 		},
 	});
 	assert.equal(await subject.prepare("one"), true);

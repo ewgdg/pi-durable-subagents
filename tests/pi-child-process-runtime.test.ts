@@ -350,7 +350,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.equal(runtimeEvents.some((event) =>
 			event.event === "agent.end" &&
 			event.payload.runId !== previousCycleId &&
-			event.payload.outcome === "interrupted" &&
+			event.payload.outcome === "aborted" &&
 			event.payload.willRetry === false
 		), true);
 
@@ -1018,7 +1018,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 				content: "Interruption must fence this Delivery during preparation.",
 			},
 		}]);
-		const failuresBeforeInterruption = runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "failed").length;
+		const failuresBeforeInterruption = runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "error").length;
 		const compactionStartsBeforeInterruption = runtimeEvents.filter((event) =>
 			event.event === "runtime.compaction.started"
 		).length;
@@ -1044,7 +1044,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			deliveryId: "test-delivery-15",
 		}), { accepted: true });
 		assert.match(String(await interruptedDeliveryOutcome), /child_turn_admission_cancelled/);
-		assert.equal(runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "failed").length, failuresBeforeInterruption);
+		assert.equal(runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "error").length, failuresBeforeInterruption);
 		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
 			entry.type === "custom_message" && entry.content === interruptedMessage.content
 		), false);

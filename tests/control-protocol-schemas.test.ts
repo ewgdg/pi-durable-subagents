@@ -17,14 +17,14 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 11, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 12, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control observe and presentation rosters preserve a retained Run stop", () => {
 	const suspension = { reason: "provider_quota", evidence: {
 		diagnostic: "Codex error: usage_limit_reached", provider: "openai-codex", model: "model", resetAt: "2030-01-01T00:00:00.000Z",
 	} };
 	const runtimeError = { reason: "runtime_error", evidence: {
-		stage: "model", error: "400 unrelated terminal failure", provenance: "in-process-hosted-runtime",
+		stage: "model", error: "400 unrelated terminal failure", provenance: "native-session-driver",
 	} };
 	const status = { agentId: "child", workflowId: "workflow", label: "Child", directSpawnerAgentId: "workflow",
 		primaryEvidence: { transcriptPath: null, inspectedThrough: { agentId: "child", entryId: "entry" } },
@@ -83,7 +83,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 11,
+		protocolVersion: 12,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -232,13 +232,20 @@ test("every version-nine method and event has TypeBox payload/result schemas", (
 	}), true);
 	assert.equal(Check(agentControlEvents["agent.end"].payload, {
 		runId: "run-1",
+		outcome: "error",
+		willRetry: false,
+		queuedInputCount: 0,
+		failure: { stage: "model", error: "400 upstream provider exploded", provenance: "native-session-driver" },
+	}), true);
+	// The wire carries the Native Session Driver's vocabulary, not a translated one.
+	assert.equal(Check(agentControlEvents["agent.end"].payload, {
+		runId: "run-1",
 		outcome: "interrupted",
 		willRetry: false,
 		queuedInputCount: 0,
-	}), true);
+	}), false);
 	assert.equal(Check(agentControlEvents["agent.settled"].payload, {
 		runId: "run-1",
-		outcome: "interrupted",
 		queuedInputCount: 0,
 	}), true);
 	const preparedRequestDelivery = {
@@ -686,15 +693,15 @@ test("Control snapshots carry runtime diagnostic reports but reject invented too
 
 test("bootstrap incompatibility diagnostics distinguish versions and safe field failures", () => {
 	const descriptor = {
-		protocolVersion: 11,
+		protocolVersion: 12,
 		endpoint: { transport: "unix", address: "/tmp/control.sock" },
 		connectionToken: "SECRET-TOKEN", workflowId: "workflow", agentId: "agent",
 		role: "ordinary", ownerPresentation: true, interaction: "terminal", excludedTools: [], expectedSessionId: "session",
 	};
 	assert.doesNotThrow(() => validateChildProcessBootstrap(descriptor));
 	for (const [value, pattern] of [
-		[{ ...descriptor, protocolVersion: 10, interaction: undefined }, /protocol_mismatch: the loaded child launch contract is version 11, the received bootstrap descriptor is version 10; missing descriptor fields: interaction/],
-		[{ ...descriptor, excludedTools: undefined }, /schema_drift: the loaded child launch contract is version 11, the received bootstrap descriptor is version 11; missing descriptor fields: excludedTools/],
+		[{ ...descriptor, protocolVersion: 11, interaction: undefined }, /protocol_mismatch: the loaded child launch contract is version 12, the received bootstrap descriptor is version 11; missing descriptor fields: interaction/],
+		[{ ...descriptor, excludedTools: undefined }, /schema_drift: the loaded child launch contract is version 12, the received bootstrap descriptor is version 12; missing descriptor fields: excludedTools/],
 		[{ ...descriptor, excludedTools: 42 }, /schema_drift.*invalid descriptor fields: excludedTools/],
 		[{ ...descriptor, protocolVersion: "SECRET-TOKEN" }, /invalid descriptor fields: protocolVersion/],
 	] as const) {

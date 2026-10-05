@@ -753,7 +753,7 @@ test("one failed provider request suspends an answer-obligated Run without regen
 				stage: "model",
 				error:
 					"400 invalid_request_error: deterministic answer-obligated generation failure",
-				provenance: "pi-child-hosted-runtime",
+				provenance: "native-session-driver",
 			},
 		});
 		assert.equal(
@@ -885,7 +885,7 @@ test("an unexpectedly ended answer-obligated Owner Run suspends until explicit h
 		evidence: {
 			stage: "model",
 			error: "deterministic answer-obligated Owner Run failure",
-			provenance: "in-process-hosted-runtime",
+			provenance: "native-session-driver",
 		},
 	});
 	assert.ok(
@@ -2230,7 +2230,7 @@ test("a terminal Moderator Run error suspends the handling Moderator without a r
 			evidence: {
 				stage: "model",
 				error: "deterministic Moderator Run failure",
-				provenance: "pi-child-hosted-runtime",
+				provenance: "native-session-driver",
 			},
 		},
 	);
@@ -2543,7 +2543,7 @@ test("an un-obligated terminal Run error suspends without widening Moderator eli
 		evidence: {
 			stage: "model",
 			error: "400 deterministic un-obligated terminal failure",
-			provenance: "in-process-hosted-runtime",
+			provenance: "native-session-driver",
 		},
 	});
 	assert.deepEqual(await findModerators(host), []);
