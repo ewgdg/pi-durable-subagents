@@ -27,9 +27,9 @@ import { registerSessionStartup } from "./pi-integration/session-startup.ts";
 import { installInteractiveHostBridge } from "./pi-integration/interactive-host-bridge.ts";
 import { workflowInteractionForMode } from "./pi-integration/workflow-interaction.ts";
 import { registerMessageDeliveryRenderer } from "./tools/message-delivery-renderer.ts";
+import { registerAgentsCommand } from "./tools/agents-command.ts";
 import {
 	registerOwnerAgentTools,
-	registerAgentsCommand,
 	setOwnerAgentToolsActive,
 } from "./tools/owner-surfaces.ts";
 

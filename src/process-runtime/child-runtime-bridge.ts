@@ -56,6 +56,7 @@ import {
 	registerCoordinationTools,
 } from "../tools/coordination-tools.ts";
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
+import { registerAgentsCommand } from "../tools/agents-command.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
 import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
 import {
@@ -76,7 +77,6 @@ import {
 	createControlBackedChildPresentationHandlers,
 	type ChildParticipantControlRequester,
 } from "./remote-participant-control.ts";
-import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
 import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
 
@@ -198,9 +198,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		}
 		current.currentBinding?.turnCompaction.completeNativeTurn(sequence);
 	});
-	registerRemoteAgentsCommand(
-		pi,
-		{
+	registerAgentsCommand(pi, {
+		kind: "participant",
+		presentation: {
 			...createControlBackedChildPresentationHandlers(participantRequest),
 			addChangeHandler(handler) {
 				if (!state) throw new Error("child_runtime_not_initialized");
@@ -208,7 +208,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				return activity.addChangeHandler(() => handler(activity.selectorSnapshot()));
 			},
 		},
-	);
+	});
 	let participantLifecycle: ParticipantLifecycleHandlers;
 	let refreshSpawnGuidance: ((refresh?: boolean) => Promise<void>) | undefined;
 	// Pi stops terminal input handling together with a hidden TUI. A blocked ask_user

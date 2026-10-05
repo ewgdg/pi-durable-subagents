@@ -112,6 +112,29 @@ type AgentSelectorItem = SelectItem & Readonly<{
 	detailLines?: readonly string[];
 }>;
 
+type AgentRoster = Readonly<{
+	live: readonly AgentRosterStatus[];
+	dormant: readonly AgentRosterStatus[];
+}>;
+
+/**
+ * The canonical Owner lookup: the roster Agent whose Agent ID equals its
+ * Workflow ID. The Owner exists whatever its Run phase: a stopped Owner Run is
+ * Dormant, not absent.
+ */
+export function findWorkflowOwner(roster: AgentRoster): AgentRosterStatus | undefined {
+	return [...roster.live, ...roster.dormant].find(
+		(status) => status.agentId === status.workflowId,
+	);
+}
+
+/** The canonical Owner lookup for callers that cannot proceed without an Owner. */
+export function requireWorkflowOwner(roster: AgentRoster): AgentRosterStatus {
+	const owner = findWorkflowOwner(roster);
+	if (!owner) throw new Error("Agent selector roster has no Owner");
+	return owner;
+}
+
 export function openAgentSelectorSurface(
 	ui: ExtensionUIContext,
 	options: AgentSelectorOptions,
@@ -811,17 +834,12 @@ class AgentSelectorSurface implements Component {
 		return this.#ownerCandidate()?.agentId;
 	}
 
-	/** The Owner exists in the roster whatever its Run phase: a stopped Owner Run is Dormant, not absent. */
 	#ownerCandidate(): AgentRosterStatus | undefined {
-		return [...this.#options.live, ...this.#options.dormant].find(
-			(status) => status.agentId === status.workflowId,
-		);
+		return findWorkflowOwner(this.#options);
 	}
 
 	#ownerStatus(): AgentRosterStatus {
-		const owner = this.#ownerCandidate();
-		if (!owner) throw new Error("Agent selector roster has no Owner");
-		return owner;
+		return requireWorkflowOwner(this.#options);
 	}
 
 	#ownerItem(): AgentSelectorItem {
