@@ -112,7 +112,6 @@ type ConnectionState = {
 type Generation = Readonly<{
 	binding: ChildRuntimeBinding;
 	ownerRequests: OwnerRequests;
-	handleOwnerEvent(event: OwnerEvent): void;
 	handleControlClose(): void;
 }>;
 
@@ -166,7 +165,7 @@ export class ChildControlConnection {
 			take: () => nativeInputIdentity.take(),
 		};
 		channel.serve(servedByCurrentGeneration(state));
-		channel.onEvent((event) => requireGeneration(state).handleOwnerEvent(event));
+		channel.onEvent((event) => routeOwnerEvent(state, event));
 		channel.onClose(() => {
 			state.closed = true;
 			state.current?.handleControlClose();
@@ -220,6 +219,22 @@ function servedByCurrentGeneration(state: ConnectionState): OwnerRequests {
 		(payload: never, signal: AbortSignal) =>
 			(requireGeneration(state).ownerRequests[method] as (payload: never, signal: AbortSignal) => unknown)(payload, signal),
 	])) as unknown as OwnerRequests;
+}
+
+/**
+ * Owner events have no response to carry a rejection, and a throwing event handler
+ * closes Control, which shuts the child down in the middle of a Pi /reload. So an
+ * event never requires a bound generation. Wait progress belongs to the connection.
+ * A selector change that lands between generations is superseded: a generation
+ * that shows Owner presentation fetches `presentation.agents.snapshot` after it
+ * binds, and every later change reaches it.
+ */
+function routeOwnerEvent(state: ConnectionState, event: OwnerEvent): void {
+	if (event.event === "presentation.agents.changed") {
+		state.current?.binding.activity.update(event.payload);
+	} else if (event.event === "coordination.wait.progress") {
+		state.waitProgressHandlers.get(event.payload.toolCallId)?.(event.payload.progress);
+	}
 }
 
 function requireGeneration(state: ConnectionState): Generation {
@@ -607,13 +622,6 @@ function bindGeneration(
 			dispose,
 		}),
 		ownerRequests,
-		handleOwnerEvent(event) {
-			if (event.event === "presentation.agents.changed") {
-				activity.update(event.payload);
-			} else if (event.event === "coordination.wait.progress") {
-				state.waitProgressHandlers.get(event.payload.toolCallId)?.(event.payload.progress);
-			}
-		},
 		handleControlClose() {
 			if (state.shutdownStarted) return;
 			state.shutdownStarted = true;

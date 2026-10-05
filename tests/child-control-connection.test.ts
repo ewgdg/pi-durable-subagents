@@ -43,6 +43,29 @@ test("an Owner request that arrives between generations is rejected, never serve
 	assert.equal((await loopback.ownerChannel.request("runtime.snapshot", {})).sessionId, loopback.host.session.sessionId);
 });
 
+test("an Owner event that arrives between generations keeps Control open for the next generation", { timeout: 5_000 }, async t => {
+	const loopback = await createChildControlLoopback(t);
+	const selector = {
+		live: [],
+		dormant: [],
+		selectedAgentId: "child",
+		humanAttention: [],
+		operationalAttention: [],
+		reports: [],
+	};
+	await loopback.endGeneration("reload");
+	// The Owner publishes selector changes whenever its roster moves, including while
+	// the child's Pi /reload has no generation bound.
+	await loopback.ownerChannel.sendEvent("presentation.agents.changed", selector);
+	const binding = await loopback.bindGeneration();
+
+	assert.equal((await loopback.ownerChannel.request("runtime.snapshot", {})).sessionId, loopback.host.session.sessionId);
+	assert.equal(loopback.hostShell.shutdowns, 0);
+	await loopback.ownerChannel.sendEvent("presentation.agents.changed", selector);
+	await loopback.ownerChannel.request("runtime.snapshot", {});
+	assert.deepEqual(binding.activity.selectorSnapshot(), selector);
+});
+
 test("a closed Control channel reaches the host shell's shutdown port", { timeout: 5_000 }, async t => {
 	const loopback = await createChildControlLoopback(t);
 	assert.equal(loopback.hostShell.shutdowns, 0);
