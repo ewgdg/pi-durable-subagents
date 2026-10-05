@@ -229,6 +229,25 @@ test("an unrelated append of the same role does not confirm and settles false wi
 	assert.ok(host.session.messages.some(message => message.role === "user"), "Pi appended a different user message");
 });
 
+test("commit proof settles false at its own message end when nothing persisted, before the Run settles", { timeout: 5000 }, async t => {
+	// A lane-holding caller awaits this proof while the Run's own agent_end hook
+	// waits on that lane (a forwarded human resume), so settlement never comes first.
+	const runSettlement = deferred();
+	t.after(() => runSettlement.resolve());
+	const host = await fixture(t, pi => {
+		pi.on("agent_end", () => runSettlement.promise);
+	});
+	const appendMessage = host.session.sessionManager.appendMessage.bind(host.session.sessionManager);
+	host.session.sessionManager.appendMessage = message =>
+		message.role === "user" ? "dropped-user-entry" : appendMessage(message);
+	host.model.setResponses([fauxAssistantMessage("The dropped input ran.")]);
+	const dispatch = host.driver.deliver({ kind: "user", content: "Never persisted." }, { proveCommit: true });
+	assert.equal(await dispatch.transcriptCommit, false);
+	assert.equal(host.session.isIdle, false, "proof does not wait for the Run to settle");
+	runSettlement.resolve();
+	await dispatch.completion;
+});
+
 test("commit proof settles false when dispatch completes without a commit", { timeout: 5000 }, async t => {
 	const host = await fixture(t, pi => {
 		pi.on("input", event => event.text === "Handled elsewhere." ? { action: "handled" } : undefined);

@@ -60,6 +60,7 @@ export type NativeDeliveryDispatch = Readonly<{
 }>;
 
 type CustomDelivery = Extract<AgentRuntimeDelivery, { kind: "custom" }>;
+type SessionMessage = Extract<AgentSessionEvent, { type: "message_end" }>["message"];
 type NativeSubmission = Readonly<{ completion: Promise<void>; preflight: Promise<void> }>;
 type AcceptedAttempt = Readonly<{ completion: Promise<void>; runActive: boolean }>;
 type BusyAttempt = Readonly<{ busy: StartupPreparationBusyError; startupCancellation: AbortSignal }>;
@@ -325,6 +326,7 @@ export class NativeSessionDriver {
  * visible on the session event surface, so `message_end` is only a wake-up: Pi
  * notifies listeners immediately before its synchronous append, and the entry is
  * read in the microtask after persistence. Only entries new since dispatch count.
+ * The Delivery's own message ending without a new entry settles false at once.
  */
 class TranscriptCommitProof {
 	readonly result: Promise<boolean>;
@@ -355,7 +357,15 @@ class TranscriptCommitProof {
 		const role = this.#delivery.kind === "custom" ? "custom" : "user";
 		this.#unsubscribe = this.#session.subscribe(event => {
 			if (event.type === "message_end" && event.message.role === role) {
-				queueMicrotask(() => { if (this.#committed()) this.#finish(() => this.#resolve(true)); });
+				const ownMessage = matchesDeliveryMessage(this.#delivery, event.message);
+				queueMicrotask(() => {
+					if (this.#committed()) this.#finish(() => this.#resolve(true));
+					// Pi's append already ran, so this exact message will never commit. Do
+					// not wait for settlement: a forwarded human resume awaits this proof
+					// while holding its Agent lane, and the Run's own agent_end hook waits
+					// on that lane, so settlement would never arrive.
+					else if (ownMessage) this.#finish(() => this.#resolve(false));
+				});
 			}
 			if (event.type === "agent_settled") this.#settle();
 		});
@@ -399,23 +409,31 @@ class TranscriptCommitProof {
 }
 
 function matchesDeliveryEntry(delivery: AgentRuntimeDelivery, entry: SessionEntry): boolean {
-	if (delivery.kind === "custom") return matchesCustomEntry(delivery, entry);
-	if (entry.type !== "message" || entry.message.role !== "user") return false;
+	if (delivery.kind === "custom") return entry.type === "custom_message" && matchesCustomFields(delivery, entry);
+	return entry.type === "message" && matchesDeliveryMessage(delivery, entry.message);
+}
+
+/** Whether a session message is this Delivery in the form Pi persists it. */
+function matchesDeliveryMessage(delivery: AgentRuntimeDelivery, message: SessionMessage): boolean {
+	if (delivery.kind === "custom") return message.role === "custom" && matchesCustomFields(delivery, message);
+	if (message.role !== "user") return false;
 	// Pi normalizes prompt images (resizing, re-encoding, or omitting them) and
 	// appends its image hints after the text, so only the leading text is stable.
-	const committed = entry.message.content;
+	const committed = message.content;
 	const committedText = typeof committed === "string"
 		? committed
 		: committed[0]?.type === "text" ? committed[0].text : undefined;
 	return committedText?.startsWith(submittedUserText(delivery.content)) === true;
 }
 
-function matchesCustomEntry(delivery: CustomDelivery, entry: SessionEntry): boolean {
-	return entry.type === "custom_message" &&
-		entry.customType === delivery.message.customType &&
-		isDeepStrictEqual(entry.content, delivery.message.content) &&
-		entry.display === delivery.message.display &&
-		isDeepStrictEqual(entry.details, "details" in delivery.message ? delivery.message.details : undefined);
+function matchesCustomFields(
+	delivery: CustomDelivery,
+	candidate: Readonly<{ customType: string; content: unknown; display: boolean; details?: unknown }>,
+): boolean {
+	return candidate.customType === delivery.message.customType &&
+		isDeepStrictEqual(candidate.content, delivery.message.content) &&
+		candidate.display === delivery.message.display &&
+		isDeepStrictEqual(candidate.details, "details" in delivery.message ? delivery.message.details : undefined);
 }
 
 function submittedUserText(content: Extract<AgentRuntimeDelivery, { kind: "user" }>["content"]): string {
