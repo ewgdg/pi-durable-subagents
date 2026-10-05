@@ -3,7 +3,7 @@ import test from "node:test";
 import { Check } from "typebox/value";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { validateAgentMessageInput, sameAgentMessageInput } from "../src/protocol/agent-message-input.ts";
-import { agentControlMethods } from "../src/control/agent-control-protocol.ts";
+import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { renderAgentMessageCall } from "../src/tools/message-renderer.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as unknown as Theme;
@@ -13,7 +13,7 @@ for (const input of [
 ] as const) {
 	test(`Background ${input.operation} input is explicit, immutable and transported`, () => {
 		assert.deepEqual(validateAgentMessageInput(input), input);
-		assert.ok(Check(agentControlMethods["coordination.message"].request, { toolCallId: "background", input }));
+		assert.ok(Check(agentControlProtocol.childToOwner.methods["coordination.message"].request, { toolCallId: "background", input }));
 		assert.equal(sameAgentMessageInput(input, { ...input, deliveryMode: "deferred" }), false);
 		const { deliveryMode: _mode, ...defaultInput } = input;
 		assert.deepEqual(validateAgentMessageInput(defaultInput), defaultInput, "omission does not inherit Background");

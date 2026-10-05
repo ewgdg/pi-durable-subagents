@@ -4,7 +4,7 @@ import { fauxToolCall, validateToolArguments, type JsonObject } from "@earendil-
 import { Compile } from "typebox/compile";
 import { Check } from "typebox/value";
 import { coordinationToolSchemas } from "../src/tools/coordination-tool-catalogue.ts";
-import { agentControlMethods } from "../src/control/agent-control-protocol.ts";
+import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 
 const parameters = coordinationToolSchemas.agent_message;
 const tool = { name: "agent_message", description: "Coordinate", parameters };
@@ -81,7 +81,7 @@ test("no registered tool declaration carries resolution keywords", () => {
 });
 
 test("nested tool input validates inside control transport", () => {
-	const request = agentControlMethods["coordination.message"].request;
+	const request = agentControlProtocol.childToOwner.methods["coordination.message"].request;
 	for (const schema of [request, JSON.parse(JSON.stringify(request))]) {
 		const validator = Compile(schema);
 		for (const base of baseInputs) {

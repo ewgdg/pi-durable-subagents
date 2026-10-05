@@ -27,10 +27,24 @@ export type EventDefinition = Readonly<{
 	payload: TSchema;
 }>;
 
-export type AgentControlProtocol = Readonly<{
+/** The methods and events one side sends to the other. */
+export type ControlDirection = Readonly<{
 	methods: Readonly<Record<string, ControlDefinition>>;
 	events: Readonly<Record<string, EventDefinition>>;
 }>;
+
+export type AgentControlProtocol = Readonly<{
+	childToOwner: ControlDirection;
+	ownerToChild: ControlDirection;
+}>;
+
+/** Which end of the Control channel this is; it fixes what may be sent and received. */
+export type ControlSide = "owner" | "child";
+
+export type OutboundDirection<P extends AgentControlProtocol, S extends ControlSide> =
+	S extends "owner" ? P["ownerToChild"] : P["childToOwner"];
+export type InboundDirection<P extends AgentControlProtocol, S extends ControlSide> =
+	S extends "owner" ? P["childToOwner"] : P["ownerToChild"];
 
 export type AgentControlIdentity = Readonly<{
 	protocolVersion: typeof AGENT_CONTROL_PROTOCOL_VERSION;
@@ -38,43 +52,62 @@ export type AgentControlIdentity = Readonly<{
 	agentId: string;
 }>;
 
-type MethodName<P extends AgentControlProtocol> = keyof P["methods"] & string;
-type EventName<P extends AgentControlProtocol> = keyof P["events"] & string;
-type MethodRequest<P extends AgentControlProtocol, M extends MethodName<P>> =
-	Static<P["methods"][M]["request"]>;
-type MethodResponse<P extends AgentControlProtocol, M extends MethodName<P>> =
-	Static<P["methods"][M]["response"]>;
-type EventPayload<P extends AgentControlProtocol, E extends EventName<P>> =
-	Static<P["events"][E]["payload"]>;
+type Primitive = string | number | boolean | bigint | symbol | null | undefined;
 
-export type ControlRequest<P extends AgentControlProtocol> = {
-	[M in MethodName<P>]: Readonly<{
-		method: M;
-		payload: MethodRequest<P, M>;
-		signal: AbortSignal;
-	}>;
-}[MethodName<P>];
+/** Senders may pass readonly values; the channel only reads and serializes them. */
+export type DeepReadonly<T> = T extends Primitive | ((...args: never[]) => unknown)
+	// Checked first so branded primitives such as Pi's `string & {}` stay primitives.
+	? T
+	: T extends readonly []
+	? readonly []
+	: T extends readonly (infer Item)[]
+		? readonly DeepReadonly<Item>[]
+	: T extends object
+		? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+		: T;
 
-export type ControlEvent<P extends AgentControlProtocol> = {
-	[E in EventName<P>]: Readonly<{
+export type MethodName<D extends ControlDirection> = keyof D["methods"] & string;
+export type EventName<D extends ControlDirection> = keyof D["events"] & string;
+export type MethodRequest<D extends ControlDirection, M extends MethodName<D>> =
+	Static<D["methods"][M]["request"]>;
+export type MethodResponse<D extends ControlDirection, M extends MethodName<D>> =
+	Static<D["methods"][M]["response"]>;
+export type EventPayload<D extends ControlDirection, E extends EventName<D>> =
+	Static<D["events"][E]["payload"]>;
+
+export type ControlEvent<D extends ControlDirection> = {
+	[E in EventName<D>]: Readonly<{
 		event: E;
-		payload: EventPayload<P, E>;
+		payload: EventPayload<D, E>;
 		sequence: number;
 	}>;
-}[EventName<P>];
+}[EventName<D>];
+
+/** One handler per method of a direction; a missing method is a type error. */
+export type ControlServeMap<D extends ControlDirection> = {
+	readonly [M in MethodName<D>]: (
+		payload: MethodRequest<D, M>,
+		signal: AbortSignal,
+	) => Promise<DeepReadonly<MethodResponse<D, M>>> | DeepReadonly<MethodResponse<D, M>>;
+};
+
+/** The typed outbound requester of one channel side. */
+export type ControlRequester<D extends ControlDirection> = <M extends MethodName<D>>(
+	method: M,
+	payload: DeepReadonly<MethodRequest<D, M>>,
+	signal?: AbortSignal,
+) => Promise<MethodResponse<D, M>>;
 
 export type ControlHello = Readonly<{
 	connectionToken: string;
 	expectedSessionId: string;
 }>;
 
-export type ControlRequestHandler<P extends AgentControlProtocol> = (
-	request: ControlRequest<P>,
-) => Promise<unknown> | unknown;
-
-export type ControlEventHandler<P extends AgentControlProtocol> = (
-	event: ControlEvent<P>,
+export type ControlEventHandler<D extends ControlDirection> = (
+	event: ControlEvent<D>,
 ) => Promise<void> | void;
+
+type ServeHandler = (payload: unknown, signal: AbortSignal) => unknown;
 
 type PendingRequest = {
 	method: string;
@@ -129,11 +162,16 @@ class TerminalRequestIds {
 	}
 }
 
-/** Ordered, validated NDJSON request/response/event channel over any byte stream. */
-export class FramedAgentControlChannel<P extends AgentControlProtocol> {
+/**
+ * Ordered, validated NDJSON request/response/event channel over any byte stream.
+ * Each side sends only its outbound direction and accepts only its inbound one; a
+ * frame from the wrong direction is a protocol violation, like an unknown name.
+ */
+export class FramedAgentControlChannel<P extends AgentControlProtocol, S extends ControlSide> {
 	readonly #identity: AgentControlIdentity;
 	readonly #maximumFrameBytes: number;
-	readonly #protocol: P;
+	readonly #outbound: ControlDirection;
+	readonly #inbound: ControlDirection;
 	readonly #transport: ControlTransport;
 	readonly #writer = new SerialLane();
 	readonly #reader = new SerialLane();
@@ -148,8 +186,8 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 	#nextRequestSequence = 0;
 	#nextEventSequence = 0;
 	#expectedEventSequence = 1;
-	#requestHandler: ControlRequestHandler<P> | undefined;
-	#eventHandler: ControlEventHandler<P> | undefined;
+	#serveMap: Readonly<Record<string, ServeHandler>> | undefined;
+	#eventHandler: ControlEventHandler<InboundDirection<P, S>> | undefined;
 	#unsubscribeData: (() => void) | undefined;
 	#unsubscribeClose: (() => void) | undefined;
 	#transportClosePromise: Promise<void> | undefined;
@@ -157,6 +195,7 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 	constructor(options: {
 		identity: AgentControlIdentity;
 		protocol: P;
+		side: S;
 		transport: ControlTransport;
 		maximumFrameBytes?: number;
 	}) {
@@ -165,7 +204,8 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 			throw new Error("control_channel_configuration: maximumFrameBytes must be a positive integer");
 		}
 		this.#identity = options.identity;
-		this.#protocol = options.protocol;
+		this.#outbound = options.side === "owner" ? options.protocol.ownerToChild : options.protocol.childToOwner;
+		this.#inbound = options.side === "owner" ? options.protocol.childToOwner : options.protocol.ownerToChild;
 		this.#transport = options.transport;
 		this.#maximumFrameBytes = options.maximumFrameBytes ?? DEFAULT_MAXIMUM_CONTROL_FRAME_BYTES;
 		this.#outboundTerminal = new TerminalRequestIds(this.#identity.agentId);
@@ -180,18 +220,20 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		});
 	}
 
-	onRequest(handler: ControlRequestHandler<P>): () => void {
+	/** Serve every inbound method; the channel validates each request and response. */
+	serve(handlers: ControlServeMap<InboundDirection<P, S>>): () => void {
 		this.#assertOpen();
-		if (this.#requestHandler) {
-			throw new Error("control_channel_handler_exists: request handler already registered");
+		if (this.#serveMap) {
+			throw new Error("control_channel_handler_exists: request handlers already registered");
 		}
-		this.#requestHandler = handler;
+		const serveMap = handlers as Readonly<Record<string, ServeHandler>>;
+		this.#serveMap = serveMap;
 		return () => {
-			if (this.#requestHandler === handler) this.#requestHandler = undefined;
+			if (this.#serveMap === serveMap) this.#serveMap = undefined;
 		};
 	}
 
-	onEvent(handler: ControlEventHandler<P>): () => void {
+	onEvent(handler: ControlEventHandler<InboundDirection<P, S>>): () => void {
 		this.#assertOpen();
 		if (this.#eventHandler) {
 			throw new Error("control_channel_handler_exists: event handler already registered");
@@ -218,14 +260,14 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		await this.#send({ ...this.#identity, type: "hello", ...hello });
 	}
 
-	async request<M extends MethodName<P>>(
+	async request<M extends MethodName<OutboundDirection<P, S>>>(
 		method: M,
-		payload: MethodRequest<P, M>,
+		payload: DeepReadonly<MethodRequest<OutboundDirection<P, S>, M>>,
 		signal?: AbortSignal,
-	): Promise<MethodResponse<P, M>> {
+	): Promise<MethodResponse<OutboundDirection<P, S>, M>> {
 		this.#assertOpen();
 		if (signal?.aborted) throw abortError();
-		const definition = this.#protocol.methods[method];
+		const definition = ownEntry(this.#outbound.methods, method);
 		if (!definition || !Check(definition.request, payload)) {
 			throw new Error(`control_channel_invalid_request: ${method}`);
 		}
@@ -258,15 +300,15 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 			pending.removeAbortListener();
 			pending.reject(asError(error));
 		});
-		return await result as MethodResponse<P, M>;
+		return await result as MethodResponse<OutboundDirection<P, S>, M>;
 	}
 
-	async sendEvent<E extends EventName<P>>(
+	async sendEvent<E extends EventName<OutboundDirection<P, S>>>(
 		event: E,
-		payload: EventPayload<P, E>,
+		payload: DeepReadonly<EventPayload<OutboundDirection<P, S>, E>>,
 	): Promise<void> {
 		this.#assertOpen();
-		const definition = this.#protocol.events[event];
+		const definition = ownEntry(this.#outbound.events, event);
 		if (!definition || !Check(definition.payload, payload)) {
 			throw new Error(`control_channel_invalid_event: ${event}`);
 		}
@@ -367,11 +409,11 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		if (this.#incoming.has(frame.requestId) || this.#incomingTerminal.has(frame.requestId)) {
 			throw new Error(`control_channel_duplicate_request: ${frame.requestId}`);
 		}
-		const definition = this.#protocol.methods[frame.method];
+		const definition = ownEntry(this.#inbound.methods, frame.method);
 		if (!definition || !Check(definition.request, frame.payload)) {
 			throw new Error(`control_channel_invalid_request: ${frame.method}`);
 		}
-		const handler = this.#requestHandler;
+		const handler = this.#serveMap && ownEntry(this.#serveMap, frame.method);
 		if (!handler) {
 			this.#incomingTerminal.add(frame.requestId);
 			void this.#sendError(
@@ -385,11 +427,7 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		this.#incoming.set(frame.requestId, { abortController });
 		let result: Promise<unknown>;
 		try {
-			result = Promise.resolve(handler({
-				method: frame.method,
-				payload: frame.payload,
-				signal: abortController.signal,
-			} as ControlRequest<P>));
+			result = Promise.resolve(handler(frame.payload, abortController.signal));
 		} catch (error) {
 			result = Promise.reject(error);
 		}
@@ -442,7 +480,7 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 			pending.reject(new Error(`${frame.error.code}: ${frame.error.message}`));
 			return;
 		}
-		const definition = this.#protocol.methods[pending.method];
+		const definition = ownEntry(this.#outbound.methods, pending.method);
 		if (!definition || !Check(definition.response, frame.result)) {
 			pending.reject(new Error(`control_channel_invalid_response: ${pending.method}`));
 			return;
@@ -456,7 +494,7 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 				`control_channel_event_sequence: expected ${this.#expectedEventSequence}, received ${frame.sequence}`,
 			);
 		}
-		const definition = this.#protocol.events[frame.event];
+		const definition = ownEntry(this.#inbound.events, frame.event);
 		if (!definition || !Check(definition.payload, frame.payload)) {
 			throw new Error(`control_channel_invalid_event: ${frame.event}`);
 		}
@@ -468,7 +506,7 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 			event: frame.event,
 			payload: frame.payload,
 			sequence: frame.sequence,
-		} as ControlEvent<P>);
+		} as ControlEvent<InboundDirection<P, S>>);
 	}
 
 	#handleCancel(frame: CancelFrame): void {
@@ -571,6 +609,11 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		this.#closeHandlers.clear();
 		for (const handler of closeHandlers) notifyCloseObserver(handler, this.#closeCause);
 	}
+}
+
+/** A direction's own entry: names arriving off the wire must not reach prototype members. */
+function ownEntry<T>(record: Readonly<Record<string, T>>, name: string): T | undefined {
+	return Object.hasOwn(record, name) ? record[name] : undefined;
 }
 
 function concatenateBytes(left: Uint8Array, right: Uint8Array): Uint8Array {

@@ -1,18 +1,16 @@
-import type { Static } from "typebox";
-import { Check } from "typebox/value";
-
 import type {
 	ControlEvent,
-	ControlRequest,
+	ControlRequester,
+	ControlServeMap,
 	FramedAgentControlChannel,
+	MethodName,
 } from "../control/agent-control-channel.ts";
-import {
-	agentControlMethods,
+import type {
 	agentControlProtocol,
-	type AgentControlMethod,
-	type RemoteAgentSelectionResult,
-	type RemoteAgentSelectorAction,
-	type RemoteAgentSelectorSnapshot,
+	ChildToOwnerControl,
+	RemoteAgentSelectionResult,
+	RemoteAgentSelectorAction,
+	RemoteAgentSelectorSnapshot,
 } from "../control/agent-control-protocol.ts";
 import type { ParticipantLifecycleHandlers } from "../pi-integration/participant-lifecycle.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
@@ -22,18 +20,10 @@ import type {
 } from "../tools/coordination-tools.ts";
 
 type RemoteParticipantRole = Exclude<CoordinationRole, "owner">;
-type MethodRequest<M extends AgentControlMethod> = Static<
-	(typeof agentControlMethods)[M]["request"]
->;
-type MethodResponse<M extends AgentControlMethod> = Static<
-	(typeof agentControlMethods)[M]["response"]
->;
+type OwnerControlChannel = FramedAgentControlChannel<typeof agentControlProtocol, "owner">;
 
-export type ChildParticipantControlRequester = <M extends AgentControlMethod>(
-	method: M,
-	payload: MethodRequest<M>,
-	signal?: AbortSignal,
-) => Promise<MethodResponse<M>>;
+/** The child's typed requester: only child→Owner methods with their exact payloads. */
+export type ChildParticipantControlRequester = ControlRequester<ChildToOwnerControl>;
 
 /** Agent-scoped Owner behavior; transport and framing stay outside this seam. */
 export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> = Readonly<{
@@ -49,7 +39,7 @@ export type OwnerParticipantPresentationHandlers = Readonly<{
 		action: RemoteAgentSelectorAction,
 		signal: AbortSignal,
 	): Promise<RemoteAgentSelectionResult>;
-	addChangeHandler?(handler: (snapshot: RemoteAgentSelectorSnapshot) => void): () => void;
+	addChangeHandler(handler: (snapshot: RemoteAgentSelectorSnapshot) => void): () => void;
 }>;
 
 export type ControlBackedChildPresentationHandlers = Readonly<{
@@ -185,7 +175,7 @@ export function createControlBackedChildParticipantHandlers(
 		...common,
 		askUser: (toolCallId, input, signal) =>
 			request("coordination.askHuman", { toolCallId, input }, signal),
-		reportToUser: (toolCallId, input) => request("coordination.reportToUser", { toolCallId, input: { ...input, evidence: [...input.evidence] } }),
+		reportToUser: (toolCallId, input) => request("coordination.reportToUser", { toolCallId, input }),
 		moderatorControl: (toolCallId, input) =>
 			request("coordination.moderatorControl", { toolCallId, input }),
 	};
@@ -195,177 +185,101 @@ export function createControlBackedChildParticipantHandlers(
 /**
  * Attach the Owner's participant serving to one admitted child channel: child
  * requests reach the Owner's handlers, Wait progress and selector changes return as
- * events, and every child event fans out to the current subscribers.
+ * events, and every child event fans out to the current subscribers. Without
+ * handlers the channel serves nothing and refuses every request.
  */
 export function serveOwnerParticipant(
-	channel: FramedAgentControlChannel<typeof agentControlProtocol>,
+	channel: OwnerControlChannel,
 	handlers:
 		| OwnerParticipantRequestHandlers<"ordinary">
 		| OwnerParticipantRequestHandlers<"moderator">
 		| undefined,
-	subscribers: ReadonlySet<(event: ControlEvent<typeof agentControlProtocol>) => void>,
+	subscribers: ReadonlySet<(event: ControlEvent<ChildToOwnerControl>) => void>,
 ): void {
-	channel.onRequest((request) =>
-		dispatchParticipantRequestToOwner(handlers, request, {
-			waitProgress: (toolCallId, progress) => {
-				void channel.sendEvent("coordination.wait.progress", { toolCallId, progress })
-					.catch(() => undefined);
-			},
-		})
-	);
-	const removePresentationChangeHandler = handlers?.presentation.addChangeHandler?.((snapshot) => {
-		void channel.sendEvent("presentation.agents.changed", {
-			...snapshot,
-			live: [...snapshot.live],
-			dormant: [...snapshot.dormant],
-			humanAttention: [...snapshot.humanAttention],
-			operationalAttention: [...snapshot.operationalAttention],
-		}).catch(() => undefined);
-	}) ?? (() => undefined);
+	if (handlers) {
+		channel.serve(ownerParticipantServeMap(handlers, (toolCallId, progress) => {
+			void channel.sendEvent("coordination.wait.progress", { toolCallId, progress })
+				.catch(() => undefined);
+		}));
+		const removePresentationChangeHandler = handlers.presentation.addChangeHandler((snapshot) => {
+			void channel.sendEvent("presentation.agents.changed", snapshot).catch(() => undefined);
+		});
+		channel.onClose(() => removePresentationChangeHandler());
+	}
 	channel.onEvent((event) => {
 		for (const subscriber of subscribers) subscriber(event);
 	});
-	channel.onClose(() => removePresentationChangeHandler());
 }
 
-/** Dispatch one authenticated child intention into its scoped Owner handlers. */
-export async function dispatchParticipantRequestToOwner(
-	handlers:
+/**
+ * One entry per child→Owner method. A coordination method the role's handler
+ * contract lacks answers `forbidden`; the contract is the only role list.
+ */
+function ownerParticipantServeMap(
+	{ lifecycle, coordination, presentation }:
 		| OwnerParticipantRequestHandlers<"ordinary">
-		| OwnerParticipantRequestHandlers<"moderator">
-		| undefined,
-	request: ControlRequest<typeof agentControlProtocol>,
-	events?: Readonly<{
-		waitProgress(toolCallId: string, progress: AgentWaitProgress): void;
-	}>,
-): Promise<unknown> {
-	if (!handlers) throw new Error("child_runtime_owner_request_unavailable");
-	assertValidRequest(request);
-	let response: unknown;
-	switch (request.method) {
-		case "runtime.executionBegin":
-			response = { frames: await handlers.lifecycle.executionStarted(request.payload.submissionSequence) };
-			break;
-		case "runtime.humanInput":
-			response = {
-				disposition: await handlers.lifecycle.humanInputSubmitted({
-					text: request.payload.text,
-					images: request.payload.images,
-					submissionSequence: request.payload.submissionSequence,
-				}),
-			};
-			break;
-		case "runtime.primaryInputQueued":
-			await handlers.lifecycle.primaryInputQueued();
-			response = {};
-			break;
-		case "runtime.humanInputMode":
-			response = { mode: await handlers.lifecycle.humanInputMode() };
-			break;
-		case "runtime.guardToolResult":
-			response = {
-				result: await handlers.lifecycle.toolResultCommitting({
-					message: request.payload.message,
-				}) ?? null,
-			};
-			break;
-		case "runtime.rootToolExecutionStart":
-			await handlers.lifecycle.rootToolExecutionStarted(request.payload);
-			response = {};
-			break;
-		case "runtime.safeBoundary":
-			await handlers.lifecycle.safeBoundaryReached();
-			response = {};
-			break;
-		case "runtime.executionEnd":
-			await handlers.lifecycle.executionEnded();
-			response = {};
-			break;
-		case "coordination.observe":
-			response = await handlers.coordination.observe(request.payload);
-			break;
-		case "coordination.message":
-			response = await handlers.coordination.message(
-				request.payload.toolCallId,
-				request.payload.input,
-			);
-			break;
-		case "coordination.wait":
-			response = await handlers.coordination.wait(
-				request.payload.toolCallId,
-				request.payload.input,
-				request.signal,
-				(progress) => events?.waitProgress(request.payload.toolCallId, progress),
-			);
-			break;
-		case "coordination.control":
-			response = await handlers.coordination.control(
-				request.payload.toolCallId,
-				request.payload.input,
-			);
-			break;
-		case "coordination.spawn":
-			if (!("spawn" in handlers.coordination)) throw unavailableForRole(request.method);
-			response = await handlers.coordination.spawn(
-				request.payload.toolCallId,
-				request.payload.input,
-			);
-			break;
-		case "coordination.templateSnapshot":
-			if (!("agentTemplateSnapshot" in handlers.coordination)) {
-				throw unavailableForRole(request.method);
-			}
-			response = await handlers.coordination.agentTemplateSnapshot(request.payload.refresh);
-			break;
-		case "coordination.askHuman":
-			if (!("askUser" in handlers.coordination)) throw unavailableForRole(request.method);
-			response = await handlers.coordination.askUser(
-				request.payload.toolCallId,
-				request.payload.input,
-				request.signal,
-			);
-			break;
-		case "coordination.reportToUser":
-			if (!("reportToUser" in handlers.coordination)) throw unavailableForRole(request.method);
-			response = await handlers.coordination.reportToUser(request.payload.toolCallId, request.payload.input);
-			break;
-		case "presentation.reports.setRead":
-			await handlers.presentation.setReportRead(request.payload.reportId, request.payload.read);
-			response = {};
-			break;
-		case "coordination.moderatorControl":
-			if (!("moderatorControl" in handlers.coordination)) throw unavailableForRole(request.method);
-			response = await handlers.coordination.moderatorControl(
-				request.payload.toolCallId,
-				request.payload.input,
-			);
-			break;
-		case "presentation.agents.snapshot":
-			response = await handlers.presentation.snapshot();
-			break;
-		case "presentation.agents.select":
-			response = await handlers.presentation.select(request.payload, request.signal);
-			break;
-		default:
-			throw new Error(`child_runtime_owner_request_unavailable: ${request.method}`);
-	}
-	assertValidResponse(request.method, response);
-	return response;
+		| OwnerParticipantRequestHandlers<"moderator">,
+	publishWaitProgress: (toolCallId: string, progress: AgentWaitProgress) => void,
+): ControlServeMap<ChildToOwnerControl> {
+	return {
+		"runtime.executionBegin": async ({ submissionSequence }) =>
+			({ frames: await lifecycle.executionStarted(submissionSequence) }),
+		"runtime.humanInput": async ({ text, images, submissionSequence }) =>
+			({ disposition: await lifecycle.humanInputSubmitted({ text, images, submissionSequence }) }),
+		"runtime.primaryInputQueued": async () => {
+			await lifecycle.primaryInputQueued();
+			return {};
+		},
+		"runtime.humanInputMode": async () => ({ mode: await lifecycle.humanInputMode() }),
+		"runtime.guardToolResult": async ({ message }) =>
+			({ result: await lifecycle.toolResultCommitting({ message }) ?? null }),
+		"runtime.rootToolExecutionStart": async (input) => {
+			await lifecycle.rootToolExecutionStarted(input);
+			return {};
+		},
+		"runtime.safeBoundary": async () => {
+			await lifecycle.safeBoundaryReached();
+			return {};
+		},
+		"runtime.executionEnd": async () => {
+			await lifecycle.executionEnded();
+			return {};
+		},
+		"coordination.observe": (input) => coordination.observe(input),
+		"coordination.message": ({ toolCallId, input }) => coordination.message(toolCallId, input),
+		"coordination.wait": ({ toolCallId, input }, signal) => coordination.wait(
+			toolCallId,
+			input,
+			signal,
+			(progress) => publishWaitProgress(toolCallId, progress),
+		),
+		"coordination.control": ({ toolCallId, input }) => coordination.control(toolCallId, input),
+		"coordination.spawn": async ({ toolCallId, input }) => {
+			if (!("spawn" in coordination)) throw forbiddenForRole("coordination.spawn");
+			return coordination.spawn(toolCallId, input);
+		},
+		"coordination.templateSnapshot": async ({ refresh }) => {
+			if (!("agentTemplateSnapshot" in coordination)) throw forbiddenForRole("coordination.templateSnapshot");
+			return coordination.agentTemplateSnapshot(refresh);
+		},
+		"coordination.askHuman": ({ toolCallId, input }, signal) => coordination.askUser(toolCallId, input, signal),
+		"coordination.reportToUser": async ({ toolCallId, input }) => {
+			if (!("reportToUser" in coordination)) throw forbiddenForRole("coordination.reportToUser");
+			return coordination.reportToUser(toolCallId, input);
+		},
+		"coordination.moderatorControl": async ({ toolCallId, input }) => {
+			if (!("moderatorControl" in coordination)) throw forbiddenForRole("coordination.moderatorControl");
+			return coordination.moderatorControl(toolCallId, input);
+		},
+		"presentation.agents.snapshot": () => presentation.snapshot(),
+		"presentation.agents.select": (action, signal) => presentation.select(action, signal),
+		"presentation.reports.setRead": async ({ reportId, read }) => {
+			await presentation.setReportRead(reportId, read);
+			return {};
+		},
+	};
 }
 
-function assertValidRequest(request: ControlRequest<typeof agentControlProtocol>): void {
-	const definition = agentControlMethods[request.method];
-	if (!definition || !Check(definition.request, request.payload)) {
-		throw new Error(`child_runtime_owner_request_invalid: ${request.method}`);
-	}
-}
-
-function assertValidResponse(method: AgentControlMethod, response: unknown): void {
-	if (!Check(agentControlMethods[method].response, response)) {
-		throw new Error(`child_runtime_owner_response_invalid: ${method}`);
-	}
-}
-
-function unavailableForRole(method: string): Error {
+function forbiddenForRole(method: MethodName<ChildToOwnerControl>): Error {
 	return new Error(`child_runtime_owner_request_forbidden: ${method}`);
 }

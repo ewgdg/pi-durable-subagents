@@ -635,6 +635,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 				humanAttention: [], operationalAttention: [], reports: [],
 			}),
 			async select() { return { kind: "selected" }; },
+			addChangeHandler: () => () => undefined,
 		},
 		lifecycle: {
 			async executionStarted() { return []; },

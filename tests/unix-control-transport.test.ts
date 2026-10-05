@@ -27,18 +27,12 @@ import {
 } from "../src/control/unix-socket-control-transport.ts";
 
 const unixOnly = process.platform === "win32" ? test.skip : test;
+const valueSchema = Type.Object({ value: Type.String() }, { additionalProperties: false });
+// Echo runs both ways: the contract case has the Owner ask the child, admission cases have children ask the Owner.
+const echo = { "test.echo": { request: valueSchema, response: valueSchema } } as const;
 const protocol = {
-	methods: {
-		"test.echo": {
-			request: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-			response: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-		},
-	},
-	events: {
-		"test.changed": {
-			payload: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-		},
-	},
+	childToOwner: { methods: echo, events: {} },
+	ownerToChild: { methods: echo, events: { "test.changed": { payload: valueSchema } } },
 } as const satisfies AgentControlProtocol;
 const identity = { protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION, workflowId: "unix-workflow", agentId: "unix-agent" };
 
@@ -61,10 +55,10 @@ unixOnly("Control Channel contract runs unchanged over connected Unix socket Ada
 	const accepted = listener.accept();
 	const ownerTransport = await connectControlTransport(listener.endpoint);
 	const childTransport = await accepted;
-	const owner = new FramedAgentControlChannel({ identity, protocol, transport: ownerTransport });
-	const child = new FramedAgentControlChannel({ identity, protocol, transport: childTransport });
+	const owner = new FramedAgentControlChannel({ identity, protocol, side: "owner", transport: ownerTransport });
+	const child = new FramedAgentControlChannel({ identity, protocol, side: "child", transport: childTransport });
 	const events: string[] = [];
-	child.onRequest(({ payload }) => ({ value: payload.value }));
+	child.serve({ "test.echo": ({ value }) => ({ value }) });
 	child.onEvent(({ payload }) => { events.push(payload.value); });
 
 	assert.deepEqual(await owner.request("test.echo", { value: "socket🙂" }), { value: "socket🙂" });
@@ -93,19 +87,20 @@ unixOnly("admission broker routes out-of-order children by one-time validated He
 		connectionToken: "first-token",
 		expectedSessionId: "first-session",
 	}, (channel) => {
-		channel.onRequest(({ payload }) => ({ value: `first:${payload.value}` }));
+		channel.serve({ "test.echo": ({ value }) => ({ value: `first:${value}` }) });
 	});
 	const secondAdmission = broker.admit({
 		agentId: "second-agent",
 		connectionToken: "second-token",
 		expectedSessionId: "second-session",
 	}, (channel) => {
-		channel.onRequest(({ payload }) => ({ value: `second:${payload.value}` }));
+		channel.serve({ "test.echo": ({ value }) => ({ value: `second:${value}` }) });
 	});
 	const secondIdentity = { ...identity, agentId: "second-agent" };
 	const secondChild = new FramedAgentControlChannel({
 		identity: secondIdentity,
 		protocol,
+		side: "child",
 		transport: await connectControlTransport(listener.endpoint),
 	});
 	await secondChild.sendHello({ connectionToken: "second-token", expectedSessionId: "second-session" });
@@ -113,6 +108,7 @@ unixOnly("admission broker routes out-of-order children by one-time validated He
 	const firstChild = new FramedAgentControlChannel({
 		identity: firstIdentity,
 		protocol,
+		side: "child",
 		transport: await connectControlTransport(listener.endpoint),
 	});
 	await firstChild.sendHello({ connectionToken: "first-token", expectedSessionId: "first-session" });
@@ -123,6 +119,7 @@ unixOnly("admission broker routes out-of-order children by one-time validated He
 	const duplicate = new FramedAgentControlChannel({
 		identity: firstIdentity,
 		protocol,
+		side: "child",
 		transport: await connectControlTransport(listener.endpoint),
 	});
 	const duplicateClosed = new Promise<Error>((resolve) => duplicate.onClose(resolve));
@@ -174,7 +171,7 @@ unixOnly("admission broker binds handlers before releasing a coalesced post-Hell
 		connectionToken: "handoff-token",
 		expectedSessionId: "handoff-session",
 	}, (channel) => {
-		channel.onRequest(({ payload }) => ({ value: `handled:${payload.value}` }));
+		channel.serve({ "test.echo": ({ value }) => ({ value: `handled:${value}` }) });
 	});
 	const child = await connectControlTransport(listener.endpoint);
 	let responseBytes = "";
@@ -225,6 +222,7 @@ unixOnly("admission broker fail-closes non-Hello, unknown-token, and mismatched 
 	const unknown = new FramedAgentControlChannel({
 		identity,
 		protocol,
+		side: "child",
 		transport: await connectControlTransport(listener.endpoint),
 	});
 	const unknownClosed = new Promise<Error>((resolve) => unknown.onClose(resolve));
@@ -245,6 +243,7 @@ unixOnly("admission broker fail-closes non-Hello, unknown-token, and mismatched 
 		const child = new FramedAgentControlChannel({
 			identity: alteredIdentity,
 			protocol,
+			side: "child",
 			transport: await connectControlTransport(listener.endpoint),
 		});
 		await child.sendHello({ connectionToken, expectedSessionId });

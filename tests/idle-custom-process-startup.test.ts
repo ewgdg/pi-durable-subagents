@@ -160,7 +160,7 @@ function ownerHandlers(agentId: string, sessionPath: string, humanInput: () => v
 	};
 	return {
 		presentation: {
-			setReportRead: unused, select: unused,
+			setReportRead: unused, select: unused, addChangeHandler: () => () => undefined,
 			snapshot: async () => ({ live: [status], dormant: [], selectedAgentId: agentId, humanAttention: [], operationalAttention: [], reports: [] }),
 		},
 		lifecycle: {

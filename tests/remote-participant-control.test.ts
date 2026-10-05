@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ControlRequest } from "../src/control/agent-control-channel.ts";
-import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
+import {
+	FramedAgentControlChannel,
+	type ControlEvent,
+} from "../src/control/agent-control-channel.ts";
+import {
+	agentControlProtocol,
+	type OwnerToChildControl,
+} from "../src/control/agent-control-protocol.ts";
+import { AGENT_CONTROL_PROTOCOL_VERSION } from "../src/control/control-protocol-schemas.ts";
+import { createInMemoryControlTransportPair } from "../src/control/in-memory-control-transport.ts";
 import {
 	createControlBackedChildParticipantHandlers,
 	createControlBackedChildPresentationHandlers,
-	dispatchParticipantRequestToOwner,
+	serveOwnerParticipant,
 	type ChildParticipantControlRequester,
 	type OwnerParticipantRequestHandlers,
 } from "../src/process-runtime/remote-participant-control.ts";
@@ -222,152 +230,8 @@ test("Control-backed child presentation requests preserve exact selector snapsho
 	]);
 });
 
-test("Owner dispatch invokes scoped process-neutral handlers and returns exact receipts", async () => {
-	const calls: unknown[] = [];
-	const handlers: OwnerParticipantRequestHandlers<"moderator"> = {
-		presentation: {
-			async setReportRead() {},
-			async snapshot() {
-				return {
-					live: [], dormant: [], selectedAgentId: "remote-agent",
-					humanAttention: [], operationalAttention: [], reports: [],
-				};
-			},
-			async select(action, signal) {
-				calls.push(["select", action, signal]);
-				return { kind: "selected" };
-			},
-		},
-		lifecycle: {
-			async executionStarted() { calls.push(["begin"]); return []; },
-			async humanInputSubmitted(input) { calls.push(["input", input]); return "submitted"; },
-			async primaryInputQueued() { calls.push(["input-queued"]); },
-			async humanInputMode() { calls.push(["mode"]); return "agent"; },
-			async toolResultCommitting(input) { calls.push(["guard", input]); return undefined; },
-			async rootToolExecutionStarted(input) { calls.push(["tool", input]); },
-			async safeBoundaryReached() { calls.push(["boundary"]); },
-			async executionEnded() { calls.push(["end"]); },
-		},
-		coordination: {
-			async observe(input) {
-				calls.push(["observe", input]);
-				return { matches: [status], hasMore: false };
-			},
-			async message(toolCallId, input) {
-				calls.push(["message", toolCallId, input]);
-				return {
-					messageId: "message-owner",
-					targetAgentId: "owner-target",
-					messageStatus: "sent",
-				};
-			},
-			async wait() { return { answers: [] }; },
-			async control(toolCallId, input) {
-				calls.push(["control", toolCallId, input]);
-				return { agentId: input.agentId, disposition: "not_running" };
-			},
-			async askUser(toolCallId, input, signal) {
-				calls.push(["ask", toolCallId, input, signal]);
-				return { requestId: "human-owner", answer: "Yes" };
-			},
-			async reportToUser() { return { reportId: "report", createdAt: "2026-01-01T00:00:00.000Z" }; },
-			async moderatorControl(toolCallId, input) {
-				calls.push(["moderator", toolCallId, input]);
-				return { disposition: "resolved" };
-			},
-		},
-	};
-	const signal = new AbortController().signal;
-	const request = {
-		method: "coordination.message",
-		payload: {
-			toolCallId: "owner-call",
-			input: { operation: "poll", messageId: "message-0" },
-		},
-		signal,
-	} as ControlRequest<typeof agentControlProtocol>;
 
-	assert.deepEqual(await dispatchParticipantRequestToOwner(handlers, request), {
-		messageId: "message-owner",
-		targetAgentId: "owner-target",
-		messageStatus: "sent",
-	});
-	assert.deepEqual(calls, [[
-		"message",
-		"owner-call",
-		{ operation: "poll", messageId: "message-0" },
-	]]);
-});
-
-test("Owner dispatch publishes the admitted Agent Wait snapshot", async () => {
-	const progress = {
-		waitingFor: [{
-			requestTitle: "Fixture request",
-			requestMessageId: "remote-wait-request",
-			responderAgentId: "responder-agent",
-		}],
-	} as const;
-	const published: unknown[] = [];
-	const handlers = {
-		coordination: {
-			async wait(_toolCallId: string, _input: unknown, _signal: AbortSignal, onProgress: (value: typeof progress) => void) {
-				onProgress(progress);
-				return { disposition: "preempted" };
-			},
-		},
-	} as unknown as OwnerParticipantRequestHandlers<"ordinary">;
-	const signal = new AbortController().signal;
-	const result = await dispatchParticipantRequestToOwner(
-		handlers,
-		{
-			method: "coordination.wait",
-			payload: { toolCallId: "remote-wait-call", input: {} },
-			signal,
-		},
-		{
-			waitProgress: (toolCallId, update) => published.push([toolCallId, update]),
-		},
-	);
-
-	assert.deepEqual(result, { disposition: "preempted" });
-	assert.deepEqual(published, [["remote-wait-call", progress]]);
-});
-
-test("Owner dispatch awaits the authenticated child's presentation selection with cancellation", async () => {
-	const cancellation = new AbortController();
-	let receivedSignal: AbortSignal | undefined;
-	const handlers = {
-		presentation: {
-			snapshot: () => ({
-				live: [], dormant: [], selectedAgentId: "remote-agent",
-				humanAttention: [], operationalAttention: [], reports: [],
-			}),
-			select: async (_action: unknown, signal: AbortSignal) => {
-				receivedSignal = signal;
-				await new Promise<void>((_resolve, reject) => signal.addEventListener(
-					"abort",
-					() => reject(new DOMException("cancelled", "AbortError")),
-					{ once: true },
-				));
-			},
-		},
-		lifecycle: {},
-		coordination: {},
-	} as unknown as OwnerParticipantRequestHandlers<"ordinary">;
-	const pending = dispatchParticipantRequestToOwner(handlers, {
-		method: "presentation.agents.select",
-		payload: { kind: "select_agent", agentId: "owner" },
-		signal: cancellation.signal,
-	});
-	cancellation.abort();
-
-	await assert.rejects(pending, (error: unknown) =>
-		error instanceof Error && error.name === "AbortError"
-	);
-	assert.equal(receivedSignal, cancellation.signal);
-});
-
-test("Moderator report transport is nonblocking and ordinary participants cannot publish", async () => {
+test("Moderator report transport is nonblocking", async () => {
 	const input = {
 		symptom: "Delivery stopped", suspectedDefect: "No continuation after dispatch",
 		uncertainty: "Cause not proven", recoveryActions: "Retried the message",
@@ -384,14 +248,6 @@ test("Moderator report transport is nonblocking and ordinary participants cannot
 	assert.deepEqual(calls, [["coordination.reportToUser", { toolCallId: "report-call", input }, undefined]]);
 	const ordinary = createControlBackedChildParticipantHandlers("ordinary", request);
 	assert.equal("reportToUser" in ordinary.coordination, false);
-	await assert.rejects(dispatchParticipantRequestToOwner({
-		coordination: ordinary.coordination,
-		lifecycle: ordinary.lifecycle,
-		presentation: {} as OwnerParticipantRequestHandlers<"ordinary">["presentation"],
-	}, {
-		method: "coordination.reportToUser", payload: { toolCallId: "report-call", input },
-		signal: new AbortController().signal,
-	} as ControlRequest<typeof agentControlProtocol>), /child_runtime_owner_request_forbidden/);
 });
 
 test("explicit report read and unread states cross the control boundary", async () => {
@@ -405,16 +261,212 @@ test("explicit report read and unread states cross the control boundary", async 
 	assert.deepEqual(calls, [["presentation.reports.setRead", { reportId: "retained-report", read: true }], ["presentation.reports.setRead", { reportId: "retained-report", read: false }]]);
 });
 
-test("Owner dispatch forwards the explicit desired report read state", async () => {
+test("Owner serving invokes scoped process-neutral handlers and returns exact receipts", async (t) => {
 	const calls: unknown[] = [];
-	const handlers = {
-		presentation: { async setReportRead(reportId: string, read: boolean) { calls.push([reportId, read]); } },
-	} as unknown as OwnerParticipantRequestHandlers<"ordinary">;
+	const { child } = serveOwner(t, moderatorHandlers({
+		async message(toolCallId, input) {
+			calls.push(["message", toolCallId, input]);
+			return { messageId: "message-owner", targetAgentId: "owner-target", messageStatus: "sent" };
+		},
+		async moderatorControl(toolCallId, input) {
+			calls.push(["moderator", toolCallId, input]);
+			return { disposition: "resolved" };
+		},
+	}));
+
+	assert.deepEqual(await child.request("coordination.message", {
+		toolCallId: "owner-call",
+		input: { operation: "poll", messageId: "message-0" },
+	}), { messageId: "message-owner", targetAgentId: "owner-target", messageStatus: "sent" });
+	assert.deepEqual(await child.request("coordination.moderatorControl", {
+		toolCallId: "moderator-call",
+		input: { operation: "resolve", summary: "Cleared", rationale: "Predicates clear" },
+	}), { disposition: "resolved" });
+	assert.deepEqual(await child.request("runtime.guardToolResult", {
+		message: { role: "user", content: "candidate", timestamp: 1 },
+	}), { result: null });
+	assert.deepEqual(calls, [
+		["message", "owner-call", { operation: "poll", messageId: "message-0" }],
+		["moderator", "moderator-call", { operation: "resolve", summary: "Cleared", rationale: "Predicates clear" }],
+	]);
+});
+
+test("Owner serving refuses a coordination method the child's role has no handler for", async (t) => {
+	let reports = 0;
+	const { child } = serveOwner(t, ordinaryHandlers());
+	const input = {
+		symptom: "Delivery stopped", suspectedDefect: "No continuation after dispatch",
+		uncertainty: "Cause not proven", recoveryActions: "Retried the message",
+		recoveryOutcome: "Still pending", evidence: ["agent/entry/call"],
+	};
+
+	await assert.rejects(
+		child.request("coordination.reportToUser", { toolCallId: "report-call", input }),
+		/request_failed: child_runtime_owner_request_forbidden: coordination.reportToUser/,
+	);
+	await assert.rejects(
+		child.request("coordination.moderatorControl", { toolCallId: "moderator-call", input: { operation: "resolve", summary: "Cleared", rationale: "Predicates clear" } }),
+		/request_failed: child_runtime_owner_request_forbidden: coordination.moderatorControl/,
+	);
+	const moderator = serveOwner(t, moderatorHandlers({
+		async reportToUser() { reports++; return { reportId: "report", createdAt: "2026-01-01T00:00:00.000Z" }; },
+	}));
+	await assert.rejects(
+		moderator.child.request("coordination.spawn", {
+			toolCallId: "spawn-call",
+			input: { title: "Work", request: "Do it", label: "worker" },
+		}),
+		/request_failed: child_runtime_owner_request_forbidden: coordination.spawn/,
+	);
+	assert.equal(reports, 0);
+});
+
+test("Owner serving publishes the admitted Agent Wait snapshot to the waiting child", async (t) => {
+	const progress = {
+		waitingFor: [{
+			requestTitle: "Fixture request",
+			requestMessageId: "remote-wait-request",
+			responderAgentId: "responder-agent",
+		}],
+	};
+	const { child, events } = serveOwner(t, ordinaryHandlers({
+		async wait(_toolCallId, _input, _signal, onProgress) {
+			onProgress?.(progress);
+			return { disposition: "preempted" };
+		},
+	}));
+
+	assert.deepEqual(
+		await child.request("coordination.wait", { toolCallId: "remote-wait-call", input: {} }),
+		{ disposition: "preempted" },
+	);
+	assert.deepEqual(events.map(({ event, payload }) => [event, payload]), [
+		["coordination.wait.progress", { toolCallId: "remote-wait-call", progress }],
+	]);
+});
+
+test("Owner serving cancels the authenticated child's presentation selection", async (t) => {
+	let receivedSignal: AbortSignal | undefined;
+	const { child } = serveOwner(t, ordinaryHandlers({}, {
+		select: async (_action, signal) => {
+			receivedSignal = signal;
+			return await new Promise((_resolve, reject) => signal.addEventListener(
+				"abort",
+				() => reject(new DOMException("cancelled", "AbortError")),
+				{ once: true },
+			));
+		},
+	}));
+	const cancellation = new AbortController();
+	const pending = child.request(
+		"presentation.agents.select",
+		{ kind: "select_agent", agentId: "owner" },
+		cancellation.signal,
+	);
+	await waitUntil(() => receivedSignal !== undefined);
+	cancellation.abort();
+
+	await assert.rejects(pending, (error: unknown) => error instanceof Error && error.name === "AbortError");
+	await waitUntil(() => receivedSignal?.aborted === true);
+});
+
+test("Owner serving forwards the explicit desired report read state", async (t) => {
+	const calls: unknown[] = [];
+	const { child } = serveOwner(t, ordinaryHandlers({}, {
+		async setReportRead(reportId, read) { calls.push([reportId, read]); },
+	}));
 	for (const read of [true, false]) {
-		assert.deepEqual(await dispatchParticipantRequestToOwner(handlers, {
-			method: "presentation.reports.setRead", payload: { reportId: "report", read },
-			signal: new AbortController().signal,
-		} as ControlRequest<typeof agentControlProtocol>), {});
+		assert.deepEqual(await child.request("presentation.reports.setRead", { reportId: "report", read }), {});
 	}
 	assert.deepEqual(calls, [["report", true], ["report", false]]);
 });
+
+type OrdinaryCoordination = OwnerParticipantRequestHandlers<"ordinary">["coordination"];
+type ModeratorCoordination = OwnerParticipantRequestHandlers<"moderator">["coordination"];
+type Presentation = OwnerParticipantRequestHandlers<"ordinary">["presentation"];
+
+const unscripted = (name: string) => () => Promise.reject(new Error(`unscripted: ${name}`));
+
+function lifecycleHandlers(): OwnerParticipantRequestHandlers<"ordinary">["lifecycle"] {
+	return {
+		executionStarted: async () => [],
+		humanInputSubmitted: async () => "continue",
+		primaryInputQueued: async () => undefined,
+		humanInputMode: async () => "agent",
+		toolResultCommitting: async () => undefined,
+		rootToolExecutionStarted: async () => undefined,
+		safeBoundaryReached: async () => undefined,
+		executionEnded: async () => undefined,
+	};
+}
+
+function presentationHandlers(overrides: Partial<Presentation>): Presentation {
+	return {
+		snapshot: unscripted("snapshot"),
+		setReportRead: unscripted("setReportRead"),
+		select: unscripted("select"),
+		addChangeHandler: () => () => undefined,
+		...overrides,
+	};
+}
+
+function ordinaryHandlers(
+	coordination: Partial<OrdinaryCoordination> = {},
+	presentation: Partial<Presentation> = {},
+): OwnerParticipantRequestHandlers<"ordinary"> {
+	return {
+		lifecycle: lifecycleHandlers(),
+		coordination: {
+			agentTemplateSnapshot: unscripted("agentTemplateSnapshot"),
+			observe: unscripted("observe"),
+			message: unscripted("message"),
+			wait: unscripted("wait"),
+			control: unscripted("control"),
+			spawn: unscripted("spawn"),
+			askUser: unscripted("askUser"),
+			...coordination,
+		},
+		presentation: presentationHandlers(presentation),
+	};
+}
+
+function moderatorHandlers(coordination: Partial<ModeratorCoordination> = {}): OwnerParticipantRequestHandlers<"moderator"> {
+	return {
+		lifecycle: lifecycleHandlers(),
+		coordination: {
+			observe: unscripted("observe"),
+			message: unscripted("message"),
+			wait: unscripted("wait"),
+			control: unscripted("control"),
+			askUser: unscripted("askUser"),
+			reportToUser: unscripted("reportToUser"),
+			moderatorControl: unscripted("moderatorControl"),
+			...coordination,
+		},
+		presentation: presentationHandlers({}),
+	};
+}
+
+/** Owner serving on one end of an in-memory Control channel; the child end requests. */
+function serveOwner(
+	t: { after(fn: () => Promise<unknown>): void },
+	handlers: OwnerParticipantRequestHandlers<"ordinary"> | OwnerParticipantRequestHandlers<"moderator">,
+) {
+	const identity = { protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION, workflowId: "workflow", agentId: "remote-agent" };
+	const [ownerTransport, childTransport] = createInMemoryControlTransportPair();
+	const owner = new FramedAgentControlChannel({ identity, protocol: agentControlProtocol, side: "owner", transport: ownerTransport });
+	const child = new FramedAgentControlChannel({ identity, protocol: agentControlProtocol, side: "child", transport: childTransport });
+	const events: ControlEvent<OwnerToChildControl>[] = [];
+	child.onEvent((event) => { events.push(event); });
+	serveOwnerParticipant(owner, handlers, new Set());
+	t.after(() => Promise.all([owner.close(), child.close()]));
+	return { child, events };
+}
+
+async function waitUntil(condition: () => boolean): Promise<void> {
+	for (let attempts = 0; attempts < 100; attempts += 1) {
+		if (condition()) return;
+		await new Promise((resolve) => setImmediate(resolve));
+	}
+	throw new Error("condition was not reached");
+}

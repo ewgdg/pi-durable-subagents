@@ -6,8 +6,16 @@ import type {
 	SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import type { FramedAgentControlChannel } from "../control/agent-control-channel.ts";
-import type { agentControlProtocol } from "../control/agent-control-protocol.ts";
+import type {
+	ControlEvent,
+	ControlServeMap,
+	FramedAgentControlChannel,
+	MethodName,
+} from "../control/agent-control-channel.ts";
+import {
+	agentControlProtocol,
+	type OwnerToChildControl,
+} from "../control/agent-control-protocol.ts";
 import {
 	NativeSessionDriver,
 	type NativeSessionEvent,
@@ -38,9 +46,9 @@ import type {
 } from "./remote-participant-control.ts";
 import { TerminalInputSubmissionAcknowledger } from "./terminal-input-submission-acknowledger.ts";
 
-export type ChildControlChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
-type OwnerRequest = Parameters<Parameters<ChildControlChannel["onRequest"]>[0]>[0];
-type OwnerEvent = Parameters<Parameters<ChildControlChannel["onEvent"]>[0]>[0];
+export type ChildControlChannel = FramedAgentControlChannel<typeof agentControlProtocol, "child">;
+type OwnerRequests = ControlServeMap<OwnerToChildControl>;
+type OwnerEvent = ControlEvent<OwnerToChildControl>;
 
 /** The only host actions a binding needs from the bridge extension shell. */
 export type ChildHostShellPort = Readonly<{
@@ -103,7 +111,7 @@ type ConnectionState = {
 
 type Generation = Readonly<{
 	binding: ChildRuntimeBinding;
-	handleOwnerRequest(request: OwnerRequest): Promise<unknown>;
+	ownerRequests: OwnerRequests;
 	handleOwnerEvent(event: OwnerEvent): void;
 	handleControlClose(): void;
 }>;
@@ -157,7 +165,7 @@ export class ChildControlConnection {
 			current: () => nativeInputIdentity.current(),
 			take: () => nativeInputIdentity.take(),
 		};
-		channel.onRequest((request) => requireGeneration(state).handleOwnerRequest(request));
+		channel.serve(servedByCurrentGeneration(state));
 		channel.onEvent((event) => requireGeneration(state).handleOwnerEvent(event));
 		channel.onClose(() => {
 			state.closed = true;
@@ -202,6 +210,16 @@ export class ChildControlConnection {
 	reportFault(code: string, error: unknown): Promise<void> {
 		return reportFault(this.#state.channel, code, error);
 	}
+}
+
+/** Every Owner→child method, served by whichever generation is bound when it arrives. */
+function servedByCurrentGeneration(state: ConnectionState): OwnerRequests {
+	const methods = Object.keys(agentControlProtocol.ownerToChild.methods) as MethodName<OwnerToChildControl>[];
+	return Object.fromEntries(methods.map((method) => [
+		method,
+		(payload: never, signal: AbortSignal) =>
+			(requireGeneration(state).ownerRequests[method] as (payload: never, signal: AbortSignal) => unknown)(payload, signal),
+	])) as unknown as OwnerRequests;
 }
 
 function requireGeneration(state: ConnectionState): Generation {
@@ -440,153 +458,129 @@ function bindGeneration(
 		};
 	}
 
-	async function handleOwnerRequest(request: OwnerRequest): Promise<unknown> {
-		switch (request.method) {
-			case "runtime.snapshot":
-				return runtimeSnapshot();
-			case "moderatorReminder.prepare": {
-				const cancel = () => reminderAdmission.cancel();
-				request.signal.addEventListener("abort", cancel, { once: true });
-				try {
-					if (request.signal.aborted) throw requestCancellationError(request.signal);
-					return { prepared: await reminderAdmission.prepare(request.payload.reservationId) };
-				} finally { request.signal.removeEventListener("abort", cancel); }
-			}
-			case "moderatorReminder.finish": {
-				const cancel = () => reminderAdmission.cancel();
-				request.signal.addEventListener("abort", cancel, { once: true });
-				try {
-					if (request.signal.aborted) { cancel(); throw requestCancellationError(request.signal); }
-					const outcome = await reminderAdmission.finish(request.payload.reservationId, request.payload.commit);
-					return { outcome };
-				} finally { request.signal.removeEventListener("abort", cancel); }
-			}
-			case "message.deliver": {
-				const { deliveryId, delivery } = request.payload;
-				const execution: DeliveryExecution = { admitted: false, finished: false, started: false };
-				const admissionCancellation = new AbortController();
-				const admissionSignal = AbortSignal.any([
-					request.signal, turnCompaction.signal, admissionCancellation.signal,
-				]);
-				let completionTracked = false;
-				const finish = () => {
-					execution.finished = true;
-					pendingDeliveries.delete(deliveryId);
-					turnCompaction.completeDelivery(deliveryId);
+	const ownerRequests: OwnerRequests = {
+		"runtime.snapshot": () => runtimeSnapshot(),
+		"moderatorReminder.prepare": async (payload, signal) => {
+			const cancel = () => reminderAdmission.cancel();
+			signal.addEventListener("abort", cancel, { once: true });
+			try {
+				if (signal.aborted) throw requestCancellationError(signal);
+				return { prepared: await reminderAdmission.prepare(payload.reservationId) };
+			} finally { signal.removeEventListener("abort", cancel); }
+		},
+		"moderatorReminder.finish": async (payload, signal) => {
+			const cancel = () => reminderAdmission.cancel();
+			signal.addEventListener("abort", cancel, { once: true });
+			try {
+				if (signal.aborted) { cancel(); throw requestCancellationError(signal); }
+				const outcome = await reminderAdmission.finish(payload.reservationId, payload.commit);
+				return { outcome };
+			} finally { signal.removeEventListener("abort", cancel); }
+		},
+		"message.deliver": async (payload, signal) => {
+			const { deliveryId, delivery } = payload;
+			const execution: DeliveryExecution = { admitted: false, finished: false, started: false };
+			const admissionCancellation = new AbortController();
+			const admissionSignal = AbortSignal.any([
+				signal, turnCompaction.signal, admissionCancellation.signal,
+			]);
+			let completionTracked = false;
+			const finish = () => {
+				execution.finished = true;
+				pendingDeliveries.delete(deliveryId);
+				turnCompaction.completeDelivery(deliveryId);
+			};
+			const cancel = async () => {
+				admissionCancellation.abort(new Error(`child_turn_admission_cancelled: ${deliveryId}`));
+				turnCompaction.cancelDelivery(deliveryId);
+				if (!execution.signal) return;
+				await sequenceQueueIntention(state, async () => {
+					// Native signal identity covers awaited start hooks as well as
+					// running work, without clearing or aborting a successor.
+					if (session.agent.signal !== execution.signal) return;
+					session.clearQueue();
+					await session.abort();
+				});
+			};
+			const onAbort = () => {
+				void cancel().catch(error => reportFault(state.channel, "delivery_cancellation_failed", error));
+			};
+			pendingDeliveries.set(deliveryId, cancel);
+			signal.addEventListener("abort", onAbort, { once: true });
+			try {
+				const dispatch = driver.deliver(delivery, {
+					proveCommit: true,
+					signal: admissionSignal,
+					admission: childTurnAdmission(payload, execution, admissionSignal),
+				});
+				const { runActive } = await dispatch.preflight;
+				// Native queue acceptance is not execution completion. Capture the
+				// session's settlement after dispatch, never preparation's earlier cycle.
+				const completion = dispatch.completion.then(() => session.waitForIdle());
+				completionTracked = true;
+				void completion.then(
+					() => state.channel.sendEvent("message.dispatch.completed", { deliveryId }),
+					error => state.channel.sendEvent("message.dispatch.completed", { deliveryId, error: errorMessage(error) }),
+				).catch(error => reportFault(state.channel, "delivery_completion_failed", error)).finally(finish);
+				return {
+					accepted: true,
+					// Only this request's own cancellation abandons the proof: message.cancel
+					// after commit must not turn a committed Delivery into a failed request.
+					transcriptCommitted: await unlessRequestCancelled(dispatch.transcriptCommit!, signal),
+					modelCycleStarted: runActive,
+					queuedInputCount: driver.queuedInputCount(),
 				};
-				const cancel = async () => {
-					admissionCancellation.abort(new Error(`child_turn_admission_cancelled: ${deliveryId}`));
-					turnCompaction.cancelDelivery(deliveryId);
-					if (!execution.signal) return;
-					await sequenceQueueIntention(state, async () => {
-						// Native signal identity covers awaited start hooks as well as
-						// running work, without clearing or aborting a successor.
-						if (session.agent.signal !== execution.signal) return;
-						session.clearQueue();
-						await session.abort();
-					});
-				};
-				const onAbort = () => {
-					void cancel().catch(error => reportFault(state.channel, "delivery_cancellation_failed", error));
-				};
-				pendingDeliveries.set(deliveryId, cancel);
-				request.signal.addEventListener("abort", onAbort, { once: true });
-				try {
-					const dispatch = driver.deliver(delivery, {
-						proveCommit: true,
-						signal: admissionSignal,
-						admission: childTurnAdmission(request.payload, execution, admissionSignal),
-					});
-					const { runActive } = await dispatch.preflight;
-					// Native queue acceptance is not execution completion. Capture the
-					// session's settlement after dispatch, never preparation's earlier cycle.
-					const completion = dispatch.completion.then(() => session.waitForIdle());
-					completionTracked = true;
-					void completion.then(
-						() => state.channel.sendEvent("message.dispatch.completed", { deliveryId }),
-						error => state.channel.sendEvent("message.dispatch.completed", { deliveryId, error: errorMessage(error) }),
-					).catch(error => reportFault(state.channel, "delivery_completion_failed", error)).finally(finish);
-					return {
-						accepted: true,
-						// Only this request's own cancellation abandons the proof: message.cancel
-						// after commit must not turn a committed Delivery into a failed request.
-						transcriptCommitted: await unlessRequestCancelled(dispatch.transcriptCommit!, request.signal),
-						modelCycleStarted: runActive,
-						queuedInputCount: driver.queuedInputCount(),
-					};
-				} finally {
-					request.signal.removeEventListener("abort", onAbort);
-					if (!completionTracked) finish();
-				}
+			} finally {
+				signal.removeEventListener("abort", onAbort);
+				if (!completionTracked) finish();
 			}
-			case "message.cancel": {
-				const cancel = pendingDeliveries.get(request.payload.deliveryId);
-				if (!cancel) return { accepted: false };
-				await cancel();
-				return { accepted: true };
-			}
-			case "queue.clear": {
-				const cleared = await turnCompaction.admit(() =>
-					sequenceQueueIntention(state, () => {
-						requireReportedRun(state, request.payload.runId);
-						return driver.clearQueue();
-					})
-				);
-				return { ...cleared, queuedInputCount: driver.queuedInputCount() };
-			}
-			case "run.interrupt": {
-				reminderAdmission.cancel();
-				// Queue intentions execute in Owner arrival order, so the interrupt takes the
-				// same turn-admission lane the native clear does. Without it an interrupt can
-				// overtake a clear that is still waiting for the admission, and its long
-				// session.abort() then runs first: the clear would remove the queued steer only
-				// after the interrupted turn had already settled.
-				const accepted = await turnCompaction.admit(() =>
-					sequenceQueueIntention(state, async () => {
-						requireReportedRun(state, request.payload.runId);
-						// This revalidation runs immediately before mutation. A successor cycle
-						// that started while this request waited in the queue is the Agent's
-						// active generation too, and interrupting active generation is exactly
-						// what the Owner asked for; only a cycle the child never reported is drift.
-						if (state.currentRunId === undefined) return false;
-						await session.abort();
-						return true;
-					})
-				);
-				return { accepted };
-			}
-			case "presentation.setVisible":
-				hostShell.setPresentationVisible(request.payload.visible);
-				return {};
-			case "runtime.shutdown":
-				state.shutdownStarted = true;
-				setImmediate(() => hostShell.shutDown());
-				return { accepted: true };
-			case "runtime.executionBegin":
-			case "runtime.humanInput":
-			case "runtime.primaryInputQueued":
-			case "runtime.humanInputMode":
-			case "runtime.guardToolResult":
-			case "runtime.rootToolExecutionStart":
-			case "runtime.safeBoundary":
-			case "runtime.executionEnd":
-			case "coordination.observe":
-			case "coordination.message":
-			case "coordination.wait":
-			case "coordination.control":
-			case "coordination.spawn":
-			case "coordination.templateSnapshot":
-			case "coordination.askHuman":
-			case "coordination.reportToUser":
-			case "presentation.reports.setRead":
-			case "coordination.moderatorControl":
-			case "presentation.agents.snapshot":
-			case "presentation.agents.select":
-				throw new Error(`child_runtime_direction_violation: ${request.method}`);
-			default:
-				return assertUnreachable(request);
-		}
-	}
+		},
+		"message.cancel": async (payload) => {
+			const cancel = pendingDeliveries.get(payload.deliveryId);
+			if (!cancel) return { accepted: false };
+			await cancel();
+			return { accepted: true };
+		},
+		"queue.clear": async (payload) => {
+			const cleared = await turnCompaction.admit(() =>
+				sequenceQueueIntention(state, () => {
+					requireReportedRun(state, payload.runId);
+					return driver.clearQueue();
+				})
+			);
+			return { ...cleared, queuedInputCount: driver.queuedInputCount() };
+		},
+		"run.interrupt": async (payload) => {
+			reminderAdmission.cancel();
+			// Queue intentions execute in Owner arrival order, so the interrupt takes the
+			// same turn-admission lane the native clear does. Without it an interrupt can
+			// overtake a clear that is still waiting for the admission, and its long
+			// session.abort() then runs first: the clear would remove the queued steer only
+			// after the interrupted turn had already settled.
+			const accepted = await turnCompaction.admit(() =>
+				sequenceQueueIntention(state, async () => {
+					requireReportedRun(state, payload.runId);
+					// This revalidation runs immediately before mutation. A successor cycle
+					// that started while this request waited in the queue is the Agent's
+					// active generation too, and interrupting active generation is exactly
+					// what the Owner asked for; only a cycle the child never reported is drift.
+					if (state.currentRunId === undefined) return false;
+					await session.abort();
+					return true;
+				})
+			);
+			return { accepted };
+		},
+		"presentation.setVisible": ({ visible }) => {
+			hostShell.setPresentationVisible(visible);
+			return {};
+		},
+		"runtime.shutdown": () => {
+			state.shutdownStarted = true;
+			setImmediate(() => hostShell.shutDown());
+			return { accepted: true };
+		},
+	};
 
 	generation = {
 		binding: Object.freeze({
@@ -612,7 +606,7 @@ function bindGeneration(
 			beforeCompaction: (event: SessionBeforeCompactEvent) => turnCompaction.beforeCompaction(event),
 			dispose,
 		}),
-		handleOwnerRequest,
+		ownerRequests,
 		handleOwnerEvent(event) {
 			if (event.event === "presentation.agents.changed") {
 				activity.update(event.payload);
@@ -701,8 +695,4 @@ function errorMessage(error: unknown): string {
 
 function requestCancellationError(signal: AbortSignal): unknown {
 	return signal.reason ?? new DOMException("The Control request was cancelled", "AbortError");
-}
-
-function assertUnreachable(value: never): never {
-	throw new Error(`child_runtime_method_unavailable: ${String(value)}`);
 }

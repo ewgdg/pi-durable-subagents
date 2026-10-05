@@ -19,13 +19,14 @@ import type { Static } from "typebox";
 
 import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import { AgentControlAdmissionBroker } from "../control/agent-control-admission.ts";
-import {
+import type {
+	ControlEvent,
 	FramedAgentControlChannel,
-	type ControlEvent,
 } from "../control/agent-control-channel.ts";
 import {
 	agentControlProtocol,
 	RuntimeSnapshotSchema,
+	type ChildToOwnerControl,
 } from "../control/agent-control-protocol.ts";
 import { createPlatformControlListener } from "../control/control-platform.ts";
 import {
@@ -88,8 +89,8 @@ export type PiChildRuntimeReady = Readonly<{
 	mode: "tui";
 	hasUI: true;
 }>;
-export type PiChildRuntimeEvent = ControlEvent<typeof agentControlProtocol>;
-export type PiChildRuntimeChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
+export type PiChildRuntimeEvent = ControlEvent<ChildToOwnerControl>;
+export type PiChildRuntimeChannel = FramedAgentControlChannel<typeof agentControlProtocol, "owner">;
 
 export type StartPiChildProcessRuntimeOptions = Readonly<{
 	workflowId: string;

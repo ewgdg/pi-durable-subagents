@@ -107,12 +107,12 @@ test("scheduler suppression follows exact Run replacement", async () => {
 test("continuation crosses runtime transport and proves a custom entry, never an Agent Message", async () => {
 	const { Check } = await import("typebox/value");
 	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-	const { agentControlMethods } = await import("../src/control/agent-control-protocol.ts");
+	const { agentControlProtocol } = await import("../src/control/agent-control-protocol.ts");
 	const { createWorkflowContinuation, inspectWorkflowContinuation } = await import("../src/protocol/workflow-continuation.ts");
 	const { inspectMessageDeliveries } = await import("../src/protocol/message-delivery.ts");
 	const { transcriptFromSessionManager } = await import("../src/pi-integration/session-manager-transcript.ts");
 	const message = createWorkflowContinuation({ activationId: randomUUID(), agentId: "child", runSequence: 1, outstandingRequests: [] });
-	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
 		deliveryId: "continuation-delivery", delivery: { kind: "custom", message, triggerTurn: true },
 	}), true);
 	const session = SessionManager.inMemory(process.cwd(), { id: "child" });

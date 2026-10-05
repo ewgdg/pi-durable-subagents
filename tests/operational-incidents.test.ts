@@ -1,5 +1,5 @@
 import { Check } from "typebox/value";
-import { agentControlMethods } from "../src/control/agent-control-protocol.ts";
+import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { createAgentSelectorSnapshot } from "../src/process-runtime/remote-agent-selector.ts";
 import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
@@ -3437,7 +3437,7 @@ test("moderation evidence failure publishes one acknowledgeable runtime report p
 	assert.equal(item.report.source.entryId, diagnosticId);
 	assert.equal(item.report.source.transcriptPath, host.session.sessionManager.getSessionFile());
 	const snapshot = JSON.parse(JSON.stringify(createAgentSelectorSnapshot(owner)));
-	assert.ok(Check(agentControlMethods["presentation.agents.snapshot"].response, snapshot));
+	assert.ok(Check(agentControlProtocol.childToOwner.methods["presentation.agents.snapshot"].response, snapshot));
 	assert.deepEqual(snapshot.reports, owner.reportHistory());
 	const reopenedManager = SessionManager.open(host.session.sessionManager.getSessionFile()!);
 	const reopened = new ModeratorReportStore({

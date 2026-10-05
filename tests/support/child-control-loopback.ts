@@ -1,7 +1,7 @@
 import type { ExtensionAPI, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 
-import { FramedAgentControlChannel } from "../../src/control/agent-control-channel.ts";
-import { agentControlProtocol, type AgentControlMethod } from "../../src/control/agent-control-protocol.ts";
+import { FramedAgentControlChannel, type MethodName } from "../../src/control/agent-control-channel.ts";
+import { agentControlProtocol, type OwnerToChildControl } from "../../src/control/agent-control-protocol.ts";
 import { AGENT_CONTROL_PROTOCOL_VERSION } from "../../src/control/control-protocol-schemas.ts";
 import { createInMemoryControlTransportPair } from "../../src/control/in-memory-control-transport.ts";
 import { registerParticipantLifecycle } from "../../src/pi-integration/participant-lifecycle.ts";
@@ -9,7 +9,6 @@ import { registerSessionStartup } from "../../src/pi-integration/session-startup
 import { registerChildBindingHooks } from "../../src/process-runtime/child-binding-hooks.ts";
 import {
 	ChildControlConnection,
-	type ChildControlChannel,
 	type ChildRuntimeBinding,
 } from "../../src/process-runtime/child-control-connection.ts";
 import {
@@ -17,7 +16,10 @@ import {
 	type ChildControlLink,
 	type ChildControlLinkAdmission,
 } from "../../src/process-runtime/pi-child-hosted-runtime.ts";
-import type { PiChildRuntimeEvent } from "../../src/process-runtime/pi-child-process-runtime.ts";
+import type {
+	PiChildRuntimeChannel,
+	PiChildRuntimeEvent,
+} from "../../src/process-runtime/pi-child-process-runtime.ts";
 import {
 	createControlBackedChildParticipantHandlers,
 	serveOwnerParticipant,
@@ -43,7 +45,7 @@ export type ChildControlLoopbackOptions = Readonly<{
 	/** Inherited extension hooks, which load after the bridge hooks and before the input tail. */
 	configure?: (pi: ExtensionAPI) => void;
 	/** Holds one Owner→child request before transmission, for in-flight ordering cases. */
-	beforeOwnerRequest?: (method: AgentControlMethod) => Promise<void>;
+	beforeOwnerRequest?: (method: MethodName<OwnerToChildControl>) => Promise<void>;
 	host?: TestOwnerHostOptions;
 }>;
 
@@ -52,7 +54,7 @@ export type ChildControlLoopback = Readonly<{
 	/** The real Owner-side child proxy over the loopback link. */
 	proxy: PiChildHostedRuntime;
 	/** The Owner end of the Control channel, for raw wire requests. */
-	ownerChannel: ChildControlChannel;
+	ownerChannel: PiChildRuntimeChannel;
 	/** Every child event in arrival order. */
 	events: ReadonlyArray<PiChildRuntimeEvent>;
 	hostShell: Readonly<{
@@ -91,9 +93,11 @@ export async function createChildControlLoopback(
 		agentId: LOOPBACK_AGENT_ID,
 	};
 	const [ownerTransport, childTransport] = createInMemoryControlTransportPair();
-	const ownerChannel = new FramedAgentControlChannel({ identity, protocol: agentControlProtocol, transport: ownerTransport });
+	const ownerChannel = new FramedAgentControlChannel({
+		identity, protocol: agentControlProtocol, side: "owner", transport: ownerTransport,
+	});
 	const connection = new ChildControlConnection(new FramedAgentControlChannel({
-		identity, protocol: agentControlProtocol, transport: childTransport,
+		identity, protocol: agentControlProtocol, side: "child", transport: childTransport,
 	}));
 	const events: PiChildRuntimeEvent[] = [];
 	const subscribers = new Set<(event: PiChildRuntimeEvent) => void>([(event) => events.push(event)]);
@@ -237,6 +241,7 @@ export function loopbackOwnerHandlers(): OwnerParticipantRequestHandlers<"ordina
 			snapshot: unscripted("presentation.snapshot"),
 			setReportRead: unscripted("presentation.setReportRead"),
 			select: unscripted("presentation.select"),
+			addChangeHandler: () => () => undefined,
 		},
 	};
 }

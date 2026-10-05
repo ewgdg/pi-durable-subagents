@@ -4,7 +4,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Static } from "typebox";
 import { Check } from "typebox/value";
 
-import { agentControlMethods } from "../src/control/agent-control-protocol.ts";
+import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { AgentTemplateCatalogueEntrySchema } from "../src/control/control-protocol-schemas.ts";
 import { isRuntimeThinkingLevel, RUNTIME_THINKING_LEVELS } from "../src/protocol/runtime-configuration.ts";
 import { RuntimeThinkingSchema } from "../src/protocol/runtime-thinking-schema.ts";
@@ -39,7 +39,7 @@ test("thinking validators and schemas accept every Pi level, with inherit only a
 			systemPromptMode: "append",
 			loadContextFiles: true,
 		}), runtimeLevel);
-		assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
+		assert.equal(Check(agentControlProtocol.childToOwner.methods["coordination.spawn"].response, {
 			spawnStatus: "created",
 			agentId: "child",
 			requestMessageId: "creation-request",

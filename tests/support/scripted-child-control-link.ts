@@ -1,9 +1,10 @@
-import type { Static } from "typebox";
-
 import type {
-	AgentControlMethod,
-	agentControlMethods,
-} from "../../src/control/agent-control-protocol.ts";
+	DeepReadonly,
+	MethodName,
+	MethodRequest,
+	MethodResponse,
+} from "../../src/control/agent-control-channel.ts";
+import type { OwnerToChildControl } from "../../src/control/agent-control-protocol.ts";
 import type { ChildControlLink } from "../../src/process-runtime/pi-child-hosted-runtime.ts";
 import { createPiChildProcessProjection } from "../../src/process-runtime/pi-child-process-projection.ts";
 import type {
@@ -12,15 +13,14 @@ import type {
 } from "../../src/process-runtime/pi-child-process-runtime.ts";
 import type { HostedAgentProjection } from "../../src/runtime/hosted-agent-projection.ts";
 
-type MethodRequest<M extends AgentControlMethod> = Static<(typeof agentControlMethods)[M]["request"]>;
-type MethodResponse<M extends AgentControlMethod> = Static<(typeof agentControlMethods)[M]["response"]>;
+type OwnerToChildMethod = MethodName<OwnerToChildControl>;
 
 /** Responses a scripted child gives, per Owner→child method. Unscripted methods reject. */
 export type ScriptedChildResponders = {
-	[M in AgentControlMethod]?: (
-		payload: MethodRequest<M>,
+	[M in OwnerToChildMethod]?: (
+		payload: DeepReadonly<MethodRequest<OwnerToChildControl, M>>,
 		signal: AbortSignal | undefined,
-	) => Promise<MethodResponse<M>> | MethodResponse<M>;
+	) => Promise<MethodResponse<OwnerToChildControl, M>> | MethodResponse<OwnerToChildControl, M>;
 };
 
 /** One child event as the scripted child emits it; the link assigns its sequence. */
@@ -31,7 +31,7 @@ export type ScriptedChildEvent = PiChildRuntimeEvent extends infer Event
 export type ScriptedChildControlLink = Readonly<{
 	link: ChildControlLink;
 	/** Methods in request order, for intention assertions. */
-	requests: Array<Readonly<{ method: AgentControlMethod; payload: unknown }>>;
+	requests: Array<Readonly<{ method: OwnerToChildMethod; payload: unknown }>>;
 	emit(event: ScriptedChildEvent): void;
 	exit(exit: Readonly<{ exitCode: number; signal: number }>): void;
 	closeChannel(cause: Error): void;
@@ -47,7 +47,7 @@ export function createScriptedChildControlLink(options: Readonly<{
 }> = {}): ScriptedChildControlLink {
 	const subscribers = new Set<(event: PiChildRuntimeEvent) => void>();
 	const closeHandlers = new Set<(cause: Error) => void>();
-	const requests: Array<Readonly<{ method: AgentControlMethod; payload: unknown }>> = [];
+	const requests: Array<Readonly<{ method: OwnerToChildMethod; payload: unknown }>> = [];
 	const responders = options.respond ?? {};
 	let sequence = 0;
 	let settleExit!: (exit: Readonly<{ exitCode: number; signal: number }>) => void;
@@ -70,11 +70,11 @@ export function createScriptedChildControlLink(options: Readonly<{
 		...options.snapshot,
 	};
 	const channel = {
-		async request<M extends AgentControlMethod>(
+		async request<M extends OwnerToChildMethod>(
 			method: M,
-			payload: MethodRequest<M>,
+			payload: DeepReadonly<MethodRequest<OwnerToChildControl, M>>,
 			signal?: AbortSignal,
-		): Promise<MethodResponse<M>> {
+		): Promise<MethodResponse<OwnerToChildControl, M>> {
 			requests.push({ method, payload });
 			const responder: ScriptedChildResponders[M] = responders[method];
 			if (!responder) throw new Error(`scripted_child_unscripted_request: ${method}`);

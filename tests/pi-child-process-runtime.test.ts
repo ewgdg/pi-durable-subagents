@@ -13,7 +13,7 @@ import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/nati
 import { writeChildSession } from "./support/child-session.ts";
 
 import type { ControlEvent } from "../src/control/agent-control-channel.ts";
-import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
+import type { ChildToOwnerControl } from "../src/control/agent-control-protocol.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
@@ -132,7 +132,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	const lifecycle: string[] = [];
 	const ownerIntentions: unknown[] = [];
 	const ownerSelections: unknown[] = [];
-	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
+	const runtimeEvents: ControlEvent<ChildToOwnerControl>[] = [];
 	let runtime: PiChildProcessRuntime | undefined;
 	let projection: ReturnType<typeof createAdmittedPiChildProcessProjection> | undefined;
 	let systemPromptArtifactPath: string | undefined;
@@ -189,7 +189,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		projection.addChangeHandler(() => projectionChanges += 1);
 		projection.addExitRequestHandler(() => projectionExits += 1);
 		projection.addFailureHandler((error) => projectionFailures.push(error));
-		runtime.onEvent((event: ControlEvent<typeof agentControlProtocol>) => {
+		runtime.onEvent((event: ControlEvent<ChildToOwnerControl>) => {
 			runtimeEvents.push(event);
 			if (["agent.start", "agent.end", "agent.settled", "session.shutdown"].includes(event.event)) {
 				lifecycle.push(event.event);
@@ -468,7 +468,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 	}
 
 	let runtime: PiChildProcessRuntime | undefined;
-	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
+	const runtimeEvents: ControlEvent<ChildToOwnerControl>[] = [];
 	try {
 		runtime = await PiChildProcessRuntime.start({
 			workflowId: "process-working-zone-workflow",
@@ -778,7 +778,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		cwd,
 	})}\n`, { mode: 0o600 });
 	let runtime: PiChildProcessRuntime | undefined;
-	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
+	const runtimeEvents: ControlEvent<ChildToOwnerControl>[] = [];
 	try {
 		runtime = await PiChildProcessRuntime.start({
 			workflowId: "process-compaction-gateway-workflow",
@@ -1732,6 +1732,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 	return {
 		presentation: {
 			setReportRead: async () => {},
+			addChangeHandler: () => () => undefined,
 			snapshot: async () => {
 				if (options.presentationSnapshotError) throw options.presentationSnapshotError;
 				return options.selectorSnapshot ?? ({

@@ -182,6 +182,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				agentId: bootstrap.agentId,
 			},
 			protocol: agentControlProtocol,
+			side: "child",
 			transport: await connectControlTransport(bootstrap.endpoint),
 		}));
 		if (!retained) childControls.set(runtime.session, currentConnection);
