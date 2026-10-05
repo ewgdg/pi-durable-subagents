@@ -1,57 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
+import { createChildControlLoopback } from "./support/child-control-loopback.ts";
 import { createScriptedChildControlLink, createScriptedTerminalProjection } from "./support/scripted-child-control-link.ts";
 
-test("an authenticated native child lifecycle adopts its transport identity without a dispatched cycle", async () => {
-	const { runtime, emit } = createFakeRuntime();
+test("an authenticated native child lifecycle adopts its transport identity without a dispatched cycle", { timeout: 5_000 }, async (t) => {
+	const loopback = await createChildControlLoopback(t);
+	const runtime = loopback.proxy;
+	loopback.host.model.setResponses([fauxAssistantMessage("Native work done.")]);
 	const hostedEvents: HostedRuntimeEvent[] = [];
 	runtime.subscribe((event) => hostedEvents.push(event));
-	await runtime.ready;
+	const settled = new Promise<void>((resolve) => runtime.subscribe((event) => { if (event.type === "agent_settled") resolve(); }));
 
-	emit({ event: "agent.start", payload: {
-		runId: "native-run-1",
-		queuedInputCount: 0,
-	} });
-	assert.equal(runtime.workState(), "active");
-	emit({ event: "agent.end", payload: {
-		runId: "native-run-1",
-		outcome: "completed",
-		willRetry: false,
-		queuedInputCount: 0,
-	} });
-	emit({ event: "agent.settled", payload: {
-		runId: "native-run-1",
-		queuedInputCount: 0,
-	} });
+	await loopback.submitNativeInput("Native work.");
+	await settled;
 
 	assert.equal(runtime.workState(), "settled");
-	assert.deepEqual(hostedEvents, [
-		{ type: "state_changed" },
+	assert.deepEqual(hostedEvents.filter((event) => event.type !== "state_changed"), [
 		{ type: "agent_end", outcome: "completed", willRetry: false },
-		{ type: "state_changed" },
 		{ type: "agent_settled" },
 	]);
-	await runtime.dispose();
+	assert.deepEqual(loopback.events.flatMap((event) => event.event.startsWith("agent.") ? [event.event] : []), [
+		"agent.start", "agent.end", "agent.settled",
+	]);
 });
 
-test("a post-admission child Runtime fault terminally fences its hosted Run once", async () => {
-	const { runtime, emit } = createFakeRuntime();
+test("a post-admission child Runtime fault terminally fences its hosted Run once", { timeout: 5_000 }, async (t) => {
+	const { loopback, held } = await createHeldDeliveryLoopback(t);
+	const runtime = loopback.proxy;
 	const hostedEvents: HostedRuntimeEvent[] = [];
 	runtime.subscribe((event) => hostedEvents.push(event));
-	await runtime.ready;
 	const completion = runtime.deliver({ kind: "user", content: "Start the Run." }).completion;
-	emit({ event: "agent.start", payload: {
-		runId: "hosted-run-1",
-		queuedInputCount: 0,
-	} });
-	emit({ event: "runtime.fault", payload: {
-		code: "participant_lifecycle_failed",
-		message: "Owner rejected the awaited boundary",
-	} });
+	await held;
+	await loopback.emitFault("participant_lifecycle_failed", "Owner rejected the awaited boundary");
 
 	assert.equal(runtime.workState(), "unavailable");
 	assert.equal(runtime.cancellationSignal().aborted, true);
@@ -65,29 +50,45 @@ test("a post-admission child Runtime fault terminally fences its hosted Run once
 		{ type: "agent_settled" },
 	]);
 
-	emit({ event: "runtime.fault", payload: {
-		code: "duplicate_fault",
-		message: "must not settle twice",
-	} });
+	await loopback.emitFault("duplicate_fault", "must not settle twice");
 	assert.equal(
 		hostedEvents.filter((event) => event.type === "agent_settled").length,
 		1,
 	);
-	await runtime.dispose();
 });
 
-test("child exit after Run admission but before model activity preserves failure", async () => {
-	const { runtime, settleExit } = createFakeRuntime();
+test("child exit after Run admission but before model activity preserves failure", { timeout: 5_000 }, async (t) => {
+	const loopback = await createChildControlLoopback(t);
+	const runtime = loopback.proxy;
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId: "idle-admitted-child", startSession: async () => ({ runtime, ready: runtime.ready }),
 	});
 	await host.lane.run(() => host.startInLane());
-	settleExit({ exitCode: 1, signal: 0 });
+	await loopback.exit({ exitCode: 1, signal: 0 });
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(host.currentRunFailed(), true);
 	await host.lane.run(() => host.discardAndEndInLane("failure"));
 });
 
+/** A loopback child whose first model call holds until its Run is aborted. */
+async function createHeldDeliveryLoopback(t: Parameters<typeof createChildControlLoopback>[0]) {
+	let markHeld!: () => void;
+	const held = new Promise<void>((resolve) => { markHeld = resolve; });
+	const loopback = await createChildControlLoopback(t);
+	loopback.host.model.setResponses([async () => {
+		const signal = loopback.host.session.agent.signal;
+		markHeld();
+		await new Promise<void>((resolve) => {
+			if (signal?.aborted) resolve();
+			signal?.addEventListener("abort", () => resolve(), { once: true });
+		});
+		return fauxAssistantMessage("Aborted.");
+	}]);
+	return { loopback, held };
+}
+
+// The cases below stay on the scripted link: they cover projection and process
+// cleanup ordering, or inject event orderings a real child cannot produce on demand.
 test("child exit fences the hosted Run before its projection reports failure", async () => {
 	const { runtime, settleExit } = createFakeRuntime({ projection: true });
 	const ordering: string[] = [];
@@ -310,7 +311,7 @@ test("correlated dispatch rejection completes Delivery failure without inventing
 	await runtime.dispose();
 });
 
-
+// A settled Run whose delivery completion is still pending needs scripted timing.
 test("orderly disposal drains supervisor dispatch tracking without lifecycle", { timeout: 5_000 }, async () => {
 	const { runtime, emit, settleExit } = createFakeRuntime();
 	const host = AgentRuntimeSupervisor.createChild({
@@ -335,5 +336,3 @@ test("orderly disposal drains supervisor dispatch tracking without lifecycle", {
 	assert.equal(host.observe().phase, "dormant");
 	assert.deepEqual(events, [], "orderly disposal must not invent terminal lifecycle");
 });
-
-/** A real child projection over a terminal that never draws, for failure ordering. */
