@@ -17,7 +17,7 @@ The tool schema states `deliveryMode` in both authoring operations and carries n
 
 `poll.messageId`, `retry.messageId`, and `cancel.requestMessageId` accept a full canonical ID or a unique case-sensitive suffix. Whitespace around the reference is ignored. Matching considers the caller's earlier authored Message sources, including Spawn Creation Requests; exact IDs take precedence. Ambiguity is rejected, so use a longer suffix or the full ID. Normal authorship, Message-kind, and Delivery validation still applies.
 
-Full IDs remain literal references subject to existing evidence checks. For suffix expansion, the referring committed tool call fixes the candidate history. Later Messages cannot change what that call resolves to, including during retry, transcript reopen, or reconstruction. Receipts and Request relationships keep the full canonical ID. This uses retained transcript indexes without a separate allocation database or alias registry.
+Full IDs remain literal references subject to existing evidence checks. For suffix expansion, the referring committed tool call fixes the candidate history. Later Messages cannot change what that call resolves to, including during retry, transcript reopen, or reconstruction. Receipts and Request Relationships keep the full canonical ID. This uses retained transcript indexes without a separate allocation database or alias registry.
 
 Collapsed Message tool rendering shows the final eight characters. Expand to see the full ID if that suffix is ambiguous. Structured tool results retain full IDs. Agent IDs remain Pi session IDs, with the existing Agent suffix matching described below. Message IDs remain deterministic source-derived hashes. This does not add cross-Workflow messaging or change Request scheduling.
 
@@ -153,7 +153,7 @@ Use a Request when the recipient owes one mechanically correlated Answer:
 }
 ```
 
-The Request fixes its requester, responder, Workflow, required title, full question, Answer destination, and delivery mode. Choose a short, specific title identifying the work; whitespace-only titles are invalid. Titles need not be unique and never replace Message IDs for correlation or the full question for instructions. Request commitment retains the requester's current Run with `awaiting_answer`.
+The Request fixes its requester, responder, Workflow, required title, full question, Answer destination, and delivery mode. Choose a short, specific title identifying the work; whitespace-only titles are invalid. Titles need not be unique and never replace Message IDs for correlation or the full question for instructions. Request admission retains the requester's current Run with `awaiting_answer`.
 
 Outbound Requests belong to their author Agent. Delivered Requests create independent Answer obligations; receiving another Request does not replace or resolve earlier work.
 
