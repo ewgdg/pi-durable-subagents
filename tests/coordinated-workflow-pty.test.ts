@@ -42,11 +42,10 @@ const FAILURE_FIXTURE = fileURLToPath(
 	new URL("./fixtures/agent-view-failure-pty-fixture.ts", import.meta.url),
 );
 const DIRECT_AGENT_INPUT = "direct input through child editor";
+// Resolve through Node's package lookup rather than a path relative to this
+// file: worktrees under .worktrees/ use the root checkout's node_modules.
 const PI_CLI = fileURLToPath(
-	new URL(
-		"../node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
-		import.meta.url,
-	),
+	new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")),
 );
 const COORDINATION_EXTENSION = fileURLToPath(
 	new URL("../src/index.ts", import.meta.url),
