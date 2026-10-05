@@ -5,7 +5,6 @@
 //
 // Plain JavaScript: Node refuses to type-strip .ts files under node_modules, where
 // installed packages live, so this entry cannot import this package's .ts modules.
-import { enableCompileCache } from "node:module";
 import { pathToFileURL } from "node:url";
 
 // Shared with child-runtime-input-registry.ts, which the bridge loads through Pi.
@@ -28,7 +27,10 @@ function coordinationInputTail(pi) {
 
 // Mirrors Pi's CLI process setup (its setupCli is not public). main() configures
 // the HTTP proxy and dispatcher itself; Pi's default app name is "pi".
-enableCompileCache();
+// No module compile cache, unlike Pi's bundled CLI: this entry loads Pi's unbundled
+// graph, and Node flushes new cache entries synchronously inside process.exit. A cold
+// flush took over 6 seconds on Windows, past the Owner's shutdown grace, so a graceful
+// child was force-killed. A warm cache saved only tens of milliseconds at startup.
 process.title = "pi";
 process.env.PI_CODING_AGENT = "true";
 process.env.AI_AGENT = "pi";
