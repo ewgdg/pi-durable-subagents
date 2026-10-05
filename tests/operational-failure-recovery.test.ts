@@ -34,7 +34,7 @@ test("a successor after obligation clearance appends to the retained failed Run 
 		answerObligationRequestIds: () => ["request"], outstandingRequestIdsFor: () => [],
 		hasUnsettledAnswerObligation: () => obligationRemains,
 		requestSources: () => [{ agentId: "requester", entryId: "request-entry", toolCallId: "request-call" }],
-		blockedDeliveries: () => [], unansweredRequestRelationships: () => [], hasDeliveryProgress: () => false,
+		blockedDeliveries: () => [], answerArbitration: { inspect: () => [] }, requestRelationships: () => [], hasDeliveryProgress: () => false,
 		shutdownDeliveryProgress() {},
 	} as unknown as MessageCoordinator;
 	const incidents = new OperationalIncidentCoordinator({

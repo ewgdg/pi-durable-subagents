@@ -453,13 +453,12 @@ export class WorkflowCoordinator {
 				this.#operationalIncidents?.deliveryProgressChanged();
 				this.#notifyAgentActivityChanged();
 			},
-			preemptAgentWait: (record, reserveDelivery) =>
-				this.#agentWaits.preemptForInboundRequest(record, reserveDelivery),
 			workflowPolicy: this.#workflowPolicy,
 		});
 		this.#agentWaits = new AgentWaitCoordinator({
 			agents: this.#agents,
 			messages: this.#messages,
+			answerArbitration: this.#messages.answerArbitration,
 			boundaryHooks: options.agentWaitBoundaryHooks,
 			clock: options.agentWaitClock,
 			assertNotShutDownOrSuspended: (record) =>

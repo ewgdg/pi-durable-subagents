@@ -63,7 +63,7 @@ for (const delivered of [false, true]) {
 		const workflowPolicy = new WorkflowPolicyStore();
 		const messages = new MessageCoordinator({ agents: history.agents, workflowPolicy, isShuttingDown: () => false });
 		for (const p of [owner, worker, peer]) messages.integrate(p.record);
-		const waits = new AgentWaitCoordinator({ agents: history.agents, messages,
+		const waits = new AgentWaitCoordinator({ agents: history.agents, messages, answerArbitration: messages.answerArbitration,
 			clock: { schedule: () => () => {} }, assertNotShutDownOrSuspended() {},
 		});
 		const abort = new AbortController();
@@ -92,17 +92,20 @@ for (const delivered of [false, true]) {
 		assert.equal(dispatchCount, 1);
 		assert.ok(commitDelivery);
 		if (delivered) commitDelivery();
-		for (const p of [worker, peer]) {
+		// A dispatched Deferred prompt commits its proof when its turn starts, so the
+		// worker reaches agent_wait only once proven. Unproven, only the peer waits.
+		const waiting = delivered ? [worker, peer] : [peer];
+		for (const p of waiting) {
 			p.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "wait" }), { stopReason: "toolUse" }));
-			const waiting = waits.wait(p.record.identity.agentId, "wait", {}, abort.signal);
-			pendingWaits.push(waiting);
-			void waiting.catch(() => {});
+			const result = waits.wait(p.record.identity.agentId, "wait", {}, abort.signal);
+			pendingWaits.push(result);
+			void result.catch(() => {});
 		}
 		for (let i = 0; i < 8; i++) await setImmediate();
 		for (const p of [worker, peer]) {
 			const run = p.record.host.observe();
 			assert.equal(run.phase, "live");
-			assert.ok("attention" in run && run.attention === "agent_wait");
+			assert.equal("attention" in run && run.attention, waiting.includes(p) ? "agent_wait" : "none");
 		}
 		assert.equal(promptSettled, false);
 		// Repeated queue advancement must not redispatch the original task.

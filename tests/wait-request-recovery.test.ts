@@ -1120,9 +1120,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 	const responder = runtimeParticipant("responder");
 	const participants = [requester, responder];
 	const agents = new Map(participants.map(p => [p.record.identity.agentId, p.record]));
-	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false,
-		preemptAgentWait: (record: Parameters<AgentWaitCoordinator["preemptForInboundRequest"]>[0], reserve: () => boolean) => waits.preemptForInboundRequest(record, reserve),
-	};
+	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
 	let messages = new MessageCoordinator(options);
 	let timer: (() => void) | undefined;
 	let waits: AgentWaitCoordinator;
@@ -1131,7 +1129,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 	function install() {
 		for (const p of participants) messages.integrate(p.record);
 		waits = new AgentWaitCoordinator({
-			agents, messages, boundaryHooks: waitBoundaryHooks,
+			agents, messages, answerArbitration: messages.answerArbitration, boundaryHooks: waitBoundaryHooks,
 			clock: { schedule: (_delay, callback) => { timer = callback; return () => { timer = undefined; }; } },
 			assertNotShutDownOrSuspended: () => undefined,
 		});

@@ -65,7 +65,8 @@ import {
 	type OperationReviewClock,
 	type OperationReviewSnapshot,
 } from "./operation-review.ts";
-import { assessProgress, type ProgressAssessment, type ProgressSnapshot } from "./progress-verdict.ts";
+import { assessProgress, type AgentProgressFacts, type ProgressAssessment, type ProgressSnapshot } from "./progress-verdict.ts";
+import { awaitsCanonicalAnswer } from "./answer-arbitration.ts";
 
 export const MAX_AUTOMATIC_MODERATOR_ATTEMPTS = 2;
 
@@ -1183,14 +1184,18 @@ export class OperationalIncidentCoordinator {
 					answerObligationRequestIds: this.#messages.answerObligationRequestIds(record),
 					// A committed Answer removes its dependency edge even while requester-side
 					// Answer Delivery remains outstanding for Wait.
-					unansweredRequests: this.#messages.unansweredRequestRelationships(
-						agentId,
-						this.#messages.outstandingRequestIdsFor(record),
-					),
+					unansweredRequests: this.#unansweredRequests(record),
 				};
 			}),
 			blockedDeliveries,
 		};
+	}
+
+	#unansweredRequests(requester: AgentRecord): AgentProgressFacts["unansweredRequests"] {
+		const requestIds = this.#messages.outstandingRequestIdsFor(requester);
+		const states = this.#messages.answerArbitration.inspect(requester, requestIds);
+		return this.#messages.requestRelationships(requestIds)
+			.filter((_, index) => awaitsCanonicalAnswer(states[index]!));
 	}
 
 	#scheduleModeratorObligationReminder(handling: OperationalIncidentHandling): void {

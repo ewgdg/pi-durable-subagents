@@ -286,9 +286,8 @@ function harness(t: { after(fn: () => void): void }, boundaryHooks?: MessageBoun
 	const state = { shutdown: false };
 	const messages = new MessageCoordinator({ agents, workflowPolicy: new WorkflowPolicyStore(), boundaryHooks,
 		isShuttingDown: () => state.shutdown,
-		preemptAgentWait: (record, reserve) => waits.preemptForInboundRequest(record, reserve),
 	});
-	const waits = new AgentWaitCoordinator({ agents, messages, assertNotShutDownOrSuspended: () => undefined });
+	const waits = new AgentWaitCoordinator({ agents, messages, answerArbitration: messages.answerArbitration, assertNotShutDownOrSuspended: () => undefined });
 	for (const p of [author, recipient]) messages.integrate(p.record);
 	const originalEnd = recipient.end;
 	recipient.end = cause => { messages.discardSchedulingInLane(recipient.record); originalEnd(cause); };

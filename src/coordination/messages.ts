@@ -8,7 +8,6 @@ import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { resolveAgentMessageReferences } from "../protocol/message-reference.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import type { JsonValue } from "@earendil-works/pi-ai";
-import { isDeepStrictEqual } from "node:util";
 
 import {
 	requireAgentRecord,
@@ -36,6 +35,7 @@ import type {
 	RequestCancellationReceipt,
 } from "./message-receipts.ts";
 import { RequestEvidence } from "./request-evidence.ts";
+import { AnswerArbitration } from "./answer-arbitration.ts";
 import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import {
 	createMessageDeliveryItem,
@@ -58,7 +58,6 @@ import {
 	createCreationRequestDeliveryItem,
 	inspectCreationRequestDelivery,
 } from "../protocol/creation-request.ts";
-import type { AgentWaitResult } from "../protocol/agent-wait.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
 import type {
 	AgentRunHandle,
@@ -122,6 +121,8 @@ export class MessageCoordinator {
 	readonly #boundaryHooks: MessageBoundaryHooks;
 	readonly #deliveryScheduler: MessageDeliveryScheduler;
 	readonly #requestEvidence: RequestEvidence;
+	readonly answerArbitration: AnswerArbitration;
+	#waitPreemptionSubscriber: IncomingRequestWaitPreemptor | undefined;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 
@@ -131,7 +132,6 @@ export class MessageCoordinator {
 		quarantinedWorkflowAgentIds?: ReadonlySet<string>;
 		isShuttingDown(): boolean;
 		boundaryHooks?: MessageBoundaryHooks;
-		preemptAgentWait?: IncomingRequestWaitPreemptor;
 		workflowPolicy: WorkflowPolicyStore;
 		deliveryProgressClock?: import("./operation-review.ts").OperationReviewClock;
 		onDeliveryProgressChanged?(): void;
@@ -152,7 +152,8 @@ export class MessageCoordinator {
 			scheduleDeliveryDispatch: this.#boundaryHooks.scheduleDeliveryDispatch,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
 			afterResumeReservation: this.#boundaryHooks.afterResumeReservation,
-			preemptAgentWait: options.preemptAgentWait,
+			preemptAgentWait: (record, reserveDelivery) =>
+				this.#waitPreemptionSubscriber?.(record, reserveDelivery) ?? Promise.resolve(),
 			workflowPolicy: options.workflowPolicy,
 			deliveryProgressClock: options.deliveryProgressClock,
 			onDeliveryProgressChanged: options.onDeliveryProgressChanged,
@@ -161,6 +162,22 @@ export class MessageCoordinator {
 				scheduler: this.#deliveryScheduler, isShuttingDown: this.#isShuttingDown,
 			}),
 		});
+		this.answerArbitration = new AnswerArbitration({
+			requestEvidence: this.#requestEvidence,
+			isDirectDeliveryInFlight: (recipientAgentId, messageId) =>
+				this.#deliveryScheduler.isDirectDeliveryInFlight(recipientAgentId, messageId),
+		});
+	}
+
+	/**
+	 * Agent Wait subscribes here because it depends on this module. Without a
+	 * subscriber no Run can be parked in a Wait, so there is nothing to preempt.
+	 */
+	subscribeWaitPreemption(subscriber: IncomingRequestWaitPreemptor): void {
+		if (this.#waitPreemptionSubscriber) {
+			throw new Error("invariant_violation: Wait preemption already has a subscriber");
+		}
+		this.#waitPreemptionSubscriber = subscriber;
 	}
 
 
@@ -326,47 +343,16 @@ export class MessageCoordinator {
 			agentId: callerAgentId, transcript: caller.transcript.inspect(), toolCallId: message.toolCallId, toolName: "agent_message",
 		}).source, input);
 		if (input.operation !== "retry") return undefined;
-		const request = this.#requestEvidence.requireCallerAuthoredMessage(
-			caller,
-			input.messageId,
-		);
-		if (request.kind !== "request") return undefined;
-		const answer = this.#requestEvidence.findAnswer(request);
-		if (!answer) return undefined;
-		const expected = {
-			disposition: "answer_delivered" as const,
-			requestMessageId: request.messageId,
-			requestTitle: request.title,
-			answerId: answer.messageId,
-			fromAgentId: answer.fromAgentId,
-			answer: answer.answer,
-			answerSource: answer.source,
-		};
-		if (!isDeepStrictEqual(message.details, expected)) return undefined;
-		const deliveryEvidence = inspectAnswerDelivery({
-			requesterAgentId: callerAgentId,
-			transcript: caller.transcript.inspect(),
-			answer,
-		}).deliveryEvidence;
-		const result: JsonValue | undefined = deliveryEvidence
-			? {
-				disposition: "answer_already_delivered",
-				requestMessageId: request.messageId,
-				requestTitle: request.title,
-				answerId: answer.messageId,
-				deliveryEvidence,
-			}
-			: this.#deliveryScheduler.hasDispatchReservation(
-				callerAgentId,
-				answer.messageId,
-			)
-				? {
-					requestMessageId: request.messageId,
-					messageStatus: "unknown",
-					reason: "inspection_incomplete",
-				}
-				: undefined;
-		if (!result) return undefined;
+		const prepared = message.details as Extract<AgentRequestRetryReceipt, { disposition: "answer_delivered" }>;
+		if (prepared.requestMessageId !== input.messageId) {
+			throw new Error(`invariant_violation: retry ${message.toolCallId} retrieved an Answer for a different Request`);
+		}
+		const reconfirmation = this.answerArbitration.reconfirm(caller, [prepared]);
+		if (reconfirmation.outcome === "unchanged") return undefined;
+		// The commit-edge indeterminate receipt has always omitted targetAgentId.
+		const result: JsonValue = reconfirmation.outcome === "replaced"
+			? reconfirmation.slots[0]!
+			: { requestMessageId: prepared.requestMessageId, messageStatus: "unknown", reason: "inspection_incomplete" };
 		return {
 			message: {
 				...message,
@@ -395,26 +381,6 @@ export class MessageCoordinator {
 		return requestMessageIds;
 	}
 
-	waitAnswers(
-		callerAgentId: string,
-		requestMessageIds: readonly string[],
-	): AgentWaitResult | undefined {
-		const caller = this.#requireAgent(callerAgentId);
-		const answers = requestMessageIds.map((requestId) => {
-			const answer = this.#requestEvidence.callerWaitAnswer(caller, requestId);
-			return answer?.disposition === "answer_delivered" &&
-				this.#deliveryScheduler.hasDispatchReservation(
-					callerAgentId,
-					answer.answerId,
-				)
-				? undefined
-				: answer;
-		});
-		return answers.every((answer) => answer !== undefined)
-			? { answers }
-			: undefined;
-	}
-
 	requestRelationships(requestIds: readonly string[]): readonly (UnresolvedAgentRequest & { requestTitle: string })[] {
 		return requestIds.map((requestId) => {
 			const request = this.#requestEvidence.requestMetadata(requestId);
@@ -425,17 +391,6 @@ export class MessageCoordinator {
 				targetAgentId: request.targetAgentId,
 			};
 		});
-	}
-
-	unansweredRequestRelationships(
-		callerAgentId: string,
-		requestIds: readonly string[],
-	): readonly UnresolvedAgentRequest[] {
-		const caller = this.#requireAgent(callerAgentId);
-		return this.requestRelationships(requestIds).filter(
-			({ requestId }) =>
-				this.#requestEvidence.callerWaitAnswer(caller, requestId) === undefined,
-		);
 	}
 
 	/**
@@ -1179,55 +1134,20 @@ export class MessageCoordinator {
 				reason: "inspection_incomplete",
 			};
 		}
-		const answer = this.#requestEvidence.findAnswer(request);
-		if (answer) {
-			const answerDelivery = inspectAnswerDelivery({
-				requesterAgentId: requester.identity.agentId,
-				transcript: requester.transcript.inspect(),
-				answer,
-			});
-			const canonicalAnswer = inspectCanonicalMessage({
-				message: answer,
-				authorTranscript: responder.transcript.inspect(),
-				deliveryEvidence: answerDelivery.deliveryEvidence,
-			});
-			if (canonicalAnswer.state !== "canonical") {
+		const [answer] = this.answerArbitration.inspect(requester, [request.messageId]);
+		switch (answer!.state) {
+			case "retrievable":
+			case "delivered":
+				return answer.slot;
+			case "indeterminate":
+			case "direct_delivery_in_flight":
 				return {
 					...retryIdentity,
 					messageStatus: "unknown",
 					reason: "inspection_incomplete",
 				};
-			}
-			if (
-				!answerDelivery.deliveryEvidence &&
-				this.#deliveryScheduler.hasDispatchReservation(
-					requester.identity.agentId,
-					answer.messageId,
-				)
-			) {
-				return {
-					...retryIdentity,
-					messageStatus: "unknown",
-					reason: "inspection_incomplete",
-				};
-			}
-			return answerDelivery.deliveryEvidence
-				? {
-					disposition: "answer_already_delivered",
-					requestMessageId: request.messageId,
-					requestTitle: request.title,
-					answerId: answer.messageId,
-					deliveryEvidence: answerDelivery.deliveryEvidence,
-				}
-				: {
-					disposition: "answer_delivered",
-					requestMessageId: request.messageId,
-					requestTitle: request.title,
-					answerId: answer.messageId,
-					fromAgentId: answer.fromAgentId,
-					answer: answer.answer,
-					answerSource: answer.source,
-				};
+			case "unanswered":
+				break;
 		}
 		if (requestDelivery.deliveryEvidence) {
 			return {

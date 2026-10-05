@@ -47,8 +47,8 @@ import {
 	findAuthoredAgentMessageSource,
 	findAuthoredAgentMessageSources,
 	inspectCanonicalRequestResolution,
+	type CanonicalRequestResolution,
 } from "../protocol/request-resolution.ts";
-import type { AgentWaitAnswer } from "../protocol/agent-wait.ts";
 import type { ResidualRequestRelationships } from "../runtime/agent-runtime-host.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
@@ -154,7 +154,7 @@ export class RequestEvidence {
 	}
 
 	findAnswer(request: Request): Answer | undefined {
-		const durable = this.#inspectResolution(request).answer;
+		const durable = this.canonicalResolution(request).answer;
 		const admitted = this.#admittedAnswersByRequest.get(request.messageId);
 		if (durable && admitted && durable.messageId !== admitted.messageId) {
 			throw new Error(
@@ -166,7 +166,7 @@ export class RequestEvidence {
 	}
 
 	findCancellation(request: Request): Cancellation | undefined {
-		const durable = this.#inspectResolution(request).cancellation;
+		const durable = this.canonicalResolution(request).cancellation;
 		const admitted = this.#admittedCancellationsByRequest.get(request.messageId);
 		if (durable && admitted && durable.messageId !== admitted.messageId) {
 			throw new Error(
@@ -693,7 +693,7 @@ export class RequestEvidence {
 				}).state === "canonical"
 			) {
 				if (responder) {
-					const resolution = this.#inspectResolution(request);
+					const resolution = this.canonicalResolution(request);
 					const answered =
 						resolution.answer &&
 						inspectAnswerDelivery({
@@ -725,7 +725,7 @@ export class RequestEvidence {
 			const incoming = requester ? this.findRequest(requestId) : undefined;
 			if (incoming) {
 				if (!this.#inspectRequestDelivery(incoming, agent).deliveryEvidence) continue;
-				const resolution = this.#inspectResolution(incoming);
+				const resolution = this.canonicalResolution(incoming);
 				// A responder can only learn of a withdrawal through Delivery, so a canonical
 				// Cancellation leaves this obligation open until it lands here
 				// (docs/agent-messaging.md: "Answer commitment or Cancellation Delivery
@@ -785,44 +785,6 @@ export class RequestEvidence {
 		return request;
 	}
 
-	callerWaitAnswer(
-		caller: AgentRecord,
-		requestId: string,
-	): AgentWaitAnswer | undefined {
-		const message = this.requireCallerAuthoredMessage(caller, requestId);
-		if (message.kind !== "request") {
-			throw new Error(`wrong_message_kind: Message ${requestId} is not a Request`);
-		}
-		const resolution = this.#inspectResolution(message);
-		if (resolution.cancellation) {
-			throw new Error(`invalid_state: Request ${requestId} was cancelled`);
-		}
-		const answer = resolution.answer;
-		if (!answer) return undefined;
-		const delivery = inspectAnswerDelivery({
-			requesterAgentId: caller.identity.agentId,
-			transcript: caller.transcript.inspect(),
-			answer,
-		});
-		return delivery.deliveryEvidence
-			? {
-				disposition: "answer_already_delivered",
-				requestMessageId: requestId,
-				requestTitle: message.title,
-				answerId: answer.messageId,
-				deliveryEvidence: delivery.deliveryEvidence,
-			}
-			: {
-				disposition: "answer_delivered",
-				requestMessageId: requestId,
-				requestTitle: message.title,
-				answerId: answer.messageId,
-				fromAgentId: answer.fromAgentId,
-				answer: answer.answer,
-				answerSource: answer.source,
-			};
-	}
-
 	resolveRecoveryMessage(author: AgentRecord, messageId: string): Message | undefined {
 		const authored = findAuthoredAgentMessageSource({
 			authorAgentId: author.identity.agentId,
@@ -867,7 +829,8 @@ export class RequestEvidence {
 		throw new Error(`unknown_identity: Message ${messageId}`);
 	}
 
-	#inspectResolution(request: Request) {
+	/** Durable Answer and Cancellation authority; admitted bridges are not consulted. */
+	canonicalResolution(request: Request): CanonicalRequestResolution {
 		return inspectCanonicalRequestResolution({
 			request,
 			requesterTranscript: this.#requireAgent(request.fromAgentId).transcript.inspect(),

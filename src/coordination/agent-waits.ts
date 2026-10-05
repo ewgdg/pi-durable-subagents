@@ -2,6 +2,7 @@ import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
 import type { AgentRecord } from "./agent-record.ts";
+import { awaitsCanonicalAnswer, type AnswerArbitration } from "./answer-arbitration.ts";
 import type { MessageCoordinator } from "./messages.ts";
 import {
 	inspectCommittedAgentWaitResult,
@@ -65,6 +66,7 @@ type PendingAgentWait = {
 export class AgentWaitCoordinator {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #messages: MessageCoordinator;
+	readonly #answerArbitration: AnswerArbitration;
 	readonly #boundaryHooks: AgentWaitBoundaryHooks;
 	readonly #clock: AgentWaitClock;
 	readonly #assertNotShutDownOrSuspended: (record: AgentRecord) => void;
@@ -75,6 +77,7 @@ export class AgentWaitCoordinator {
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		messages: MessageCoordinator;
+		answerArbitration: AnswerArbitration;
 		boundaryHooks?: AgentWaitBoundaryHooks;
 		clock?: AgentWaitClock;
 		assertNotShutDownOrSuspended(record: AgentRecord): void;
@@ -83,10 +86,12 @@ export class AgentWaitCoordinator {
 	}) {
 		this.#agents = options.agents;
 		this.#messages = options.messages;
+		this.#answerArbitration = options.answerArbitration;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#clock = options.clock ?? SYSTEM_AGENT_WAIT_CLOCK;
 		this.#assertNotShutDownOrSuspended = options.assertNotShutDownOrSuspended;
 		this.#rejectsSuspendedResponders = options.rejectsSuspendedResponders ?? false;
+		this.#messages.subscribeWaitPreemption((record, reserveDelivery) => this.#preempt(record, reserveDelivery));
 	}
 
 	async wait(
@@ -124,11 +129,8 @@ export class AgentWaitCoordinator {
 				responderAgentId: targetAgentId,
 			})),
 		});
-		const completed = this.#messages.waitAnswers(
-			callerAgentId,
-			requestMessageIds,
-		);
-		if (!completed) this.#assertNoSuspendedResponder(callerAgentId, requestMessageIds);
+		const completed = this.#completedAggregate(caller, requestMessageIds);
+		if (!completed) this.#assertNoSuspendedResponder(caller, requestMessageIds);
 		const handle = caller.host.currentHandle();
 		if (!handle) throw new Error("Agent Run is unavailable");
 		const key = waitKey(callerAgentId, toolCallId);
@@ -196,22 +198,17 @@ export class AgentWaitCoordinator {
 	 * The suspension notice preempts a Wait only once. Waiting again on the same
 	 * stop would park forever when no human can resume it, so fail fast instead.
 	 */
-	#assertNoSuspendedResponder(callerAgentId: string, requestMessageIds: readonly string[]): void {
+	#assertNoSuspendedResponder(caller: AgentRecord, requestMessageIds: readonly string[]): void {
 		if (!this.#rejectsSuspendedResponders) return;
-		const suspended = this.#messages.unansweredRequestRelationships(callerAgentId, requestMessageIds)
+		const states = this.#answerArbitration.inspect(caller, requestMessageIds);
+		const suspended = this.#messages.requestRelationships(requestMessageIds)
+			.filter((_, index) => awaitsCanonicalAnswer(states[index]!))
 			.map(({ targetAgentId }) => targetAgentId)
 			.filter((agentId) => this.#agents.get(agentId)?.host.currentRunSuspension() !== undefined);
 		if (suspended.length === 0) return;
 		throw new Error(
 			`responder_suspended: ${[...new Set(suspended)].join(", ")} ${suspended.length === 1 ? "is" : "are"} suspended and no human will resume ${suspended.length === 1 ? "it" : "them"} in this headless Workflow. Resume with agent_control operation "resume", terminate, or cancel the Request instead of waiting.`,
 		);
-	}
-
-	preemptForInboundRequest(
-		record: AgentRecord,
-		reserveDelivery: () => boolean,
-	): Promise<void> {
-		return this.#preempt(record, reserveDelivery);
 	}
 
 	preemptForHumanInput(record: AgentRecord): Promise<void> {
@@ -236,10 +233,7 @@ export class AgentWaitCoordinator {
 			});
 			// This is the race boundary: the complete outstanding snapshot wins
 			// before new direction acquires the parked Run.
-			completed = this.#messages.waitAnswers(
-				pending.callerAgentId,
-				pending.requestMessageIds,
-			);
+			completed = this.#completedAggregate(pending.record, pending.requestMessageIds);
 		} catch (error) {
 			this.#fence(
 				pending.callerAgentId,
@@ -294,17 +288,14 @@ export class AgentWaitCoordinator {
 			!pending.record.host.currentRunFailed() &&
 			isDeepStrictEqual(message.details, pending.candidate)
 		) {
-			if (pending.candidate && "disposition" in pending.candidate) return undefined;
+			if (!pending.candidate || "disposition" in pending.candidate) return undefined;
 			// A completed aggregate candidate may have lost to direct Delivery before
 			// Pi commits it. Preemption has no Answer retrieval to re-arbitrate.
-			const current = this.#messages.waitAnswers(
-				callerAgentId,
-				pending.requestMessageIds,
-			);
-			if (current) {
-				if (isDeepStrictEqual(current, pending.candidate)) return undefined;
-				pending.candidate = current;
-				return { message: completedToolResult(message, current) };
+			const reconfirmation = this.#answerArbitration.reconfirm(pending.record, pending.candidate.answers);
+			if (reconfirmation.outcome === "unchanged") return undefined;
+			if (reconfirmation.outcome === "replaced") {
+				pending.candidate = { answers: reconfirmation.slots };
+				return { message: completedToolResult(message, pending.candidate) };
 			}
 		}
 		this.#fence(callerAgentId, pending.toolCallId, FENCED_MESSAGE);
@@ -360,19 +351,13 @@ export class AgentWaitCoordinator {
 		if (pending.phase !== "waiting") return;
 		let completed: AgentWaitResult | undefined;
 		try {
-			completed = this.#messages.waitAnswers(
-				pending.callerAgentId,
-				pending.requestMessageIds,
-			);
+			completed = this.#completedAggregate(pending.record, pending.requestMessageIds);
 			if (!completed) {
 				// Proof gets checked before maintenance, whose in-flight passes
 				// coalesce separately for each recipient.
 				await pending.reconcileRequestDeliveries();
 				if (pending.phase !== "waiting") return;
-				completed = this.#messages.waitAnswers(
-					pending.callerAgentId,
-					pending.requestMessageIds,
-				);
+				completed = this.#completedAggregate(pending.record, pending.requestMessageIds);
 			}
 		} catch (error) {
 			// Delivery maintenance may finish after Answer completion or preemption.
@@ -415,6 +400,13 @@ export class AgentWaitCoordinator {
 				error instanceof Error ? error.message : String(error),
 			);
 		}
+	}
+
+	/** Complete only when every Request is retrievable or already delivered. */
+	#completedAggregate(caller: AgentRecord, requestMessageIds: readonly string[]): AgentWaitResult | undefined {
+		const answers = this.#answerArbitration.inspect(caller, requestMessageIds)
+			.flatMap((state) => state.state === "retrievable" || state.state === "delivered" ? [state.slot] : []);
+		return answers.length === requestMessageIds.length ? { answers } : undefined;
 	}
 
 	#scheduleReconciliation(pending: PendingAgentWait): void {
