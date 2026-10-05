@@ -18,7 +18,7 @@ import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
-import type { AgentObserveInput } from "../src/tools/participant-coordination-tools.ts";
+import type { AgentObserveInput } from "../src/tools/coordination-tool-catalogue.ts";
 import {
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,

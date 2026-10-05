@@ -33,10 +33,9 @@ import { installInteractiveHostBridge } from "./pi-integration/interactive-host-
 import { workflowInteractionForMode } from "./pi-integration/workflow-interaction.ts";
 import { registerMessageDeliveryRenderer } from "./tools/message-delivery-renderer.ts";
 import {
-	activateOwnerAgentTools,
-	deactivateOwnerAgentTools,
 	registerOwnerAgentTools,
 	registerAgentsCommand,
+	setOwnerAgentToolsActive,
 } from "./tools/owner-surfaces.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
@@ -80,7 +79,7 @@ export const createOwnerExtension = (
 	};
 	// Pi reconstructs replacement transcripts before session_start. Register the
 	// official tool definitions now so historical calls receive their renderers.
-	registerOwnerAgentTools(pi, resolveAdmittedOwnerView);
+	const ownerTools = registerOwnerAgentTools(pi, resolveAdmittedOwnerView);
 
 	let bootstrappedSessionManager: ExtensionContext["sessionManager"] | undefined;
 	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
@@ -93,8 +92,8 @@ export const createOwnerExtension = (
 		bootstrappedSessionManager = ctx.sessionManager;
 		ownerAdmissionState = "pending";
 		ownerIdentified = false;
-		deactivateOwnerAgentTools(pi);
 		const interaction = workflowInteractionForMode(ctx.mode);
+		setOwnerAgentToolsActive(pi, interaction, false);
 		try {
 			const ownerView = await initializeOwnerWorkflow({
 				pi,
@@ -103,6 +102,7 @@ export const createOwnerExtension = (
 				interaction,
 				entryModulePath: ENTRY_MODULE_PATH,
 				constructWorkflowCoordinator,
+				ownerTools,
 				event,
 				onOwnerIdentified: () => { ownerIdentified = true; },
 			});
@@ -111,18 +111,14 @@ export const createOwnerExtension = (
 				return;
 			}
 			resolveOwnerView = ownerView;
-			registerOwnerAgentTools(
-				pi,
-				resolveAdmittedOwnerView,
-				resolveOwnerView().agentTemplateSnapshot(),
-			);
-			activateOwnerAgentTools(pi);
+			ownerTools.refreshSpawnGuidance(resolveOwnerView().agentTemplateSnapshot());
+			setOwnerAgentToolsActive(pi, interaction, true);
 			ownerAdmissionState = "admitted";
 			if (interaction === "terminal") showOwnerBlockage(ctx.ui, undefined);
 		} catch (error) {
 			ownerAdmissionState = "failed";
 			resolveOwnerView = undefined;
-			deactivateOwnerAgentTools(pi);
+			setOwnerAgentToolsActive(pi, interaction, false);
 			const failure = error instanceof OwnerRecoveryError ? error : new OwnerRecoveryError(
 				error instanceof ProtocolInvariantError ? "Owner transcript recovery" : "Owner admission",
 				ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile(), error,

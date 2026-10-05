@@ -53,9 +53,9 @@ import {
 } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 import {
-	participantCoordinationToolNames,
-	registerParticipantCoordinationTools,
-} from "../tools/participant-coordination-tools.ts";
+	coordinationToolActivation,
+	registerCoordinationTools,
+} from "../tools/coordination-tools.ts";
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
@@ -214,7 +214,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		},
 	);
 	let participantLifecycle: ParticipantLifecycleHandlers;
-	let refreshOrdinaryAgentTools: ((refresh?: boolean) => Promise<void>) | undefined;
+	let refreshSpawnGuidance: ((refresh?: boolean) => Promise<void>) | undefined;
 	// Pi stops terminal input handling together with a hidden TUI. A blocked ask_user
 	// therefore has to keep this Agent's native editor live to receive the human's
 	// keystrokes, which the Owner forwards into this process's PTY.
@@ -238,22 +238,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		const coordination = { ...participant.coordination, holdNativeEditorWhileAsking };
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
-		registerParticipantCoordinationTools(
-			pi,
-			"ordinary",
-			coordination,
-			resolveAgentLabel,
-			undefined,
-			resolveAnswerTargetAgent,
-		);
-		refreshOrdinaryAgentTools = async (refresh = false) => registerParticipantCoordinationTools(
-			pi,
-			"ordinary",
-			coordination,
-			resolveAgentLabel,
-			await coordination.agentTemplateSnapshot(refresh),
-			resolveAnswerTargetAgent,
-		);
+		const coordinationTools = registerCoordinationTools(pi, "ordinary", coordination, { resolveAgentLabel, resolveAnswerTargetAgent });
+		refreshSpawnGuidance = async (refresh = false) =>
+			coordinationTools.refreshSpawnGuidance(await coordination.agentTemplateSnapshot(refresh));
 	} else {
 		const participant = createControlBackedChildParticipantHandlers(
 			"moderator",
@@ -264,14 +251,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		const coordination = { ...participant.coordination, holdNativeEditorWhileAsking };
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
-		registerParticipantCoordinationTools(
-			pi,
-			"moderator",
-			coordination,
-			resolveAgentLabel,
-			undefined,
-			resolveAnswerTargetAgent,
-		);
+		registerCoordinationTools(pi, "moderator", coordination, { resolveAgentLabel, resolveAnswerTargetAgent });
 	}
 	registerParticipantNativeSessionPolicy(pi);
 	const publishCurrentRuntimeSnapshot = async () => {
@@ -477,7 +457,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				});
 			}
 			if (bootstrap.ownerPresentation) {
-				await refreshOrdinaryAgentTools?.(event.reason === "reload");
+				await refreshSpawnGuidance?.(event.reason === "reload");
 			}
 			if (bootstrap.ownerPresentation) {
 				binding.activity.update(
@@ -874,14 +854,12 @@ function applyStartupToolFilter(
 	bootstrap: Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">,
 	retained: boolean,
 ): void {
-	const roleTools = participantCoordinationToolNames[bootstrap.role];
-	// A headless Workflow has no human to answer, so a question would block forever.
-	// The Agent escalates through its supervisor with agent_message instead.
-	const withheldTools = new Set<string>(bootstrap.interaction === "headless" ? ["ask_user"] : []);
+	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
+	const withheldTools = new Set<string>(roleTools.filter((name) => !activeTools.includes(name)));
 	const excludedNames = new Set(retained ? [] : bootstrap.excludedTools);
 	pi.setActiveTools([...new Set([
 		...pi.getActiveTools().filter((name) => !excludedNames.has(name)),
-		...roleTools,
+		...activeTools,
 	])].filter((name) => !withheldTools.has(name)));
 }
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Check } from "typebox/value";
 
-import { participantCoordinationToolSchemas } from "../src/tools/participant-coordination-tools.ts";
+import { coordinationToolSchemas } from "../src/tools/coordination-tool-catalogue.ts";
 
 import { validateAgentSpawnInput } from "../src/protocol/agent-spawn-input.ts";
 
@@ -10,7 +10,7 @@ test("Agent Spawn rejects every removed conversation field", () => {
 	for (const conversation of ["fork", "copy", null, undefined]) {
 		const input = { title: "Fixture request", request: "Use isolated context.", conversation };
 		assert.throws(() => validateAgentSpawnInput(input), /conversation.*no longer supported/);
-		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), false);
+		assert.equal(Check(coordinationToolSchemas.agent_spawn, input), false);
 	}
 });
 
@@ -18,7 +18,7 @@ test("isolated spawning accepts default, Template and explicit configuration", (
 	for (const configuration of [{}, { template: "reviewer" }, { config: { excludeTools: ["read"] } }, { template: "reviewer", config: { excludeTools: ["read"] } }]) {
 		const input = { title: "Fixture request", request: "Use supplied context.", ...configuration };
 		assert.deepEqual(validateAgentSpawnInput(input), input);
-		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
+		assert.equal(Check(coordinationToolSchemas.agent_spawn, input), true);
 	}
 });
 
@@ -41,7 +41,7 @@ test("Agent Spawn accepts the exclusion filter and rejects obsolete fields", () 
 		{ tools: ["read"] },
 		{ skills: ["review"] },
 	]) {
-		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, {
+		assert.equal(Check(coordinationToolSchemas.agent_spawn, {
 			title: "Fixture request", request: "Reject obsolete fields.", config,
 		}), false);
 		assert.throws(
@@ -144,20 +144,20 @@ test("Agent Spawn validates model overrides with explicit inheritance", () => {
 test("Agent Spawn requires one atomic model pair while recorded half-pairs keep resolving", () => {
 	for (const model of [{ id: "provider/model", thinking: "high" }, { id: "inherit", thinking: "inherit" }]) {
 		const input = { title: "Fixture request", request: "Use selected values.", config: { model } };
-		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
+		assert.equal(Check(coordinationToolSchemas.agent_spawn, input), true);
 		assert.deepEqual(validateAgentSpawnInput(input), input);
 	}
 	// The tool and control schemas reject a half-pair, which would otherwise let an
 	// availability change between Runtime preparations move the level to another model.
 	for (const model of [{}, { id: "provider/model" }, { thinking: "high" }, { id: "inherit" }, { thinking: "inherit" }]) {
 		const input = { title: "Fixture request", request: "Use selected defaults.", config: { model } };
-		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), false);
+		assert.equal(Check(coordinationToolSchemas.agent_spawn, input), false);
 		// A call recorded before the pair rule still parses for recovery and replay.
 		assert.deepEqual(validateAgentSpawnInput(input), input);
 	}
 	for (const model of [{ id: "invalid" }, { thinking: "invalid" }, { extra: true }, { id: null }, { thinking: null }]) {
 		const input = { title: "Fixture request", request: "Reject invalid configuration.", config: { model } };
-		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), false);
+		assert.equal(Check(coordinationToolSchemas.agent_spawn, input), false);
 		assert.throws(() => validateAgentSpawnInput(input), /invalid/);
 	}
 });

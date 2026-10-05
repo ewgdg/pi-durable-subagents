@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { registerParticipantCoordinationTools } from "../src/tools/participant-coordination-tools.ts";
+import { registerCoordinationTools, type CoordinationToolHandlers } from "../src/tools/coordination-tools.ts";
 import type { WorkflowResumeReceipt } from "../src/protocol/workflow-resume.ts";
 
 let resumeTool: ToolDefinition;
-registerParticipantCoordinationTools({
+registerCoordinationTools({
 	registerTool(tool: ToolDefinition) {
 		if (tool.name === "workflow_resume") resumeTool = tool;
 	},
-} as ExtensionAPI, "owner", {} as Parameters<typeof registerParticipantCoordinationTools<"owner">>[2]);
+} as ExtensionAPI, "owner", {} as CoordinationToolHandlers<"owner">);
 
 const theme = {
 	fg: (color: string, text: string) => `<${color}>${text}</${color}>`,

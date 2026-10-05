@@ -1,9 +1,9 @@
 import type { ParticipantLifecycleHandlers } from "../pi-integration/participant-lifecycle.ts";
+import type { AgentObserveInput } from "../tools/coordination-tool-catalogue.ts";
 import type {
-	AgentObserveInput,
-	ParticipantCoordinationRole,
-	ParticipantCoordinationToolHandlers,
-} from "../tools/participant-coordination-tools.ts";
+	CoordinationRole,
+	CoordinationToolHandlers,
+} from "../tools/coordination-tools.ts";
 import type {
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
@@ -11,8 +11,8 @@ import type {
 
 type ParticipantView = OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView;
 
-export type ViewBackedParticipantHandlers<Role extends ParticipantCoordinationRole> = Readonly<{
-	coordination: ParticipantCoordinationToolHandlers<Role>;
+export type ViewBackedParticipantHandlers<Role extends CoordinationRole> = Readonly<{
+	coordination: CoordinationToolHandlers<Role>;
 	lifecycle: ParticipantLifecycleHandlers;
 }>;
 
@@ -34,9 +34,9 @@ export function createViewBackedParticipantHandlers(
 	resolveView: () => ModeratorAgentCoordinatorView,
 ): ViewBackedParticipantHandlers<"moderator">;
 export function createViewBackedParticipantHandlers(
-	role: ParticipantCoordinationRole,
+	role: CoordinationRole,
 	resolveView: () => ParticipantView,
-): ViewBackedParticipantHandlers<ParticipantCoordinationRole> {
+): ViewBackedParticipantHandlers<CoordinationRole> {
 	return {
 		coordination: coordinationHandlers(role, resolveView),
 		lifecycle: lifecycleHandlers(resolveView),
@@ -44,9 +44,9 @@ export function createViewBackedParticipantHandlers(
 }
 
 function coordinationHandlers(
-	role: ParticipantCoordinationRole,
+	role: CoordinationRole,
 	resolveView: () => ParticipantView,
-): ParticipantCoordinationToolHandlers<ParticipantCoordinationRole> {
+): CoordinationToolHandlers<CoordinationRole> {
 	const common = {
 		message: (toolCallId: string, input: Parameters<ParticipantView["message"]>[1]) =>
 			resolveView().message(toolCallId, input),

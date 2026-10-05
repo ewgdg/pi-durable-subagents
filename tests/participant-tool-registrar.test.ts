@@ -5,12 +5,12 @@ import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt } from "@ear
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 
+import { coordinationToolSchemas } from "../src/tools/coordination-tool-catalogue.ts";
 import {
-	participantCoordinationToolSchemas,
-	registerParticipantCoordinationTools,
-	type ParticipantCoordinationRole,
-	type ParticipantCoordinationToolHandlers,
-} from "../src/tools/participant-coordination-tools.ts";
+	registerCoordinationTools,
+	type CoordinationRole,
+	type CoordinationToolHandlers,
+} from "../src/tools/coordination-tools.ts";
 import {
 	renderAgentTemplatePromptGuide,
 } from "../src/tools/agent-template-prompt-guide.ts";
@@ -68,34 +68,6 @@ test("registered Answer results remain canonical with and without other obligati
 	}
 });
 
-const roleToolNames = {
-	ordinary: [
-		"agent_control",
-		"agent_message",
-		"agent_observe",
-		"agent_wait",
-		"agent_spawn",
-		"ask_user",
-	],
-	moderator: [
-		"agent_control",
-		"agent_message",
-		"agent_observe",
-		"agent_wait",
-		"ask_user",
-		"moderator_control",
-		"report_to_user",
-	],
-	owner: [
-		"workflow_resume",
-		"agent_control",
-		"agent_message",
-		"agent_observe",
-		"agent_wait",
-		"agent_spawn",
-	],
-} as const;
-
 const agentStatus = {
 	agentId: "child-agent",
 	workflowId: "workflow",
@@ -108,9 +80,9 @@ const agentStatus = {
 	run: { phase: "dormant", retentionReasons: [] },
 } as const;
 
-const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
-	ParticipantCoordinationToolHandlers<"moderator"> &
-	ParticipantCoordinationToolHandlers<"owner"> = {
+const handlers: CoordinationToolHandlers<"ordinary"> &
+	CoordinationToolHandlers<"moderator"> &
+	CoordinationToolHandlers<"owner"> = {
 	async resumeWorkflow() { return { workflowId: "workflow", outstandingRequests: [] }; },
 	async message() {
 		return {
@@ -149,42 +121,15 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	},
 };
 
-test("participant registrar exposes the exact closed sequential role tool sets", async (t) => {
-	for (const role of ["ordinary", "moderator", "owner"] as const) {
-		await t.test(role, async (t) => {
-			const host = await createRegistrarHost(t, role, handlers);
-			assert.deepEqual(
-				host.session.getActiveToolNames().sort(),
-				[...roleToolNames[role]].sort(),
-			);
-			const callableFromTools = host.session.getCallableToolNames();
-			for (const toolName of roleToolNames[role]) {
-				assert.ok(!callableFromTools.includes(toolName), `${toolName} must not be callable from codemode`);
-			}
-			for (const toolName of roleToolNames[role]) {
-				const tool = host.session.getToolDefinition(toolName);
-				assert.ok(tool, toolName);
-				assert.equal(tool.executionMode, "sequential", toolName);
-				assert.equal(tool.parameters, participantCoordinationToolSchemas[toolName]);
-				assertClosedTypeBoxObjects(tool.parameters, toolName);
-				assert.equal(typeof tool.renderCall, "function", toolName);
-				assert.equal(typeof tool.renderResult, "function", toolName);
-			}
-			assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
-			await host.runtime.dispose();
-		});
-	}
-});
-
 test("Workflow resume accepts only the current Workflow's parameterless Owner operation", () => {
-	const schema = participantCoordinationToolSchemas.workflow_resume;
+	const schema = coordinationToolSchemas.workflow_resume;
 	assert.equal(Value.Check(schema, {}), true);
 	assert.equal(Value.Check(schema, { workflowId: "other" }), false);
 	assert.equal(Value.Check(schema, { agentId: "child" }), false);
 });
 
 test("Agent Message schema requires explicit Answer and Cancellation targets", () => {
-	const variants = (participantCoordinationToolSchemas.agent_message as {
+	const variants = (coordinationToolSchemas.agent_message as {
 		anyOf: Array<{ properties: Record<string, { const?: string }> }>;
 	}).anyOf;
 	const answer = variants.find(({ properties }) =>
@@ -211,7 +156,7 @@ test("Agent Message schema requires explicit Answer and Cancellation targets", (
 });
 
 test("Agent Wait accepts all outbound Requests or a non-empty Request selection", () => {
-	const schema = participantCoordinationToolSchemas.agent_wait;
+	const schema = coordinationToolSchemas.agent_wait;
 	assert.equal(Value.Check(schema, {}), true);
 	assert.equal(Value.Check(schema, {
 		requestMessageIds: ["request-a"],
@@ -223,7 +168,7 @@ test("Agent Wait accepts all outbound Requests or a non-empty Request selection"
 });
 
 test("Agent Observe schema describes status selectors and omitted identity as self-observation", () => {
-	const variants = (participantCoordinationToolSchemas.agent_observe as {
+	const variants = (coordinationToolSchemas.agent_observe as {
 		anyOf: Array<{
 			properties: Record<string, { const?: string; description?: string }>;
 		}>;
@@ -239,7 +184,7 @@ test("Agent Observe schema describes status selectors and omitted identity as se
 });
 
 test("Agent Observe request schema documents full inspection including closed Requests", () => {
-	const variants = (participantCoordinationToolSchemas.agent_observe as {
+	const variants = (coordinationToolSchemas.agent_observe as {
 		anyOf: Array<{
 			properties: Record<string, { const?: string; description?: string }>;
 		}>;
@@ -255,7 +200,7 @@ test("Agent Observe request schema documents full inspection including closed Re
 });
 
 test("Agent Observe schema composes authorized and direct-child search filters", () => {
-	const schema = participantCoordinationToolSchemas.agent_observe;
+	const schema = coordinationToolSchemas.agent_observe;
 	assert.equal(Value.Check(schema, { operation: "status" }), true);
 	assert.equal(Value.Check(schema, {
 		operation: "search",
@@ -298,7 +243,7 @@ test("Agent Observe schema composes authorized and direct-child search filters",
 });
 
 test("Agent Spawn schema accepts isolated children and rejects extension path arrays", () => {
-	const schema = participantCoordinationToolSchemas.agent_spawn;
+	const schema = coordinationToolSchemas.agent_spawn;
 	assert.equal(schema.type, "object");
 	assert.equal("anyOf" in schema, false);
 	assert.equal("allOf" in schema, false);
@@ -401,49 +346,6 @@ test("Message guidance keeps obligations separate from delivery-mode rules", asy
  	assert.match(deliveryRules, /background/);
  	assert.match(deliveryRules, /FIFO/);
  	assert.match(deliveryRules, /starv/);
-});
-
-test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalogue", async (t) => {
-	let observedSystemPrompt = "";
-	const templateSnapshot = {
-		templates: [{
-			name: "integration-researcher",
-			useWhen: "Use for integration research.",
-			models: [{
-				model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
-				thinking: "high" as const,
-			}],
-			systemPromptMode: "append" as const,
-			loadContextFiles: true,
-		}],
-	};
-	const host = await createTestOwnerHost(t, (pi) => {
-		registerParticipantCoordinationTools(
-			pi,
-			"owner",
-			handlers,
-			undefined,
-			templateSnapshot,
-		);
-	});
-	const spawn = host.session.getToolDefinition("agent_spawn");
-	assert.ok(spawn);
-	assert.equal(
-		spawn.promptGuidelines?.some((guideline) =>
-			guideline.includes("integration-researcher")
-		),
-		true,
-	);
-	host.model.setResponses([(context) => {
-		observedSystemPrompt = getCurrentSystemPrompt(context.messages);
-		return fauxAssistantMessage("Done.");
-	}]);
-
-	await host.session.prompt("Choose an Agent Template if appropriate.");
-	assert.match(observedSystemPrompt, /## Available Agent Templates Snapshot/);
-	assert.match(observedSystemPrompt, /integration-researcher/);
-	assert.match(observedSystemPrompt, /  model: anthropic\/claude-sonnet-4-5\n  thinking: high/);
-	await host.runtime.dispose();
 });
 
 test("participant registrar contributes each prompt guide once", async (t) => {
@@ -580,7 +482,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 	const controlReceipt = { agentId: "child-agent", disposition: "held" } as const;
 	const humanReceipt = { requestId: "human-1", answer: "Proceed." } as const;
 	const signal = new AbortController().signal;
-	const routedHandlers: ParticipantCoordinationToolHandlers<"ordinary"> = {
+	const routedHandlers: CoordinationToolHandlers<"ordinary"> = {
 		async message(toolCallId, input) {
 			calls.push(["message", toolCallId, input]);
 			return messageReceipt;
@@ -657,7 +559,7 @@ test("participant registrar preserves handler errors and Moderator control routi
 	const failure = new Error("exact coordinator rejection");
 	const moderatorReceipt = { disposition: "resolved" } as const;
 	let moderatorCall: unknown;
-	const moderatorHandlers: ParticipantCoordinationToolHandlers<"moderator"> = {
+	const moderatorHandlers: CoordinationToolHandlers<"moderator"> = {
 		...handlers,
 		async control() {
 			throw failure;
@@ -691,13 +593,13 @@ test("participant registrar preserves handler errors and Moderator control routi
 	await host.runtime.dispose();
 });
 
-async function createRegistrarHost<Role extends ParticipantCoordinationRole>(
+async function createRegistrarHost<Role extends CoordinationRole>(
 	t: TestCleanupRegistrar,
 	role: Role,
-	roleHandlers: ParticipantCoordinationToolHandlers<Role>,
+	roleHandlers: CoordinationToolHandlers<Role>,
 ): Promise<TestOwnerHost> {
 	return createTestOwnerHost(t, (pi: ExtensionAPI) => {
-		registerParticipantCoordinationTools(pi, role, roleHandlers);
+		registerCoordinationTools(pi, role, roleHandlers);
 	});
 }
 
@@ -729,26 +631,4 @@ function toolMetadata(host: TestOwnerHost, toolName: string) {
 		promptSnippet: tool.promptSnippet,
 		renderShell: tool.renderShell,
 	};
-}
-
-function assertClosedTypeBoxObjects(schema: unknown, path: string): void {
-	if (typeof schema !== "object" || schema === null) return;
-	const node = schema as {
-		type?: unknown;
-		additionalProperties?: unknown;
-		anyOf?: unknown[];
-		properties?: Record<string, unknown>;
-		items?: unknown;
-	};
-	if (node.type === "object") {
-		assert.equal(node.type, "object", path);
-		if (!node.anyOf) assert.equal(node.additionalProperties, false, path);
-	}
-	for (const [index, variant] of (node.anyOf ?? []).entries()) {
-		assertClosedTypeBoxObjects(variant, `${path}.anyOf[${index}]`);
-	}
-	for (const [property, child] of Object.entries(node.properties ?? {})) {
-		assertClosedTypeBoxObjects(child, `${path}.${property}`);
-	}
-	if (node.items) assertClosedTypeBoxObjects(node.items, `${path}.items`);
 }

@@ -5,6 +5,7 @@ import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 
 import {
 	renderHumanRequestCall,
+	renderHumanRequestError,
 	renderHumanRequestResult,
 } from "../src/tools/coordination-renderers.ts";
 
@@ -37,21 +38,19 @@ test("the human Answer block packs its label with the Answer", () => {
 		},
 		options,
 		plainTheme,
-		{ isError: false },
 	).render(60).map((line) => line.trim());
 	assert.deepEqual(rendered, ["", "[Answer]", "Keep native Pi.", ""]);
 });
 
 test("an interrupted Human Request reports the failure without a body gap", () => {
 	initTheme("dark");
-	const rendered = renderHumanRequestResult(
+	const rendered = renderHumanRequestError(
 		{
 			content: [{ type: "text", text: "Input was interrupted before an Answer arrived." }],
-			details: { requestId: "human-request", answer: "" },
+			details: undefined,
 		},
 		options,
 		plainTheme,
-		{ isError: true },
 	).render(60).map((line) => line.trim());
 	assert.deepEqual(rendered, [
 		"",

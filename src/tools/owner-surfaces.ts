@@ -20,33 +20,33 @@ import {
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
 } from "../process-runtime/remote-agent-selector.ts";
-import { registerParticipantCoordinationTools } from "./participant-coordination-tools.ts";
+import {
+	coordinationToolActivation,
+	registerCoordinationTools,
+	type SpawnGuidanceRefresh,
+} from "./coordination-tools.ts";
 import { createViewBackedParticipantHandlers } from "../coordination/view-backed-participant-handlers.ts";
-import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
+import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
 import { headlessOwnerDiagnostics, openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
 import { openModelPolicySurface } from "../presentation/model-policy-surface.ts";
 
-const OWNER_AGENT_TOOL_NAMES = new Set([
-	"workflow_resume",
-	"agent_message",
-	"agent_wait",
-	"agent_spawn",
-	"agent_observe",
-	"agent_control",
-]);
-
-export function activateOwnerAgentTools(pi: ExtensionAPI): void {
-	pi.setActiveTools([
-		...new Set([...pi.getActiveTools(), ...OWNER_AGENT_TOOL_NAMES]),
-	]);
+/** Give an admitted Owner exactly its active coordination tools, or none when not admitted. */
+export function setOwnerAgentToolsActive(
+	pi: ExtensionAPI,
+	interaction: WorkflowInteraction,
+	admitted: boolean,
+): void {
+	const { roleTools, activeTools } = coordinationToolActivation("owner", interaction);
+	const otherTools = pi.getActiveTools().filter((name) => !(roleTools as readonly string[]).includes(name));
+	pi.setActiveTools(admitted ? [...otherTools, ...activeTools] : otherTools);
 }
 
-export function deactivateOwnerAgentTools(pi: ExtensionAPI): void {
-	pi.setActiveTools(
-		pi.getActiveTools().filter((toolName) => !OWNER_AGENT_TOOL_NAMES.has(toolName)),
-	);
-}
+/** The admitted Owner's view and its Spawn guidance, which `/agents models` refreshes. */
+export type AdmittedOwnerSurface = Readonly<{
+	view: () => OrdinaryAgentCoordinatorView;
+	tools: SpawnGuidanceRefresh;
+}>;
 
 const HEADLESS_AGENTS_COMMAND_MESSAGE =
 	"The Agents selector, Agent views, reports, and model policy need Pi's terminal UI. " +
@@ -57,7 +57,7 @@ export function registerAgentsCommand(
 	resolveView: () => HumanPresentationCoordinatorView,
 	ownerAdmission?: OwnerRecoveryError | "admitted",
 	/** Present only in the Workflow Owner session; enables `/agents models`. */
-	admittedOwnerView?: () => OrdinaryAgentCoordinatorView,
+	admittedOwner?: AdmittedOwnerSurface,
 ): void {
 	const admissionFailure = ownerAdmission === "admitted" ? undefined : ownerAdmission;
 	pi.registerCommand("agents", {
@@ -66,7 +66,7 @@ export function registerAgentsCommand(
 			const completions = [
 				...(getAgentsArgumentCompletions(prefix) ?? []),
 				...(ownerAdmission && "diagnostics".startsWith(prefix.trim()) ? [{ value: "diagnostics", label: "diagnostics" }] : []),
-				...(admittedOwnerView && "models".startsWith(prefix.trim()) ? [{ value: "models", label: "models" }] : []),
+				...(admittedOwner && "models".startsWith(prefix.trim()) ? [{ value: "models", label: "models" }] : []),
 			];
 			return completions.length ? completions : null;
 		},
@@ -83,15 +83,15 @@ export function registerAgentsCommand(
 				ctx.ui.notify(HEADLESS_AGENTS_COMMAND_MESSAGE, "warning");
 				return;
 			}
-			if (admittedOwnerView && args.trim() === "models") {
-				const view = admittedOwnerView();
+			if (admittedOwner && args.trim() === "models") {
+				const view = admittedOwner.view();
 				await openModelPolicySurface(ctx.ui, {
 					...view.modelPolicy(),
 					persist: async (entries) => (await view.setModelExclusions(entries)).excludedModels,
 				});
-				// Spawn guidance is baked into the registered tool definitions, so refresh
-				// them rather than leaving the Owner's own prompt describing stale bans.
-				registerOwnerAgentTools(pi, admittedOwnerView, view.agentTemplateSnapshot());
+				// Spawn guidance is baked into the registered tool definition, so refresh
+				// it rather than leaving the Owner's own prompt describing stale bans.
+				admittedOwner.tools.refreshSpawnGuidance(view.agentTemplateSnapshot());
 				return;
 			}
 			if (admissionFailure) {
@@ -209,14 +209,14 @@ export function registerAgentsCommand(
 export function registerOwnerAgentTools(
 	pi: ExtensionAPI,
 	resolveView: () => OrdinaryAgentCoordinatorView,
-	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot,
-): void {
-	registerParticipantCoordinationTools(
+): SpawnGuidanceRefresh {
+	return registerCoordinationTools(
 		pi,
 		"owner",
 		createViewBackedParticipantHandlers("owner", resolveView).coordination,
-		(agentId) => resolveView().agentLabel(agentId),
-		agentTemplateSnapshot,
-		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
+		{
+			resolveAgentLabel: (agentId) => resolveView().agentLabel(agentId),
+			resolveAnswerTargetAgent: (toolCallId) => resolveView().answerTargetAgent(toolCallId),
+		},
 	);
 }

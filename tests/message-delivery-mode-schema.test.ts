@@ -3,10 +3,10 @@ import test from "node:test";
 import { fauxToolCall, validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import { Compile } from "typebox/compile";
 import { Check } from "typebox/value";
-import { participantCoordinationToolSchemas } from "../src/tools/participant-coordination-tools.ts";
+import { coordinationToolSchemas } from "../src/tools/coordination-tool-catalogue.ts";
 import { agentControlMethods } from "../src/control/agent-control-protocol.ts";
 
-const parameters = participantCoordinationToolSchemas.agent_message;
+const parameters = coordinationToolSchemas.agent_message;
 const tool = { name: "agent_message", description: "Coordinate", parameters };
 const baseInputs = [
 	{ operation: "send", targetAgent: "recipient", content: "Information" },
@@ -73,7 +73,7 @@ test("closed operation-specific arguments reject foreign fields", () => {
 });
 
 test("no registered tool declaration carries resolution keywords", () => {
-	for (const [name, schema] of Object.entries(participantCoordinationToolSchemas)) {
+	for (const [name, schema] of Object.entries(coordinationToolSchemas)) {
 		assert.deepEqual(resolutionKeywordsIn(schema), [], name);
 		// OpenAI-compatible providers and DeepSeek validate the schema root before variants.
 		assert.equal((schema as { type?: unknown }).type, "object", name);

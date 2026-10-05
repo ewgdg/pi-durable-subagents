@@ -106,7 +106,7 @@ import { createViewBackedParticipantHandlers } from "./view-backed-participant-h
 import type {
 	AgentSearchInput,
 	AgentSearchResult,
-} from "../tools/participant-coordination-tools.ts";
+} from "../tools/coordination-tool-catalogue.ts";
 import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
 import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import { createOwnerAgentPresentationHandlers } from "../process-runtime/remote-agent-selector.ts";

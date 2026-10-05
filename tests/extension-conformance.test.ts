@@ -10,9 +10,9 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import { registerParticipantNativeSessionPolicy } from "../src/pi-integration/participant-native-session-policy.ts";
 import {
-	registerParticipantCoordinationTools,
-	type ParticipantCoordinationToolHandlers,
-} from "../src/tools/participant-coordination-tools.ts";
+	registerCoordinationTools,
+	type CoordinationToolHandlers,
+} from "../src/tools/coordination-tools.ts";
 import {
 	renderAgentControlCall,
 	renderAgentControlResult,
@@ -43,13 +43,13 @@ const unavailableHandlers = new Proxy({}, {
 	get: () => () => {
 		throw new Error("Role conformance does not execute coordination behavior");
 	},
-}) as ParticipantCoordinationToolHandlers<"ordinary"> & ParticipantCoordinationToolHandlers<"moderator">;
+}) as CoordinationToolHandlers<"ordinary"> & CoordinationToolHandlers<"moderator">;
 
 function roleTools(
 	role: "ordinary" | "moderator",
 	resolveAgentLabel?: (agentId: string) => string | undefined,
 ): ExtensionFactory {
-	return (pi) => registerParticipantCoordinationTools(pi, role, unavailableHandlers, resolveAgentLabel);
+	return (pi) => { registerCoordinationTools(pi, role, unavailableHandlers, { resolveAgentLabel }); };
 }
 
 const plainTheme = {
@@ -304,7 +304,6 @@ test("Agent Control rendering shows compact identities while collapsed and full 
 		},
 		{ expanded: false, isPartial: false },
 		plainTheme,
-		{ isError: false },
 		resolveAgentLabel,
 	).render(120).join("\n");
 	assert.match(result, /held · Researcher · 983c81e3/);
@@ -317,7 +316,6 @@ test("Agent Control rendering shows compact identities while collapsed and full 
 		},
 		{ expanded: true, isPartial: false },
 		plainTheme,
-		{ isError: false },
 		resolveAgentLabel,
 	).render(160).join("\n");
 	assert.match(expandedResult, new RegExp(`held · Researcher · ${agentId}`));
@@ -340,7 +338,6 @@ test("Agent Control renders a sent Resume receipt in the Message receipt languag
 		},
 		{ expanded: false, isPartial: false },
 		trackingTheme,
-		{ isError: false },
 		() => "Researcher",
 	).render(120).join("\n");
 

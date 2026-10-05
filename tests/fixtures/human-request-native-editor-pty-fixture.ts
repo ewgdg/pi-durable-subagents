@@ -8,7 +8,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { createViewBackedParticipantHandlers } from "../../src/coordination/view-backed-participant-handlers.ts";
 import { registerParticipantLifecycle } from "../../src/pi-integration/participant-lifecycle.ts";
 import { installAgentActivityDock } from "../../src/presentation/agent-activity-surface.ts";
-import { registerParticipantCoordinationTools } from "../../src/tools/participant-coordination-tools.ts";
+import { registerCoordinationTools } from "../../src/tools/coordination-tools.ts";
 import type { OrdinaryAgentCoordinatorView } from "../../src/coordination/workflow-coordinator.ts";
 import type { HumanAnswerCandidate } from "../../src/protocol/human-request.ts";
 import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
@@ -110,7 +110,7 @@ const view = {
 // An ordinary-role surface over the fake view, composed from the shared registrars.
 const extension: ExtensionFactory = (pi) => {
 	const handlers = createViewBackedParticipantHandlers("ordinary", () => view);
-	registerParticipantCoordinationTools(pi, "ordinary", handlers.coordination);
+	registerCoordinationTools(pi, "ordinary", handlers.coordination);
 	registerParticipantLifecycle(pi, handlers.lifecycle);
 	pi.on("session_start", (_event, ctx) => {
 		installAgentActivityDock(ctx.ui, {

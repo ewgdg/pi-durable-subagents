@@ -1,20 +1,13 @@
 import { WORKFLOW_RECOVERY_GUIDANCE, type WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
-import { boundedToolPreview } from "./bounded-preview.ts";
-import { Text } from "@earendil-works/pi-tui";
+import { Container } from "@earendil-works/pi-tui";
 import type { ReportToUserInput, ReportToUserReceipt } from "../protocol/moderator-report.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
-import type {
-	AgentToolResult,
-	ExtensionAPI,
-	ToolExposure,
-} from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 
 import type { AgentStatus } from "../coordination/agent-record.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
-import type { AgentLabelResolver } from "../presentation/agent-identity.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
@@ -32,6 +25,10 @@ import type {
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import { COORDINATION_HISTORY_GUIDANCE } from "../presentation/coordination-history-guidance.ts";
+import type {
+	CoordinationRole,
+	CoordinationToolEntry,
+} from "./coordination-tools.ts";
 import {
 	renderWorkflowResumeCall,
 	renderWorkflowResumeResult,
@@ -40,12 +37,15 @@ import {
 	renderAgentObserveCall,
 	renderAgentObserveResult,
 	renderAgentWaitCall,
+	renderAgentWaitProgress,
 	renderAgentWaitResult,
 	renderHumanRequestCall,
+	renderHumanRequestError,
 	renderHumanRequestResult,
 	renderModeratorControlCall,
 	renderModeratorControlResult,
-	renderToolError,
+	renderReportToUserCall,
+	renderReportToUserResult,
 } from "./coordination-renderers.ts";
 import {
 	renderAgentMessageCall,
@@ -57,49 +57,11 @@ import {
 } from "./spawn-renderer.ts";
 import { renderAgentTemplatePromptGuide } from "./agent-template-prompt-guide.ts";
 
-export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
-
-/**
- * Tools this registrar activates for each role. The child bridge merges its own
- * role list at startup completion, so a Spawn exclusion filter can never leave a
- * participant unable to answer.
+/*
+ * The Coordination Tool Catalogue: one entry per model-facing coordination tool.
+ * Each entry declares everything specific to its tool; `coordination-tools.ts`
+ * registers them and owns what they share.
  */
-export const participantCoordinationToolNames = {
-	owner: [
-		"workflow_resume",
-		"agent_message",
-		"agent_wait",
-		"agent_spawn",
-		"agent_observe",
-		"agent_control",
-	],
-	ordinary: [
-		"agent_message",
-		"agent_wait",
-		"agent_spawn",
-		"agent_observe",
-		"agent_control",
-		"ask_user",
-	],
-	moderator: [
-		"agent_message",
-		"agent_wait",
-		"agent_observe",
-		"agent_control",
-		"ask_user",
-		"report_to_user",
-		"moderator_control",
-	],
-} as const satisfies Record<ParticipantCoordinationRole, readonly string[]>;
-
-/**
- * Coordination durability resolves each call from its committed top-level
- * assistant toolCall (identities derive from agentId/entryId/toolCallId). Calls a
- * codemode script makes through `ctx.executeTool()` never enter the transcript,
- * so they could not commit; `model-only` keeps the tools declared to the model
- * but off codemode's callable set.
- */
-const COORDINATION_TOOL_EXPOSURE: ToolExposure = "model-only";
 
 const AGENT_MESSAGE_PROMPT_GUIDE = `<agent_message>
 For send and request, targetAgent accepts an exact Agent label, full Agent ID, or unique Agent ID suffix. Full IDs and suffixes resolve Workflow-wide. Labels resolve only among the caller, its Direct Spawner, and its direct children; Owner and Moderator labels resolve Workflow-wide. An ambiguous target is rejected rather than guessed.
@@ -193,64 +155,6 @@ export type AgentSearchResult = Readonly<{
 }>;
 
 export type AgentObserveResult = AgentStatus | AgentSearchResult | OpenIncomingRequestList | RequestInspection;
-
-type CommonParticipantCoordinationToolHandlers = Readonly<{
-	message(
-		toolCallId: string,
-		input: AgentMessageInput,
-	): Promise<AgentMessageReceipt>;
-	wait(
-		toolCallId: string,
-		input: AgentWaitInput,
-		signal: AbortSignal | undefined,
-		onProgress?: (progress: AgentWaitProgress) => void,
-	): Promise<AgentWaitResult>;
-	observe(input: AgentObserveInput): Promise<AgentObserveResult>;
-	control(
-		toolCallId: string,
-		input: RunControlInput,
-	): Promise<RunControlReceipt>;
-}>;
-
-type SpawnParticipantCoordinationToolHandler = Readonly<{
-	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
-	agentTemplateSnapshot(
-		refresh?: boolean,
-	): AgentTemplateCatalogueSnapshot | Promise<AgentTemplateCatalogueSnapshot>;
-}>;
-
-type HumanParticipantCoordinationToolHandler = Readonly<{
-	askUser(
-		toolCallId: string,
-		input: HumanRequestInput,
-		signal: AbortSignal | undefined,
-	): Promise<HumanAnswer>;
-	/**
-	 * Keep this Agent's native editor live while `askUser` blocks, and return the
-	 * release. Pi stops terminal input handling together with a hidden TUI, so an
-	 * Agent blocked on a Human Request cannot otherwise receive the human's
-	 * keystrokes, which the Owner forwards into its PTY.
-	 */
-	holdNativeEditorWhileAsking?(): () => void;
-}>;
-
-type ModeratorParticipantCoordinationToolHandler = Readonly<{
-	reportToUser(toolCallId: string, input: ReportToUserInput): Promise<ReportToUserReceipt>;
-	moderatorControl(
-		toolCallId: string,
-		input: ModeratorControlInput,
-	): Promise<ModeratorControlReceipt>;
-}>;
-
-export type ParticipantCoordinationToolHandlers<
-	Role extends ParticipantCoordinationRole,
-> = CommonParticipantCoordinationToolHandlers & (
-	Role extends "ordinary"
-		? SpawnParticipantCoordinationToolHandler & HumanParticipantCoordinationToolHandler
-		: Role extends "moderator"
-			? HumanParticipantCoordinationToolHandler & ModeratorParticipantCoordinationToolHandler
-			: SpawnParticipantCoordinationToolHandler & Readonly<{ resumeWorkflow(toolCallId: string): Promise<WorkflowResumeReceipt> }>
-);
 
 const contextPreparationParameters = Type.Object(
 	{
@@ -601,287 +505,304 @@ const reportToUserParameters = Type.Object({
 
 const workflowResumeParameters = Type.Object({}, { additionalProperties: false });
 
-export const participantCoordinationToolSchemas = {
-	workflow_resume: workflowResumeParameters,
-	agent_message: agentMessageParameters,
-	agent_wait: agentWaitParameters,
-	agent_spawn: agentSpawnParameters,
-	agent_observe: agentObserveParameters,
-	agent_control: agentControlParameters,
-	ask_user: askUserParameters,
-	moderator_control: moderatorControlParameters,
-	report_to_user: reportToUserParameters,
-} as const;
 
-type AvailableHandlers = CommonParticipantCoordinationToolHandlers &
-	Partial<SpawnParticipantCoordinationToolHandler> &
-	Partial<HumanParticipantCoordinationToolHandler> &
-	Partial<ModeratorParticipantCoordinationToolHandler> &
-	Readonly<{ resumeWorkflow?(toolCallId: string): Promise<WorkflowResumeReceipt> }>;
+export const workflowResumeEntry = defineCoordinationTool({
+	name: "workflow_resume",
+	label: "Resume Workflow",
+	description: "Owner only: resume the current Workflow from a verified durable snapshot, scheduling eligible pending Messages and continuing dormant responders with unanswered Requests.",
+	promptSnippet: "Resume unfinished coordination after restart.",
+	guidance: [
+		WORKFLOW_RECOVERY_GUIDANCE,
+		"Interrupted tools and volatile Wait calls are not restored; inspect side effects before repeating interrupted work.",
+	],
+	parameters: workflowResumeParameters,
+	roles: ["owner"],
+	execute: (handlers: Readonly<{ resumeWorkflow(toolCallId: string): Promise<WorkflowResumeReceipt> }>, { toolCallId }) =>
+		handlers.resumeWorkflow(toolCallId),
+	renderCall: (args, theme) => renderWorkflowResumeCall(args, theme),
+	renderReceipt: (result, options, theme) => renderWorkflowResumeResult(result, options, theme),
+	inFlight: { pendingLabel: "resuming Workflow" },
+});
 
-export function registerParticipantCoordinationTools<
-	Role extends ParticipantCoordinationRole,
->(
-	pi: ExtensionAPI,
-	role: Role,
-	handlers: ParticipantCoordinationToolHandlers<Role>,
-	resolveAgentLabel: AgentLabelResolver = () => undefined,
-	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot,
-	resolveAnswerTargetAgent?: (toolCallId: string) => string | undefined,
-): void {
-	const availableHandlers = handlers as AvailableHandlers;
-	if (role === "owner") {
-		pi.registerTool({
-			name: "workflow_resume",
-			label: "Resume Workflow",
-			description: "Owner only: resume the current Workflow from a verified durable snapshot, scheduling eligible pending Messages and continuing dormant responders with unanswered Requests.",
-			promptSnippet: "Resume unfinished coordination after restart.",
-			promptGuidelines: [
-				WORKFLOW_RECOVERY_GUIDANCE,
-				"Interrupted tools and volatile Wait calls are not restored; inspect side effects before repeating interrupted work.",
-			],
-			executionMode: "sequential",
-			exposure: COORDINATION_TOOL_EXPOSURE,
-			parameters: workflowResumeParameters,
-			renderCall: renderWorkflowResumeCall,
-			renderResult: renderWorkflowResumeResult,
-			async execute(toolCallId) {
-				return toolResult(await availableHandlers.resumeWorkflow!(toolCallId));
-			},
-		});
-	}
-
-	pi.registerTool<typeof agentMessageParameters, AgentMessageReceipt>({
-		name: "agent_message",
-		label: "Message Agent",
-		description:
-			"Send one immutable Message or correlated Request to a known Agent in this Workflow.",
-		promptSnippet: "Send, request, answer, cancel, poll, or retry direct Agent communication.",
-		promptGuidelines: [
-			AGENT_MESSAGE_PROMPT_GUIDE,
-			DELIVERY_MODE_PROMPT_GUIDE,
-			AGENT_DELEGATION_PROMPT_GUIDE,
-		],
-		executionMode: "sequential",
-		exposure: COORDINATION_TOOL_EXPOSURE,
-		parameters: agentMessageParameters,
-		renderCall: (args, _theme, context) =>
-			renderAgentMessageCall(
-				args,
-				_theme,
-				resolveAgentLabel,
-				context.expanded,
-				args.operation === "answer"
-					? resolveAnswerTargetAgent?.(context.toolCallId)
-					: undefined,
-			),
-		// A thrown call (e.g. an Answer that is not the turn's only tool call) has no receipt details.
-		renderResult: (result, options, theme, context) =>
-			!options.isPartial && context.isError
-				? renderToolError(result, options, theme)
-				: renderAgentMessageResult(result, options, theme),
-		async execute(toolCallId, parameters, _signal, _onUpdate, ctx) {
-			if (parameters.operation !== "answer") return toolResult(await availableHandlers.message(toolCallId, parameters));
+export const agentMessageEntry = defineCoordinationTool({
+	name: "agent_message",
+	label: "Message Agent",
+	description:
+		"Send one immutable Message or correlated Request to a known Agent in this Workflow.",
+	promptSnippet: "Send, request, answer, cancel, poll, or retry direct Agent communication.",
+	guidance: [
+		AGENT_MESSAGE_PROMPT_GUIDE,
+		DELIVERY_MODE_PROMPT_GUIDE,
+		AGENT_DELEGATION_PROMPT_GUIDE,
+	],
+	parameters: agentMessageParameters,
+	roles: ["owner", "ordinary", "moderator"],
+	async execute(
+		handlers: Readonly<{ message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt> }>,
+		{ toolCallId, params, ctx },
+	) {
+		if (params.operation === "answer") {
 			const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
 			const agentId = ctx.sessionManager.getSessionId();
 			const { source } = resolveCommittedToolCall({ agentId, transcript, toolCallId, toolName: "agent_message" });
 			const entry = transcript.entries.find(entry => entry.id === source.entryId);
-			// Pi's terminate hint ends a batch only when every result requests it.
-			// A standalone Answer prevents a redundant follow-up summary after the final result.
 			if (entry?.type === "message" && entry.message.role === "assistant" &&
 				entry.message.content.filter(part => part.type === "toolCall").length !== 1) {
 				throw new Error("invalid_input: Answer must be the only tool call in its turn");
 			}
-			const receipt = await availableHandlers.message(toolCallId, parameters);
-			if (!("messageStatus" in receipt) || !("requestMessageId" in receipt)) return toolResult(receipt);
-			return { ...toolResult(receipt), terminate: true };
-		},
-	});
-	pi.registerTool<typeof agentWaitParameters, AgentWaitResult | AgentWaitProgress>({
-		name: "agent_wait",
-		label: "Wait for Answers",
-		description:
-			"Join all or selected outstanding outbound Requests' Answers. Renew missing Request delivery scheduling without duplicates; primary human input or eligible inbound delivery may preempt.",
-		promptSnippet:
-			"Wait for all your outstanding outbound Requests, or select requestMessageIds by full ID or unique suffix.",
-		promptGuidelines: [AGENT_WAIT_PROMPT_GUIDE],
-		executionMode: "sequential",
-		exposure: COORDINATION_TOOL_EXPOSURE,
-		parameters: agentWaitParameters,
-		renderCall: (args, theme, context) => renderAgentWaitCall(args, theme, context.expanded),
-		renderResult: (result, options, theme, context) =>
-			renderAgentWaitResult(
-				result,
-				options,
-				theme,
-				context,
-				resolveAgentLabel,
-			),
-		async execute(toolCallId, parameters, signal, onUpdate) {
-			return toolResult(
-				await availableHandlers.wait(
-					toolCallId,
-					parameters,
-					signal,
-					(progress) => onUpdate?.({
-						content: [{
-							type: "text",
-							text: `Waiting for ${progress.waitingFor.length} Agent Answer${
-								progress.waitingFor.length === 1 ? "" : "s"
-							}.`,
-						}],
-						details: progress,
-					}),
-				),
-			);
-		},
-	});
-	if (role !== "moderator") {
-		pi.registerTool<typeof agentSpawnParameters, AgentSpawnReceipt>({
-			name: "agent_spawn",
-			label: "Spawn Agent",
-			description:
-				"Create one fresh durable child Agent with isolated context, then deliver its initial Creation Request.",
-			promptSnippet: "Create a fresh child Agent with isolated context.",
-			promptGuidelines: [
-				AGENT_SPAWN_PROMPT_GUIDE,
-				AGENT_DELEGATION_PROMPT_GUIDE,
-				...(agentTemplateSnapshot === undefined
-					? []
-					: [renderAgentTemplatePromptGuide(agentTemplateSnapshot)]),
-			],
-			executionMode: "sequential",
-			exposure: COORDINATION_TOOL_EXPOSURE,
-			parameters: agentSpawnParameters,
-			renderCall: (args, theme, context) =>
-				renderAgentSpawnCall(args, theme, context.expanded),
-			renderResult: renderAgentSpawnResult,
-			async execute(toolCallId, parameters) {
-				return toolResult(await availableHandlers.spawn!(toolCallId, parameters));
-			},
-		});
-	}
+		}
+		return handlers.message(toolCallId, params);
+	},
+	// Pi's terminate hint ends a batch only when every result requests it.
+	// A standalone Answer prevents a redundant follow-up summary after the final result.
+	endsToolLoop: (params, receipt) =>
+		params.operation === "answer" && "messageStatus" in receipt && "requestMessageId" in receipt,
+	renderCall: (args, theme, context, presentation) =>
+		renderAgentMessageCall(
+			args,
+			theme,
+			presentation.resolveAgentLabel,
+			context.expanded,
+			args.operation === "answer"
+				? presentation.resolveAnswerTargetAgent(context.toolCallId)
+				: undefined,
+		),
+	renderReceipt: (result, options, theme) => renderAgentMessageResult(result, options, theme),
+	inFlight: { pendingLabel: "scheduling" },
+});
 
-	pi.registerTool<typeof agentObserveParameters, AgentObserveResult>({
-		name: "agent_observe",
-		label: "Observe Agent",
-		description: role === "moderator"
-			? "Passively observe Workflow Agents, search authorized Agent scopes, or inspect your Request obligations."
-			: "Passively observe authorized Agents, search their metadata, or inspect your Request obligations.",
-		promptSnippet: role === "moderator"
-			? "Pull Agent status/search results and inspect Request obligations."
-			: "Observe Agent status/search and inspect Request obligations.",
-		promptGuidelines: [AGENT_OBSERVE_PROMPT_GUIDE],
-		executionMode: "sequential",
-		exposure: COORDINATION_TOOL_EXPOSURE,
-		parameters: agentObserveParameters,
-		renderCall: (args, theme, context) =>
-			renderAgentObserveCall(args, theme, resolveAgentLabel, context.expanded),
-		renderResult: (result, options, theme, context) =>
-			renderAgentObserveResult(result, options, theme, context, resolveAgentLabel),
-		async execute(_toolCallId, parameters) {
-			return toolResult(await availableHandlers.observe(parameters));
-		},
-	});
-	pi.registerTool<typeof agentControlParameters, RunControlReceipt>({
-		name: "agent_control",
-		label: "Control Agent Run",
-		description:
-			"Interrupt, explicitly resume, or terminate one authorized exact Agent Run.",
-		promptSnippet: role === "moderator"
-			? "Supervise any current non-Owner Run needed to restore safe progress."
-			: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
-		promptGuidelines: [AGENT_CONTROL_PROMPT_GUIDE],
-		executionMode: "sequential",
-		exposure: COORDINATION_TOOL_EXPOSURE,
-		parameters: agentControlParameters,
-		renderCall: (args, theme, context) =>
-			renderAgentControlCall(args, theme, resolveAgentLabel, context.expanded),
-		renderResult: (result, options, theme, context) =>
-			renderAgentControlResult(result, options, theme, context, resolveAgentLabel),
-		async execute(toolCallId, parameters) {
-			return toolResult(await availableHandlers.control(toolCallId, parameters));
-		},
-	});
-	if (role !== "owner") {
-		pi.registerTool<typeof askUserParameters, HumanAnswer>({
-			name: "ask_user",
-			label: "Ask User",
-			description:
-				"Ask the human one nonblank free-form question and wait for one nonblank free-form Answer.",
-			promptSnippet:
-				"Block until the human supplies judgment through this Agent's native editor.",
-			executionMode: "sequential",
-			exposure: COORDINATION_TOOL_EXPOSURE,
-			parameters: askUserParameters,
-			renderShell: "self",
-			renderCall: renderHumanRequestCall,
-			renderResult: renderHumanRequestResult,
-			async execute(toolCallId, parameters, signal) {
-				const releaseNativeEditor = availableHandlers.holdNativeEditorWhileAsking?.();
-				try {
-					return toolResult(
-						await availableHandlers.askUser!(toolCallId, parameters, signal),
-					);
-				} finally {
-					releaseNativeEditor?.();
-				}
-			},
-		});
-	}
+export const agentWaitEntry = defineCoordinationTool({
+	name: "agent_wait",
+	label: "Wait for Answers",
+	description:
+		"Join all or selected outstanding outbound Requests' Answers. Renew missing Request delivery scheduling without duplicates; primary human input or eligible inbound delivery may preempt.",
+	promptSnippet:
+		"Wait for all your outstanding outbound Requests, or select requestMessageIds by full ID or unique suffix.",
+	guidance: [AGENT_WAIT_PROMPT_GUIDE],
+	parameters: agentWaitParameters,
+	roles: ["owner", "ordinary", "moderator"],
+	execute: (
+		handlers: Readonly<{
+			wait(
+				toolCallId: string,
+				input: AgentWaitInput,
+				signal: AbortSignal | undefined,
+				onProgress?: (progress: AgentWaitProgress) => void,
+			): Promise<AgentWaitResult>;
+		}>,
+		{ toolCallId, params, signal, onUpdate },
+	) => handlers.wait(
+		toolCallId,
+		params,
+		signal,
+		(progress) => onUpdate?.({
+			content: [{
+				type: "text",
+				text: `Waiting for ${progress.waitingFor.length} Agent Answer${
+					progress.waitingFor.length === 1 ? "" : "s"
+				}.`,
+			}],
+			details: progress,
+		}),
+	),
+	renderCall: (args, theme, context) => renderAgentWaitCall(args, theme, context.expanded),
+	renderReceipt: (result, options, theme, context, presentation) =>
+		renderAgentWaitResult(result, options, theme, context, presentation.resolveAgentLabel),
+	inFlight: {
+		renderProgress: (result, options, theme, context, presentation) =>
+			renderAgentWaitProgress(result, theme, context, presentation.resolveAgentLabel),
+	},
+});
 
-	if (role === "moderator") {
-		pi.registerTool<typeof reportToUserParameters, ReportToUserReceipt>({
-			name: "report_to_user",
-			label: "Report to User",
-			description: "Preserve an immutable suspected runtime defect report in the human Attention Inbox. Returns immediately without human acknowledgment; does not close an incident or settle an Answer obligation.",
-			promptSnippet: "Report suspected runtime defects nonblocking after investigation and autonomous recovery attempts.",
-			promptGuidelines: [
-				"Before report_to_user, investigate, preserve exact evidence, and attempt safe autonomous recovery. Distinguish suspected defects from uncertainty and record recovery outcomes.",
-				"Before claiming a missing result or crash, obtain current Agent status and read its primaryEvidence.transcriptPath. Match the exact toolCallId to its matching toolResult across the physical transcript, and verify the current physical transcript tail, including entry ID and timestamp. inspectedThrough is an earlier observation, not a current end-of-file guarantee; a selected branch or truncated excerpt is not the full transcript.",
-				"Record the exact call/result and verified tail references and what was actually inspected. A missing result alone does not prove a crash. State claims as unverified when current primary evidence is unavailable; do not convert an earlier report or scheduling diagnostic into a confirmed runtime cause.",
-				"Use report_to_user, not ask_user, for end-of-investigation runtime defect reporting. Reporting never resolves an unresolved incident or discharges an Answer obligation; use moderator_control only when its resolution predicates clear.",
-			],
-			executionMode: "sequential",
-			exposure: COORDINATION_TOOL_EXPOSURE,
-			parameters: reportToUserParameters,
-			renderCall: (args, theme) => new Text(theme.fg("toolTitle", "Report to User") + " " + boundedToolPreview(args.symptom ?? ""), 0, 0),
-			renderResult: (result, _options, theme, context) => new Text(theme.fg(
-				context.isError ? "error" : result.details ? "success" : "muted",
-				!context.isError && result.details
-					? `Report retained · ${result.details.reportId}`
-					: boundedToolPreview(result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n")),
-			), 0, 0),
-			async execute(toolCallId, parameters) {
-				return toolResult(await availableHandlers.reportToUser!(toolCallId, parameters));
-			},
-		});
-		pi.registerTool<typeof moderatorControlParameters, ModeratorControlReceipt>({
-			name: "moderator_control",
-			label: "Control Moderation",
-			description:
-				"Renew an exact Operation Review interval or resolve handling after every mechanically checkable predicate clears. A Run Failure clears as soon as a successor Run starts; any remaining Answer Obligation is ordinary Workflow work.",
-			promptSnippet:
-				"Renew an exact reviewed call deliberately, or resolve immediately when the original condition clears.",
-			executionMode: "sequential",
-			exposure: COORDINATION_TOOL_EXPOSURE,
-			parameters: moderatorControlParameters,
-			renderCall: renderModeratorControlCall,
-			renderResult: renderModeratorControlResult,
-			async execute(toolCallId, parameters) {
-				return toolResult(
-					await availableHandlers.moderatorControl!(toolCallId, parameters),
-				);
-			},
-		});
-	}
-}
+export const agentSpawnEntry = defineCoordinationTool({
+	name: "agent_spawn",
+	label: "Spawn Agent",
+	description:
+		"Create one fresh durable child Agent with isolated context, then deliver its initial Creation Request.",
+	promptSnippet: "Create a fresh child Agent with isolated context.",
+	guidance: (snapshot) => [
+		AGENT_SPAWN_PROMPT_GUIDE,
+		AGENT_DELEGATION_PROMPT_GUIDE,
+		...(snapshot === undefined ? [] : [renderAgentTemplatePromptGuide(snapshot)]),
+	],
+	parameters: agentSpawnParameters,
+	roles: ["owner", "ordinary"],
+	execute: (
+		handlers: Readonly<{
+			spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
+			agentTemplateSnapshot(
+				refresh?: boolean,
+			): AgentTemplateCatalogueSnapshot | Promise<AgentTemplateCatalogueSnapshot>;
+		}>,
+		{ toolCallId, params },
+	) => handlers.spawn(toolCallId, params),
+	renderCall: (args, theme, context) => renderAgentSpawnCall(args, theme, context.expanded),
+	renderReceipt: (result, options, theme, context) => renderAgentSpawnResult(result, options, theme, context),
+	inFlight: { pendingLabel: "resolving configuration" },
+});
 
-function toolResult<Details>(details: Details): AgentToolResult<Details> {
-	return {
-		content: [{ type: "text", text: JSON.stringify(details) }],
-		details,
-	};
+export const agentObserveEntry = defineCoordinationTool({
+	name: "agent_observe",
+	label: "Observe Agent",
+	description: {
+		default: "Passively observe authorized Agents, search their metadata, or inspect your Request obligations.",
+		moderator: "Passively observe Workflow Agents, search authorized Agent scopes, or inspect your Request obligations.",
+	},
+	promptSnippet: {
+		default: "Observe Agent status/search and inspect Request obligations.",
+		moderator: "Pull Agent status/search results and inspect Request obligations.",
+	},
+	guidance: [AGENT_OBSERVE_PROMPT_GUIDE],
+	parameters: agentObserveParameters,
+	roles: ["owner", "ordinary", "moderator"],
+	execute: (
+		handlers: Readonly<{ observe(input: AgentObserveInput): Promise<AgentObserveResult> }>,
+		{ params },
+	) => handlers.observe(params),
+	renderCall: (args, theme, context, presentation) =>
+		renderAgentObserveCall(args, theme, presentation.resolveAgentLabel, context.expanded),
+	renderReceipt: (result, options, theme, context, presentation) =>
+		renderAgentObserveResult(result, options, theme, context, presentation.resolveAgentLabel),
+	inFlight: { pendingLabel: "inspecting" },
+});
+
+export const agentControlEntry = defineCoordinationTool({
+	name: "agent_control",
+	label: "Control Agent Run",
+	description:
+		"Interrupt, explicitly resume, or terminate one authorized exact Agent Run.",
+	promptSnippet: {
+		default: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
+		moderator: "Supervise any current non-Owner Run needed to restore safe progress.",
+	},
+	guidance: [AGENT_CONTROL_PROMPT_GUIDE],
+	parameters: agentControlParameters,
+	roles: ["owner", "ordinary", "moderator"],
+	execute: (
+		handlers: Readonly<{ control(toolCallId: string, input: RunControlInput): Promise<RunControlReceipt> }>,
+		{ toolCallId, params },
+	) => handlers.control(toolCallId, params),
+	renderCall: (args, theme, context, presentation) =>
+		renderAgentControlCall(args, theme, presentation.resolveAgentLabel, context.expanded),
+	renderReceipt: (result, options, theme, _context, presentation) =>
+		renderAgentControlResult(result, options, theme, presentation.resolveAgentLabel),
+	inFlight: { pendingLabel: "controlling" },
+});
+
+export const askUserEntry = defineCoordinationTool({
+	name: "ask_user",
+	label: "Ask User",
+	description:
+		"Ask the human one nonblank free-form question and wait for one nonblank free-form Answer.",
+	promptSnippet:
+		"Block until the human supplies judgment through this Agent's native editor.",
+	parameters: askUserParameters,
+	roles: ["ordinary", "moderator"],
+	requiresHuman: true,
+	renderShell: "self",
+	async execute(
+		handlers: Readonly<{
+			askUser(
+				toolCallId: string,
+				input: HumanRequestInput,
+				signal: AbortSignal | undefined,
+			): Promise<HumanAnswer>;
+			/**
+			 * Keep this Agent's native editor live while `askUser` blocks, and return the
+			 * release. Pi stops terminal input handling together with a hidden TUI, so an
+			 * Agent blocked on a Human Request cannot otherwise receive the human's
+			 * keystrokes, which the Owner forwards into its PTY.
+			 */
+			holdNativeEditorWhileAsking?(): () => void;
+		}>,
+		{ toolCallId, params, signal },
+	) {
+		const releaseNativeEditor = handlers.holdNativeEditorWhileAsking?.();
+		try {
+			return await handlers.askUser(toolCallId, params, signal);
+		} finally {
+			releaseNativeEditor?.();
+		}
+	},
+	renderCall: (args, theme, context) => renderHumanRequestCall(args, theme, context),
+	renderReceipt: (result, options, theme) => renderHumanRequestResult(result, options, theme),
+	// The call block already shows the waiting question.
+	inFlight: { renderProgress: () => new Container() },
+	renderError: renderHumanRequestError,
+});
+
+export const reportToUserEntry = defineCoordinationTool({
+	name: "report_to_user",
+	label: "Report to User",
+	description: "Preserve an immutable suspected runtime defect report in the human Attention Inbox. Returns immediately without human acknowledgment; does not close an incident or settle an Answer obligation.",
+	promptSnippet: "Report suspected runtime defects nonblocking after investigation and autonomous recovery attempts.",
+	guidance: [
+		"Before report_to_user, investigate, preserve exact evidence, and attempt safe autonomous recovery. Distinguish suspected defects from uncertainty and record recovery outcomes.",
+		"Before claiming a missing result or crash, obtain current Agent status and read its primaryEvidence.transcriptPath. Match the exact toolCallId to its matching toolResult across the physical transcript, and verify the current physical transcript tail, including entry ID and timestamp. inspectedThrough is an earlier observation, not a current end-of-file guarantee; a selected branch or truncated excerpt is not the full transcript.",
+		"Record the exact call/result and verified tail references and what was actually inspected. A missing result alone does not prove a crash. State claims as unverified when current primary evidence is unavailable; do not convert an earlier report or scheduling diagnostic into a confirmed runtime cause.",
+		"Use report_to_user, not ask_user, for end-of-investigation runtime defect reporting. Reporting never resolves an unresolved incident or discharges an Answer obligation; use moderator_control only when its resolution predicates clear.",
+	],
+	parameters: reportToUserParameters,
+	roles: ["moderator"],
+	execute: (
+		handlers: Readonly<{ reportToUser(toolCallId: string, input: ReportToUserInput): Promise<ReportToUserReceipt> }>,
+		{ toolCallId, params },
+	) => handlers.reportToUser(toolCallId, params),
+	renderCall: (args, theme) => renderReportToUserCall(args, theme),
+	renderReceipt: (result, _options, theme) => renderReportToUserResult(result, theme),
+	inFlight: { pendingLabel: "reporting" },
+});
+
+export const moderatorControlEntry = defineCoordinationTool({
+	name: "moderator_control",
+	label: "Control Moderation",
+	description:
+		"Renew an exact Operation Review interval or resolve handling after every mechanically checkable predicate clears. A Run Failure clears as soon as a successor Run starts; any remaining Answer Obligation is ordinary Workflow work.",
+	promptSnippet:
+		"Renew an exact reviewed call deliberately, or resolve immediately when the original condition clears.",
+	parameters: moderatorControlParameters,
+	roles: ["moderator"],
+	execute: (
+		handlers: Readonly<{
+			moderatorControl(toolCallId: string, input: ModeratorControlInput): Promise<ModeratorControlReceipt>;
+		}>,
+		{ toolCallId, params },
+	) => handlers.moderatorControl(toolCallId, params),
+	renderCall: (args, theme) => renderModeratorControlCall(args, theme),
+	renderReceipt: (result, options, theme) => renderModeratorControlResult(result, options, theme),
+	inFlight: { pendingLabel: "moderating" },
+});
+
+export const coordinationToolCatalogue = [
+	workflowResumeEntry,
+	agentMessageEntry,
+	agentWaitEntry,
+	agentSpawnEntry,
+	agentObserveEntry,
+	agentControlEntry,
+	askUserEntry,
+	reportToUserEntry,
+	moderatorControlEntry,
+] as const;
+
+type CatalogueEntry = (typeof coordinationToolCatalogue)[number];
+
+/** Each coordination tool's parameter schema, by tool name. */
+export const coordinationToolSchemas = Object.fromEntries(
+	coordinationToolCatalogue.map((entry) => [entry.name, entry.parameters]),
+) as { [Entry in CatalogueEntry as Entry["name"]]: Entry["parameters"] };
+
+/** Preserve literal names, roles, and handler types for the derived handler contract. */
+function defineCoordinationTool<
+	const Name extends string,
+	const Roles extends readonly CoordinationRole[],
+	Handlers,
+	Params extends TSchema,
+	Details,
+>(
+	entry: CoordinationToolEntry<Name, Roles, Handlers, Params, Details>,
+): CoordinationToolEntry<Name, Roles, Handlers, Params, Details> {
+	return entry;
 }
 
 function objectRootUnion<T extends TSchema>(schema: T): T {

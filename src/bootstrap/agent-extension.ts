@@ -11,6 +11,7 @@ import type {
 } from "../coordination/workflow-coordinator.ts";
 import { createViewBackedParticipantHandlers } from "../coordination/view-backed-participant-handlers.ts";
 import { registerAgentsCommand } from "../tools/owner-surfaces.ts";
+import type { SpawnGuidanceRefresh } from "../tools/coordination-tools.ts";
 import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import {
 	installAgentActivityDock,
@@ -38,12 +39,14 @@ export function bindHiddenOwnerAgentExtension(options: {
 	pi: ExtensionAPI;
 	runtime: AgentSessionRuntime;
 	resolveView: () => OrdinaryAgentCoordinatorView;
+	ownerTools: SpawnGuidanceRefresh;
 	prepareOwnerReplacement: () => Promise<void>;
 }): void {
 	const {
 		pi,
 		runtime,
 		resolveView,
+		ownerTools,
 		prepareOwnerReplacement,
 	} = options;
 	const ownerExtension = requireOwnerAgentExtension(runtime);
@@ -51,7 +54,7 @@ export function bindHiddenOwnerAgentExtension(options: {
 	// Pi loads package extensions publicly. Once this session is authenticated as
 	// Owner, the same extension becomes its hidden identity-bound Owner surface.
 	ownerExtension.hidden = true;
-	registerAgentsCommand(pi, resolveView, "admitted", resolveView);
+	registerAgentsCommand(pi, resolveView, "admitted", { view: resolveView, tools: ownerTools });
 	const lifecycleHandlers = createViewBackedParticipantHandlers("owner", resolveView).lifecycle;
 	const unbindPrimarySteeringAdmission = bindPrimarySteeringAdmission(
 		runtime.session,

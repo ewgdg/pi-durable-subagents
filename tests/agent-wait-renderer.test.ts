@@ -5,6 +5,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import {
 	renderAgentWaitCall,
+	renderAgentWaitProgress,
 	renderAgentWaitResult,
 } from "../src/tools/coordination-renderers.ts";
 
@@ -57,9 +58,8 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 			{ requestTitle: "Fixture request", requestMessageId: "request-review", responderAgentId: "review-agent" },
 		],
 	};
-	const waiting = renderAgentWaitResult(
+	const waiting = renderAgentWaitProgress(
 		{ content: [{ type: "text", text: "waiting" }], details: progress },
-		{ expanded: false, isPartial: true },
 		plainTheme,
 		context,
 		resolveAgentLabel,
@@ -133,9 +133,8 @@ test("in-flight Agent Wait progress uses a calm role, not a warning", () => {
 		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
 		bold: (text: string) => text,
 	} as unknown as Theme;
-	const render = (details: unknown) => renderAgentWaitResult(
-		{ content: [{ type: "text", text: "waiting" }], details } as never,
-		{ expanded: false, isPartial: true },
+	const render = (details: unknown) => renderAgentWaitProgress(
+		{ content: [{ type: "text", text: "waiting" }], details },
 		taggedTheme,
 		renderContext(),
 		resolveAgentLabel,

@@ -588,7 +588,21 @@ test("/agents models toggles durable model exclusions from the Owner session", {
 		persistent: true,
 		processVisibleModel: true,
 	});
+	const templateDirectory = join(host.services.agentDir, "agents");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(join(templateDirectory, "delegate.md"), [
+		"---",
+		"name: owner-model-delegate",
+		"useWhen: Use the Owner model.",
+		"models:",
+		"  - id: coordination-test/deterministic-owner",
+		"    thinking: off",
+		"---",
+		"Delegate context.",
+	].join("\n"), "utf8");
 	await bindTestOwnerHost(host, "tui");
+	const spawnGuidance = () => host.session.getToolDefinition("agent_spawn")?.promptGuidelines?.join("\n") ?? "";
+	assert.match(spawnGuidance(), /model: coordination-test\/deterministic-owner/);
 	const command = host.session.extensionRunner.getCommand("agents");
 	assert.ok(command);
 	const handled = command.handler(
@@ -625,6 +639,9 @@ test("/agents models toggles durable model exclusions from the Owner session", {
 
 	surface.handleInput?.("\x1b");
 	await handled;
+	// The Owner's own Spawn guidance stops offering a Template whose only model is now banned.
+	assert.match(spawnGuidance(), /## Available Agent Templates Snapshot/);
+	assert.doesNotMatch(spawnGuidance(), /owner-model-delegate/);
 	await host.runtime.dispose();
 });
 

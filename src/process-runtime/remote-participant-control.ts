@@ -13,11 +13,11 @@ import {
 import type { ParticipantLifecycleHandlers } from "../pi-integration/participant-lifecycle.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
 import type {
-	ParticipantCoordinationRole,
-	ParticipantCoordinationToolHandlers,
-} from "../tools/participant-coordination-tools.ts";
+	CoordinationRole,
+	CoordinationToolHandlers,
+} from "../tools/coordination-tools.ts";
 
-type RemoteParticipantRole = Exclude<ParticipantCoordinationRole, "owner">;
+type RemoteParticipantRole = Exclude<CoordinationRole, "owner">;
 type MethodRequest<M extends AgentControlMethod> = Static<
 	(typeof agentControlMethods)[M]["request"]
 >;
@@ -34,7 +34,7 @@ export type ChildParticipantControlRequester = <M extends AgentControlMethod>(
 /** Agent-scoped Owner behavior; transport and framing stay outside this seam. */
 export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> = Readonly<{
 	lifecycle: ParticipantLifecycleHandlers;
-	coordination: ParticipantCoordinationToolHandlers<Role>;
+	coordination: CoordinationToolHandlers<Role>;
 	presentation: OwnerParticipantPresentationHandlers;
 }>;
 
@@ -60,7 +60,7 @@ export type ControlBackedChildPresentationHandlers = Readonly<{
 
 export type ControlBackedChildParticipantHandlers<Role extends RemoteParticipantRole> = Readonly<{
 	lifecycle: ParticipantLifecycleHandlers;
-	coordination: ParticipantCoordinationToolHandlers<Role>;
+	coordination: CoordinationToolHandlers<Role>;
 }>;
 
 export type ChildNativeInputIdentity = Readonly<{
@@ -76,7 +76,7 @@ export type ChildAgentWaitProgressSource = Readonly<{
 }>;
 
 type CommonChildCoordinationHandlers = Pick<
-	ParticipantCoordinationToolHandlers<"ordinary">,
+	CoordinationToolHandlers<"ordinary">,
 	"observe" | "message" | "wait" | "control"
 >;
 
@@ -164,7 +164,7 @@ export function createControlBackedChildParticipantHandlers(
 			request("coordination.control", { toolCallId, input }),
 	};
 	if (role === "ordinary") {
-		const coordination: ParticipantCoordinationToolHandlers<"ordinary"> = {
+		const coordination: CoordinationToolHandlers<"ordinary"> = {
 			...common,
 			agentTemplateSnapshot: (refresh = false) => request(
 				"coordination.templateSnapshot",
@@ -177,7 +177,7 @@ export function createControlBackedChildParticipantHandlers(
 		};
 		return { lifecycle, coordination };
 	}
-	const coordination: ParticipantCoordinationToolHandlers<"moderator"> = {
+	const coordination: CoordinationToolHandlers<"moderator"> = {
 		...common,
 		askUser: (toolCallId, input, signal) =>
 			request("coordination.askHuman", { toolCallId, input }, signal),

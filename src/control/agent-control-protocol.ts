@@ -24,10 +24,10 @@ import type { ModeratorControlInput, ModeratorControlReceipt } from "../protocol
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import { AgentTemplateCatalogueSnapshotSchema } from "./control-protocol-schemas.ts";
 import {
-	participantCoordinationToolSchemas,
+	coordinationToolSchemas,
 	type AgentObserveInput,
 	type AgentObserveResult,
-} from "../tools/participant-coordination-tools.ts";
+} from "../tools/coordination-tool-catalogue.ts";
 
 const closed = <const P extends Parameters<typeof Type.Object>[0]>(properties: P) =>
 	Type.Object(properties, { additionalProperties: false });
@@ -490,22 +490,22 @@ const ToolIntention = <T extends TSchema>(input: T) => closed({
 	input,
 });
 const AgentMessageInputSchema = Type.Unsafe<AgentMessageInput>(
-	participantCoordinationToolSchemas.agent_message,
+	coordinationToolSchemas.agent_message,
 );
 const AgentObserveInputSchema = Type.Unsafe<AgentObserveInput>(
-	participantCoordinationToolSchemas.agent_observe,
+	coordinationToolSchemas.agent_observe,
 );
 const RunControlInputSchema = Type.Unsafe<RunControlInput>(
-	participantCoordinationToolSchemas.agent_control,
+	coordinationToolSchemas.agent_control,
 );
 const AgentSpawnInputSchema = Type.Unsafe<AgentSpawnInput>(
-	participantCoordinationToolSchemas.agent_spawn,
+	coordinationToolSchemas.agent_spawn,
 );
 const HumanRequestInputSchema = Type.Unsafe<HumanRequestInput>(
-	participantCoordinationToolSchemas.ask_user,
+	coordinationToolSchemas.ask_user,
 );
 const ModeratorControlInputSchema = Type.Unsafe<ModeratorControlInput>(
-	participantCoordinationToolSchemas.moderator_control,
+	coordinationToolSchemas.moderator_control,
 );
 const ContextPreparationSchema = closed({
 	workScale: Type.Union([
@@ -661,7 +661,7 @@ const OperationalIncidentAttentionSchema = Type.Union([closed({
 	affectedAgents: Type.Array(OperationalIncidentAgentSchema, { uniqueItems: true }),
 })]);
 const ReportFields = {
-	...participantCoordinationToolSchemas.report_to_user.properties,
+	...coordinationToolSchemas.report_to_user.properties,
 	reportId: NonEmptyStringSchema,
 	createdAt: NonEmptyStringSchema,
 };
@@ -807,7 +807,7 @@ export const agentControlMethods = {
 		response: Type.Unsafe<AgentMessageReceipt>(AgentMessageReceiptSchema),
 	},
 	"coordination.wait": {
-		request: ToolIntention(participantCoordinationToolSchemas.agent_wait),
+		request: ToolIntention(coordinationToolSchemas.agent_wait),
 		response: Type.Unsafe<AgentWaitResult>(AgentWaitResultSchema),
 	},
 	"coordination.control": {
@@ -829,7 +829,7 @@ export const agentControlMethods = {
 		response: Type.Unsafe<HumanAnswer>(HumanAnswerSchema),
 	},
 	"coordination.reportToUser": {
-		request: ToolIntention(participantCoordinationToolSchemas.report_to_user),
+		request: ToolIntention(coordinationToolSchemas.report_to_user),
 		response: closed({ reportId: NonEmptyStringSchema, createdAt: NonEmptyStringSchema }),
 	},
 	"presentation.reports.setRead": {

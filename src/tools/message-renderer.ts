@@ -173,10 +173,6 @@ export function renderAgentMessageResult(
 	theme: Theme,
 ): Component {
 	const container = new Container();
-	if (options.isPartial) {
-		container.addChild(new Text(theme.fg("accent", "scheduling…"), 0, 0));
-		return container;
-	}
 	const receipt = result.details;
 	const disposition = "messageStatus" in receipt
 		? receipt.messageStatus
