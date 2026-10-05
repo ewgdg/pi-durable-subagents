@@ -15,6 +15,7 @@ import { participant } from "./support/request-history.ts";
 
 import { resumeWorkflow } from "../src/coordination/workflow-resume.ts";
 import type { WorkflowResumeActivation } from "../src/coordination/workflow-recovery-outcomes.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 test("recovery schedules original Requests and Messages once, preserving context preparation", { timeout: 5_000 }, async t => {
 	const h = harness(t);
@@ -320,7 +321,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 	const participants = [requester, responder, worker];
 	const agents = new Map(participants.map(p => [p.record.identity.agentId, p.record]));
 	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
-	let messages = new MessageCoordinator(options);
+	let messages = new MessageCoordinator({ ...options, ...requestCoordination(agents) });
 	for (const p of participants) messages.integrate(p.record);
 	t.after(() => messages.shutdownDeliveryProgress());
 	return {
@@ -329,7 +330,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 		async recover() {
 			for (const p of participants) messages.discardSchedulingInLane(p.record);
 			messages.shutdownDeliveryProgress();
-			messages = new MessageCoordinator(options);
+			messages = new MessageCoordinator({ ...options, ...requestCoordination(agents) });
 			for (const p of participants) messages.integrate(p.record);
 			await messages.refreshTranscriptFacts();
 		},
@@ -410,6 +411,7 @@ function runtimeParticipant(agentId: string) {
 			ended.add(handler); return () => { ended.delete(handler); };
 		},
 		addRetentionReason: () => undefined, removeRetentionReason: () => undefined,
+		replaceRequestRelationships: () => undefined, requestRelationshipIds: () => [],
 		hasRetentionReason: () => false,
 		blocksOrdinaryDelivery: () => runtime.blocked,
 		currentWorkState: () => attention === "agent_wait" ? "active" : "settled",
@@ -707,9 +709,10 @@ test("recovery preserves failed-authoring contradictions and quarantined uncerta
 			role: "toolResult", toolCallId: id, toolName: "agent_message",
 			content: [{ type: "text", text: "Authoring failed" }], isError: true, timestamp: Date.now(),
 		});
+		const quarantinedWorkflowAgentIds = new Set(evidence === "quarantined" ? ["unreadable-peer"] : []);
 		const messages = new MessageCoordinator({
-			agents: h.agents, workflowPolicy: h.policy, isShuttingDown: () => false,
-			quarantinedWorkflowAgentIds: new Set(evidence === "quarantined" ? ["unreadable-peer"] : []),
+			agents: h.agents, workflowPolicy: h.policy, isShuttingDown: () => false, quarantinedWorkflowAgentIds,
+			...requestCoordination(h.agents, new Set(), quarantinedWorkflowAgentIds),
 		});
 		t.after(() => messages.shutdownDeliveryProgress());
 		await assert.rejects(resumeWorkflow({

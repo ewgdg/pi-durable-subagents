@@ -8,6 +8,7 @@ import type { OwnerIdentity } from "../src/protocol/owner-identity.ts";
 import type { AgentRuntimeHost } from "../src/runtime/agent-runtime-host.ts";
 import type { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import { participant, requestHistory } from "./support/request-history.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [false, true]) {
 	test(`a quota-suspended dependency keeps its requester Waiting (unrelated branch: ${unrelated}, cycle: ${cycle})`, async (t) => {
@@ -43,7 +44,7 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 			} as unknown as AgentRuntimeHost;
 		}
 		const policy = new WorkflowPolicyStore();
-		const messages = new MessageCoordinator({ agents: history.agents, workflowPolicy: policy, isShuttingDown: () => false });
+		const messages = new MessageCoordinator({ agents: history.agents, ...requestCoordination(history.agents), workflowPolicy: policy, isShuttingDown: () => false });
 		// Exercise incident filtering even if a previously expired delivery watcher
 		// still reports the recipient when its quota suspension arrives.
 		messages.blockedDeliveries = () => suspended ? [{

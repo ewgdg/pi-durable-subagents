@@ -7,11 +7,12 @@ import { AgentWaitCoordinator, type AgentWaitBoundaryHooks } from "../src/coordi
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery, inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
-import type { AgentRuntimeHost, AgentRunHandle, AgentRuntimeDelivery, AgentRunEndCause } from "../src/runtime/agent-runtime-host.ts";
+import type { AgentRuntimeHost, AgentRunHandle, AgentRuntimeDelivery, AgentRunEndCause, RequestRelationshipSet } from "../src/runtime/agent-runtime-host.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { participant } from "./support/request-history.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { resumeWorkflow } from "../src/coordination/workflow-resume.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 for (const sourcePresent of [false, true]) test(`a delivered Request with ${sourcePresent ? "rejected" : "absent"} source can be answered locally across replay without Delivery`, { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
@@ -937,7 +938,7 @@ test("a Cancellation whose Request never reached the responder starts no Run", {
 	assert.equal(h.deliveries(h.responder).filter(delivery => delivery.projection.kind === "request_cancellation").length, 0);
 });
 
-test("an in-flight Request Delivery announces its Cancellation without re-adding answer_owed", { timeout: 5_000 }, async (t) => {
+test("a Request delivered after its Cancellation commits stays owed until that Cancellation is delivered", { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	h.responder.deferProof = true;
 	const request = await h.message(h.requester, "deferred", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Proof pending" });
@@ -948,20 +949,44 @@ test("an in-flight Request Delivery announces its Cancellation without re-adding
 	// the in-flight Request proof commits.
 	h.responder.blocked = true;
 	await h.message(h.requester, "cancel", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdrawn" });
-	h.responder.blocked = false;
 	h.responder.commitPending();
-	// Only the withdrawn Request proof was deferred; the Cancellation commits normally.
-	h.responder.deferProof = false;
+	// Settlement is where the scheduler observes the committed Request proof.
 	h.responder.settle(); await flush();
 	assert.equal(
 		h.responder.retentionReasons.has(`answer_owed:${request.requestMessageId}`),
-		false,
-		"the requester's committed Cancellation prevents re-adding the responder duty",
+		true,
+		"the delivered Request is owed until its Cancellation reaches the responder",
 	);
+	assert.deepEqual(h.messages.openIncomingRequests("responder").requests.map(item => item.requestMessageId), [request.requestMessageId]);
+	h.responder.blocked = false;
+	// Only the withdrawn Request proof was deferred; the Cancellation commits normally.
+	h.responder.deferProof = false;
+	h.responder.settle(); await flush();
 	assert.deepEqual(
 		h.deliveries(h.responder).map(delivery => delivery.projection.kind),
 		["request", "request_cancellation"],
 		"a Request whose Delivery is already in flight still announces its Cancellation",
+	);
+	h.responder.settle(); await flush();
+	assert.equal(h.responder.retentionReasons.has(`answer_owed:${request.requestMessageId}`), false);
+});
+
+test("an Answer Delivery that precedes its author result ends the responder obligation", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const request = await h.message(h.requester, "work", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Do the work" });
+	assert.ok("requestMessageId" in request);
+	h.responder.settle(); await flush();
+	assert.equal(h.responder.retentionReasons.has(`answer_owed:${request.requestMessageId}`), true);
+	const input = { operation: "answer" as const, requestId: request.requestMessageId, answer: "Done" };
+	call(h.responder, "answer", "agent_message", input);
+	await h.messages.execute("responder", "answer", input);
+	h.requester.settle(); await flush();
+	assert.deepEqual(h.deliveries(h.requester).map(delivery => delivery.projection.kind), ["answer"]);
+	assert.equal(h.requester.retentionReasons.has(`awaiting_answer:${request.requestMessageId}`), false);
+	assert.equal(
+		h.responder.retentionReasons.has(`answer_owed:${request.requestMessageId}`),
+		false,
+		"Delivery made the Answer canonical before the responder's own tool result committed",
 	);
 });
 
@@ -1121,7 +1146,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 	const participants = [requester, responder];
 	const agents = new Map(participants.map(p => [p.record.identity.agentId, p.record]));
 	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
-	let messages = new MessageCoordinator(options);
+	let messages = new MessageCoordinator({ ...options, ...requestCoordination(agents) });
 	let timer: (() => void) | undefined;
 	let waits: AgentWaitCoordinator;
 	const abort = new AbortController();
@@ -1156,7 +1181,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 			waits.shutdown();
 			for (const p of participants) messages.discardSchedulingInLane(p.record);
 			messages.shutdownDeliveryProgress();
-			messages = new MessageCoordinator(options);
+			messages = new MessageCoordinator({ ...options, ...requestCoordination(agents) });
 			install();
 			await messages.refreshTranscriptFacts();
 		},
@@ -1232,12 +1257,18 @@ function runtimeParticipant(agentId: string) {
 		addEndedHandler: (handler: (handle: AgentRunHandle, cause: AgentRunEndCause) => void) => {
 			ended.add(handler); return () => { ended.delete(handler); };
 		},
-		addRetentionReason: (reason: string, requestId?: string) => {
-			runtime.retentionReasons.add(requestId === undefined ? reason : `${reason}:${requestId}`);
+		addRetentionReason: (reason: string) => { runtime.retentionReasons.add(reason); },
+		removeRetentionReason: (reason: string) => { runtime.retentionReasons.delete(reason); },
+		replaceRequestRelationships: (relationships: RequestRelationshipSet) => {
+			for (const entry of [...runtime.retentionReasons]) {
+				if (entry.startsWith("awaiting_answer:") || entry.startsWith("answer_owed:")) runtime.retentionReasons.delete(entry);
+			}
+			for (const requestId of relationships.awaitingAnswerRequestIds) runtime.retentionReasons.add(`awaiting_answer:${requestId}`);
+			for (const requestId of relationships.answerOwedRequestIds) runtime.retentionReasons.add(`answer_owed:${requestId}`);
 		},
-		removeRetentionReason: (reason: string, requestId?: string) => {
-			runtime.retentionReasons.delete(requestId === undefined ? reason : `${reason}:${requestId}`);
-		},
+		requestRelationshipIds: (reason: string) => [...runtime.retentionReasons]
+			.filter((entry) => entry.startsWith(`${reason}:`))
+			.map((entry) => entry.slice(reason.length + 1)),
 		hasRetentionReason: () => false,
 		blocksOrdinaryDelivery: () => runtime.blocked,
 		currentWorkState: () => attention === "agent_wait" ? "active" : "settled",

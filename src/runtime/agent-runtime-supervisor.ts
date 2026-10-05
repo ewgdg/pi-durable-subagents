@@ -18,7 +18,8 @@ import type {
 	EffectiveRuntimeSnapshot,
 	RunResumptionHandle,
 	ProjectionInputSubmission,
-	ResidualRequestRelationships,
+	RequestRelationshipReason,
+	RequestRelationshipSet,
 	RuntimeInitializationTermination,
 	TranscriptCommitConfirmation,
 } from "./agent-runtime-host.ts";
@@ -31,7 +32,7 @@ export type {
 	AgentRunState,
 	AgentRunSuspension,
 	RunResumptionHandle,
-	ResidualRequestRelationships,
+	RequestRelationshipSet,
 	RunRetentionReason,
 } from "./agent-runtime-host.ts";
 import type {
@@ -41,7 +42,6 @@ import type {
 import { InProcessHostedRuntime } from "./in-process-hosted-runtime.ts";
 import { SerialLane } from "./serial-lane.ts";
 
-type RequestRelationshipReason = "awaiting_answer" | "answer_owed";
 type RuntimeOwnership = "supervisor" | "native-host";
 
 // Pi publishes public compaction completion immediately before its interactive
@@ -85,7 +85,7 @@ type EndedHandler = (handle: AgentRunHandle, cause: AgentRunEndCause, failure?: 
 type StateChangeHandler = () => void;
 type ProjectionInputSettledHandler = () => void;
 type RunFenceHandler = (handle: AgentRunHandle) => void;
-type RunStartInitializer = () => ResidualRequestRelationships | Promise<ResidualRequestRelationships>;
+type RunStartInitializer = () => Promise<void>;
 type RunStartedHandler = (
 	handle: AgentRunHandle,
 ) => void | Promise<void>;
@@ -257,12 +257,9 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 
 	async initializeCurrentRunRelationships(): Promise<void> {
 		if (!this.currentHandle() || this.#starting || this.#ending) {
-			throw new Error("invariant_violation: Request relationships require a bound Agent Run");
+			throw new Error("invariant_violation: Request Relationships require a bound Agent Run");
 		}
-		const handle = this.currentHandle()!;
-		const relationships = await this.#runStartInitializer?.();
-		if (!this.isCurrent(handle) || this.#ending || this.#runStartsClosed) return;
-		this.#initializeRequestRelationships(relationships);
+		await this.#runStartInitializer?.();
 	}
 
 	currentHandle(): AgentRunHandle | undefined {
@@ -879,53 +876,39 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		run.hasInput = false;
 		// Startup owns an exact Run before readiness. Keep that identity for terminal
 		// cleanup, while #starting fences execution/release during yielding catch-up.
-		const relationships = await this.#runStartInitializer?.();
+		await this.#runStartInitializer?.();
 		if (this.#runStartsClosed) return;
 		if (this.#runtime !== run) throw new Error("invariant_violation: Agent Runtime changed during Run initialization");
-		this.#initializeRequestRelationships(relationships);
 		this.#notifyStateChanged();
 	}
 
-	#initializeRequestRelationships(relationships: ResidualRequestRelationships | undefined): void {
-		this.#requestRelationships.clear();
-		if (!relationships) return;
-		for (const requestId of relationships.awaitingAnswerRequestIds) {
-			this.addRetentionReason("awaiting_answer", requestId);
-		}
-		for (const requestId of relationships.answerOwedRequestIds) {
-			this.addRetentionReason("answer_owed", requestId);
-		}
-	}
-
-	addRetentionReason(reason: AgentRetentionReason, requestId?: string): void {
+	addRetentionReason(reason: Exclude<AgentRetentionReason, RequestRelationshipReason>): void {
 		if (!this.#runtime && !this.#starting) return;
-		if (isRequestRelationshipReason(reason)) {
-			const exactRequestId = requireRequestRelationshipId(reason, requestId);
-			let relationships = this.#requestRelationships.get(reason);
-			if (!relationships) {
-				relationships = new Set();
-				this.#requestRelationships.set(reason, relationships);
-			}
-			if (relationships.has(exactRequestId)) return;
-			relationships.add(exactRequestId);
-			this.#notifyStateChanged();
-			return;
-		}
 		if (this.#retentionReasons.has(reason)) return;
 		this.#retentionReasons.add(reason);
 		this.#notifyStateChanged();
 	}
 
-	removeRetentionReason(reason: AgentRetentionReason, requestId?: string): void {
-		if (isRequestRelationshipReason(reason)) {
-			const exactRequestId = requireRequestRelationshipId(reason, requestId);
-			const relationships = this.#requestRelationships.get(reason);
-			if (!relationships?.delete(exactRequestId)) return;
-			if (relationships?.size === 0) this.#requestRelationships.delete(reason);
-			this.#notifyStateChanged();
-			return;
-		}
+	removeRetentionReason(reason: Exclude<AgentRetentionReason, RequestRelationshipReason>): void {
 		if (this.#retentionReasons.delete(reason)) this.#notifyStateChanged();
+	}
+
+	replaceRequestRelationships(relationships: RequestRelationshipSet): void {
+		if (!this.#runtime && !this.#starting) return;
+		const next = new Map<RequestRelationshipReason, Set<string>>();
+		for (const [reason, requestIds] of [
+			["awaiting_answer", relationships.awaitingAnswerRequestIds],
+			["answer_owed", relationships.answerOwedRequestIds],
+		] as const) {
+			if (requestIds.some((requestId) => requestId.length === 0)) {
+				throw new Error(`${reason} requires an exact Request identity`);
+			}
+			if (requestIds.length > 0) next.set(reason, new Set(requestIds));
+		}
+		if (sameRequestRelationships(this.#requestRelationships, next)) return;
+		this.#requestRelationships.clear();
+		for (const [reason, requestIds] of next) this.#requestRelationships.set(reason, requestIds);
+		this.#notifyStateChanged();
 	}
 
 	hasRetentionReason(reason: AgentRetentionReason, requestId?: string): boolean {
@@ -1493,12 +1476,14 @@ function isRequestRelationshipReason(
 	return reason === "awaiting_answer" || reason === "answer_owed";
 }
 
-function requireRequestRelationshipId(
-	reason: RequestRelationshipReason,
-	requestId: string | undefined,
-): string {
-	if (requestId === undefined || requestId.length === 0) {
-		throw new Error(`${reason} requires an exact Request identity`);
+function sameRequestRelationships(
+	current: ReadonlyMap<RequestRelationshipReason, ReadonlySet<string>>,
+	next: ReadonlyMap<RequestRelationshipReason, ReadonlySet<string>>,
+): boolean {
+	if (current.size !== next.size) return false;
+	for (const [reason, requestIds] of next) {
+		const existing = current.get(reason);
+		if (existing?.size !== requestIds.size || [...requestIds].some((requestId) => !existing.has(requestId))) return false;
 	}
-	return requestId;
+	return true;
 }

@@ -41,7 +41,7 @@ const terminalFailure = { stage: "model", error: "400 unrelated terminal failure
 test("a terminal error from a live Runtime retains the exact Run as a resumable stop", async () => {
 	const { host, emit, delivered } = fixture();
 	const handle = await host.startInLane();
-	host.addRetentionReason("answer_owed", "incoming");
+	host.replaceRequestRelationships({ awaitingAnswerRequestIds: [], answerOwedRequestIds: ["incoming"] });
 	emit({ type: "agent_end", outcome: "error", willRetry: false, failure: terminalFailure });
 	emit({ type: "agent_settled" });
 	assert.equal(host.currentRunFailed(), false);
@@ -87,8 +87,7 @@ test("configured native retry retains its opportunity before terminal quota susp
 test("quota suspension precedes Run failure, preserves identity and obligations, and gates input", async () => {
 	const { host, emit, delivered } = fixture();
 	const handle = await host.startInLane();
-	host.addRetentionReason("answer_owed", "incoming");
-	host.addRetentionReason("awaiting_answer", "outgoing");
+	host.replaceRequestRelationships({ awaitingAnswerRequestIds: ["outgoing"], answerOwedRequestIds: ["incoming"] });
 	suspend(host, emit);
 	emit({ type: "agent_settled" });
 	assert.equal(host.currentRunFailed(), false);
@@ -136,10 +135,10 @@ test("only the exact Run and its resumption hold can clear a quota stop", async 
 test("termination clears the live quota stop, but relationship cancellation alone does not", async () => {
 	const { host, emit, starts } = fixture();
 	await host.startInLane();
-	host.addRetentionReason("answer_owed", "incoming");
+	host.replaceRequestRelationships({ awaitingAnswerRequestIds: [], answerOwedRequestIds: ["incoming"] });
 	suspend(host, emit);
-	host.addRetentionReason("awaiting_answer", "outgoing");
-	host.removeRetentionReason("awaiting_answer", "outgoing");
+	host.replaceRequestRelationships({ awaitingAnswerRequestIds: ["outgoing"], answerOwedRequestIds: ["incoming"] });
+	host.replaceRequestRelationships({ awaitingAnswerRequestIds: [], answerOwedRequestIds: ["incoming"] });
 	assert.ok(host.currentRunSuspension());
 	const ended: unknown[] = [];
 	host.addEndedHandler((...args) => ended.push(args));

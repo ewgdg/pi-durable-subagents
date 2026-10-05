@@ -12,6 +12,7 @@ import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-
 import type { PiChildProcessLaunch, PiChildProcessRuntime, PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { participant } from "./support/request-history.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 const CUSTOM_TYPE = "agent-coordination.delivery-failure";
 
@@ -285,7 +286,7 @@ function harness(t: { after(fn: () => void): void }, boundaryHooks?: MessageBoun
 	const recipient = runtimeParticipant("recipient", false);
 	const agents = new Map([author, recipient].map(p => [p.record.identity.agentId, p.record]));
 	const state = { shutdown: false };
-	const messages = new MessageCoordinator({ agents, workflowPolicy: new WorkflowPolicyStore(), boundaryHooks,
+	const messages = new MessageCoordinator({ agents, ...requestCoordination(agents), workflowPolicy: new WorkflowPolicyStore(), boundaryHooks,
 		isShuttingDown: () => state.shutdown,
 	});
 	const waits = new AgentWaitCoordinator({ agents, messages, answerArbitration: messages.answerArbitration, assertNotShutDownOrSuspended: () => undefined });
@@ -335,6 +336,7 @@ function runtimeParticipant(agentId: string, commitOnDispatch: boolean) {
 		discardAndEndInLane: async (cause: AgentRunEndCause) => runtime.end(cause),
 		addEndedHandler: (handler: (handle: AgentRunHandle, cause: AgentRunEndCause) => void) => { ended.add(handler); return () => ended.delete(handler); },
 		addRetentionReason() {}, removeRetentionReason() {}, hasRetentionReason: () => false,
+		replaceRequestRelationships() {}, requestRelationshipIds: () => [],
 		finishIsolatedResumptionInLane() {}, releaseIfEligibleInLane: () => "retained",
 		blocksOrdinaryDelivery: () => runtime.blocked,
 		currentWorkState: () => attention === "agent_wait" || runtime.active ? "active" : "settled",

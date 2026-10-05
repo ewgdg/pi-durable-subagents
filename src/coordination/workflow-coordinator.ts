@@ -72,6 +72,8 @@ import type {
 	HumanRequestInput,
 } from "../protocol/human-request.ts";
 import { RunSupervisor } from "./run-supervision.ts";
+import { RequestEvidence } from "./request-evidence.ts";
+import { RequestRelationships } from "./request-relationships.ts";
 import type {
 	RunControlInput,
 	RunControlReceipt,
@@ -234,6 +236,8 @@ export class WorkflowCoordinator {
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
 	readonly #sessionFactory: ProcessChildSessionFactory;
+	readonly #requestEvidence: RequestEvidence;
+	readonly #requestRelationships: RequestRelationships;
 	readonly #messages: MessageCoordinator;
 	readonly #agentWaits: AgentWaitCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
@@ -412,8 +416,16 @@ export class WorkflowCoordinator {
 			this.#agents.set(recovered.identity.agentId, record);
 			parent.children.push(recovered.identity.agentId);
 		}
+		this.#requestEvidence = new RequestEvidence(
+			this.#agents,
+			this.#quarantinedAgentIds,
+			this.#quarantinedWorkflowAgentIds,
+		);
+		this.#requestRelationships = new RequestRelationships({ requestEvidence: this.#requestEvidence });
 		this.#messages = new MessageCoordinator({
 			agents: this.#agents,
+			requestEvidence: this.#requestEvidence,
+			requestRelationships: this.#requestRelationships,
 			quarantinedAgentIds: this.#quarantinedAgentIds,
 			quarantinedWorkflowAgentIds: this.#quarantinedWorkflowAgentIds,
 			isShuttingDown: () => this.#shuttingDown,
@@ -494,6 +506,7 @@ export class WorkflowCoordinator {
 			agentIdBySpawnSource: this.#agentIdBySpawnSource,
 			sessionFactory,
 			messages: this.#messages,
+			requestRelationships: this.#requestRelationships,
 			integrateAgent: (record) => this.#integrateAgent(record),
 			boundaryHooks: options.spawnBoundaryHooks,
 			isShuttingDown: () => this.#shuttingDown,
@@ -1176,6 +1189,7 @@ export class WorkflowCoordinator {
 			);
 		});
 		this.#selection.integrate(record);
+		this.#requestRelationships.integrate(record);
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
 		this.#notifyAgentActivityChanged(record.identity.agentId);

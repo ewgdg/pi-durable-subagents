@@ -13,6 +13,7 @@ import type { AgentRuntimeHost, AgentRunHandle, AgentRuntimeDelivery } from "../
 import type { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { participant, requestHistory } from "./support/request-history.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 for (const delivered of [false, true]) {
 	test(`${delivered ? "proven" : "unproven"} Deferred prompt ${delivered ? "permits" : "excludes"} dependency deadlock handling during agent_wait`, { timeout: 5_000 }, async t => {
@@ -40,6 +41,8 @@ for (const delivered of [false, true]) {
 				setRunStartInitializer() {}, addSettledHandler: () => () => {}, addEndedHandler: () => () => {},
 				addRetentionReason: (reason: string) => { retention.add(reason); },
 				removeRetentionReason: (reason: string) => { retention.delete(reason); },
+				// The fixture pins each worker's Request Relationships; projection writes are ignored.
+				replaceRequestRelationships() {},
 				hasRetentionReason: (reason: string) => retention.has(reason),
 				blocksOrdinaryDelivery: () => false,
 				currentWorkState: () => attention === "agent_wait" ? "active" : "settled",
@@ -62,7 +65,7 @@ for (const delivered of [false, true]) {
 			} as unknown as AgentRuntimeHost;
 		}
 		const workflowPolicy = new WorkflowPolicyStore();
-		const messages = new MessageCoordinator({ agents: history.agents, workflowPolicy, isShuttingDown: () => false });
+		const messages = new MessageCoordinator({ agents: history.agents, ...requestCoordination(history.agents), workflowPolicy, isShuttingDown: () => false });
 		for (const p of [owner, worker, peer]) messages.integrate(p.record);
 		const waits = new AgentWaitCoordinator({ agents: history.agents, messages, answerArbitration: messages.answerArbitration,
 			clock: { schedule: () => () => {} }, assertNotShutDownOrSuspended() {},

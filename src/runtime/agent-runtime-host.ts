@@ -31,11 +31,12 @@ export type AgentRunSuspension =
 	}>;
 export type SuspendedNativeInput = Readonly<{ steering: readonly string[]; followUp: readonly string[] }>;
 
+/** Exact Request-keyed reasons, written only as a whole set by Request Relationships. */
+export type RequestRelationshipReason = "awaiting_answer" | "answer_owed";
 export type RunRetentionReason =
 	| "owner_host_binding"
 	| "pending_delivery"
-	| "awaiting_answer"
-	| "answer_owed"
+	| RequestRelationshipReason
 	| "interruption_hold"
 	| "moderator_handling";
 
@@ -71,7 +72,7 @@ export type RunResumptionHandle = Readonly<{
 export type AgentRunSettlement = "settled" | "failed";
 export type AgentRunEndCause = "clean" | "failure" | "termination" | "shutdown";
 export type AgentRunFailure = Readonly<{ stage: string; error: string; provenance: string }>;
-export type ResidualRequestRelationships = Readonly<{
+export type RequestRelationshipSet = Readonly<{
 	awaitingAnswerRequestIds: readonly string[];
 	answerOwedRequestIds: readonly string[];
 }>;
@@ -173,7 +174,8 @@ export interface AgentRuntimeHost {
 	addStateChangeHandler(handler: () => void): () => void;
 	setProjectionInputSettledHandler(handler: () => void): void;
 	setRunFenceHandler(handler: (handle: AgentRunHandle) => void): void;
-	setRunStartInitializer(initializer: () => ResidualRequestRelationships | Promise<ResidualRequestRelationships>): void;
+	/** Awaited before a newly admitted Run proceeds. */
+	setRunStartInitializer(initializer: () => Promise<void>): void;
 	setRunStartedHandler(
 		handler: (handle: AgentRunHandle) => void | Promise<void>,
 	): void;
@@ -208,10 +210,12 @@ export interface AgentRuntimeHost {
 	endInputRequired(handle: AgentRunHandle, requestId: string): void;
 	beginAgentWait(handle: AgentRunHandle, toolCallId: string): void;
 	endAgentWait(handle: AgentRunHandle, toolCallId: string): void;
-	addRetentionReason(reason: AgentRetentionReason, requestId?: string): void;
-	removeRetentionReason(reason: AgentRetentionReason, requestId?: string): void;
+	addRetentionReason(reason: Exclude<AgentRetentionReason, RequestRelationshipReason>): void;
+	removeRetentionReason(reason: Exclude<AgentRetentionReason, RequestRelationshipReason>): void;
+	/** Replaces both Request Relationship reasons at once; a no-op without a bound Run. */
+	replaceRequestRelationships(relationships: RequestRelationshipSet): void;
 	hasRetentionReason(reason: AgentRetentionReason, requestId?: string): boolean;
-	requestRelationshipIds(reason: "awaiting_answer" | "answer_owed"): readonly string[];
+	requestRelationshipIds(reason: RequestRelationshipReason): readonly string[];
 	residualRequestCounts(): Readonly<{ incoming: number; outgoing: number }>;
 	/** Human-facing activity only; not a scheduling or lifecycle state. */
 	isCompacting(): boolean;

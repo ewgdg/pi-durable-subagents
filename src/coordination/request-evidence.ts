@@ -1,7 +1,7 @@
 import { resolveMessageReference } from "../protocol/message-reference.ts";
 import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
 import { summarizeRequestObligations, type OpenIncomingRequestList, type RequestInspection } from "../protocol/request-inspection.ts";
-import { indexedState, type RetainedTranscript } from "../transcript/retained-transcript.ts";
+import { coordinationEntries, indexedState, type RetainedTranscript } from "../transcript/retained-transcript.ts";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import {
 	withAgentTranscriptObservations,
@@ -49,7 +49,7 @@ import {
 	inspectCanonicalRequestResolution,
 	type CanonicalRequestResolution,
 } from "../protocol/request-resolution.ts";
-import type { ResidualRequestRelationships } from "../runtime/agent-runtime-host.ts";
+import type { RequestRelationshipSet } from "../runtime/agent-runtime-host.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
 	inspectCommittedAgentMessageTarget,
@@ -69,6 +69,7 @@ export class RequestEvidence {
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	// The transcript is authoritative. These entries only bridge the interval after
 	// lane admission and before Pi appends the native tool result.
+	readonly #admittedRequestsById = new Map<string, Request>();
 	readonly #admittedAnswersByRequest = new Map<string, Answer>();
 	readonly #admittedCancellationsByRequest = new Map<string, Cancellation>();
 	readonly #relationshipGraphs = new WeakMap<AgentRecord, RelationshipGraph>();
@@ -88,21 +89,17 @@ export class RequestEvidence {
 		this.#quarantinedWorkflowAgentIds = quarantinedWorkflowAgentIds;
 	}
 
-	rememberAdmittedAnswer(answer: Answer): void {
-		this.#admittedAnswersByRequest.set(answer.requestId, answer);
+	rememberAdmittedRequest(request: Request): void {
+		this.#admittedRequestsById.set(request.messageId, request);
 	}
 
-	isAnswerAwaitingAuthorResult(answer: Answer): boolean {
-		const responder = this.#requireAgent(answer.fromAgentId);
-		const resultRequestId = answerSourceResultRequestId({
-			transcript: responder.transcript.inspect(),
-			source: answer.source,
-		});
-		return (
-			resultRequestId === undefined &&
-			responder.host.currentHandle() !== undefined &&
-			!responder.host.currentRunFailed()
-		);
+	/** Initial admission failed, so the Request was never created. */
+	forgetAdmittedRequest(requestId: string): void {
+		this.#admittedRequestsById.delete(requestId);
+	}
+
+	rememberAdmittedAnswer(answer: Answer): void {
+		this.#admittedAnswersByRequest.set(answer.requestId, answer);
 	}
 
 	findAnswerBySource(responder: AgentRecord, toolCallId: string): Answer | undefined {
@@ -140,7 +137,35 @@ export class RequestEvidence {
 		);
 	}
 
+	/**
+	 * The author's Requests and Cancellations admitted in its lane whose native
+	 * tool result has not committed yet. Once it commits, the transcript decides.
+	 */
+	admittedAuthorshipBy(author: AgentRecord): Readonly<{
+		requestIds: readonly string[];
+		cancelledRequestIds: readonly string[];
+	}> {
+		const authorId = author.identity.agentId;
+		const requestIds: string[] = [];
+		for (const [requestId, request] of this.#admittedRequestsById) {
+			if (request.fromAgentId !== authorId) continue;
+			if (this.#hasAuthorResult(author, request.source.toolCallId)) {
+				this.#admittedRequestsById.delete(requestId);
+			} else requestIds.push(requestId);
+		}
+		const cancelledRequestIds = [...this.#admittedCancellationsByRequest.values()]
+			.filter((cancellation) => cancellation.fromAgentId === authorId &&
+				!this.#hasAuthorResult(author, cancellation.source.toolCallId))
+			.map(({ requestId }) => requestId);
+		return { requestIds, cancelledRequestIds };
+	}
+
 	discardAdmittedAuthorshipBy(author: AgentRecord): void {
+		for (const [requestId, request] of this.#admittedRequestsById) {
+			if (request.fromAgentId === author.identity.agentId) {
+				this.#admittedRequestsById.delete(requestId);
+			}
+		}
 		for (const [requestId, answer] of this.#admittedAnswersByRequest) {
 			if (answer.fromAgentId === author.identity.agentId) {
 				this.#admittedAnswersByRequest.delete(requestId);
@@ -442,7 +467,7 @@ export class RequestEvidence {
 		return this.residualRelationshipsFor(agent).awaitingAnswerRequestIds;
 	}
 
-	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
+	residualRelationshipsFor(agent: AgentRecord): RequestRelationshipSet {
 		return withAgentTranscriptObservations(this.#agents.values(), () => {
 			const graph = this.#relationshipGraph(agent);
 			for (;;) {
@@ -490,8 +515,8 @@ export class RequestEvidence {
 		return result;
 	}
 
-	async refreshRelationshipsFor(agent: AgentRecord): Promise<ResidualRequestRelationships> {
-		let result: ResidualRequestRelationships | undefined;
+	async refreshRelationshipsFor(agent: AgentRecord): Promise<RequestRelationshipSet> {
+		let result: RequestRelationshipSet | undefined;
 		do {
 			const records = [...this.#agents.values()];
 			const inspections = new Map<AgentRecord, TranscriptInspection>();
@@ -838,6 +863,12 @@ export class RequestEvidence {
 		});
 	}
 
+	#hasAuthorResult(author: AgentRecord, toolCallId: string): boolean {
+		return coordinationEntries(author.transcript.inspect(), author.identity.agentId, `result:${toolCallId}`)
+			.some((entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+				entry.message.toolCallId === toolCallId);
+	}
+
 	#hasCanonicalAuthoredCancellation(author: AgentRecord, requestId: string): boolean {
 		const transcript = author.transcript.inspect();
 		const canonical = cancellationSourcesForRequest({ authorAgentId: author.identity.agentId, transcript, requestId })
@@ -1129,7 +1160,7 @@ type RelationshipGraph = {
 	initialized: boolean;
 	awaiting: Set<string>;
 	owed: Set<string>;
-	result: ResidualRequestRelationships;
+	result: RequestRelationshipSet;
 	pending?: Generator<void>;
 };
 

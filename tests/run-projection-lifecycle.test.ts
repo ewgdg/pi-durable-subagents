@@ -21,7 +21,7 @@ for (const prepared of [false, true]) test(`shutdown during ${prepared ? "prepar
 	host.setRunStartInitializer(async () => {
 		entered.resolve();
 		await resume.promise;
-		return { awaitingAnswerRequestIds: ["unpublished-request"], answerOwedRequestIds: [] };
+		host.replaceRequestRelationships({ awaitingAnswerRequestIds: ["unpublished-request"], answerOwedRequestIds: [] });
 	});
 	let started = false;
 	const ended: string[] = [];
@@ -421,12 +421,8 @@ test("shutdown fencing prevents a prepared Runtime from admitting a Run", async 
 		startSession: async () => resource.startedRun,
 	});
 	let relationshipInitializations = 0;
-	host.setRunStartInitializer(() => {
+	host.setRunStartInitializer(async () => {
 		relationshipInitializations += 1;
-		return {
-			awaitingAnswerRequestIds: [],
-			answerOwedRequestIds: [],
-		};
 	});
 
 	await host.lane.run(() => host.prepareInLane(["interactive_selection"]));

@@ -12,11 +12,12 @@ import { OperationalIncidentCoordinator } from "../src/coordination/operational-
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
-import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
+import { AGENT_IDENTITY_CUSTOM_TYPE, adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import { AgentTranscript, type TranscriptInspection } from "../src/transcript/agent-transcript.ts";
 import { createTestOwnerHost, type TestCleanupRegistrar } from "./support/pi-host.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 test("a burst of host changes shares one fresh reconciliation after yielding to native events", async (t) => {
 	const harness = await reconciliationHarness(t);
@@ -116,8 +117,11 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 	const agents = new Map([[identity.agentId, owner]]);
 	const workflowPolicy = new WorkflowPolicyStore();
 	let shuttingDown = false;
+	const { requestEvidence, requestRelationships } = requestCoordination(agents);
 	const messages = new MessageCoordinator({
 		agents,
+		requestEvidence,
+		requestRelationships,
 		isShuttingDown: () => shuttingDown,
 		workflowPolicy,
 	});
@@ -164,11 +168,14 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 	});
 	function addCreationRequest(childId: string): string {
 		const toolCallId = `spawn-${childId}`;
+		const creationInput = { title: "Fixture request", request: `Complete ${childId}.` };
 		const entryId = host.session.sessionManager.appendMessage(fauxAssistantMessage(
-			fauxToolCall("agent_spawn", { title: "Fixture request", request: `Complete ${childId}.` }, { id: toolCallId }),
+			fauxToolCall("agent_spawn", creationInput, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		));
 		const source = { agentId: identity.agentId, entryId, toolCallId };
+		const childSession = SessionManager.inMemory(host.cwd, { id: childId });
+		childSession.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: childId });
 		const child: AgentRecord = {
 			identity: {
 				agentId: childId,
@@ -182,14 +189,20 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 				agentId: childId,
 				async startSession() { throw new Error("Request lookup must not start a Run"); },
 			}),
-			transcript: transcriptFromSessionManager(SessionManager.inMemory(host.cwd, { id: childId })),
+			transcript: transcriptFromSessionManager(childSession),
 			children: [],
+			creationInput,
 		};
 		agents.set(childId, child);
 		owner.children.push(childId);
-		const requestId = deriveMessageIdentity(source);
-		owner.host.addRetentionReason("awaiting_answer", requestId);
-		return requestId;
+		// This stands in for the Spawner's sync. Its read is not a reconciliation
+		// pass, so the inspection probe must not observe it.
+		const probe = inspect;
+		inspect = () => undefined;
+		requestRelationships.sync(owner);
+		inspect = probe;
+		assert.ok(owner.host.hasRetentionReason("awaiting_answer", deriveMessageIdentity(source)));
+		return deriveMessageIdentity(source);
 	}
 	addCreationRequest("worker");
 	await incidents.reachSafeBoundary();

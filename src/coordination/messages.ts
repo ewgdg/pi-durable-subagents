@@ -34,7 +34,8 @@ import type {
 	AgentRequestRetryReceipt,
 	RequestCancellationReceipt,
 } from "./message-receipts.ts";
-import { RequestEvidence } from "./request-evidence.ts";
+import type { RequestEvidence } from "./request-evidence.ts";
+import type { RequestRelationships } from "./request-relationships.ts";
 import { AnswerArbitration } from "./answer-arbitration.ts";
 import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import {
@@ -121,6 +122,7 @@ export class MessageCoordinator {
 	readonly #boundaryHooks: MessageBoundaryHooks;
 	readonly #deliveryScheduler: MessageDeliveryScheduler;
 	readonly #requestEvidence: RequestEvidence;
+	readonly #requestRelationships: RequestRelationships;
 	readonly answerArbitration: AnswerArbitration;
 	#waitPreemptionSubscriber: IncomingRequestWaitPreemptor | undefined;
 	readonly #deliveryProgressSubscribers = new Set<() => void>();
@@ -129,6 +131,8 @@ export class MessageCoordinator {
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
+		requestEvidence: RequestEvidence;
+		requestRelationships: RequestRelationships;
 		quarantinedAgentIds?: ReadonlySet<string>;
 		quarantinedWorkflowAgentIds?: ReadonlySet<string>;
 		isShuttingDown(): boolean;
@@ -142,11 +146,8 @@ export class MessageCoordinator {
 			options.quarantinedWorkflowAgentIds ?? this.#quarantinedAgentIds;
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
-		this.#requestEvidence = new RequestEvidence(
-			this.#agents,
-			this.#quarantinedAgentIds,
-			this.#quarantinedWorkflowAgentIds,
-		);
+		this.#requestEvidence = options.requestEvidence;
+		this.#requestRelationships = options.requestRelationships;
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			scheduleDeliveryDispatch: this.#boundaryHooks.scheduleDeliveryDispatch,
@@ -300,9 +301,6 @@ export class MessageCoordinator {
 	shutdownDeliveryProgress(): void { this.#deliveryScheduler.shutdownProgress(); }
 
 	integrate(record: AgentRecord): void {
-		record.host.setRunStartInitializer(
-			() => this.#requestEvidence.refreshRelationshipsFor(record),
-		);
 		record.host.addSettledHandler((_handle, settlement) => {
 			if (settlement === "failed") {
 				this.#requestEvidence.discardAdmittedAuthorshipBy(record);
@@ -543,7 +541,8 @@ export class MessageCoordinator {
 			};
 		}
 		if (message.kind === "request") {
-			sender.host.addRetentionReason("awaiting_answer", message.messageId);
+			this.#requestEvidence.rememberAdmittedRequest(message);
+			this.#requestRelationships.sync(sender);
 		}
 		const delivery = this.#scheduleGeneralMessage(recipient, message);
 		if (
@@ -558,7 +557,7 @@ export class MessageCoordinator {
 			if (message.kind !== "request") {
 				this.#deliveryScheduler.recordAdmissionFailure(recipient, delivery, new Error("Confirmed Delivery admission failure"));
 			}
-			if (message.kind === "request") sender.host.removeRetentionReason("awaiting_answer", message.messageId);
+			if (message.kind === "request") this.#rollBackInitialRequestAdmission(sender, message.messageId);
 			return {
 				...identity,
 				messageStatus: "not_sent",
@@ -577,13 +576,20 @@ export class MessageCoordinator {
 		}
 		// Only initial send owns non-creation rollback; scheduler failures alone
 		// cannot distinguish this from a failed retry of an existing Request.
-		if (message.kind === "request") this.#deliveryScheduler.discardUncreatedDeliveryProgress(message.messageId);
-		if (message.kind === "request") sender.host.removeRetentionReason("awaiting_answer", message.messageId);
+		if (message.kind === "request") {
+			this.#deliveryScheduler.discardUncreatedDeliveryProgress(message.messageId);
+			this.#rollBackInitialRequestAdmission(sender, message.messageId);
+		}
 		return {
 			...identity,
 			messageStatus: "not_sent",
 			reason: admission,
 		};
+	}
+
+	#rollBackInitialRequestAdmission(sender: AgentRecord, requestId: string): void {
+		this.#requestEvidence.forgetAdmittedRequest(requestId);
+		this.#requestRelationships.sync(sender);
 	}
 
 	recordCreationRequestFailure(options: CreationRequestScheduling, error: unknown): void {
@@ -623,15 +629,7 @@ export class MessageCoordinator {
 			isDeliveryBlocked: () =>
 				this.#deliveryScheduler.isDeliveryBlocked(recipient, "deferred") ||
 				this.#requestEvidence.isIncomingRequestBlocked(recipient, requestId),
-			afterCommit: () => {
-				const request = this.#requestEvidence.requireRequest(requestId);
-				if (
-					this.#requestEvidence.findAnswer(request) === undefined &&
-					this.#requestEvidence.findCancellation(request) === undefined
-				) {
-					recipient.host.addRetentionReason("answer_owed", requestId);
-				}
-			},
+			afterCommit: () => this.#requestRelationships.sync(recipient),
 		};
 	}
 
@@ -661,7 +659,7 @@ export class MessageCoordinator {
 		record: AgentRecord,
 		handle: AgentRunHandle,
 	): Promise<boolean> {
-		await this.#syncAnswerRelationshipsInLane(record);
+		await this.#syncRequestRelationshipsInLane(record);
 		// Workflow activity, not Request retention, owns parking eligibility. A
 		// different child can still be working after the last Answer is reconciled.
 		return this.#deliveryScheduler.beginParkingInLane(record, handle);
@@ -681,19 +679,16 @@ export class MessageCoordinator {
 		if (record.host.observe().phase === "ending" || record.host.isInterrupting()) {
 			return Promise.resolve();
 		}
-		await record.host.lane.run(() => this.#syncAnswerRelationshipsInLane(record));
+		await record.host.lane.run(() => this.#syncRequestRelationshipsInLane(record));
 		return this.#deliveryScheduler.reachSafeBoundary(record);
 	}
 
 	/**
-	 * Requester-side Answer proof first, then responder-side Answer authorship;
-	 * the queue advances once if either retention changed. Shared by the safe
-	 * boundary and Owner parking.
+	 * One sync of both relationship reasons; the queue advances once if the
+	 * Agent's owed set shrank. Shared by the safe boundary and Owner parking.
 	 */
-	async #syncAnswerRelationshipsInLane(record: AgentRecord): Promise<void> {
-		const proofChanged = this.#reconcileAnswerDeliveries(record);
-		const authorshipChanged = this.#reconcileCommittedAnswerAuthorship(record);
-		if (proofChanged || authorshipChanged) {
+	async #syncRequestRelationshipsInLane(record: AgentRecord): Promise<void> {
+		if (this.#requestRelationships.sync(record).answerOwedShrank) {
 			await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
 		}
 	}
@@ -940,7 +935,7 @@ export class MessageCoordinator {
 				request,
 			});
 			this.#requestEvidence.rememberAdmittedCancellation(cancellation);
-			caller.host.removeRetentionReason("awaiting_answer", request.messageId);
+			this.#requestRelationships.sync(caller);
 			return { disposition: "admitted", request, responder, cancellation } as const;
 		});
 		if (admitted.disposition === "answered") {
@@ -1301,87 +1296,20 @@ export class MessageCoordinator {
 			suppressesAfterCommitMessageId: message.kind === "request_cancellation"
 				? message.requestId
 				: undefined,
-			afterCommit: message.kind === "request"
+			afterCommit: message.kind === "answer"
 				? () => {
-					if (
-						this.#requestEvidence.findAnswer(message) === undefined &&
-						this.#requestEvidence.findCancellation(message) === undefined
-					) {
-						recipient.host.addRetentionReason("answer_owed", message.messageId);
-					}
+					this.#requestRelationships.sync(recipient);
+					const responder = this.#requireAgent(message.fromAgentId);
+					void responder.host.lane.run(async () => {
+						if (this.#requestRelationships.sync(responder).answerOwedShrank) {
+							await this.#deliveryScheduler.requestQueueAdvancedInLane(responder);
+						}
+					});
 				}
-					: message.kind === "answer"
-					? () => {
-						recipient.host.removeRetentionReason(
-							"awaiting_answer",
-							message.requestId,
-						);
-						if (!this.#requestEvidence.isAnswerAwaitingAuthorResult(message)) {
-							const responder = this.#requireAgent(message.fromAgentId);
-							void responder.host.lane.run(async () => {
-								responder.host.removeRetentionReason(
-									"answer_owed",
-									message.requestId,
-								);
-								await this.#deliveryScheduler.requestQueueAdvancedInLane(responder);
-							});
-						}
-					}
-					: message.kind === "request_cancellation"
-						? () => {
-							recipient.host.removeRetentionReason(
-								"answer_owed",
-								message.requestId,
-							);
-							const requester = this.#requireAgent(message.fromAgentId);
-							void requester.host.lane.run(() =>
-								requester.host.removeRetentionReason(
-									"awaiting_answer",
-									message.requestId,
-								)
-							);
-						}
-						: undefined,
+				: message.kind === "request" || message.kind === "request_cancellation"
+					? () => this.#requestRelationships.sync(recipient)
+					: undefined,
 		};
-	}
-
-	#reconcileCommittedAnswerAuthorship(responder: AgentRecord): boolean {
-		const unresolved = new Set(this.answerObligationRequestIds(responder));
-		let changed = false;
-		for (const requestId of responder.host.requestRelationshipIds("answer_owed")) {
-			if (unresolved.has(requestId)) continue;
-			responder.host.removeRetentionReason("answer_owed", requestId);
-			changed = true;
-		}
-		return changed;
-	}
-
-	#reconcileAnswerDeliveries(requester: AgentRecord): boolean {
-		let changed = false;
-		for (const requestId of requester.host.requestRelationshipIds("awaiting_answer")) {
-			const request = this.#requestEvidence.findRequest(requestId);
-			if (!request) {
-				requester.host.removeRetentionReason("awaiting_answer", requestId);
-				changed = true;
-				continue;
-			}
-			const answer = this.#requestEvidence.findAnswer(request);
-			if (!answer) continue;
-			if (answer.targetAgentId !== requester.identity.agentId) continue;
-			const delivery = inspectAnswerDelivery({
-				requesterAgentId: requester.identity.agentId,
-				transcript: requester.transcript.inspect(),
-				answer,
-			});
-			if (delivery.deliveryEvidence) {
-				requester.host.removeRetentionReason(
-					"awaiting_answer",
-					answer.requestId,
-				);
-				changed = true;
-			}
-		}
-		return changed;
 	}
 
 	/**

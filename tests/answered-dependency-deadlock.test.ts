@@ -11,6 +11,7 @@ import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import type { AgentRuntimeHost } from "../src/runtime/agent-runtime-host.ts";
 import type { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import { participant, requestHistory } from "./support/request-history.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 for (const ownerAnswered of [false, true]) {
 	test(`a ${ownerAnswered ? "committed-undelivered Answer does not hide" : "genuine unanswered Owner dependency opens"} the core/publication cycle`, async (t) => {
@@ -53,7 +54,7 @@ for (const ownerAnswered of [false, true]) {
 			} as unknown as AgentRuntimeHost;
 		}
 		const workflowPolicy = new WorkflowPolicyStore();
-		const messages = new MessageCoordinator({ agents: history.agents, workflowPolicy, isShuttingDown: () => false });
+		const messages = new MessageCoordinator({ agents: history.agents, ...requestCoordination(history.agents), workflowPolicy, isShuttingDown: () => false });
 		let creationAttempts = 0;
 		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
