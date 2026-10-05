@@ -149,7 +149,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 				kind: "user",
 				content: "Earlier work.",
 				deliverAs: "followUp",
-			}, { inspectCommit: () => true });
+			});
 			await previous.completion;
 			await session.waitForIdle();
 			await new Promise<void>((resolve) => setImmediate(resolve));
@@ -284,7 +284,7 @@ for (const cancellation of [undefined, "delivery", "native"] as const) {
 				return fauxAssistantMessage("Custom follow-up completed.");
 			},
 		]);
-		const dispatch = ownerChannel.request("message.deliver", { deliveryId: "competing-delivery", delivery: {
+		const dispatch = ownerChannel.request("message.deliver", { deliveryId: "competing-delivery", proveCommit: true, delivery: {
 			kind: "custom", message: {
 				...deliveryMessage, details: { messages: [...deliveryMessage.details.messages] },
 			}, triggerTurn: true,

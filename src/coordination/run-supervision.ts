@@ -246,9 +246,7 @@ export class RunSupervisor {
 		];
 		const delivery = record.host.deliverInLane(
 			{ kind: "user", content, forwardedInput: submissionSequence === undefined ? {} : { submissionSequence } },
-			// The Owner's own Pi `input` extensions may append to human input before Pi
-			// commits it, so only its leading text proves the commit.
-			{ userCommitText: "leading" },
+			{},
 		);
 		const committed = await delivery.transcriptCommit;
 		if (!committed) throw new Error("Human input did not commit");

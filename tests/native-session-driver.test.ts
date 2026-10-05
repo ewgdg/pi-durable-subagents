@@ -7,8 +7,7 @@ import {
 	NativeSessionDriver,
 	type NativeSessionEvent,
 } from "../src/pi-integration/native-session-driver.ts";
-import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
-import type { UserCommitTextRule } from "../src/runtime/agent-runtime-host.ts";
+import { disposeSessionStartup, registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost, type TestOwnerHost, type TestOwnerHostOptions } from "./support/pi-host.ts";
@@ -201,83 +200,75 @@ test("commit proof accepts Pi's normalized form of a user Delivery with an image
 	assert.ok(committed.content[1]?.type === "image" && committed.content[1].data !== image.data, "Pi persisted a resized image");
 });
 
-test("commit proof of a queued steer waits for Pi to consume it", { timeout: 5000 }, async t => {
+test("commit proof refuses a user Delivery Pi may queue: only a started Run proves it by position", { timeout: 5000 }, async t => {
 	const host = await fixture(t);
-	const modelStarted = deferred();
-	const release = deferred();
-	t.after(() => release.resolve());
-	host.model.setResponses([
-		async () => { modelStarted.resolve(); await release.promise; return fauxAssistantMessage("First."); },
-		fauxAssistantMessage("Steer handled."),
-	]);
-	const run = host.session.prompt("Long work.");
-	await modelStarted.promise;
-	const dispatch = host.driver.deliver({ kind: "user", content: "Steer this Run.", deliverAs: "steer" }, { proveCommit: true });
-	await dispatch.completion;
-	release.resolve();
-	assert.equal(await dispatch.transcriptCommit, true);
-	await run;
+	for (const deliverAs of ["steer", "followUp"] as const) {
+		assert.throws(
+			() => host.driver.deliver({ kind: "user", content: "Queued input.", deliverAs }, { proveCommit: true }),
+			/queued_user_commit_unprovable/,
+		);
+	}
 });
 
 type UserContent = Extract<Parameters<NativeSessionDriver["deliver"]>[0], { kind: "user" }>["content"];
 
-/** Holds a native Run on its first model response so Deliveries queue behind it. */
-async function startHeldRun(t: TestContext, host: TestOwnerHost) {
-	const modelStarted = deferred();
-	const release = deferred();
-	t.after(() => release.resolve());
-	host.model.setResponses([
-		async () => { modelStarted.resolve(); await release.promise; return fauxAssistantMessage("Held work done."); },
-		fauxAssistantMessage("Queued input handled."),
-	]);
-	const run = host.session.prompt("Held work.");
-	await modelStarted.promise;
-	return { run, release: () => release.resolve() };
+/** Commits a user message with the given text the way another submission would, without Pi's Run. */
+function commitUnrelatedUserMessage(host: TestOwnerHost, text: string): void {
+	host.session.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
 }
 
-// Child Deliveries commit their exact text; Owner human input commits by its
-// leading text so the Owner's Pi `input` transforms may append. Both admit Pi's
-// image hints, which only the started path appends.
-const userCommitTextRows: ReadonlyArray<Readonly<{
+// A started user Delivery is the first user message its own Run emits, so the
+// proof follows Pi's message object, never its text: input transforms may append
+// or rewrite it, and another message with the same text never confirms it.
+const userCommitRows: ReadonlyArray<Readonly<{
 	name: string;
-	userCommitText: UserCommitTextRule;
 	content: UserContent;
-	queued?: boolean;
-	transform?: (text: string) => string;
+	input?: (text: string, host: TestOwnerHost) => { action: "transform"; text: string } | { action: "handled" };
 	committed: boolean;
 }>> = [
-	{ name: "an image Delivery that starts a Run", userCommitText: "exact", content: [{ type: "text", text: "See image." }, oversizedPngImage()], committed: true },
-	{ name: "an image Delivery queued into a Run", userCommitText: "exact", content: [{ type: "text", text: "See image." }, oversizedPngImage()], queued: true, committed: true },
-	{ name: "an image Delivery that starts a Run", userCommitText: "leading", content: [{ type: "text", text: "See image." }, oversizedPngImage()], committed: true },
-	{ name: "an image Delivery queued into a Run", userCommitText: "leading", content: [{ type: "text", text: "See image." }, oversizedPngImage()], queued: true, committed: true },
-	{ name: "text an input handler appends to", userCommitText: "leading", content: "Submitted text.", transform: text => `${text}\n\nAppended context.`, committed: true },
-	{ name: "queued text an input handler appends to", userCommitText: "leading", content: "Submitted text.", queued: true, transform: text => `${text} (enriched)`, committed: true },
-	{ name: "text an input handler appends to", userCommitText: "exact", content: "Submitted text.", transform: text => `${text}\n\nAppended context.`, committed: false },
-	{ name: "a longer message sharing the submitted text", userCommitText: "exact", content: "ok", transform: () => "ok, continue with the plan", committed: false },
-	{ name: "any message after an image-only Delivery", userCommitText: "exact", content: [oversizedPngImage()], transform: () => "Unrelated input.", committed: false },
-	{ name: "text an input handler rewrites", userCommitText: "exact", content: "Submitted text.", transform: () => "Different text.", committed: false },
-	{ name: "text an input handler rewrites", userCommitText: "leading", content: "Submitted text.", transform: () => "Different text.", committed: false },
+	{ name: "an image Delivery", content: [{ type: "text", text: "See image." }, oversizedPngImage()], committed: true },
+	{ name: "an image-only Delivery", content: [oversizedPngImage()], committed: true },
+	{ name: "text an input handler appends to", content: "Submitted text.", input: text => ({ action: "transform", text: `${text}\n\nAppended context.` }), committed: true },
+	{ name: "text an input handler rewrites", content: "Submitted text.", input: () => ({ action: "transform", text: "Different text." }), committed: true },
+	{
+		name: "handled input while another message with the same text commits",
+		content: "ok",
+		input: (text, host) => { commitUnrelatedUserMessage(host, text); return { action: "handled" }; },
+		committed: false,
+	},
+	{
+		name: "a handled image-only Delivery while an unrelated message commits",
+		content: [oversizedPngImage()],
+		input: (_text, host) => { commitUnrelatedUserMessage(host, "Unrelated input."); return { action: "handled" }; },
+		committed: false,
+	},
 ];
 
-for (const row of userCommitTextRows) {
-	test(`${row.userCommitText} user commit text ${row.committed ? "confirms" : "rejects"} ${row.name}`, { timeout: 5000 }, async t => {
-		const host = await fixture(t, pi => {
-			pi.on("input", event => row.transform ? { action: "transform", text: row.transform(event.text) } : undefined);
+for (const row of userCommitRows) {
+	test(`user commit proof ${row.committed ? "confirms" : "rejects"} ${row.name}`, { timeout: 5000 }, async t => {
+		let host!: Awaited<ReturnType<typeof fixture>>;
+		host = await fixture(t, pi => {
+			pi.on("input", event => row.input?.(event.text, host));
 		});
-		const held = row.queued ? await startHeldRun(t, host) : undefined;
-		if (!held) host.model.setResponses([fauxAssistantMessage("Input handled.")]);
-		const dispatch = host.driver.deliver(
-			{ kind: "user", content: row.content, ...(held ? { deliverAs: "steer" as const } : {}) },
-			{ proveCommit: true, userCommitText: row.userCommitText },
-		);
+		host.model.setResponses([fauxAssistantMessage("Input handled.")]);
+		const dispatch = host.driver.deliver({ kind: "user", content: row.content }, { proveCommit: true });
 		await dispatch.completion;
-		held?.release();
 		assert.equal(await dispatch.transcriptCommit, row.committed);
-		await held?.run;
 		await host.session.waitForIdle();
-		assert.ok(host.session.messages.some(message => message.role === "user"), "Pi committed a user message");
 	});
 }
+
+test("user commit proof follows a Delivery that a startup generation retired mid-preparation cancels", { timeout: 5000 }, async t => {
+	let host!: Awaited<ReturnType<typeof fixture>>;
+	host = await fixture(t, pi => {
+		// An extension reload disposes the startup admission of the retired generation.
+		pi.on("input", () => { disposeSessionStartup(host.session); });
+	});
+	const dispatch = host.driver.deliver({ kind: "user", content: "Prepared across a reload." }, { proveCommit: true });
+	await assert.rejects(dispatch.completion, /startup_admission_cancelled/);
+	await assert.rejects(dispatch.transcriptCommit!, /startup_admission_cancelled/);
+	assert.equal(host.session.messages.length, 0);
+});
 
 test("commit proof settles false at its own message end when nothing persisted, before the Run settles", { timeout: 5000 }, async t => {
 	// A lane-holding caller awaits this proof while the Run's own agent_end hook
