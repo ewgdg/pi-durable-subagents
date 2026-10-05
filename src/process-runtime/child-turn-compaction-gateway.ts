@@ -222,8 +222,10 @@ export class ChildTurnCompactionGateway {
 		try {
 			await this.#session.compact(customInstructions);
 		} catch (error) {
-			// Pi rejects even when an extension cancels compaction to start its own
-			// turn. Honor Pi's outcome, not error text or extension-specific intent.
+			// Pi rejects every extension cancellation but reports it as aborted.
+			// Extensions cancel to hand off to their own turn, and also to keep an
+			// existing checkpoint after their own compaction fails. Honor Pi's
+			// outcome, not error text or extension-specific intent.
 			if (!aborted) throw error;
 		} finally {
 			unsubscribe();
