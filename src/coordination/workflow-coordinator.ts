@@ -783,17 +783,11 @@ export class WorkflowCoordinator {
 		if (this.#shuttingDown) return false;
 		// The entire Workflow matters: a waiting parent contributes no execution,
 		// but its progressing descendant (or a recovering Moderator) still does.
-		for (const record of this.#agents.values()) {
-			// Isolated resumption blocks ordinary Delivery, not the resumed execution.
-			if (record.identity.agentId === this.#ownerIdentity.agentId ||
-				record.host.currentInterruptionHold() || record.host.currentRunSuspension()) continue;
-			const run = record.host.observe();
+		const progressing = this.#operationalIncidents.progressingNonOwnerAgentIds().some((agentId) =>
 			// Moderator startup belongs to the bounded recovery inspection below.
 			// A hung startup must stop counting when that inspection times out.
-			if ((run.phase === "starting" && !this.#isModerator(record.identity.agentId)) || run.phase === "ending" ||
-				(run.phase === "live" && run.work === "active" && run.attention === "none")) return true;
-		}
-		return this.#messages.hasAutonomousDeliveryProgress() ||
+			!(this.#isModerator(agentId) && this.#requireAgent(agentId).host.observe().phase === "starting"));
+		return progressing || this.#messages.hasAutonomousDeliveryProgress() ||
 			this.#operationalIncidents.hasAutonomousRecoveryProgress();
 	}
 

@@ -65,8 +65,13 @@ import type {
 	RunResumptionHandle,
 } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
-import type { UnresolvedAgentRequest } from "./dependency-deadlock.ts";
 import { resolveCommittedAgentMessageTargetId } from "./agent-message-target.ts";
+
+export type UnresolvedAgentRequest = Readonly<{
+	requestId: string;
+	fromAgentId: string;
+	targetAgentId: string;
+}>;
 
 export type { AgentMessageInput } from "../protocol/message.ts";
 export type {
@@ -408,12 +413,6 @@ export class MessageCoordinator {
 		return answers.every((answer) => answer !== undefined)
 			? { answers }
 			: undefined;
-	}
-
-	requestTargetAgentIds(requestIds: readonly string[]): readonly string[] {
-		return requestIds.map(
-			(requestId) => this.#requestEvidence.requestMetadata(requestId).targetAgentId,
-		);
 	}
 
 	requestRelationships(requestIds: readonly string[]): readonly (UnresolvedAgentRequest & { requestTitle: string })[] {

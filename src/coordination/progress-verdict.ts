@@ -21,8 +21,9 @@ export type AgentProgressFacts = Readonly<{
 	attention?: "none" | "input_required" | "agent_wait";
 	suspended: boolean;
 	currentRunFailed: boolean;
-	/** Includes `interactive_selection` and `interruption_hold` when present. */
 	retentionReasons: readonly AgentRetentionReason[];
+	interruptionHold: boolean;
+	interactiveSelection: boolean;
 	isolatedResumption: boolean;
 	unresolvedOperationReview: boolean;
 	deliveryProgress: boolean;
@@ -30,6 +31,12 @@ export type AgentProgressFacts = Readonly<{
 	/** Outgoing Requests without a committed Answer: the only dependency edges. */
 	unansweredRequests: readonly Readonly<{ requestId: string; targetAgentId: string }>[];
 }>;
+
+/** The facts `waitingReason` reads; the delivery scheduler supplies only these. */
+export type WaitingFacts = Pick<
+	AgentProgressFacts,
+	"phase" | "attention" | "suspended" | "interruptionHold" | "interactiveSelection" | "isolatedResumption"
+>;
 
 export type BlockedDeliveryFacts = Readonly<{ messageId: string; recipientAgentId: string }>;
 
@@ -68,10 +75,10 @@ export type ProgressAssessment = Readonly<{
 }>;
 
 /** The single definition of a legitimate wait, shared with the delivery scheduler. */
-export function waitingReason(facts: AgentProgressFacts): WaitingReason | undefined {
+export function waitingReason(facts: WaitingFacts): WaitingReason | undefined {
 	if (facts.phase !== "dormant" && facts.attention === "input_required") return "input_required";
-	if (facts.retentionReasons.includes("interactive_selection")) return "interactive_selection";
-	if (facts.retentionReasons.includes("interruption_hold")) return "interruption_hold";
+	if (facts.interactiveSelection) return "interactive_selection";
+	if (facts.interruptionHold) return "interruption_hold";
 	if (facts.suspended) return "run_suspension";
 	if (facts.isolatedResumption) return "isolated_resumption";
 	return undefined;

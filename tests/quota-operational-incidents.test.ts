@@ -9,7 +9,7 @@ import type { ProcessChildSessionFactory } from "../src/runtime/process-child-se
 import { participant, requestHistory } from "./support/request-history.ts";
 
 for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [false, true]) {
-	test(`quota blocks only its dependency path (unrelated branch: ${unrelated}, cycle: ${cycle})`, async (t) => {
+	test(`a quota-suspended dependency keeps its requester Waiting (unrelated branch: ${unrelated}, cycle: ${cycle})`, async (t) => {
 		const history = requestHistory();
 		const leaf = participant("quota-leaf");
 		history.agents.set("quota-leaf", leaf.record);
@@ -36,6 +36,7 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 					suspension: agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined }),
 				currentRunSuspension: () => agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined,
 				currentRunFailed: () => false,
+				blocksOrdinaryDelivery: () => false,
 				hasRetentionReason: () => false,
 				requestRelationshipIds: (kind: string) => kind === "answer_owed" ? incoming.get(agentId) ?? [] : [],
 			} as unknown as AgentRuntimeHost;
@@ -64,7 +65,10 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 		incidents.deliveryProgressChanged();
 		await incidents.reachSafeBoundary();
 		assert.deepEqual(errors, []);
-		assert.deepEqual(reminded.sort(), unrelated ? [...(cycle === "upstream" ? ["bridge"] : []), "other", "responder"] : []);
+		// Best branch wins: one Waiting (suspended) dependency keeps the requester and
+		// its upstream bridge from Stalling, while the unrelated stalled leaf still
+		// receives its own reminder.
+		assert.deepEqual(reminded.sort(), unrelated ? ["other"] : []);
 		if (cycle !== "none") return;
 		// Explicit clearance restores ordinary incident observation; no timer retries it.
 		suspended = false;

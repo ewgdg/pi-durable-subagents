@@ -494,13 +494,18 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	cancelIsolatedResumptionInLane(hold: RunResumptionHandle): void {
-		if (this.#isolatedResumption?.hold === hold) {
-			this.#isolatedResumption = undefined;
-		}
+		if (this.#isolatedResumption?.hold === hold) this.#endIsolatedResumption();
 	}
 
 	finishIsolatedResumptionInLane(handle: AgentRunHandle): void {
-		if (this.#isolatedResumption?.handle === handle) this.#isolatedResumption = undefined;
+		if (this.#isolatedResumption?.handle === handle) this.#endIsolatedResumption();
+	}
+
+	#endIsolatedResumption(): void {
+		this.#isolatedResumption = undefined;
+		// Isolated resumption is a Progress Verdict wait: a resumed Run that already
+		// settled becomes observable as Stalled only once this wait ends.
+		this.#notifyStateChanged();
 	}
 
 	async interruptCurrentRunInLane(): Promise<

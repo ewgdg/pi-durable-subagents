@@ -1,5 +1,6 @@
 import {
 	EvidenceUnavailableError,
+	waitingFactsOf,
 	type AgentRecord,
 } from "./agent-record.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
@@ -23,6 +24,7 @@ import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 
 import { DeliveryProgress, type DeliveryBlockageReason, type DeliveryProgressStage } from "./delivery-progress.ts";
 import { SYSTEM_OPERATION_REVIEW_CLOCK, type OperationReviewClock } from "./operation-review.ts";
+import { waitingReason } from "./progress-verdict.ts";
 
 type ScheduledDeliveryBase = Readonly<{
 	messageId: string;
@@ -117,7 +119,7 @@ type TrackedDeliveryProgress = {
 	failure?: { reason: string; outcome: MessageDeliveryFailure["outcome"] };
 };
 
-type BlockedDelivery = Readonly<{
+export type BlockedDelivery = Readonly<{
 	messageId: string;
 	recipientAgentId: string;
 	reason: DeliveryBlockageReason;
@@ -244,12 +246,8 @@ export class MessageDeliveryScheduler {
 
 	#deliveryWaitIsLegitimate(item: TrackedDeliveryProgress): boolean {
 		const { record, delivery } = item;
+		if (waitingReason(waitingFactsOf(record)) !== undefined) return true;
 		const run = record.host.observe();
-		if (
-			record.host.hasRetentionReason("interactive_selection") ||
-			record.host.blocksOrdinaryDelivery() ||
-			(run.phase !== "dormant" && run.attention === "input_required")
-		) return true;
 		// Dispatched work belongs to delivery machinery until proof commits; its
 		// prompt Promise must not turn subsequent model duration into a deadline.
 		// Unrelated recipient work cannot restore a lost scheduling continuation.

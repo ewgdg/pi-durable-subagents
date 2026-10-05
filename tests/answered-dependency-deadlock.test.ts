@@ -45,6 +45,7 @@ for (const ownerAnswered of [false, true]) {
 			record.host = {
 				observe: () => ({ phase: "live", work: "settled", attention: "agent_wait", retentionReasons }),
 				currentRunFailed: () => false,
+				blocksOrdinaryDelivery: () => false,
 				hasRetentionReason: (reason: string) => retentionReasons.some(item => item.reason === reason),
 				requestRelationshipIds: () => [],
 				removeRetentionReason: () => {},
