@@ -8,6 +8,7 @@ import {
 	type NativeSessionEvent,
 } from "../src/pi-integration/native-session-driver.ts";
 import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
+import type { UserCommitTextRule } from "../src/runtime/agent-runtime-host.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost, type TestOwnerHost, type TestOwnerHostOptions } from "./support/pi-host.ts";
@@ -218,35 +219,63 @@ test("commit proof of a queued steer waits for Pi to consume it", { timeout: 500
 	await run;
 });
 
-test("an unrelated append of the same role does not confirm and settles false with the Run", { timeout: 5000 }, async t => {
-	const host = await fixture(t, pi => {
-		pi.on("input", event => event.text === "Delivered text." ? { action: "transform", text: "Different text." } : undefined);
-	});
-	host.model.setResponses([fauxAssistantMessage("Different input handled.")]);
-	const dispatch = host.driver.deliver({ kind: "user", content: "Delivered text." }, { proveCommit: true });
-	assert.equal(await dispatch.transcriptCommit, false);
-	await dispatch.completion;
-	assert.ok(host.session.messages.some(message => message.role === "user"), "Pi appended a different user message");
-});
+type UserContent = Extract<Parameters<NativeSessionDriver["deliver"]>[0], { kind: "user" }>["content"];
 
-const prefixOnlyRows: ReadonlyArray<Readonly<{
+/** Holds a native Run on its first model response so Deliveries queue behind it. */
+async function startHeldRun(t: TestContext, host: TestOwnerHost) {
+	const modelStarted = deferred();
+	const release = deferred();
+	t.after(() => release.resolve());
+	host.model.setResponses([
+		async () => { modelStarted.resolve(); await release.promise; return fauxAssistantMessage("Held work done."); },
+		fauxAssistantMessage("Queued input handled."),
+	]);
+	const run = host.session.prompt("Held work.");
+	await modelStarted.promise;
+	return { run, release: () => release.resolve() };
+}
+
+// Child Deliveries commit their exact text; Owner human input commits by its
+// leading text so the Owner's Pi `input` transforms may append. Both admit Pi's
+// image hints, which only the started path appends.
+const userCommitTextRows: ReadonlyArray<Readonly<{
 	name: string;
-	content: Extract<Parameters<NativeSessionDriver["deliver"]>[0], { kind: "user" }>["content"];
-	committedText: string;
+	userCommitText: UserCommitTextRule;
+	content: UserContent;
+	queued?: boolean;
+	transform?: (text: string) => string;
+	committed: boolean;
 }>> = [
-	{ name: "a longer message sharing the submitted text", content: "ok", committedText: "ok, continue with the plan" },
-	{ name: "any message after an image-only Delivery", content: [oversizedPngImage()], committedText: "Unrelated input." },
+	{ name: "an image Delivery that starts a Run", userCommitText: "exact", content: [{ type: "text", text: "See image." }, oversizedPngImage()], committed: true },
+	{ name: "an image Delivery queued into a Run", userCommitText: "exact", content: [{ type: "text", text: "See image." }, oversizedPngImage()], queued: true, committed: true },
+	{ name: "an image Delivery that starts a Run", userCommitText: "leading", content: [{ type: "text", text: "See image." }, oversizedPngImage()], committed: true },
+	{ name: "an image Delivery queued into a Run", userCommitText: "leading", content: [{ type: "text", text: "See image." }, oversizedPngImage()], queued: true, committed: true },
+	{ name: "text an input handler appends to", userCommitText: "leading", content: "Submitted text.", transform: text => `${text}\n\nAppended context.`, committed: true },
+	{ name: "queued text an input handler appends to", userCommitText: "leading", content: "Submitted text.", queued: true, transform: text => `${text} (enriched)`, committed: true },
+	{ name: "text an input handler appends to", userCommitText: "exact", content: "Submitted text.", transform: text => `${text}\n\nAppended context.`, committed: false },
+	{ name: "a longer message sharing the submitted text", userCommitText: "exact", content: "ok", transform: () => "ok, continue with the plan", committed: false },
+	{ name: "any message after an image-only Delivery", userCommitText: "exact", content: [oversizedPngImage()], transform: () => "Unrelated input.", committed: false },
+	{ name: "text an input handler rewrites", userCommitText: "exact", content: "Submitted text.", transform: () => "Different text.", committed: false },
+	{ name: "text an input handler rewrites", userCommitText: "leading", content: "Submitted text.", transform: () => "Different text.", committed: false },
 ];
 
-for (const row of prefixOnlyRows) {
-	test(`commit proof rejects ${row.name}`, { timeout: 5000 }, async t => {
+for (const row of userCommitTextRows) {
+	test(`${row.userCommitText} user commit text ${row.committed ? "confirms" : "rejects"} ${row.name}`, { timeout: 5000 }, async t => {
 		const host = await fixture(t, pi => {
-			pi.on("input", () => ({ action: "transform", text: row.committedText }));
+			pi.on("input", event => row.transform ? { action: "transform", text: row.transform(event.text) } : undefined);
 		});
-		host.model.setResponses([fauxAssistantMessage("Different input handled.")]);
-		const dispatch = host.driver.deliver({ kind: "user", content: row.content }, { proveCommit: true });
-		assert.equal(await dispatch.transcriptCommit, false);
+		const held = row.queued ? await startHeldRun(t, host) : undefined;
+		if (!held) host.model.setResponses([fauxAssistantMessage("Input handled.")]);
+		const dispatch = host.driver.deliver(
+			{ kind: "user", content: row.content, ...(held ? { deliverAs: "steer" as const } : {}) },
+			{ proveCommit: true, userCommitText: row.userCommitText },
+		);
 		await dispatch.completion;
+		held?.release();
+		assert.equal(await dispatch.transcriptCommit, row.committed);
+		await held?.run;
+		await host.session.waitForIdle();
+		assert.ok(host.session.messages.some(message => message.role === "user"), "Pi committed a user message");
 	});
 }
 

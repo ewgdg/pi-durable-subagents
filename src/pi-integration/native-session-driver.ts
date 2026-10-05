@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentSession, AgentSessionEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 
-import type { AgentRunFailure, AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
+import type { AgentRunFailure, AgentRuntimeDelivery, UserCommitTextRule } from "../runtime/agent-runtime-host.ts";
 import { classifyQuotaEvidence, type QuotaEvidence } from "../runtime/quota-evidence.ts";
 import { RetainedRuntimeQueue, type RuntimeQueue } from "../runtime/retained-runtime-queue.ts";
 import {
@@ -46,6 +46,8 @@ export type TurnAdmission = Readonly<{
 
 export type NativeDeliveryOptions = Readonly<{
 	proveCommit?: boolean;
+	/** The text rule of a proven user Delivery; "exact" unless the caller tolerates appends. */
+	userCommitText?: UserCommitTextRule;
 	admission?: TurnAdmission;
 	/** Cancels the Delivery until Pi accepts its submission. */
 	signal?: AbortSignal;
@@ -88,7 +90,7 @@ export class NativeSessionDriver {
 	}
 
 	deliver(delivery: AgentRuntimeDelivery, options: NativeDeliveryOptions = {}): NativeDeliveryDispatch {
-		const proof = options.proveCommit ? this.#createProof(delivery) : undefined;
+		const proof = options.proveCommit ? this.#createProof(delivery, options.userCommitText ?? "exact") : undefined;
 		const accepted = this.#dispatch(delivery, options.admission ?? IMMEDIATE_ADMISSION, options, proof);
 		const completion = accepted.then(attempt => attempt.completion);
 		void completion.then(() => proof?.dispatchCompleted(), error => proof?.reject(error));
@@ -264,8 +266,8 @@ export class NativeSessionDriver {
 		return { completion, preflight };
 	}
 
-	#createProof(delivery: AgentRuntimeDelivery): TranscriptCommitProof {
-		const proof = new TranscriptCommitProof(this.#session, delivery, () => this.#proofs.delete(proof));
+	#createProof(delivery: AgentRuntimeDelivery, userCommitText: UserCommitTextRule): TranscriptCommitProof {
+		const proof = new TranscriptCommitProof(this.#session, delivery, userCommitText, () => this.#proofs.delete(proof));
 		this.#proofs.add(proof);
 		return proof;
 	}
@@ -332,6 +334,7 @@ class TranscriptCommitProof {
 	readonly result: Promise<boolean>;
 	readonly #session: AgentSession;
 	readonly #delivery: AgentRuntimeDelivery;
+	readonly #userCommitText: UserCommitTextRule;
 	#existingEntryIds: ReadonlySet<string> = new Set();
 	#unsubscribe: (() => void) | undefined;
 	readonly #onFinished: () => void;
@@ -339,9 +342,15 @@ class TranscriptCommitProof {
 	#reject!: (error: unknown) => void;
 	#finished = false;
 
-	constructor(session: AgentSession, delivery: AgentRuntimeDelivery, onFinished: () => void) {
+	constructor(
+		session: AgentSession,
+		delivery: AgentRuntimeDelivery,
+		userCommitText: UserCommitTextRule,
+		onFinished: () => void,
+	) {
 		this.#session = session;
 		this.#delivery = delivery;
+		this.#userCommitText = userCommitText;
 		this.#onFinished = onFinished;
 		this.result = new Promise<boolean>((resolve, reject) => {
 			this.#resolve = resolve;
@@ -357,7 +366,7 @@ class TranscriptCommitProof {
 		const role = this.#delivery.kind === "custom" ? "custom" : "user";
 		this.#unsubscribe = this.#session.subscribe(event => {
 			if (event.type === "message_end" && event.message.role === role) {
-				const ownMessage = matchesDeliveryMessage(this.#delivery, event.message);
+				const ownMessage = matchesDeliveryMessage(this.#delivery, this.#userCommitText, event.message);
 				queueMicrotask(() => {
 					if (this.#committed()) this.#finish(() => this.#resolve(true));
 					// Pi's append already ran, so this exact message will never commit. Do
@@ -396,7 +405,7 @@ class TranscriptCommitProof {
 	#committed(): boolean {
 		if (this.#finished) return false;
 		return this.#session.sessionManager.getEntries().some(entry =>
-			!this.#existingEntryIds.has(entry.id) && matchesDeliveryEntry(this.#delivery, entry));
+			!this.#existingEntryIds.has(entry.id) && matchesDeliveryEntry(this.#delivery, this.#userCommitText, entry));
 	}
 
 	#finish(settlement: () => void): void {
@@ -408,25 +417,34 @@ class TranscriptCommitProof {
 	}
 }
 
-function matchesDeliveryEntry(delivery: AgentRuntimeDelivery, entry: SessionEntry): boolean {
+function matchesDeliveryEntry(
+	delivery: AgentRuntimeDelivery,
+	userCommitText: UserCommitTextRule,
+	entry: SessionEntry,
+): boolean {
 	if (delivery.kind === "custom") return entry.type === "custom_message" && matchesCustomFields(delivery, entry);
-	return entry.type === "message" && matchesDeliveryMessage(delivery, entry.message);
+	return entry.type === "message" && matchesDeliveryMessage(delivery, userCommitText, entry.message);
 }
 
 /** Whether a session message is this Delivery in the form Pi persists it. */
-function matchesDeliveryMessage(delivery: AgentRuntimeDelivery, message: SessionMessage): boolean {
+function matchesDeliveryMessage(
+	delivery: AgentRuntimeDelivery,
+	userCommitText: UserCommitTextRule,
+	message: SessionMessage,
+): boolean {
 	if (delivery.kind === "custom") return message.role === "custom" && matchesCustomFields(delivery, message);
 	if (message.role !== "user") return false;
 	// Pi normalizes prompt images (resizing, re-encoding, or omitting them) and
 	// appends their hints as "\n\n<hints>" after the text, so only the text is
-	// compared. A bare prefix would let "ok" or an image-only Delivery's empty
-	// text match an unrelated later user message.
+	// compared. Under "exact", a bare prefix would let "ok" or an image-only
+	// Delivery's empty text match an unrelated later user message.
 	const committed = message.content;
 	const committedText = typeof committed === "string"
 		? committed
 		: committed[0]?.type === "text" ? committed[0].text : undefined;
 	if (committedText === undefined) return false;
 	const submittedText = submittedUserText(delivery.content);
+	if (userCommitText === "leading") return committedText.startsWith(submittedText);
 	return committedText === submittedText ||
 		(hasImages(delivery.content) && committedText.startsWith(`${submittedText}${PI_IMAGE_HINT_SEPARATOR}`));
 }
