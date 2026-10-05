@@ -181,7 +181,7 @@ const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
 	piOwned({
 		role: Type.Literal("branchSummary"),
 		summary: Type.String(),
-		fromId: NonEmptyStringSchema,
+		fromId: Type.Union([NonEmptyStringSchema, Type.Null()]),
 		timestamp: Type.Number(),
 	}),
 	piOwned({

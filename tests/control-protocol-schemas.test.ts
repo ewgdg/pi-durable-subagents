@@ -755,3 +755,11 @@ test("runtime.guardToolResult carries Pi message fields the protocol does not na
 	assert.equal(Check(guard.request, { message: { ...toolResult, role: "unknown" } }), false);
 	assert.equal(Check(guard.request, { message: assistant, extra: true }), false);
 });
+
+// Pi records a branch summary with fromId null when the branch left the session root.
+test("runtime.guardToolResult accepts a Pi branch summary without a source entry", () => {
+	const guard = agentControlMethods["runtime.guardToolResult"];
+	const message = { role: "branchSummary", summary: "Explored the root", fromId: null, timestamp: 1 };
+	assert.equal(Check(guard.request, { message }), true);
+	assert.equal(Check(guard.request, { message: { ...message, fromId: "" } }), false);
+});
