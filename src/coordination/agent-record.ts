@@ -12,6 +12,7 @@ import type {
 } from "../templates/agent-configuration.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import { AgentTranscript, type TranscriptInspection } from "../transcript/agent-transcript.ts";
+import type { WaitingFacts } from "./progress-verdict.ts";
 
 export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdentity;
 
@@ -44,6 +45,23 @@ export type AgentStatus = Readonly<{
 	}>;
 	run: AgentRunState;
 }>;
+
+/** Host observations behind `waitingReason`, shared by every Progress Verdict consumer. */
+export function waitingFactsOf(record: AgentRecord): WaitingFacts {
+	const run = record.host.observe();
+	const suspended = run.suspension !== undefined;
+	const interruptionHold = record.host.hasRetentionReason("interruption_hold");
+	return {
+		phase: run.phase,
+		...(run.phase === "dormant" ? {} : { attention: run.attention }),
+		suspended,
+		interruptionHold,
+		interactiveSelection: record.host.hasRetentionReason("interactive_selection"),
+		// Suspensions and Holds also block ordinary Delivery; what remains is an
+		// isolated resumption, which the host exposes no more directly.
+		isolatedResumption: record.host.blocksOrdinaryDelivery() && !suspended && !interruptionHold,
+	};
+}
 
 export class EvidenceUnavailableError extends Error {
 	constructor(message: string) {

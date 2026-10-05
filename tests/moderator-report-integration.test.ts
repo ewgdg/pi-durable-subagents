@@ -2,24 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools, type Context } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
-import type { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
-import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
-import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
+import { createTestOwnerHost } from "./support/pi-host.ts";
+import { createTestOwnerExtension } from "./support/owner-extension.ts";
 
 test("Moderator reports return without human waiting and survive independent incident resolution", { timeout: 15_000 }, async (t) => {
 	// Real subprocess startup gets an allowance; observable progress below has a 5s deadline.
-	let owner!: ReturnType<WorkflowCoordinator["forAgent"]>;
-	const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), {
+	const ownerExtension = createTestOwnerExtension();
+	const host = await createTestOwnerHost(t, ownerExtension.extension, {
 		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
 	});
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
-	owner = coordinator.forAgent(identity.agentId);
-	await bindTestOwnerHost(host, "tui");
+	const coordinator = ownerExtension.coordinator();
+	const owner = ownerExtension.owner();
 	const input = { symptom: "Agent stalled", suspectedDefect: "Completion wake may be lost", uncertainty: "Cause is not confirmed", recoveryActions: "Inspect then interrupt the stalled Run", recoveryOutcome: "Recovery not yet attempted", evidence: ["Committed obligation stall trigger"] };
 	let affectedAgentId = "";
 	let moderatorStep = 0;
@@ -84,7 +79,7 @@ test("Moderator reports return without human waiting and survive independent inc
 	const reopened = SessionManager.open(host.session.sessionManager.getSessionFile()!);
 	const coldStore = new ModeratorReportStore({ transcript: transcriptFromSessionManager(reopened), appendCustomEntry: (type, data) => reopened.appendCustomEntry(type, data) });
 	assert.deepEqual(coldStore.history(), history);
-	await coordinator.shutdown(async () => host.runtime.dispose());
+	await host.runtime.dispose();
 });
 
 async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {

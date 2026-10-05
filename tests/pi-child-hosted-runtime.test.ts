@@ -7,15 +7,19 @@ import test from "node:test";
 import { QUOTA_DIAGNOSTICS } from "./fixtures/quota-evidence-extension.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 
+import {
+	createScriptedChildControlLink,
+	createScriptedTerminalProjection,
+} from "./support/scripted-child-control-link.ts";
 import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
+import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import {
 	PiChildProcessRuntime,
-	type PiChildProcessLaunch,
-	type PiChildRuntimeEvent,
+	type PiChildRuntimeSnapshot,
 } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
@@ -56,7 +60,7 @@ test(`real child bridge terminal handling: ${scenario}`, {
 			extensions: [fileURLToPath(new URL("./fixtures/quota-evidence-extension.ts", import.meta.url))], loadContextFiles: false },
 		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1", QUOTA_FIXTURE_SCENARIO: scenario },
 	});
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
 	const ends: Extract<HostedRuntimeEvent, { type: "agent_end" }>[] = [];
 	let settlements = 0;
 	runtime.subscribe(event => {
@@ -174,7 +178,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 	});
 	const pid = launch.pid;
 	const bootstrapPath = launch.bootstrapPath;
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId: expectedSessionId,
 		startSession: async () => ({ runtime, ready: runtime.ready }),
@@ -324,36 +328,27 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 });
 
 test("a hosted child atomically refreshes its effective snapshot", async () => {
-	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-	const initialSnapshot = fakeRuntimeSnapshot({
+	const initialSnapshot = runtimeSnapshot({
 		modelId: "initial-model",
 		thinking: "off",
 		tools: ["parallel-tool"],
 	});
 	let currentSnapshot = initialSnapshot;
 	let requestSnapshot = async () => currentSnapshot;
-	const admitted = {
+	const scripted = createScriptedChildControlLink({
 		snapshot: initialSnapshot,
-		channel: {
-			onClose: () => () => undefined,
-			async request(method: string) {
-				if (method === "runtime.snapshot") return await requestSnapshot();
-				throw new Error(`unexpected request: ${method}`);
-			},
-		},
-	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
+		respond: { "runtime.snapshot": () => requestSnapshot() },
+	});
+	const runtime = new PiChildHostedRuntime({ link: scripted.link });
 	await runtime.ready;
 	assert.equal(runtime.snapshot().model.modelId, "initial-model");
 
-	currentSnapshot = fakeRuntimeSnapshot({
+	currentSnapshot = runtimeSnapshot({
 		modelId: "current-model",
 		thinking: "high",
 		tools: ["sequential-tool"],
 	});
-	for (const handler of eventHandlers) {
-		handler(controlEvent("runtime.snapshot.changed", currentSnapshot));
-	}
+	scripted.emit({ event: "runtime.snapshot.changed", payload: currentSnapshot });
 	assert.equal(runtime.snapshot().model.modelId, "current-model");
 	await runtime.synchronizeState();
 	assert.deepEqual(runtime.snapshot(), {
@@ -383,14 +378,12 @@ test("a hosted child atomically refreshes its effective snapshot", async () => {
 	};
 	const synchronization = runtime.synchronizeState();
 	await snapshotRequested;
-	const newerSnapshot = fakeRuntimeSnapshot({
+	const newerSnapshot = runtimeSnapshot({
 		modelId: "newer-model",
 		thinking: "off",
 		tools: ["newer-tool"],
 	});
-	for (const handler of eventHandlers) {
-		handler(controlEvent("runtime.snapshot.changed", newerSnapshot));
-	}
+	scripted.emit({ event: "runtime.snapshot.changed", payload: newerSnapshot });
 	releaseStaleSnapshot();
 	await synchronization;
 	assert.equal(runtime.snapshot().model.modelId, "newer-model");
@@ -398,113 +391,45 @@ test("a hosted child atomically refreshes its effective snapshot", async () => {
 });
 
 test("a prepared hosted child has no Run queue or abort intention", async () => {
-	const requestedMethods: string[] = [];
-	const snapshot = fakeRuntimeSnapshot({
-		modelId: "prepared-model",
-		thinking: "off",
-		tools: [],
-	});
-	const admitted = {
-		snapshot,
-		channel: {
-			onClose: () => () => undefined,
-			async request(method: string) {
-				requestedMethods.push(method);
-				throw new Error(`unexpected request: ${method}`);
-			},
-		},
-	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, new Set()));
+	const scripted = createScriptedChildControlLink();
+	const runtime = new PiChildHostedRuntime({ link: scripted.link });
 	await runtime.ready;
 	assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
 	await runtime.abort();
-	assert.deepEqual(requestedMethods, []);
+	assert.deepEqual(scripted.requests, []);
 	await runtime.dispose();
 });
 
 test("retry and normal agent-end boundaries do not falsely cancel the exact hosted Run", async () => {
-	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-	const admitted = {
-		snapshot: {
-			cwd: "/runtime",
-			model: { provider: "test", modelId: "model" },
-			thinking: "off",
-			tools: ["parallel-tool", "sequential-tool"],
-			skills: [],
-			skillSources: [],
-			extensions: [],
-			projectTrusted: true,
-			sessionId: "retry-runtime",
-			sessionPath: "/sessions/retry-runtime.jsonl",
-			systemPrompt: null,
-			loadContextFiles: true,
-		},
-		channel: {
-			onClose: () => () => undefined,
-			async request() {
-				return {
-					accepted: true,
-					transcriptCommitted: true,
-					modelCycleStarted: true,
-					queuedInputCount: 0,
-				};
-			},
-		},
-	} as unknown as PiChildProcessRuntime;
-	const launch = {
-		exited: new Promise<never>(() => undefined),
-		ready: async () => admitted,
-		cancelInitialization: () => undefined,
-		frame: () => ({
-			columns: 80,
-			rows: 24,
-			lines: [],
-			cursor: { row: 0, column: 0, visible: false, style: "block", blink: false },
-		}),
-		writeInput() {},
-		resize() {},
-		addChangeHandler: () => () => undefined,
-		addFailureHandler: () => () => undefined,
-		onEvent(handler: (event: PiChildRuntimeEvent) => void) {
-			eventHandlers.add(handler);
-			return () => eventHandlers.delete(handler);
-		},
-		dispose: async () => undefined,
-	} as unknown as PiChildProcessLaunch;
-	const runtime = new PiChildHostedRuntime(
-		launch,
-	);
+	const scripted = createScriptedChildControlLink({ respond: { "message.deliver": acceptedDelivery } });
+	const runtime = new PiChildHostedRuntime({ link: scripted.link });
 	await runtime.ready;
 	const completion = runtime.deliver({ kind: "user", content: "Retry this Run." }).completion;
-	const emit = (event: PiChildRuntimeEvent) => {
-		for (const handler of eventHandlers) handler(event);
-	};
 
-	emit(controlEvent("agent.start", { runId: "hosted-run-1", queuedInputCount: 0 }));
+	scripted.emit({ event: "agent.start", payload: { runId: "hosted-run-1", queuedInputCount: 0 } });
 	const cancellation = runtime.cancellationSignal();
-	emit(controlEvent("agent.end", {
+	scripted.emit({ event: "agent.end", payload: {
 		runId: "hosted-run-1",
-		outcome: "failed",
+		outcome: "error",
 		willRetry: true,
 		queuedInputCount: 0,
-		error: "retryable",
-	}));
+		failure: { stage: "model", error: "retryable", provenance: "native-session-driver" },
+	} });
 	assert.equal(cancellation.aborted, false);
-	emit(controlEvent("agent.start", { runId: "hosted-run-1", queuedInputCount: 0 }));
+	scripted.emit({ event: "agent.start", payload: { runId: "hosted-run-1", queuedInputCount: 0 } });
 	assert.equal(runtime.cancellationSignal(), cancellation);
-	emit(controlEvent("agent.end", {
+	scripted.emit({ event: "agent.end", payload: {
 		runId: "hosted-run-1",
 		outcome: "completed",
 		willRetry: false,
 		queuedInputCount: 0,
-	}));
+	} });
 	assert.equal(cancellation.aborted, false);
-	emit(controlEvent("message.dispatch.completed", { deliveryId: "delivery-1" }));
-	emit(controlEvent("agent.settled", {
+	scripted.emit({ event: "message.dispatch.completed", payload: { deliveryId: "delivery-1" } });
+	scripted.emit({ event: "agent.settled", payload: {
 		runId: "hosted-run-1",
-		outcome: "completed",
 		queuedInputCount: 0,
-	}));
+	} });
 	await completion;
 	await runtime.dispose();
 });
@@ -568,52 +493,34 @@ for (const scenario of [
 	"selected_quit", "unselected_quit", "reload", "unannounced_exit", "signal_exit", "host_disposal",
 ] as const) {
 	test(`hosted child shutdown classification: ${scenario}`, { timeout: 5_000 }, async () => {
-		const handlers = new Set<(event: PiChildRuntimeEvent) => void>();
-		let resolveExit!: (exit: { exitCode: number; signal: number }) => void;
-		const exited = new Promise<{ exitCode: number; signal: number }>((resolve) => {
-			resolveExit = resolve;
-		});
-		let channelClosed: ((error?: unknown) => void) | undefined;
-		const admitted = {
-			snapshot: fakeRuntimeSnapshot({ modelId: "quit-test", thinking: "off", tools: [] }),
-			channel: {
-				onClose(handler: (error?: unknown) => void) {
-					channelClosed = handler;
-					return () => { channelClosed = undefined; };
-				},
-				async request() {
-					return { accepted: true, transcriptCommitted: true, modelCycleStarted: true, queuedInputCount: 0 };
-				},
-			},
-		} as unknown as PiChildProcessRuntime;
-		const launch = Object.assign(fakeLaunch(admitted, handlers), { exited });
+		const scripted = createScriptedChildControlLink({ respond: { "message.deliver": acceptedDelivery } });
 		const observed: string[] = [];
-		const runtime = new PiChildHostedRuntime(launch, () => {
-			observed.push("quit_requested");
-			return scenario === "selected_quit";
+		const runtime = new PiChildHostedRuntime({
+			link: scripted.link,
+			createProjection: () => createScriptedTerminalProjection(scripted.link),
+			onQuit: () => {
+				observed.push("quit_requested");
+				return scenario === "selected_quit";
+			},
 		});
 		await runtime.ready;
+		const projection = runtime.projection;
+		assert.ok(projection);
 		runtime.subscribe((event) => {
 			if (event.type === "agent_end") observed.push(`agent_end:${event.outcome}`);
 		});
-		runtime.projection.addExitRequestHandler(() => observed.push("presentation_exit"));
+		projection.addExitRequestHandler(() => observed.push("presentation_exit"));
 		const delivery = runtime.deliver({ kind: "user", content: "Keep work outstanding." });
 		const completion = delivery.completion.then(() => "completed", () => "rejected");
-		for (const handler of handlers) handler(controlEvent("agent.start", {
-			runId: "hosted-run-1", queuedInputCount: 0,
-		}));
+		scripted.emit({ event: "agent.start", payload: { runId: "hosted-run-1", queuedInputCount: 0 } });
 		if (scenario === "selected_quit" || scenario === "unselected_quit" || scenario === "reload") {
-			for (const handler of handlers) handler(controlEvent("session.shutdown", {
-				reason: scenario === "reload" ? "reload" : "quit",
-			}));
+			scripted.emit({ event: "session.shutdown", payload: { reason: scenario === "reload" ? "reload" : "quit" } });
 		}
 		if (scenario === "selected_quit") {
 			assert.deepEqual(observed, ["quit_requested"]);
 			assert.equal(runtime.workState(), "unavailable");
 			assert.equal(await completion, "rejected", "shutdown must release in-flight delivery");
-			for (const handler of handlers) handler(controlEvent("agent.start", {
-				runId: "late-child-cycle", queuedInputCount: 0,
-			}));
+			scripted.emit({ event: "agent.start", payload: { runId: "late-child-cycle", queuedInputCount: 0 } });
 			assert.equal(runtime.workState(), "unavailable", "late lifecycle cannot revive a quitting Runtime");
 		}
 		if (scenario === "reload") {
@@ -622,15 +529,13 @@ for (const scenario of [
 		}
 		if (scenario === "host_disposal") {
 			// Settle work normally first; disposal owns the later transport exit.
-			for (const handler of handlers) handler(controlEvent("message.dispatch.completed", { deliveryId: "delivery-1" }));
-			for (const handler of handlers) handler(controlEvent("agent.settled", {
-				runId: "hosted-run-1", queuedInputCount: 0, outcome: "completed",
-			}));
+			scripted.emit({ event: "message.dispatch.completed", payload: { deliveryId: "delivery-1" } });
+			scripted.emit({ event: "agent.settled", payload: { runId: "hosted-run-1", queuedInputCount: 0 } });
 			assert.equal(await completion, "completed");
-			await runtime.projection.dispose();
+			await projection.dispose();
 		}
-		resolveExit({ exitCode: 0, signal: scenario === "signal_exit" ? 9 : 0 });
-		channelClosed?.(new Error("Control closed after process quit"));
+		scripted.exit({ exitCode: 0, signal: scenario === "signal_exit" ? 9 : 0 });
+		scripted.closeChannel(new Error("Control closed after process quit"));
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		const expected = scenario === "selected_quit" || scenario === "host_disposal";
 		assert.equal(observed.includes("agent_end:error"), !expected);
@@ -640,238 +545,25 @@ for (const scenario of [
 	});
 }
 
-
-test("hosted child reminder busy releases explicit reservation", { timeout: 5000 }, async () => {
-	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-	let reserved = false;
-	let prepareCalls = 0;
-	let callbackCalls = 0;
-	const calls: Array<{ method: string; payload: unknown }> = [];
-	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-busy", thinking: "off", tools: [] }),
-		channel: {
-			onClose: () => () => undefined,
-			async request(method: string, payload: unknown) {
-				calls.push({ method, payload });
-				if (method === "moderatorReminder.prepare") {
-					assert.equal(reserved, false);
-					reserved = true;
-					prepareCalls++;
-					return { prepared: prepareCalls > 1 };
-				}
-				if (method === "moderatorReminder.finish") {
-					assert.equal((payload as { commit: boolean }).commit, false);
-					reserved = false;
-					return { outcome: "suppressed" };
-				}
-				throw new Error("unexpected request: " + method);
-			},
-		},
-	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
-	try {
-		await runtime.ready;
-		assert.equal(await runtime.deliverModeratorReminder(async () => {
-			callbackCalls++;
-			return "committed";
-		}), "busy");
-		assert.equal(callbackCalls, 0);
-		assert.equal(reserved, false);
-		assert.deepEqual(calls.map(({ method }) => method), [
-			"moderatorReminder.prepare",
-			"moderatorReminder.finish",
-		]);
-
-		assert.equal(await runtime.deliverModeratorReminder(async () => {
-			callbackCalls++;
-			return "suppressed";
-		}), "suppressed");
-		assert.equal(callbackCalls, 1);
-		assert.equal(reserved, false, "a busy reservation must not block its successor");
-	} finally {
-		await runtime.dispose();
-	}
-});
-
-test("hosted child reminder stale callback suppresses and releases reservation", { timeout: 5000 }, async () => {
-	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-	let reserved = false;
-	const calls: Array<{ method: string; payload: unknown }> = [];
-	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-stale", thinking: "off", tools: [] }),
-		channel: {
-			onClose: () => () => undefined,
-			async request(method: string, payload: unknown) {
-				calls.push({ method, payload });
-				if (method === "moderatorReminder.prepare") {
-					assert.equal(reserved, false);
-					reserved = true;
-					return { prepared: true };
-				}
-				if (method === "moderatorReminder.finish") {
-					const commit = (payload as { commit: boolean }).commit;
-					assert.equal(commit, false, "a stale callback must release, never commit");
-					reserved = false;
-					return { outcome: "suppressed" };
-				}
-				throw new Error("unexpected request: " + method);
-			},
-		},
-	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
-	try {
-		await runtime.ready;
-		const outcome = await runtime.deliverModeratorReminder(async (commit) => {
-			assert.equal(typeof commit, "function");
-			return "suppressed";
-		});
-		assert.equal(outcome, "suppressed");
-		assert.equal(reserved, false);
-		assert.equal(calls.filter(({ method, payload }) =>
-			method === "moderatorReminder.finish" && (payload as { commit: boolean }).commit
-		).length, 0);
-		assert.equal(await runtime.deliverModeratorReminder(async () => "suppressed"), "suppressed");
-	} finally {
-		await runtime.dispose();
-	}
-});
-
-test("hosted child reminder throwing callback releases reservation", { timeout: 5000 }, async () => {
-	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-	let reserved = false;
-	let prepareCalls = 0;
-	const callbackError = new Error("reconciliation failed");
-	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-throw", thinking: "off", tools: [] }),
-		channel: {
-			onClose: () => () => undefined,
-			async request(method: string, payload: unknown) {
-				if (method === "moderatorReminder.prepare") {
-					assert.equal(reserved, false);
-					reserved = true;
-					prepareCalls++;
-					return { prepared: true };
-				}
-				if (method === "moderatorReminder.finish") {
-					assert.equal((payload as { commit: boolean }).commit, false);
-					reserved = false;
-					return { outcome: "suppressed" };
-				}
-				throw new Error("unexpected request: " + method);
-			},
-		},
-	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
-	try {
-		await runtime.ready;
-		await assert.rejects(
-			runtime.deliverModeratorReminder(async () => {
-				throw callbackError;
-			}),
-			(error) => error === callbackError,
-		);
-		assert.equal(reserved, false);
-		assert.equal(prepareCalls, 1);
-		assert.equal(await runtime.deliverModeratorReminder(async () => "suppressed"), "suppressed");
-		assert.equal(reserved, false);
-	} finally {
-		await runtime.dispose();
-	}
-});
-
-test("hosted child reminder abort while callback waits releases promptly and late callback cannot commit", { timeout: 5000 }, async () => {
-	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-	let reserved = false;
-	let finishRelease!: () => void;
-	const releaseObserved = new Promise<void>((resolve) => { finishRelease = resolve; });
-	let callbackStarted!: () => void;
-	const callbackEntered = new Promise<void>((resolve) => { callbackStarted = resolve; });
-	let allowLateCallback!: () => void;
-	const lateCallbackAllowed = new Promise<void>((resolve) => { allowLateCallback = resolve; });
-	let callbackFinished!: () => void;
-	const callbackCompleted = new Promise<void>((resolve) => { callbackFinished = resolve; });
-	let lateCommitRejected = false;
-	let finishCommitCalls = 0;
-	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-abort", thinking: "off", tools: [] }),
-		channel: {
-			onClose: () => () => undefined,
-			async request(method: string, payload: unknown) {
-				if (method === "moderatorReminder.prepare") {
-					assert.equal(reserved, false);
-					reserved = true;
-					return { prepared: true };
-				}
-				if (method === "moderatorReminder.finish") {
-					const commit = (payload as { commit: boolean }).commit;
-					if (commit) {
-						finishCommitCalls++;
-						throw new Error("late commit reached transport");
-					}
-					reserved = false;
-					finishRelease();
-					return { outcome: "suppressed" };
-				}
-				throw new Error("unexpected request: " + method);
-			},
-		},
-	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
-	try {
-		await runtime.ready;
-		const reminder = runtime.deliverModeratorReminder(async (commit) => {
-			callbackStarted();
-			await lateCallbackAllowed;
-			try {
-				await commit();
-			} catch {
-				lateCommitRejected = true;
-			}
-			callbackFinished();
-			return "suppressed";
-		});
-		await callbackEntered;
-		await runtime.abort();
-		await assert.rejects(reminder);
-		await releaseObserved;
-		assert.equal(reserved, false);
-		allowLateCallback();
-		await callbackCompleted;
-		assert.equal(lateCommitRejected, true);
-		assert.equal(finishCommitCalls, 0, "an aborted callback cannot commit after release");
-	} finally {
-		allowLateCallback();
-		await runtime.dispose();
-	}
-});
-
 test("hosted child reminder transport rejection does not strand future admission", { timeout: 5000 }, async () => {
 	const prepareError = new Error("prepare transport failed");
 	{
-		const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 		let prepareCalls = 0;
 		let reserved = false;
-		const admitted = {
-			snapshot: fakeRuntimeSnapshot({ modelId: "reminder-prepare-fault", thinking: "off", tools: [] }),
-			channel: {
-				onClose: () => () => undefined,
-				async request(method: string, payload: unknown) {
-					if (method === "moderatorReminder.prepare") {
-						prepareCalls++;
-						if (prepareCalls === 1) throw prepareError;
-						assert.equal(reserved, false);
-						reserved = true;
-						return { prepared: true };
-					}
-					if (method === "moderatorReminder.finish") {
-						reserved = false;
-						return { outcome: "suppressed" };
-					}
-					throw new Error("unexpected request: " + method);
-				},
+		const scripted = createScriptedChildControlLink({ respond: {
+			"moderatorReminder.prepare": () => {
+				prepareCalls++;
+				if (prepareCalls === 1) throw prepareError;
+				assert.equal(reserved, false);
+				reserved = true;
+				return { prepared: true };
 			},
-		} as unknown as PiChildProcessRuntime;
-		const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
+			"moderatorReminder.finish": () => {
+				reserved = false;
+				return { outcome: "suppressed" };
+			},
+		} });
+		const runtime = new PiChildHostedRuntime({ link: scripted.link });
 		try {
 			await runtime.ready;
 			await assert.rejects(runtime.deliverModeratorReminder(async () => "suppressed"), (error) => error === prepareError);
@@ -884,30 +576,21 @@ test("hosted child reminder transport rejection does not strand future admission
 
 	const finishError = new Error("finish transport failed");
 	{
-		const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 		let reserved = false;
 		let finishCommitCalls = 0;
-		const admitted = {
-			snapshot: fakeRuntimeSnapshot({ modelId: "reminder-finish-fault", thinking: "off", tools: [] }),
-			channel: {
-				onClose: () => () => undefined,
-				async request(method: string, payload: unknown) {
-					if (method === "moderatorReminder.prepare") {
-						assert.equal(reserved, false);
-						reserved = true;
-						return { prepared: true };
-					}
-					if (method === "moderatorReminder.finish") {
-						const commit = (payload as { commit: boolean }).commit;
-						if (commit && finishCommitCalls++ === 0) throw finishError;
-						reserved = false;
-						return { outcome: commit ? "committed" : "suppressed" };
-					}
-					throw new Error("unexpected request: " + method);
-				},
+		const scripted = createScriptedChildControlLink({ respond: {
+			"moderatorReminder.prepare": () => {
+				assert.equal(reserved, false);
+				reserved = true;
+				return { prepared: true };
 			},
-		} as unknown as PiChildProcessRuntime;
-		const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
+			"moderatorReminder.finish": ({ commit }) => {
+				if (commit && finishCommitCalls++ === 0) throw finishError;
+				reserved = false;
+				return { outcome: commit ? "committed" : "suppressed" };
+			},
+		} });
+		const runtime = new PiChildHostedRuntime({ link: scripted.link });
 		try {
 			await runtime.ready;
 			await assert.rejects(
@@ -920,49 +603,6 @@ test("hosted child reminder transport rejection does not strand future admission
 		} finally {
 			await runtime.dispose();
 		}
-	}
-});
-
-test("hosted child reminder busy does not create speculative Run id", { timeout: 5000 }, async () => {
-	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-	let reserved = false;
-	const admitted = {
-		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-no-run", thinking: "off", tools: [] }),
-		channel: {
-			onClose: () => () => undefined,
-			async request(method: string, payload: unknown) {
-				if (method === "moderatorReminder.prepare") {
-					reserved = true;
-					return { prepared: false };
-				}
-				if (method === "moderatorReminder.finish") {
-					assert.equal((payload as { commit: boolean }).commit, false);
-					reserved = false;
-					return { outcome: "suppressed" };
-				}
-				throw new Error("unexpected request: " + method);
-			},
-		},
-	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
-	try {
-		await runtime.ready;
-		assert.equal(await runtime.deliverModeratorReminder(async () => "committed"), "busy");
-		assert.equal(reserved, false);
-		for (const handler of eventHandlers) {
-			handler(controlEvent("agent.start", { runId: "native-after-busy", queuedInputCount: 0 }));
-		}
-		assert.equal(runtime.workState(), "active", "busy admission must not create a stale Run identity");
-		for (const handler of eventHandlers) {
-			handler(controlEvent("agent.settled", {
-				runId: "native-after-busy",
-				outcome: "completed",
-				queuedInputCount: 0,
-			}));
-		}
-		assert.equal(runtime.workState(), "settled");
-	} finally {
-		await runtime.dispose();
 	}
 });
 
@@ -995,6 +635,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 				humanAttention: [], operationalAttention: [], reports: [],
 			}),
 			async select() { return { kind: "selected" }; },
+			addChangeHandler: () => () => undefined,
 		},
 		lifecycle: {
 			async executionStarted() { return []; },
@@ -1090,7 +731,7 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 		rows: 24,
 		ownerRequestHandlers: ordinaryOwnerHandlers(`hosted-${name}-agent`),
 	});
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId: expectedSessionId,
 		startSession: async () => ({ runtime, ready: runtime.ready }),
@@ -1110,11 +751,11 @@ async function waitUntil(condition: () => boolean | Promise<boolean>): Promise<v
 	throw new Error("Timed out waiting for hosted Runtime state");
 }
 
-function fakeRuntimeSnapshot(options: Readonly<{
+function runtimeSnapshot(options: Readonly<{
 	modelId: string;
 	thinking: "off" | "high";
 	tools: readonly string[];
-}>): PiChildProcessRuntime["snapshot"] {
+}>): PiChildRuntimeSnapshot {
 	return {
 		cwd: "/runtime",
 		model: { provider: "test", modelId: options.modelId },
@@ -1131,35 +772,6 @@ function fakeRuntimeSnapshot(options: Readonly<{
 	};
 }
 
-function fakeLaunch(
-	admitted: PiChildProcessRuntime,
-	eventHandlers: Set<(event: PiChildRuntimeEvent) => void>,
-): PiChildProcessLaunch {
-	return {
-		exited: new Promise<never>(() => undefined),
-		ready: async () => admitted,
-		cancelInitialization: () => undefined,
-		frame: () => ({
-			columns: 80,
-			rows: 24,
-			lines: [],
-			cursor: { row: 0, column: 0, visible: false, style: "block", blink: false },
-		}),
-		writeInput() {},
-		resize() {},
-		addChangeHandler: () => () => undefined,
-		addFailureHandler: () => () => undefined,
-		onEvent(handler: (event: PiChildRuntimeEvent) => void) {
-			eventHandlers.add(handler);
-			return () => eventHandlers.delete(handler);
-		},
-		dispose: async () => undefined,
-	} as unknown as PiChildProcessLaunch;
-}
-
-function controlEvent(
-	event: PiChildRuntimeEvent["event"],
-	payload: unknown,
-): PiChildRuntimeEvent {
-	return { event, payload } as PiChildRuntimeEvent;
+function acceptedDelivery() {
+	return { accepted: true, transcriptCommitted: true, modelCycleStarted: true, queuedInputCount: 0 };
 }

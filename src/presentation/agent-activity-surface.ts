@@ -18,8 +18,10 @@ import type { LiveRunState } from "../runtime/agent-runtime-host.ts";
 import type { HumanAttentionItem } from "../coordination/human-requests.ts";
 import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
 import {
+	formatAttentionLiveStatus,
 	formatOperationalIncidentHeadline,
 } from "./operational-incident-surface.ts";
+import { attentionInbox, type AttentionInboxItem } from "./attention-inbox.ts";
 import {
 	agentWorkStatusRole,
 	formatAgentWorkStatus,
@@ -119,18 +121,12 @@ export class AgentActivityDock implements Component {
 					snapshot.scope.compacting,
 				),
 			}, this.#theme)];
-		const attentionLines = ownerScope
-			? this.#renderAttention(
-				snapshot.humanAttention,
-				snapshot.operationalAttention.filter(({ trigger, reportSource }) => {
-					if (trigger.kind === "moderation_unavailable") return false;
-					// Linked reports own inbox acknowledgement; unresolved state remains a live status.
-					return !reportSource || !(snapshot.reports ?? []).some(({ report }) =>
-						report.source.kind === "runtime_diagnostic" && report.source.agentId === reportSource.agentId && report.source.entryId === reportSource.entryId);
-				}),
-				snapshot.reports ?? [],
-			)
-			: [];
+		const inbox = attentionInbox({
+			humanAttention: snapshot.humanAttention,
+			operationalAttention: snapshot.operationalAttention,
+			reports: snapshot.reports ?? [],
+		});
+		const attentionLines = ownerScope ? this.#renderAttention(inbox.items) : [];
 		const liveChildren = snapshot.children.filter(hasLiveRun);
 		const visibleChildren = liveChildren.slice(0, MAX_VISIBLE_AGENT_ROWS);
 		const hiddenChildCount = liveChildren.length - visibleChildren.length;
@@ -151,11 +147,9 @@ export class AgentActivityDock implements Component {
 				`${this.#theme.fg("accent", this.#theme.bold("ANSWER"))}${this.#theme.fg("dim", " · Enter submits")}`,
 			]
 			: [];
-		const operationalStatus = !ownerScope ? []
-			: snapshot.operationalAttention.some(({ trigger }) => trigger.kind === "moderation_unavailable")
-				? [this.#theme.fg("warning", "Moderation Unavailable · live status")]
-				: snapshot.operationalAttention.some(({ reportSource }) => reportSource !== undefined)
-					? [this.#theme.fg("warning", "Operational incident unresolved · live status")] : [];
+		const operationalStatus = !ownerScope || inbox.liveStatus === "none"
+			? []
+			: [this.#theme.fg("warning", formatAttentionLiveStatus(inbox.liveStatus))];
 		return [...identityLines, ...operationalStatus, ...attentionLines, ...agentLines, ...answerModeLines].map(
 			(line) => truncateToWidth(line, safeWidth, ""),
 		);
@@ -187,22 +181,7 @@ export class AgentActivityDock implements Component {
 		this.#stopSpinner();
 	}
 
-	#renderAttention(
-		human: readonly HumanAttentionItem[],
-		operational: readonly OperationalIncidentAttention[],
-		reports: readonly ReportHistoryItem[],
-	): string[] {
-		const items = [
-			...human.map((attention) => ({
-				kind: "human" as const,
-				attention,
-			})),
-			...operational.map((attention) => ({
-				kind: "operational" as const,
-				attention,
-			})),
-			...reports.filter(({ readAt }) => readAt === undefined).map(({ report }) => ({ kind: "report" as const, report })),
-		];
+	#renderAttention(items: readonly AttentionInboxItem[]): string[] {
 		if (items.length === 0) return [];
 		const visibleItems = items.slice(0, MAX_VISIBLE_ATTENTION_ROWS);
 		const hiddenItemCount = items.length - visibleItems.length;
@@ -212,9 +191,10 @@ export class AgentActivityDock implements Component {
 			...visibleItems.map((item, index) => {
 				const branch = index === visibleRowCount - 1 ? "└─" : "├─";
 				if (item.kind === "report") {
-					return `${branch} ${this.#theme.fg("warning", "REPORT")} ${boundedToolPreview(sanitizeReportTerminalText(item.report.reporter?.label ?? "Runtime"))} · ${boundedToolPreview(sanitizeReportTerminalText(item.report.symptom))}`;
+					const { report } = item.item;
+					return `${branch} ${this.#theme.fg("warning", "REPORT")} ${boundedToolPreview(sanitizeReportTerminalText(report.reporter?.label ?? "Runtime"))} · ${boundedToolPreview(sanitizeReportTerminalText(report.symptom))}`;
 				}
-				if (item.kind === "human") {
+				if (item.kind === "human_request") {
 					return `${branch} ${this.#theme.fg("warning", "DECIDE")} ${this.#theme.bold(item.attention.agentLabel)} · ${boundedToolPreview(item.attention.question)}`;
 				}
 				return `${branch} ${this.#theme.fg("warning", "ATTENTION")} ${formatOperationalIncidentHeadline(item.attention)}`;

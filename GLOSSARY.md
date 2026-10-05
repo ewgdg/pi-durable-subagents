@@ -13,6 +13,10 @@ The canonical interpretation of ordinary Identity evidence using the live Pi ses
 **Owner Fork**:
 A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
 
+**Owner Admission**:
+The one-time attempt, per Owner extension attachment, to bind its Pi session to a verified Workflow as the Workflow Owner. It is Pending until it settles as Admitted (coordination available), Blocked (coordination disabled, failure evidence retained, and native fork allowed only if Owner role identification completed first), or Inactive (the host bound no Runtime, so no Owner exists); model turns wait until it settles.
+_Avoid_: Owner bootstrap (that is the Identity record), failed admission (say Blocked)
+
 **Context-only Coordination**:
 Coordination material presented as information rather than current protocol-authoring input: Invalid when it fails declared record validation, or Inherited when it belongs to another Agent's copied scope. These distinct marks neither grant authority nor cancel an obligation established by valid records.
 
@@ -106,7 +110,7 @@ The volatile resolution performed immediately before one new Agent Runtime start
 The working directory obtained during Runtime Preparation by resolving the canonical per-spawn `cwd` against the current parent Runtime working directory. It anchors that Agent's project-scoped Template discovery for descendants and Pi's ordinary Project Context and cwd-scoped resource discovery for the prepared Runtime.
 
 **Workflow Policy**:
-The Owner-scoped configuration snapshot governing new host admissions, limits, operation review, and delivery progress. Its execution limit counts concurrent child Agent Runs only; the canonical Workflow Owner and Moderators enter immediately without consuming child capacity. Owner resource reload may replace the Policy prospectively without making it transcript state or changing already-admitted work.
+The Owner-scoped configuration snapshot governing new host admissions, limits, operation review, and delivery progress. Owner resource reload may replace the Policy prospectively without making it transcript state or changing already-admitted work.
 _Avoid_: Workflow state, Workflow configuration lifecycle
 
 **Agent Request**:
@@ -148,14 +152,39 @@ _Avoid_: interruption, failure, Answer retrieval
 **Request Cancellation**:
 An immutable requester-authored Message withdrawing one exact Agent Request: commitment ends its requester-side wait and Delivery ends its responder's Answer obligation, without stopping work or undoing effects. Other obligations and Agent-owned outbound dependencies remain intact; cancellation is one hop and never cascades.
 
+**Request Relationship**:
+One Agent's unresolved stake in one Request, read from transcript evidence plus that Agent's own admitted but not yet committed authorship. An outgoing relationship lasts from Request admission until requester-side Answer proof, the requester's own Cancellation commitment, or definitive initial admission failure. An incoming relationship is the Answer Obligation: from Request Delivery until the Answer is canonical or Cancellation Delivery reaches the responder. Each unresolved Request Relationship is a Run Retention Reason for the Agent's current Run; it is recomputed from evidence rather than kept as a durable or Workflow-global obligation store.
+_Avoid_: residual relationship, retention patch
+
 **Cooperative Cancellation**:
 A responder's explicit decision, after receiving Request Cancellation, to cancel its own downstream Requests that are no longer needed. Every cancellation remains an independent requester-authored fact; there is no cascade identity or runtime claim that an entire dependency chain was cancelled.
 
 **Agent Runtime**:
 The volatile Pi session, configured resources, and interactive presentation currently hosted for one durable Agent Identity. A Runtime can be prepared while its Agent is Dormant and can remain available across successive Runs while interactively selected. Preparing it executes ordinary extension lifecycle behavior without censoring extension effects; any effect that initiates Agent work admits a Run normally.
 
+**Native Session Driver**:
+The single module that drives one Pi session binding generation for both the Owner's in-process Agent Runtime and each child bridge. It classifies Run ends (`completed`, `aborted`, `error`), retains queued input on a terminal error before any listener runs, dispatches Deliveries through startup admission or Pi's prompt, retries a busy custom startup outside the turn admission it was given, proves transcript commitment against Pi's persisted form, and commits an idle model-starting custom message only when nothing else could own the turn. The child passes its Turn Compaction Gateway as turn admission; the Owner passes none.
+
 **Turn Compaction Gateway**:
 The child-local, Runtime-generation-bound admission boundary that serializes only turn preparation and commitment. It cancels unused post-Run threshold compaction, recomputes threshold preparation before later idle work, preserves Pi-native manual and overflow compaction, and releases before the model cycle. Deferral is not durable state and does not retain a Run or Agent Runtime.
+
+**Control Direction**:
+One half of the Control protocol, child→Owner or Owner→child, each declaring its own methods and events once. A channel is built for one side, so it may send only its outbound direction and serves its inbound direction through one complete serve map. A request or event from the wrong direction is rejected like an unknown one and closes the channel.
+
+**Wire Conformance Binding**:
+The compile-time check tying a Control wire schema to the domain or Pi type it carries. Domain-owned results must match both ways; tool inputs may be stricter than the domain input; Pi-owned messages must accept every Pi value. A mismatch fails typecheck, not a live child.
+
+**Child Control Connection**:
+The child's end of Child Control, one per child process. It survives reload and holds the channel, the reported Run identity, queue-intention ordering, and native input identity. It routes each Owner request to the current Child Runtime Binding; a request that arrives between generations is rejected, never served by a disposed binding. Control close reaches the host shell's shutdown port.
+
+**Child Runtime Binding**:
+One Pi session binding generation inside a child, bound to its Child Control Connection. It receives the Pi session Runtime, the launch facts as a plain value, the participant lifecycle handlers, and three host-shell ports (notify, presentation visibility, shutdown). It never reads process globals; the bridge extension shell owns Pi registration, the terminal, bootstrap, and the environment.
+
+**Child Control Link**:
+The narrow port the Owner-side child proxy depends on instead of the process launch: readiness with the first Runtime snapshot and the Control channel, child events, exit, and disposal. Presentation is supplied separately.
+
+**Child Control Loopback**:
+Test support that connects the real Owner-side child proxy and Owner participant serving to a real Child Control Connection and Child Runtime Binding over the in-memory transport and a faux Pi session. It has no PTY, launch, or hello admission.
 
 **Owner Settlement Parking**:
 The volatile wait at a normally completed low-level Workflow Owner boundary while canonical outbound Agent Requests remain outstanding. One awaited Agent-core listener runs after Pi and extension `agent_end` handling, delays native settlement and threshold compaction, and wakes only after turn-triggering input enters an active Agent queue or the exact Run is fenced. Parking is settled-equivalent for serialized Message Delivery but keeps Pi's Owner session active, uses its existing continuation, and creates no transcript evidence. Child and Moderator settlement is unchanged.
@@ -164,17 +193,21 @@ The volatile wait at a normally completed low-level Workflow Owner boundary whil
 One exact transient epoch of admitted Agent work within an Agent Runtime. Initial creation work, model-starting human or extension input, and coordination Delivery can start a Run; navigation and UI-only commands cannot. Exact Run identity fences interruption, termination, failure, Human Requests, Delivery scheduling, and Operational Incident evaluation. Releasing, failing, or terminating a Run does not remove its durable Agent Identity and need not replace a selected Agent Runtime.
 
 **Run Retention Reason**:
-A transient, live-observed reason the host must retain an exact Agent Run. Active work, required input, pending delivery, unresolved Request relationships, interruption hold, unresolved Moderator handling, and Owner host binding may each provide one.
+A transient, live-observed reason the host must retain an exact Agent Run. Active work, required input, pending delivery, unresolved Request Relationships, interruption hold, unresolved Moderator handling, and Owner host binding may each provide one.
 _Avoid_: Completion blocker, Request blocker
 
 **Agent Runtime Retention Reason**:
 A transient reason to keep an Agent Runtime available independently of Run admission. Interactive Selection provides the current Runtime retention reason.
 
 **Interactive Selection**:
-The transient human choice to attach the physical terminal to one durable non-Owner Agent's process-isolated PTY while the continuously bound Owner TUI is suspended in place. Selection prepares and retains that Agent's configured Runtime and shows its native transcript, Run state, widgets, editor, footer, commands, shortcuts, and extension UI without transferring Workflow ownership. Selection itself does not admit a Run, initialize Run-scoped Request relationships, invoke the model, or append transcript evidence. User input, slash-command effects, extension lifecycle effects, and coordination Delivery keep their ordinary power: if they initiate Agent work, the same Runtime enters a Run. Run failure leaves the selected Runtime and view in place while the Agent becomes Dormant. An announced native quit of the exact selected child projection begins the Workflow shutdown fence before transport loss, releases pending Agent Waits, and does not report Run Failure; native Owner disposal follows terminal restoration. Reload does not begin shutdown, and unselected child exits remain unexpected. Closing a never-activated view disposes only its prepared Runtime and cannot create an Operational Incident. If Dormant Runtime Preparation fails before publishing a usable projection, the host instead presents one read-only Post-mortem View of durable transcript evidence without fabricating a Runtime or changing Agent state.
+The transient human choice to attach the physical terminal to one durable non-Owner Agent's process-isolated PTY while the continuously bound Owner TUI is suspended in place. Selection prepares and retains that Agent's configured Runtime and shows its native transcript, Run state, widgets, editor, footer, commands, shortcuts, and extension UI without transferring Workflow ownership. Selection itself does not admit a Run, initialize Run-scoped Request Relationships, invoke the model, or append transcript evidence. User input, slash-command effects, extension lifecycle effects, and coordination Delivery keep their ordinary power: if they initiate Agent work, the same Runtime enters a Run. Run failure leaves the selected Runtime and view in place while the Agent becomes Dormant. An announced native quit of the exact selected child projection begins the Workflow shutdown fence before transport loss, releases pending Agent Waits, and does not report Run Failure; native Owner disposal follows terminal restoration. Reload does not begin shutdown, and unselected child exits remain unexpected. Closing a never-activated view disposes only its prepared Runtime and cannot create an Operational Incident. If Dormant Runtime Preparation fails before publishing a usable projection, the host instead presents one read-only Post-mortem View of durable transcript evidence without fabricating a Runtime or changing Agent state.
 
 **Post-mortem View**:
 An Owner-hosted read-only presentation of one coherent active-branch snapshot from a durable Agent transcript, used only when Dormant Runtime Preparation cannot produce a usable projection. It shows the Runtime preparation error separately, admits no Run, creates no Runtime or retention, appends no evidence, and does not mark the durable Agent failed. Closing it restores the exact previously mounted Owner or Agent presentation.
+
+**Agents Navigation**:
+The one `/agents` navigation loop every participant runs: open the selector, prepare a selection while the selector shows its loading row, present it once the selector or Report closes, and reopen the selector only when a Post-mortem View is left with `a`. `/agents owner` selects the roster Agent whose Agent ID equals its Workflow ID, live or Dormant, and fails when the roster has none. The Owner session and child processes differ only in their navigation adapter: the Owner's works over its own view, a child's over Control.
+_Avoid_: remote selector, local selector (one loop, two adapters)
 
 **Selected Agent Status**:
 The human-facing lifecycle and work disposition of an Agent under Interactive Selection. It is Dormant when no exact Run exists. A healthy current Run is Active while work is executing, Waiting with a concise reason when progress requires a named external condition or human action, and Idle when settled without such a wait. Starting, Ending, Failed, and Suspended communicate lifecycle transitions, failure, and a retained Run stop separately.
@@ -199,7 +232,7 @@ _Avoid_: Agent termination
 The unexpected terminal end of one exact Agent Run after Pi's user-configured native recovery behavior has finished, when the Runtime could not retain the Run — a child Runtime that is already unavailable, a coordination fence, or a startup failure. A terminal error from a still-usable Runtime is a Run Suspension instead. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically. An open Interactive Selection keeps the same Agent Runtime and presentation while the Agent becomes Dormant; later input or coordination may admit a successor in that Runtime.
 
 **Progress Verdict**:
-The single classification of an Agent's progress shared by every Operational Incident detector and Owner Settlement Parking: Progressing, Waiting, Stalled, or Inactive. Progressing means execution or deliverable work will advance it; Waiting means it is parked on a legitimate external condition such as human attention, Interactive Selection, a Hold, Run Suspension, or execution capacity; Inactive means dormant or failed. A settled Agent takes the best verdict among its unanswered outgoing Requests, so one Progressing or Waiting dependency keeps it from being Stalled.
+The single classification of an Agent's progress shared by every Operational Incident detector and Owner Settlement Parking: Progressing, Waiting, Stalled, or Inactive. Progressing means execution or deliverable work will advance it; Waiting means it is parked on a legitimate external condition such as human attention, Interactive Selection, a Hold, or Run Suspension; Inactive means dormant or failed. Interactive Selection and isolated resumption are explanatory waits that rank below Progressing: they keep a settled Agent from being Stalled, but a selected or resumed Agent that is executing is still Progressing. A settled Agent takes the best verdict among its unanswered outgoing Requests, so one Progressing or Waiting dependency keeps it from being Stalled.
 _Avoid_: progress source check, exclusion
 
 **Dependency Deadlock**:
@@ -215,7 +248,7 @@ A settled Agent Run retained by an Answer Obligation it must discharge, with no 
 The captured Workflow Policy interval during which eligible delivery machinery must advance toward transcript Delivery proof. Eligibility starts an interval; reservation and dispatch reset it. Legitimate dependency waits suspend it, and regained eligibility starts fresh. Proof or suppression clears it. Polls and heartbeats are not progress, and neither ordinary model generation nor Agent Wait duration is timed.
 
 **Delivery Stall**:
-A live delivery blockage qualifying through an unresolved upstream Answer Obligation and its outstanding Request path. Known scheduling loss requests investigation immediately; silent eligible scheduling or commitment stalls qualify at the Delivery Progress Deadline. The undelivered leaf need not have an obligation and the path need not be cyclic. Human attention, selection and Holds exclude paths. Run termination leaves undelivered work observable while its upstream obligation remains; it is not cancellation or an exclusion. Handling is bounded per continuous blocked Message and grants no retry, cancellation, outcome, or authority.
+A live delivery blockage qualifying through an unresolved upstream Answer Obligation and its outstanding Request path. Known scheduling loss requests investigation immediately; silent eligible scheduling or commitment stalls qualify at the Delivery Progress Deadline. The undelivered leaf need not have an obligation and the path need not be cyclic. Any waiting reason on a path, such as human attention, selection, a Hold, or Run Suspension, excludes it. Run termination leaves undelivered work observable while its upstream obligation remains; it is not cancellation or an exclusion. Handling is bounded per continuous blocked Message and grants no retry, cancellation, outcome, or authority.
 
 **Moderation Unavailable**:
 A live status indicating that moderation cannot inspect evidence or create its Moderator, including when its observation pass misses its completion deadline. One Runtime Report brings each continuous fault to human attention, independently of whether that report has been read. Reading does not clear the status, retry creation, or imply recovery. Successful inspection, completion of pending preparation, or original-condition clearance ends the applicable fault. It is not an Operational Incident trigger or durable failure state.
@@ -231,6 +264,10 @@ A Report authored directly by the Workflow runtime when moderation is unavailabl
 
 **Report Read State**:
 The human's explicit, reversible acknowledgement of a Report notification. Unread brings the Report to the Attention Inbox; Read removes only that notification, preserving history and all independent live conditions. Opening, copying, or closing a Report does not change its Read State.
+
+**Attention Inbox**:
+The Workflow Owner's list of items waiting on the human: pending Human Requests, unread Reports, and exhausted Operational Incident handling that no Report covers yet. Continuing live conditions such as Moderation Unavailable show beside it rather than in it, so reading a Report never hides them.
+_Avoid_: notification list, attention list
 
 **Operational Incident**:
 A predefined suspicious live coordination condition blocking at least one unresolved Answer Obligation and starting Moderator handling. It is a transient occurrence rather than a durable aggregate or lifecycle; unnecessary review is preferable to silently stranded obligated work.
@@ -251,7 +288,7 @@ The atomic model-visible identity bootstrap that creates and initializes one Mod
 The trusted rule that a Moderator uses its role-scoped messaging, inspection, and non-Owner supervisory controls only to restore safe progress, records its rationale, and asks the Workflow Owner for task intent, policy, value, or risk judgment. Structural invariants still prohibit Agent creation, impersonation, acting on another Agent's Requests, transcript or identity mutation, control of the Owner Run, and machinery retries without adapter-declared safe reconciliation.
 
 **Moderator Resolution**:
-The explicit Moderator tool outcome that records its summary and rationale, requires the Moderator's own incoming and outgoing Request relationships to be settled, verifies any mechanically checkable trigger has cleared, releases transient duplicate suppression, and permits the Moderator Run to close. If the qualifying Answer Obligations cleared externally, it reports `already_cleared`; the tool call and result are ordinary transcript evidence, not an Incident lifecycle or record.
+The explicit Moderator tool outcome that records its summary and rationale, requires the Moderator's own incoming and outgoing Request Relationships to be settled, verifies any mechanically checkable trigger has cleared, releases transient duplicate suppression, and permits the Moderator Run to close. If the qualifying Answer Obligations cleared externally, it reports `already_cleared`; the tool call and result are ordinary transcript evidence, not an Incident lifecycle or record.
 
 **Moderator Escalation**:
 An ordinary free-form Agent Request from a Moderator to the Workflow Owner for task intent, policy, value, risk, Owner action, or another choice the Moderator cannot verify as mechanically safe. Its ordinary Agent Answer guides further handling; it creates no special packet, handoff, or transfer of control, and the Moderator still records Moderator Resolution afterward.

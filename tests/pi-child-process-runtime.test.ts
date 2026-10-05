@@ -13,12 +13,12 @@ import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/nati
 import { writeChildSession } from "./support/child-session.ts";
 
 import type { ControlEvent } from "../src/control/agent-control-channel.ts";
-import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
+import type { ChildToOwnerControl } from "../src/control/agent-control-protocol.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
-import type { AgentObserveInput } from "../src/tools/participant-coordination-tools.ts";
+import type { AgentObserveInput } from "../src/tools/coordination-tool-catalogue.ts";
 import {
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
@@ -132,7 +132,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	const lifecycle: string[] = [];
 	const ownerIntentions: unknown[] = [];
 	const ownerSelections: unknown[] = [];
-	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
+	const runtimeEvents: ControlEvent<ChildToOwnerControl>[] = [];
 	let runtime: PiChildProcessRuntime | undefined;
 	let projection: ReturnType<typeof createAdmittedPiChildProcessProjection> | undefined;
 	let systemPromptArtifactPath: string | undefined;
@@ -189,7 +189,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		projection.addChangeHandler(() => projectionChanges += 1);
 		projection.addExitRequestHandler(() => projectionExits += 1);
 		projection.addFailureHandler((error) => projectionFailures.push(error));
-		runtime.onEvent((event: ControlEvent<typeof agentControlProtocol>) => {
+		runtime.onEvent((event: ControlEvent<ChildToOwnerControl>) => {
 			runtimeEvents.push(event);
 			if (["agent.start", "agent.end", "agent.settled", "session.shutdown"].includes(event.event)) {
 				lifecycle.push(event.event);
@@ -350,7 +350,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.equal(runtimeEvents.some((event) =>
 			event.event === "agent.end" &&
 			event.payload.runId !== previousCycleId &&
-			event.payload.outcome === "interrupted" &&
+			event.payload.outcome === "aborted" &&
 			event.payload.willRetry === false
 		), true);
 
@@ -468,7 +468,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 	}
 
 	let runtime: PiChildProcessRuntime | undefined;
-	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
+	const runtimeEvents: ControlEvent<ChildToOwnerControl>[] = [];
 	try {
 		runtime = await PiChildProcessRuntime.start({
 			workflowId: "process-working-zone-workflow",
@@ -778,7 +778,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		cwd,
 	})}\n`, { mode: 0o600 });
 	let runtime: PiChildProcessRuntime | undefined;
-	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
+	const runtimeEvents: ControlEvent<ChildToOwnerControl>[] = [];
 	try {
 		runtime = await PiChildProcessRuntime.start({
 			workflowId: "process-compaction-gateway-workflow",
@@ -1018,7 +1018,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 				content: "Interruption must fence this Delivery during preparation.",
 			},
 		}]);
-		const failuresBeforeInterruption = runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "failed").length;
+		const failuresBeforeInterruption = runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "error").length;
 		const compactionStartsBeforeInterruption = runtimeEvents.filter((event) =>
 			event.event === "runtime.compaction.started"
 		).length;
@@ -1044,7 +1044,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			deliveryId: "test-delivery-15",
 		}), { accepted: true });
 		assert.match(String(await interruptedDeliveryOutcome), /child_turn_admission_cancelled/);
-		assert.equal(runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "failed").length, failuresBeforeInterruption);
+		assert.equal(runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "error").length, failuresBeforeInterruption);
 		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
 			entry.type === "custom_message" && entry.content === interruptedMessage.content
 		), false);
@@ -1732,6 +1732,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 	return {
 		presentation: {
 			setReportRead: async () => {},
+			addChangeHandler: () => () => undefined,
 			snapshot: async () => {
 				if (options.presentationSnapshotError) throw options.presentationSnapshotError;
 				return options.selectorSnapshot ?? ({

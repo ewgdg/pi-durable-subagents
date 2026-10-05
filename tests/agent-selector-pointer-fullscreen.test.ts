@@ -3,7 +3,8 @@ import test, { type TestContext } from "node:test";
 import type { ExtensionUIContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Editor, TuiAltScreen, TuiMainScreen, getKeybindings, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type TuiMouseEvent, type TUI } from "@earendil-works/pi-tui";
 import type { AgentRosterStatus } from "../src/coordination/workflow-coordinator.ts";
-import { openAgentSelectorSurface, type AgentSelectorAction, type AgentSelectorOptions } from "../src/presentation/agent-selector-surface.ts";
+import type { AgentSelectorAction } from "../src/presentation/agent-selector-projection.ts";
+import { openAgentSelectorSurface, type AgentSelectorOptions } from "../src/presentation/agent-selector-surface.ts";
 import { ScreenTerminal } from "./support/screen-terminal.ts";
 
 const identity = (text: string) => text;

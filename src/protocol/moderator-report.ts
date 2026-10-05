@@ -17,6 +17,7 @@ export type ReportToUserInput = Readonly<{
 	recoveryOutcome: string;
 	evidence: readonly string[];
 }>;
+export type ReportToUserReceipt = Readonly<{ reportId: string; createdAt: string }>;
 export type Reporter = Readonly<{ agentId: string; label: string }>;
 export type ModeratorReportSource = ToolCallPointer & Readonly<{ transcriptPath: string; kind?: never }>;
 export type RuntimeReportSource = EntryPointer & Readonly<{ kind: "runtime_diagnostic"; transcriptPath: string; incidentKey?: string; toolCallId?: never }>;

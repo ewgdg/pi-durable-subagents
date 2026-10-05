@@ -12,10 +12,11 @@ import {
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 
-import { createAgentActivityExtension } from "../src/bootstrap/agent-extension.ts";
+import { extensionCommandAction } from "../src/pi-integration/extension-command-action.ts";
+import { createTestOwnerExtension } from "./support/owner-extension.ts";
+import { createTestOwnerHost, type TestOwnerHost } from "./support/pi-host.ts";
 import type {
 	AgentRosterStatus,
-	HumanPresentationCoordinatorView,
 } from "../src/coordination/workflow-coordinator.ts";
 import {
 	AgentActivityDock,
@@ -204,15 +205,9 @@ test("activity install forwards the Agents menu action to the installed dock", (
 	dock.dispose();
 });
 
-test("activity extension dispatches the registered Agents command on a dock click", async () => {
-	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
+test("a dock click submits the Agents command as editor input", () => {
 	const sent: Array<{ content: unknown; options: unknown }> = [];
 	const pi = {
-		on(event: string, handler: (...args: unknown[]) => unknown) {
-			const registered = handlers.get(event) ?? [];
-			registered.push(handler);
-			handlers.set(event, registered);
-		},
 		sendUserMessage(content: unknown, options: unknown) {
 			sent.push({ content, options });
 		},
@@ -224,14 +219,10 @@ test("activity extension dispatches the registered Agents command on a dock clic
 		},
 	} as unknown as ExtensionUIContext;
 
-	await createAgentActivityExtension(() => ({
-		agentActivity: () => ownerSnapshot,
-		addAgentActivityChangeHandler: () => () => {},
-		refreshAgentActivity: () => {},
-	} as unknown as HumanPresentationCoordinatorView))(pi);
-	const sessionStart = handlers.get("session_start")?.[0];
-	assert.ok(sessionStart);
-	await sessionStart({}, { ui });
+	installAgentActivityDock(ui, {
+		snapshot: () => ownerSnapshot,
+		addChangeHandler: () => () => {},
+	}, { openAgentsMenu: extensionCommandAction(pi, "/agents") });
 	assert.ok(installedFactory);
 	const dock = installedFactory(
 		{ requestRender() {}, hasOverlay: () => false } as unknown as TUI,
@@ -244,28 +235,44 @@ test("activity extension dispatches the registered Agents command on a dock clic
 	dock.dispose();
 });
 
-test("activity extension publishes native model-selection changes", async () => {
-	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
-	const pi = {
-		on(event: string, handler: (...args: unknown[]) => unknown) {
-			const registered = handlers.get(event) ?? [];
-			registered.push(handler);
-			handlers.set(event, registered);
-		},
-	} as unknown as ExtensionAPI;
-	let refreshes = 0;
-	const view = {
-		refreshAgentActivity() {
-			refreshes += 1;
-		},
-	} as unknown as HumanPresentationCoordinatorView;
+test("the Owner's activity refreshes with its new model after a native model change", async (t) => {
+	const owner = createTestOwnerExtension();
+	const host = await createTestOwnerHost(t, owner.extension);
+	const alternate = registerAlternateModel(host);
+	const publishedModels: unknown[] = [];
+	const unsubscribe = owner.owner().addAgentActivityChangeHandler(() => {
+		publishedModels.push(owner.owner().agentActivity().scope.model);
+	});
+	t.after(unsubscribe);
 
-	await createAgentActivityExtension(() => view)(pi);
-	const modelSelect = handlers.get("model_select")?.[0];
-	assert.ok(modelSelect);
-	await modelSelect();
-	assert.equal(refreshes, 1);
+	await host.session.setModel(alternate);
+
+	assert.deepEqual(publishedModels.at(-1), { provider: alternate.provider, modelId: alternate.id });
 });
+
+function registerAlternateModel(host: TestOwnerHost) {
+	const provider = "coordination-test-alternate";
+	const owned = host.session.model;
+	assert.ok(owned);
+	host.services.modelRuntime.registerProvider(provider, {
+		name: "Alternate coordination test",
+		baseUrl: "http://coordination-test-alternate.invalid",
+		api: owned.api,
+		apiKey: "in-memory-test",
+		models: [{
+			id: "alternate-owner",
+			name: "Alternate Owner",
+			reasoning: owned.reasoning,
+			input: owned.input,
+			cost: owned.cost,
+			contextWindow: owned.contextWindow,
+			maxTokens: owned.maxTokens,
+		}],
+	});
+	const model = host.services.modelRuntime.getModel(provider, "alternate-owner");
+	assert.ok(model);
+	return model;
+}
 
 test("activity installs as one persistent native above-editor widget", () => {
 	const snapshots = source({
@@ -655,84 +662,30 @@ test("the roster refreshes compaction and restores current activity", () => {
  } finally { harness.dock.dispose(); }
 });
 
-test("unread reports remain in the Owner Attention Inbox until explicitly marked read", () => {
-	const report = {
-		reportId: "report", createdAt: "2026-01-01T00:00:00.000Z",
-		reporter: { agentId: "moderator", label: "Moderator" },
-		source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/sessions/moderator.jsonl" },
-		symptom: "Delivery stalled", suspectedDefect: "Continuation absent", uncertainty: "Cause unknown",
-		recoveryActions: "Retried", recoveryOutcome: "Still blocked", evidence: ["entry"],
-	};
-	const snapshot: AgentActivitySnapshot = {
-		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
-		children: [], answerMode: false, humanAttention: [], operationalAttention: [],
-		reports: [{ report }],
-	};
-	const { dock } = createDock(snapshot);
-	assert.match(dock.render(120).join("\n"), /REPORT.*Moderator.*Delivery stalled/);
-	dock.dispose();
-	const { dock: readDock } = createDock({ ...snapshot, reports: [{ report, readAt: report.createdAt }] });
-	assert.doesNotMatch(readDock.render(120).join("\n"), /REPORT/);
-	readDock.dispose();
-});
-
-test("linked Run Failure reports own inbox visibility while unresolved status remains live", () => {
+// Inbox membership and live status rules live in attention-inbox.test.ts.
+test("the Owner dock paints the shared inbox beside its live status; other scopes show neither", () => {
 	const report = {
 		reportId: "failure", createdAt: "2026-06-11T00:00:00Z",
 		source: { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "diagnostic", transcriptPath: "/tmp/owner.jsonl" },
 		symptom: "Run failed", suspectedDefect: "Unknown", uncertainty: "Unknown",
 		recoveryActions: "None", recoveryOutcome: "Unknown", evidence: ["diagnostic"],
 	};
-	for (const readAt of [undefined, report.createdAt]) {
-		for (const reportSource of [
-			{ agentId: "owner", entryId: "diagnostic" },
-			{ agentId: "other", entryId: "diagnostic" },
-			{ agentId: "owner", entryId: "other" },
-		]) {
-			const { dock } = createDock({
-				scope: agent({ agentId: "owner", label: "Owner", parent: null }), children: [], answerMode: false,
-				humanAttention: [], operationalAttention: [{
-					trigger: { kind: "run_failure", agentId: "child", runSequence: 1, obligations: { total: 1, sources: [] } },
-					affectedAgents: [{ agentId: "child", label: "Child" }], diagnostics: [], reportSource,
-				}],
-				reports: [{ report, ...(readAt ? { readAt } : {}) }],
-			});
-			try {
-				const rendered = dock.render(160).join("\n");
-				assert.match(rendered, /Operational incident unresolved · live status/);
-				if (reportSource.agentId === "owner" && reportSource.entryId === "diagnostic") {
-					assert.doesNotMatch(rendered, /ATTENTION/);
-					if (readAt) assert.doesNotMatch(rendered, /Attention Inbox/);
-				} else assert.match(rendered, /ATTENTION.*Run Failure/);
-				if (readAt) assert.doesNotMatch(rendered, /REPORT/);
-				else assert.match(rendered, /REPORT.*Runtime.*Run failed/);
-			} finally { dock.dispose(); }
-		}
-	}
-});
-
-test("acknowledged moderation failure keeps live unavailable status outside the inbox", () => {
-	const report = {
-		reportId: "failure", createdAt: "2026-06-11T00:00:00Z",
-		source: { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "diagnostic", transcriptPath: "/tmp/owner.jsonl" },
-		symptom: "Inspection blocked", suspectedDefect: "Unknown", uncertainty: "No incident established",
-		recoveryActions: "None", recoveryOutcome: "Unknown", evidence: ["diagnostic"],
+	const attention = {
+		children: [], answerMode: false, humanAttention: [],
+		operationalAttention: [{
+			trigger: { kind: "run_failure" as const, agentId: "child", runSequence: 1, obligations: { total: 1, sources: [] } },
+			affectedAgents: [{ agentId: "child", label: "Child" }], diagnostics: [],
+			reportSource: { agentId: "owner", entryId: "diagnostic" },
+		}],
+		reports: [{ report }],
 	};
-	for (const readAt of [undefined, report.createdAt]) {
-		const { dock } = createDock({
-			scope: agent({ agentId: "owner", label: "Owner", parent: null }), children: [], answerMode: false,
-			humanAttention: [], operationalAttention: [{
-				trigger: { kind: "moderation_unavailable" }, affectedAgents: [], diagnostics: [],
-				reportSource: { agentId: "owner", entryId: "diagnostic" },
-			}],
-			reports: [{ report, ...(readAt ? { readAt } : {}) }],
-		});
-		const rendered = dock.render(160).join("\n");
-		assert.match(rendered, /Moderation Unavailable · live status/);
-		assert.doesNotMatch(rendered, /Operational incident unresolved/);
-		assert.doesNotMatch(rendered, /ATTENTION.*Moderation/);
-		if (readAt) assert.doesNotMatch(rendered, /Attention Inbox|REPORT/);
-		else assert.match(rendered, /REPORT.*Runtime.*Inspection blocked/);
-		dock.dispose();
-	}
+	const { dock } = createDock({ ...attention, scope: agent({ agentId: "owner", label: "Owner", parent: null }) });
+	const owner = dock.render(160).join("\n");
+	assert.match(owner, /Operational incident unresolved · live status/);
+	assert.match(owner, /REPORT.*Runtime.*Run failed/);
+	assert.doesNotMatch(owner, /ATTENTION/);
+	dock.dispose();
+	const { dock: nested } = createDock({ ...attention, scope: agent({ agentId: "child", label: "Child", parent: "owner" }) });
+	assert.doesNotMatch(nested.render(160).join("\n"), /live status|Attention Inbox|REPORT/);
+	nested.dispose();
 });

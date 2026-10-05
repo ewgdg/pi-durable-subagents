@@ -38,7 +38,8 @@ import type {
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import type { AgentRunState } from "../runtime/agent-runtime-host.ts";
-import type { AgentObserveInput } from "./participant-coordination-tools.ts";
+import type { ReportToUserInput, ReportToUserReceipt } from "../protocol/moderator-report.ts";
+import type { AgentObserveInput } from "./coordination-tool-catalogue.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import { renderMessageProjection } from "./message-delivery-renderer.ts";
 import { messageReceiptStatusColor } from "./message-renderer.ts";
@@ -54,11 +55,7 @@ export function renderWorkflowResumeResult(
 	result: AgentToolResult<WorkflowResumeReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ isError: boolean }>,
 ): Text {
-	if (context.isError) return renderToolError(result, options, theme);
-	if (options.isPartial || result.details === undefined) return pending(theme, "resuming Workflow");
-
 	const requests = result.details.outstandingRequests;
 	if (requests.length === 0) {
 		return new Text(theme.fg("dim", "no outstanding outbound Requests"), 0, 0);
@@ -93,29 +90,33 @@ export function renderAgentWaitCall(
 	return toolCall(theme, "wait", args.requestMessageIds?.map(id => formatMessageIdentity(id, expanded)) ?? []);
 }
 
+/** In-flight Wait names the snapshot responders; the receipt reuses them. */
+export function renderAgentWaitProgress(
+	result: AgentToolResult<unknown>,
+	theme: Theme,
+	context: Readonly<{ state: AgentWaitRenderState }>,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
+): Text {
+	if (!isAgentWaitProgress(result.details)) return renderInFlightLabel(theme, "waiting for Answers");
+	context.state.progress = result.details;
+	const count = result.details.waitingFor.length;
+	const identities = result.details.waitingFor.map(({ responderAgentId, requestTitle }) =>
+		theme.fg("customMessageLabel", boundedToolPreview(requestTitle)) +
+			theme.fg("muted", ` · ${formatAgentIdentity(responderAgentId, resolveAgentLabel)}`)
+	);
+	return new Text([
+		theme.fg("accent", `waiting for ${count} Answer${count === 1 ? "" : "s"}…`),
+		...identities.map((identity) => `• ${identity}`),
+	].join("\n"), 0, 0);
+}
+
 export function renderAgentWaitResult(
-	result: AgentToolResult<AgentWaitResult | AgentWaitProgress>,
+	result: AgentToolResult<AgentWaitResult | undefined>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ state: AgentWaitRenderState; isError: boolean }>,
+	context: Readonly<{ state: AgentWaitRenderState }>,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Component {
-	if (!options.isPartial && context.isError) return renderToolError(result, options, theme);
-	if (options.isPartial) {
-		if (isAgentWaitProgress(result.details)) {
-			context.state.progress = result.details;
-			const count = result.details.waitingFor.length;
-			const identities = result.details.waitingFor.map(({ responderAgentId, requestTitle }) =>
-				theme.fg("customMessageLabel", boundedToolPreview(requestTitle)) +
-					theme.fg("muted", ` · ${formatAgentIdentity(responderAgentId, resolveAgentLabel)}`)
-			);
-			return new Text([
-				theme.fg("accent", `waiting for ${count} Answer${count === 1 ? "" : "s"}…`),
-				...identities.map((identity) => `• ${identity}`),
-			].join("\n"), 0, 0);
-		}
-		return pending(theme, "waiting for Answers");
-	}
 	if (result.details && "disposition" in result.details) {
 		return receipt(theme, "preempted", result.details, options);
 	}
@@ -230,11 +231,9 @@ export function renderAgentObserveResult(
 	result: AgentToolResult<unknown>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ args: AgentObserveInput; isError?: boolean }>,
+	context: Readonly<{ args: AgentObserveInput }>,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Component {
-	if (options.isPartial) return pending(theme, "inspecting");
-	if (context.isError) return renderToolError(result, options, theme);
 	const details = asRecord(result.details);
 	if (context.args.operation === "obligations" && Array.isArray(details?.requests)) {
 		const requests = details.requests as readonly OpenIncomingRequest[];
@@ -290,11 +289,8 @@ export function renderAgentControlResult(
 	result: AgentToolResult<RunControlReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ isError: boolean }>,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Text {
-	if (!options.isPartial && context.isError) return renderToolError(result, options, theme);
-	if (options.isPartial || result.details === undefined) return pending(theme, "controlling");
 	const details = result.details;
 	const disposition = "disposition" in details
 		? details.disposition
@@ -332,22 +328,26 @@ export function renderHumanRequestCall(
 	});
 }
 
-export function renderHumanRequestResult(
-	result: AgentToolResult<HumanAnswer>,
-	options: ToolRenderResultOptions,
+/** An interrupted Human Request keeps its transcript block shape. */
+export function renderHumanRequestError(
+	result: AgentToolResult<unknown>,
+	_options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ isError: boolean }>,
 ): Component {
-	if (options.isPartial) return new Container();
-	if (context.isError) {
-		return transcriptBlock({
-			label: "[Interrupted]",
-			markdown: toolResultText(result),
-			theme,
-			background: "toolErrorBg",
-			textColor: "error",
-		});
-	}
+	return transcriptBlock({
+		label: "[Interrupted]",
+		markdown: toolResultText(result),
+		theme,
+		background: "toolErrorBg",
+		textColor: "error",
+	});
+}
+
+export function renderHumanRequestResult(
+	result: AgentToolResult<HumanAnswer | undefined>,
+	_options: ToolRenderResultOptions,
+	theme: Theme,
+): Component {
 	return transcriptBlock({
 		label: "[Answer]",
 		markdown: result.details?.answer ?? toolResultText(result),
@@ -374,11 +374,22 @@ export function renderModeratorControlResult(
 	result: AgentToolResult<ModeratorControlReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ isError: boolean }>,
 ): Text {
-	if (!options.isPartial && context.isError) return renderToolError(result, options, theme);
-	if (options.isPartial || result.details === undefined) return pending(theme, "moderating");
 	return receipt(theme, result.details.disposition, result.details, options);
+}
+
+export function renderReportToUserCall(args: ReportToUserInput, theme: Theme): Text {
+	return new Text(theme.fg("toolTitle", "Report to User") + " " + boundedToolPreview(args.symptom ?? ""), 0, 0);
+}
+
+export function renderReportToUserResult(
+	result: AgentToolResult<ReportToUserReceipt | undefined>,
+	theme: Theme,
+): Text {
+	return new Text(theme.fg(
+		result.details ? "success" : "muted",
+		result.details ? `Report retained · ${result.details.reportId}` : boundedToolPreview(toolResultText(result)),
+	), 0, 0);
 }
 
 function toolCall(
@@ -395,7 +406,7 @@ function toolCall(
 }
 
 // In-flight coordination needs no user action, so it must not borrow the warning role.
-function pending(theme: Theme, label: string): Text {
+export function renderInFlightLabel(theme: Theme, label: string): Text {
 	return new Text(theme.fg("accent", `${label}…`), 0, 0);
 }
 

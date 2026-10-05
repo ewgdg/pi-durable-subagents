@@ -1,97 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
-import type {
-	PiChildProcessLaunch,
-	PiChildProcessRuntime,
-	PiChildRuntimeEvent,
-} from "../src/process-runtime/pi-child-process-runtime.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
+import { createChildControlLoopback } from "./support/child-control-loopback.ts";
+import { createScriptedChildControlLink, createScriptedTerminalProjection } from "./support/scripted-child-control-link.ts";
 
-test("child Control preserves normalized quota evidence without changing retry semantics", async () => {
-	for (const willRetry of [true, false]) {
-		const { runtime, emit } = createFakeRuntime();
-		const events: HostedRuntimeEvent[] = [];
-		runtime.subscribe(event => events.push(event));
-		await runtime.ready;
-		const quota = { diagnostic: "Codex error: The usage limit has been reached", provider: "openai-codex", model: "gpt-5", resetAt: "2030-01-01T00:00:00.000Z" };
-		emit(controlEvent("agent.start", { runId: "quota", queuedInputCount: 0 }));
-		emit(controlEvent("agent.end", { runId: "quota", outcome: "failed", willRetry, queuedInputCount: 0, error: quota.diagnostic, quota }));
-		const event = events.find(event => event.type === "agent_end");
-		assert.equal(event?.type, "agent_end");
-		if (event?.type !== "agent_end") throw new Error("missing end");
-		assert.deepEqual(event.quota, quota);
-		assert.equal(event.willRetry, willRetry);
-		await runtime.dispose();
-	}
-});
-
-test("an authenticated native child lifecycle adopts its transport identity without a dispatched cycle", async () => {
-	const { runtime, emit } = createFakeRuntime();
+test("an authenticated native child lifecycle adopts its transport identity without a dispatched cycle", { timeout: 5_000 }, async (t) => {
+	const loopback = await createChildControlLoopback(t);
+	const runtime = loopback.proxy;
+	loopback.host.model.setResponses([fauxAssistantMessage("Native work done.")]);
 	const hostedEvents: HostedRuntimeEvent[] = [];
 	runtime.subscribe((event) => hostedEvents.push(event));
-	await runtime.ready;
+	const settled = new Promise<void>((resolve) => runtime.subscribe((event) => { if (event.type === "agent_settled") resolve(); }));
 
-	emit(controlEvent("agent.start", {
-		runId: "native-run-1",
-		queuedInputCount: 0,
-	}));
-	assert.equal(runtime.workState(), "active");
-	emit(controlEvent("agent.end", {
-		runId: "native-run-1",
-		outcome: "completed",
-		willRetry: false,
-		queuedInputCount: 0,
-	}));
-	emit(controlEvent("agent.settled", {
-		runId: "native-run-1",
-		outcome: "completed",
-		queuedInputCount: 0,
-	}));
+	await loopback.submitNativeInput("Native work.");
+	await settled;
 
 	assert.equal(runtime.workState(), "settled");
-	assert.deepEqual(hostedEvents, [
-		{ type: "state_changed" },
+	assert.deepEqual(hostedEvents.filter((event) => event.type !== "state_changed"), [
 		{ type: "agent_end", outcome: "completed", willRetry: false },
-		{ type: "state_changed" },
 		{ type: "agent_settled" },
 	]);
-	await runtime.dispose();
+	assert.deepEqual(loopback.events.flatMap((event) => event.event.startsWith("agent.") ? [event.event] : []), [
+		"agent.start", "agent.end", "agent.settled",
+	]);
 });
 
-test("child model errors preserve the original provider text", async () => {
-	const { runtime, emit } = createFakeRuntime();
-	const events: HostedRuntimeEvent[] = [];
-	runtime.subscribe((event) => events.push(event));
-	await runtime.ready;
-	emit(controlEvent("agent.start", { runId: "model-failure", queuedInputCount: 0 }));
-	emit(controlEvent("agent.end", {
-		runId: "model-failure", outcome: "failed", willRetry: false, queuedInputCount: 0,
-		error: "provider rejected model identifier",
-	}));
-	assert.deepEqual(events.find((event) => event.type === "agent_end"), {
-		type: "agent_end", outcome: "error", willRetry: false,
-		failure: { stage: "model", error: "provider rejected model identifier", provenance: "pi-child-hosted-runtime" },
-	});
-	await runtime.dispose();
-});
-
-test("a post-admission child Runtime fault terminally fences its hosted Run once", async () => {
-	const { runtime, emit } = createFakeRuntime();
+test("a post-admission child Runtime fault terminally fences its hosted Run once", { timeout: 5_000 }, async (t) => {
+	const { loopback, held } = await createHeldDeliveryLoopback(t);
+	const runtime = loopback.proxy;
 	const hostedEvents: HostedRuntimeEvent[] = [];
 	runtime.subscribe((event) => hostedEvents.push(event));
-	await runtime.ready;
 	const completion = runtime.deliver({ kind: "user", content: "Start the Run." }).completion;
-	emit(controlEvent("agent.start", {
-		runId: "hosted-run-1",
-		queuedInputCount: 0,
-	}));
-	emit(controlEvent("runtime.fault", {
-		code: "participant_lifecycle_failed",
-		message: "Owner rejected the awaited boundary",
-	}));
+	await held;
+	await loopback.emitFault("participant_lifecycle_failed", "Owner rejected the awaited boundary");
 
 	assert.equal(runtime.workState(), "unavailable");
 	assert.equal(runtime.cancellationSignal().aborted, true);
@@ -105,35 +50,52 @@ test("a post-admission child Runtime fault terminally fences its hosted Run once
 		{ type: "agent_settled" },
 	]);
 
-	emit(controlEvent("runtime.fault", {
-		code: "duplicate_fault",
-		message: "must not settle twice",
-	}));
+	await loopback.emitFault("duplicate_fault", "must not settle twice");
 	assert.equal(
 		hostedEvents.filter((event) => event.type === "agent_settled").length,
 		1,
 	);
-	await runtime.dispose();
 });
 
-test("child exit after Run admission but before model activity preserves failure", async () => {
-	const { runtime, settleExit } = createFakeRuntime();
+test("child exit after Run admission but before model activity preserves failure", { timeout: 5_000 }, async (t) => {
+	const loopback = await createChildControlLoopback(t);
+	const runtime = loopback.proxy;
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId: "idle-admitted-child", startSession: async () => ({ runtime, ready: runtime.ready }),
 	});
 	await host.lane.run(() => host.startInLane());
-	settleExit({ exitCode: 1, signal: 0 });
+	await loopback.exit({ exitCode: 1, signal: 0 });
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(host.currentRunFailed(), true);
 	await host.lane.run(() => host.discardAndEndInLane("failure"));
 });
 
+/** A loopback child whose first model call holds until its Run is aborted. */
+async function createHeldDeliveryLoopback(t: Parameters<typeof createChildControlLoopback>[0]) {
+	let markHeld!: () => void;
+	const held = new Promise<void>((resolve) => { markHeld = resolve; });
+	const loopback = await createChildControlLoopback(t);
+	loopback.host.model.setResponses([async () => {
+		const signal = loopback.host.session.agent.signal;
+		markHeld();
+		await new Promise<void>((resolve) => {
+			if (signal?.aborted) resolve();
+			signal?.addEventListener("abort", () => resolve(), { once: true });
+		});
+		return fauxAssistantMessage("Aborted.");
+	}]);
+	return { loopback, held };
+}
+
+// The cases below stay on the scripted link: they cover projection and process
+// cleanup ordering, or inject event orderings a real child cannot produce on demand.
 test("child exit fences the hosted Run before its projection reports failure", async () => {
-	const { runtime, settleExit } = createFakeRuntime();
+	const { runtime, settleExit } = createFakeRuntime({ projection: true });
 	const ordering: string[] = [];
 	runtime.subscribe((event) => {
 		if (event.type === "agent_end") ordering.push("runtime fenced");
 	});
+	assert.ok(runtime.projection);
 	runtime.projection.addFailureHandler(() => ordering.push("projection failed"));
 	await runtime.ready;
 	const completion = runtime.deliver({ kind: "user", content: "Observe exit order." }).completion;
@@ -153,19 +115,19 @@ test("failed process Runtime cleanup does not repeat intentions over dead Contro
 	});
 	await host.lane.run(() => host.startInLane());
 	const delivery = host.deliverInLane({ kind: "user", content: "Fail this Run." });
-	emit(controlEvent("agent.start", {
+	emit({ event: "agent.start", payload: {
 		runId: "hosted-run-1",
 		queuedInputCount: 0,
-	}));
-	emit(controlEvent("runtime.fault", {
+	} });
+	emit({ event: "runtime.fault", payload: {
 		code: "dead_control",
 		message: "Control is already unavailable",
-	}));
+	} });
 	await assert.rejects(delivery.completion, /dead_control/);
 
 	await host.lane.run(() => host.discardAndEndInLane("failure"));
 	assert.equal(host.observe().phase, "dormant");
-	assert.deepEqual(requestedMethods, ["message.deliver"]);
+	assert.deepEqual(requestedMethods(), ["message.deliver"]);
 });
 
 test("cleanup does not duplicate a Runtime fault that wins an in-flight intention", async () => {
@@ -177,22 +139,22 @@ test("cleanup does not duplicate a Runtime fault that wins an in-flight intentio
 	await host.lane.run(() => host.startInLane());
 	const delivery = host.deliverInLane({ kind: "user", content: "Race cleanup with failure." });
 	void delivery.completion.catch(() => undefined);
-	harness.emit(controlEvent("agent.start", {
+	harness.emit({ event: "agent.start", payload: {
 		runId: "hosted-run-1",
 		queuedInputCount: 0,
-	}));
+	} });
 
 	const cleanup = host.lane.run(() => host.discardAndEndInLane("shutdown"));
 	await harness.queueClearStarted;
-	harness.emit(controlEvent("runtime.fault", {
+	harness.emit({ event: "runtime.fault", payload: {
 		code: "control_lost_during_cleanup",
 		message: "The Runtime fault owns this terminal transition",
-	}));
+	} });
 	harness.rejectQueueClear(new Error("control_channel_closed: channel closed"));
 
 	await cleanup;
 	assert.equal(host.observe().phase, "dormant");
-	assert.deepEqual(harness.requestedMethods, ["message.deliver", "queue.clear"]);
+	assert.deepEqual(harness.requestedMethods(), ["message.deliver", "queue.clear"]);
 });
 
 test("a stale child lifecycle event terminally fences the exact hosted Run once", async () => {
@@ -201,16 +163,16 @@ test("a stale child lifecycle event terminally fences the exact hosted Run once"
 	runtime.subscribe((event) => hostedEvents.push(event));
 	await runtime.ready;
 	const completion = runtime.deliver({ kind: "user", content: "Start the exact Run." }).completion;
-	emit(controlEvent("agent.start", {
+	emit({ event: "agent.start", payload: {
 		runId: "hosted-run-1",
 		queuedInputCount: 0,
-	}));
-	emit(controlEvent("agent.end", {
+	} });
+	emit({ event: "agent.end", payload: {
 		runId: "stale-hosted-run",
 		outcome: "completed",
 		willRetry: false,
 		queuedInputCount: 0,
-	}));
+	} });
 
 	assert.equal(runtime.workState(), "unavailable");
 	await assert.rejects(completion, /stale_run.*stale-hosted-run.*hosted-run-1/);
@@ -223,22 +185,9 @@ test("a stale child lifecycle event terminally fences the exact hosted Run once"
 
 function createFakeRuntime(options: Readonly<{
 	holdQueueClear?: boolean;
-}> = {}): Readonly<{
-	runtime: PiChildHostedRuntime;
-	requestedMethods: string[];
-	requestedDeliveryIds: string[];
-	queueClearStarted: Promise<void>;
-	rejectQueueClear(error: unknown): void;
-	emit(event: PiChildRuntimeEvent): void;
-	settleExit(exit: Readonly<{ exitCode: number; signal: number }>): void;
-}> {
-	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-	const requestedMethods: string[] = [];
+	projection?: boolean;
+}> = {}) {
 	const requestedDeliveryIds: string[] = [];
-	let settleExit!: (exit: Readonly<{ exitCode: number; signal: number }>) => void;
-	const exited = new Promise<Readonly<{ exitCode: number; signal: number }>>((resolve) => {
-		settleExit = resolve;
-	});
 	let markQueueClearStarted!: () => void;
 	const queueClearStarted = new Promise<void>((resolve) => {
 		markQueueClearStarted = resolve;
@@ -248,77 +197,34 @@ function createFakeRuntime(options: Readonly<{
 		rejectQueueClear = reject;
 	});
 	void queueClear.catch(() => undefined);
-	const admitted = {
-		snapshot: {
-			cwd: "/runtime",
-			model: { provider: "test", modelId: "model" },
-			thinking: "off",
-			tools: [],
-			skills: [],
-			skillSources: [],
-			extensions: [],
-			projectTrusted: true,
-			sessionId: "fault-runtime",
-			sessionPath: "/sessions/fault-runtime.jsonl",
-			systemPrompt: null,
-			loadContextFiles: true,
-		},
-		channel: {
-			onClose: () => () => undefined,
-			async request(method: string, payload: { deliveryId?: string }) {
-				requestedMethods.push(method);
-				if (method === "message.deliver") requestedDeliveryIds.push(payload.deliveryId!);
-				if (method === "queue.clear" && options.holdQueueClear) {
-					markQueueClearStarted();
-					return await queueClear;
-				}
-				return {
-					accepted: true,
-					transcriptCommitted: true,
-					modelCycleStarted: true,
-					queuedInputCount: 0,
-				};
+	const scripted = createScriptedChildControlLink({
+		snapshot: { sessionId: "fault-runtime" },
+		respond: {
+			"message.deliver": ({ deliveryId }) => {
+				requestedDeliveryIds.push(deliveryId);
+				return { accepted: true, transcriptCommitted: true, modelCycleStarted: true, queuedInputCount: 0 };
 			},
+			"queue.clear": async () => {
+				if (!options.holdQueueClear) return { steering: [], followUp: [], queuedInputCount: 0 };
+				markQueueClearStarted();
+				return await queueClear;
+			},
+			"run.interrupt": () => ({ accepted: true }),
+			"message.cancel": () => ({ accepted: true }),
 		},
-	} as unknown as PiChildProcessRuntime;
-	const launch = {
-		exited,
-		ready: async () => admitted,
-		cancelInitialization: () => undefined,
-		frame: () => ({
-			columns: 80,
-			rows: 24,
-			lines: [],
-			cursor: { row: 0, column: 0, visible: false, style: "block", blink: false },
-		}),
-		writeInput() {},
-		resize() {},
-		addChangeHandler: () => () => undefined,
-		addFailureHandler: () => () => undefined,
-		onEvent(handler: (event: PiChildRuntimeEvent) => void) {
-			eventHandlers.add(handler);
-			return () => eventHandlers.delete(handler);
-		},
-		dispose: async () => undefined,
-	} as unknown as PiChildProcessLaunch;
+	});
 	return {
-		runtime: new PiChildHostedRuntime(launch),
-		requestedMethods,
+		runtime: new PiChildHostedRuntime({
+			link: scripted.link,
+			...(options.projection ? { createProjection: () => createScriptedTerminalProjection(scripted.link) } : {}),
+		}),
+		requestedMethods: () => scripted.requests.map(({ method }) => method),
 		requestedDeliveryIds,
 		queueClearStarted,
 		rejectQueueClear,
-		emit(event) {
-			for (const handler of eventHandlers) handler(event);
-		},
-		settleExit,
+		emit: scripted.emit,
+		settleExit: scripted.exit,
 	};
-}
-
-function controlEvent(
-	event: PiChildRuntimeEvent["event"],
-	payload: unknown,
-): PiChildRuntimeEvent {
-	return { event, payload } as PiChildRuntimeEvent;
 }
 
 test("compaction is observable, refreshes on both edges, and clears on disposal and fault", async () => {
@@ -327,11 +233,11 @@ test("compaction is observable, refreshes on both edges, and clears on disposal 
   await runtime.ready;
   const states: boolean[] = [];
   runtime.subscribe(event => { if (event.type === "state_changed") states.push(runtime.isCompacting()); });
-  emit(controlEvent("runtime.compaction.started", {}));
+  emit({ event: "runtime.compaction.started", payload: {} });
   assert.equal(runtime.isCompacting(), true);
   assert.equal(runtime.workState(), "settled");
-  if (terminal === "complete") emit(controlEvent("runtime.compaction.completed", {}));
-  if (terminal === "fault") emit(controlEvent("runtime.fault", { code: "failed", message: "failed" }));
+  if (terminal === "complete") emit({ event: "runtime.compaction.completed", payload: {} });
+  if (terminal === "fault") emit({ event: "runtime.fault", payload: { code: "failed", message: "failed" } });
   if (terminal === "dispose") await runtime.dispose();
   assert.equal(runtime.isCompacting(), false);
   assert.deepEqual(states, [true, false]);
@@ -349,14 +255,14 @@ test("host presentation observes compaction changes without changing Run state a
  const before = host.observe();
  const states: boolean[] = [];
  host.addStateChangeHandler(() => states.push(host.isCompacting()));
- emit(controlEvent("runtime.compaction.started", {}));
+ emit({ event: "runtime.compaction.started", payload: {} });
  assert.equal(host.isCompacting(), true);
  assert.deepEqual(host.observe(), before);
- emit(controlEvent("runtime.compaction.completed", {}));
+ emit({ event: "runtime.compaction.completed", payload: {} });
  assert.equal(host.isCompacting(), false);
  assert.deepEqual(host.observe(), before);
  assert.deepEqual(states, [true, false]);
- emit(controlEvent("runtime.compaction.started", {}));
+ emit({ event: "runtime.compaction.started", payload: {} });
  await host.lane.run(() => host.discardAndEndInLane("shutdown"));
  assert.equal(host.isCompacting(), false);
  assert.equal(host.observe().phase, "dormant");
@@ -366,7 +272,7 @@ for (const dispatchFinishesFirst of [true, false]) {
 	test(`Delivery completion follows its child-correlated completion independently of lifecycle ordering: dispatch first=${dispatchFinishesFirst}`, { timeout: 5_000 }, async () => {
 		const { runtime, emit, requestedDeliveryIds } = createFakeRuntime();
 		await runtime.ready;
-		emit(controlEvent("agent.start", { runId: "native-run-1", queuedInputCount: 0 }));
+		emit({ event: "agent.start", payload: { runId: "native-run-1", queuedInputCount: 0 } });
 		const first = runtime.deliver({ kind: "user", content: "First queued input.", deliverAs: "steer" });
 		const second = runtime.deliver({ kind: "user", content: "Second queued input.", deliverAs: "steer" });
 		let firstCompleted = false;
@@ -374,10 +280,10 @@ for (const dispatchFinishesFirst of [true, false]) {
 		void first.completion.then(() => { firstCompleted = true; });
 		void second.completion.then(() => { secondCompleted = true; });
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		const settle = () => emit(controlEvent("agent.settled", {
-			runId: "native-run-1", queuedInputCount: 0, outcome: "completed",
-		}));
-		const dispatch = () => emit(controlEvent("message.dispatch.completed", { deliveryId: requestedDeliveryIds[0] }));
+		const settle = () => emit({ event: "agent.settled", payload: {
+			runId: "native-run-1", queuedInputCount: 0,
+		} });
+		const dispatch = () => emit({ event: "message.dispatch.completed", payload: { deliveryId: requestedDeliveryIds[0] } });
 		if (dispatchFinishesFirst) dispatch(); else settle();
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		assert.equal(firstCompleted, dispatchFinishesFirst);
@@ -385,7 +291,7 @@ for (const dispatchFinishesFirst of [true, false]) {
 		if (dispatchFinishesFirst) settle(); else dispatch();
 		await first.completion;
 		assert.equal(secondCompleted, false, "one dispatch completion cannot resolve another Delivery");
-		emit(controlEvent("message.dispatch.completed", { deliveryId: requestedDeliveryIds[1] }));
+		emit({ event: "message.dispatch.completed", payload: { deliveryId: requestedDeliveryIds[1] } });
 		await second.completion;
 		await runtime.dispose();
 	});
@@ -399,13 +305,13 @@ test("correlated dispatch rejection completes Delivery failure without inventing
 	const delivery = runtime.deliver({ kind: "user", content: "Dispatch rejected." });
 	const rejected = assert.rejects(delivery.completion, /dispatch rejected/);
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	emit(controlEvent("message.dispatch.completed", { deliveryId: requestedDeliveryIds[0], error: "dispatch rejected" }));
+	emit({ event: "message.dispatch.completed", payload: { deliveryId: requestedDeliveryIds[0], error: "dispatch rejected" } });
 	await rejected;
 	assert.deepEqual(events, []);
 	await runtime.dispose();
 });
 
-
+// A settled Run whose delivery completion is still pending needs scripted timing.
 test("orderly disposal drains supervisor dispatch tracking without lifecycle", { timeout: 5_000 }, async () => {
 	const { runtime, emit, settleExit } = createFakeRuntime();
 	const host = AgentRuntimeSupervisor.createChild({
@@ -416,10 +322,10 @@ test("orderly disposal drains supervisor dispatch tracking without lifecycle", {
 	const delivery = host.deliverInLane({ kind: "user", content: "Await actual dispatch." });
 	const rejected = assert.rejects(delivery.completion, /child_runtime_disposed/);
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	emit(controlEvent("agent.start", { runId: "hosted-run-1", queuedInputCount: 0 }));
-	emit(controlEvent("agent.settled", {
-		runId: "hosted-run-1", queuedInputCount: 0, outcome: "completed",
-	}));
+	emit({ event: "agent.start", payload: { runId: "hosted-run-1", queuedInputCount: 0 } });
+	emit({ event: "agent.settled", payload: {
+		runId: "hosted-run-1", queuedInputCount: 0,
+	} });
 	const events: HostedRuntimeEvent[] = [];
 	runtime.subscribe((event) => events.push(event));
 	await runtime.dispose();

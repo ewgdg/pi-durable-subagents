@@ -77,12 +77,12 @@ rather than implement both paths.
 
 | Fact | Evidence / consequence |
 | --- | --- |
-| Owner identification precedes coordination replay; failed admission retains a boolean identification checkpoint and diagnostics, not a healthy coordinator. | [`owner-bootstrap.ts`](../src/bootstrap/owner-bootstrap.ts), [`index.ts`](../src/index.ts). Retain a verified identity descriptor for repair rather than calling the failed coordinator. |
+| Owner identification precedes coordination replay; failed admission retains a boolean identification checkpoint and diagnostics, not a healthy coordinator. | [`owner-bootstrap.ts`](../src/bootstrap/owner-bootstrap.ts), [`owner-admission.ts`](../src/bootstrap/owner-admission.ts). Retain a verified identity descriptor for repair rather than calling the failed coordinator. |
 | Ordinary Owner identity adoption may append a fresh cutoff, including for copied identity evidence. | [`owner-identity.ts`](../src/protocol/owner-identity.ts). Repair must not invoke adoption as a way to invent membership or erase invalid evidence. |
 | Moderators have a Workflow identity and no Direct Spawner. Existing bootstrap commits incident input before starting a Run. | [`moderator-input.ts`](../src/protocol/moderator-input.ts), [moderation](operational-incident-moderation.md#atomic-moderator-bootstrap). Reuse that relationship, not child Creation Requests. Existing incident inputs and report tools still depend on ordinary coordination. |
 | Owner reload shuts down managed participant Runs and rebuilds coordination projections, not the active native transcript. | [Reload contract](cold-host-recovery.md#owner-resource-reload), [`WorkflowCoordinator.shutdown`](../src/coordination/workflow-coordinator.ts). Cleanup failure is a blocker, not proof of quiescence. |
 | Cold discovery can quarantine candidates and still admit a partial Workflow. | [`cold-host-discovery.ts`](../src/bootstrap/cold-host-discovery.ts). A successful ordinary admission alone is too weak to certify a repair. |
-| Current blocked-admission guards cancel native resume. | [`index.ts`](../src/index.ts). Repair needs a narrowly scoped reopening authorization, not a blanket exception for resume. |
+| Current blocked-admission guards cancel native resume. | [`owner-admission.ts`](../src/bootstrap/owner-admission.ts). Repair needs a narrowly scoped reopening authorization, not a blanket exception for resume. |
 
 The [Pi session-replacement investigation](research/pi-session-replacement.md)
 owns the native lifecycle evidence. Its bounded probe confirms that Pi 0.85.1

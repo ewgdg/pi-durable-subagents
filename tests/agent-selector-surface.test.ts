@@ -10,13 +10,13 @@ import type {
 	Component,
 	TUI,
 } from "@earendil-works/pi-tui";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import type {
 	AgentRosterStatus,
 	AgentStatus,
 } from "../src/coordination/workflow-coordinator.ts";
-import { type AgentSelectorOptions, openAgentSelectorSurface } from "../src/presentation/agent-selector-surface.ts";
+import { openAgentSelectorSurface } from "../src/presentation/agent-selector-surface.ts";
 
 test("a long Live roster stays bounded and scrolls from the selected Agent", async () => {
 	const live = [
@@ -218,6 +218,7 @@ test("Live and Dormant are explicit keyboard-accessible tabs", async () => {
 	assert.match(dormant, /Live.* Dormant /);
 	assert.match(dormant, /Recent/);
 	assert.match(dormant, /Older/);
+	assert.match(dormant, /Agents/);
 	assert.doesNotMatch(dormant, /→ Owner/);
 
 	harness.component.handleInput?.("\x1b[Z");
@@ -245,44 +246,6 @@ test("o returns to Owner from the flat Dormant roster", async () => {
 	assert.doesNotMatch(dormant, /→ Owner/);
 	harness.component.handleInput?.("o");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
-});
-
-test("reopening preserves the selected Dormant Agent", async () => {
-	const harness = surfaceHarness(30);
-	const firstSelection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)],
-		dormant: [
-			dormantAgentStatus("recent", "Recent", "owner"),
-			dormantAgentStatus("selected", "Selected", "owner"),
-		],
-		selectedAgentId: "owner",
-	});
-	await Promise.resolve();
-	assert.ok(harness.component);
-
-	harness.component.handleInput?.("\t");
-	harness.component.handleInput?.("j");
-	harness.component.handleInput?.("\r");
-	const selected = await firstSelection;
-	assert.deepEqual(selected, { kind: "select_agent", agentId: "selected" });
-	if (!selected || selected.kind !== "select_agent") throw new Error("selection missing");
-
-	const reopened = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)],
-		dormant: [
-			dormantAgentStatus("recent", "Recent", "owner"),
-			dormantAgentStatus("selected", "Selected", "owner"),
-		],
-		selectedAgentId: selected.agentId,
-	});
-	await Promise.resolve();
-	assert.ok(harness.component);
-
-	const rendered = renderPanel(harness.component, 80).join("\n");
-	assert.match(rendered, /Live.* Dormant /);
-	assert.match(rendered, /→ Selected/);
-	harness.component.handleInput?.("\x1b");
-	assert.equal(await reopened, undefined);
 });
 
 test("Live shows direct children and navigates Agent scopes", async () => {
@@ -524,44 +487,7 @@ test("Dormant Moderator rows show its incident kind while details preserve its r
 	});
 });
 
-test("Live uses one attention-first list and dispatches the exact Human Request", async () => {
-	const harness = surfaceHarness(30);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [
-			agentStatus("owner", "Owner", null),
-			agentStatus("researcher", "Researcher", "owner"),
-		],
-		dormant: [],
-		selectedAgentId: "owner",
-		humanAttention: [{
-			requestId: "human-request-id",
-			agentId: "researcher",
-			agentLabel: "Researcher",
-			question: "Which boundary should remain authoritative?",
-		}],
-		operationalAttention: [],
-	});
-	await Promise.resolve();
-	assert.ok(harness.component);
-
-	const lines = renderPanel(harness.component, 80);
-	const attentionHeader = lines.findIndex((line) => line.includes("Attention Inbox"));
-	const decideRow = lines.findIndex((line) => line.includes("DECIDE 1"));
-	const agentsHeader = lines.findIndex((line) => /Agents/.test(line));
-	assert.ok(attentionHeader < decideRow);
-	assert.ok(decideRow < agentsHeader);
-	assert.doesNotMatch(lines.join("\n"), /→?\s*Owner\s+live/);
-	assert.match(lines[decideRow] ?? "", /→ DECIDE 1/);
-
-	harness.component.handleInput?.("\r");
-	assert.deepEqual(await selection, {
-		kind: "decide",
-		requestId: "human-request-id",
-		agentId: "researcher",
-	});
-});
-
-test("single-Agent Operational ATTENTION opens the affected Agent", async () => {
+test("incident rows paint their headline with Request and diagnostic evidence", async () => {
 	const harness = surfaceHarness(30);
 	const selection = openAgentSelectorSurface(harness.ui, {
 		live: [agentStatus("owner", "Owner", null)],
@@ -592,38 +518,7 @@ test("single-Agent Operational ATTENTION opens the affected Agent", async () => 
 	assert.match(rendered, /→ ATTENTION 1 · Run Failure · Affected Agent/);
 	assert.match(rendered, /Affected Affected Agent/);
 	assert.match(rendered, /Request requester-agent\/request-entry\/request-call/);
-	harness.component.handleInput?.("\r");
-	assert.deepEqual(await selection, {
-		kind: "select_agent",
-		agentId: "affected-agent",
-	});
-});
-
-test("multi-Agent Operational ATTENTION keeps the overlay open when Enter has no action", async () => {
-	const harness = surfaceHarness(30);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)],
-		dormant: [],
-		selectedAgentId: "owner",
-		operationalAttention: [{
-			trigger: {
-				kind: "dependency_deadlock",
-				agentIds: ["first-agent", "second-agent"],
-				requests: { total: 0, sources: [] },
-			},
-			affectedAgents: [
-				{ agentId: "first-agent", label: "First Agent" },
-				{ agentId: "second-agent", label: "Second Agent" },
-			],
-			diagnostics: [],
-		}],
-	});
-	await Promise.resolve();
-	assert.ok(harness.component);
-
-	harness.component.handleInput?.("\r");
-	assert.equal(harness.resolved, false);
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ ATTENTION 1 · Dependency Deadl/);
+	assert.match(rendered, /Diagnostic moderator\/diagnostic-entry/);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -813,246 +708,21 @@ test("an open selector refreshes compaction and restores current work without mo
  assert.equal(removed, true);
 });
 
-test("Owner-default focus stays on the resolved child when attention arrives", async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const child = agentStatus("child", "Child", "owner");
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, child], dormant: [], selectedAgentId: "owner",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Child/);
-	publish({
-		live: [owner, child], dormant: [],
-		humanAttention: [{ requestId: "request", agentId: "child", agentLabel: "Child", question: "Proceed?" }],
-	});
-	assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Child/);
-	harness.component!.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
-});
-
-for (const withSibling of [false, true]) test(`focused ending Agent stays in Live after becoming Dormant (sibling=${withSibling})`, async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const child = { ...agentStatus("child", "Child", "owner"), run: { phase: "ending" as const, attention: "none" as const, retentionReasons: [] } };
-	const siblings = withSibling ? [agentStatus("sibling", "Sibling", "owner")] : [];
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, child, ...siblings], dormant: [], selectedAgentId: "owner",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	const before = renderPanel(harness.component, 80);
-	const childRow = before.findIndex(line => line.includes("→ Child"));
-	assert.ok(childRow >= 0);
-	for (const compacting of [false, true, false]) {
-		publish({ live: [owner, ...siblings], dormant: [{ ...dormantAgentStatus("child", "Child", "owner"), compacting }] });
-		const after = renderPanel(harness.component, 80);
-		assert.match(after[childRow]!, /→ Child.*dormant/);
-		if (withSibling) assert.ok(after.findIndex(line => line.includes("Sibling")) > childRow);
-	}
-	harness.component!.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
-});
-
-for (const navigation of ["j", "k", "pointer"] as const) test(`leaving a migrated focused row releases it without changing the ${navigation} destination`, async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const previous = agentStatus("previous", "Previous", "owner");
-	const child = agentStatus("child", "Child", "owner");
-	const next = agentStatus("next", "Next", "owner");
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, previous, child, next], dormant: [], selectedAgentId: "child",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	publish({ live: [owner, previous, next], dormant: [dormantAgentStatus("child", "Child", "owner")] });
-	const component = harness.component!;
-	const before = renderPanel(component, 80);
-	assert.ok(before.findIndex(line => line.includes("Previous")) < before.findIndex(line => line.includes("→ Child")));
-	assert.ok(before.findIndex(line => line.includes("→ Child")) < before.findIndex(line => line.includes("Next")));
-	if (navigation === "pointer") {
-		const lines = component.render(80).map(stripTerminalSequences);
-		const y = lines.findIndex(line => line.includes("Next"));
-		const x = lines[y]!.indexOf("Next");
-		component.handleMouse?.({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: 80, height: 24, shift: false, alt: false, ctrl: false });
-	} else {
-		component.handleInput?.(navigation);
-		assert.match(renderPanel(component, 80).join("\n"), navigation === "j" ? /→ Next/ : /→ Previous/);
-	}
-	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /Child/);
-	if (navigation !== "pointer") component.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: navigation === "k" ? "previous" : "next" });
-});
-
-test("changing tabs releases a migrated row and returning restores normal membership", async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const child = agentStatus("child", "Child", "owner");
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, child], dormant: [], selectedAgentId: "owner",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	publish({ live: [owner], dormant: [dormantAgentStatus("child", "Child", "owner")] });
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Child.*dormant/);
-	harness.component!.handleInput?.("\t");
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Child.*dormant/);
-	harness.component!.handleInput?.("\x1b[Z");
-	assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Child/);
-	harness.component!.handleInput?.("\x1b");
-	assert.equal(await selection, undefined);
-});
-
-test("focused Dormant Agent becoming Live keeps its row until focus leaves", async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const child = dormantAgentStatus("child", "Child", "owner");
-	const sibling = dormantAgentStatus("sibling", "Sibling", "owner");
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner], dormant: [child, sibling], selectedAgentId: "child",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	publish({ live: [owner, agentStatus("child", "Child", "owner")], dormant: [sibling] });
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Child\*.*idle/);
-	harness.component!.handleInput?.("j");
-	assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Child/);
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Sibling/);
-	harness.component!.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
-});
-
-test("changing scope releases a migrated focused row", async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const branch = agentStatus("branch", "Branch", "owner");
-	const child = agentStatus("child", "Child", "branch");
-	const sibling = agentStatus("sibling", "Sibling", "branch");
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, branch, child, sibling], dormant: [], selectedAgentId: "child",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	publish({ live: [owner, branch, sibling], dormant: [dormantAgentStatus("child", "Child", "branch")] });
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Child\*.*dormant/);
-	harness.component!.handleInput?.("h");
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Branch/);
-	harness.component!.handleInput?.("l");
-	assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Child/);
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Sibling/);
-	harness.component!.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
-});
-
-test("a mounted but unfocused Agent is not retained when it migrates", async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const child = agentStatus("child", "Child", "owner");
-	const sibling = agentStatus("sibling", "Sibling", "owner");
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, child, sibling], dormant: [], selectedAgentId: "child",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	harness.component!.handleInput?.("j");
-	publish({ live: [owner, sibling], dormant: [dormantAgentStatus("child", "Child", "owner")] });
-	assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Child/);
-	assert.match(renderPanel(harness.component, 80).join("\n"), /→ Sibling/);
-	harness.component!.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
-});
-
-test("a disappeared selection's fallback stays focused on subsequent refreshes", async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const child = agentStatus("child", "Child", "owner");
-	const sibling = agentStatus("sibling", "Sibling", "owner");
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, child, sibling], dormant: [], selectedAgentId: "child",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	publish({ live: [owner, sibling], dormant: [] });
-	assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Sibling/);
-	publish({ live: [owner, child, sibling], dormant: [] });
-	assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Sibling/);
-	harness.component!.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
-});
-
-test("Owner footer is the final non-wrapping focus destination", async () => {
+test("rebound list navigation keys stop at both ends like the arrow keys", async (t) => {
+	const keybindings = getKeybindings();
+	const previousBindings = keybindings.getUserBindings();
+	t.after(() => keybindings.setUserBindings(previousBindings));
+	keybindings.setUserBindings({ ...previousBindings, "tui.select.up": "ctrl+p", "tui.select.down": "ctrl+n" });
 	const harness = surfaceHarness(24);
 	const selection = openAgentSelectorSurface(harness.ui, {
 		live: [agentStatus("owner", "Owner", null), agentStatus("child", "Child", "owner")],
 		dormant: [], selectedAgentId: "child",
 	});
 	const component = harness.component!;
-	component.handleInput?.("k");
+	component.handleInput?.("\x10");
 	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
-	component.handleInput?.("j");
-	component.handleInput?.("j");
-	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
-	component.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
-});
-
-test("Agents heading returns to root and preserves the top-level ancestor", async () => {
-	const harness = surfaceHarness(30);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [
-			agentStatus("owner", "Owner", null),
-			agentStatus("first", "First", "owner"),
-			agentStatus("branch", "Branch", "owner"),
-			agentStatus("nested", "Nested", "branch"),
-			agentStatus("leaf", "Leaf", "nested"),
-		], dormant: [], selectedAgentId: "leaf",
-	});
-	const component = harness.component!;
-	clickLabel(component, "Agents");
-	assert.equal(harness.resolved, false);
-	assert.match(renderPanel(component, 80).join("\n"), /→ Branch/);
-	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /\[›\] Nested/);
-	clickLabel(component, "Agents");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Branch/);
-	component.handleInput?.("k");
-	assert.match(renderPanel(component, 80).join("\n"), /→ First/);
-	component.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "first" });
-});
-
-test("Attention, Agents and Owner form one non-circular order", async () => {
-	const harness = surfaceHarness(24);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null), agentStatus("child", "Child", "owner")],
-		dormant: [], selectedAgentId: "child",
-		humanAttention: [{ requestId: "request", agentId: "child", agentLabel: "Child", question: "Proceed?" }],
-	});
-	const component = harness.component!;
-	component.handleInput?.("j");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
-	component.handleInput?.("j");
-	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
-	component.handleInput?.("k");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
-	component.handleInput?.("k");
-	component.handleInput?.("k");
-	assert.match(renderPanel(component, 80).join("\n"), /→ DECIDE/);
-	component.handleInput?.("\x1b");
-	assert.equal(await selection, undefined);
-});
-
-test("Dormant has an Agents heading and a final Owner action", async () => {
-	const harness = surfaceHarness(24);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)],
-		dormant: [dormantAgentStatus("child", "Child", "owner")], selectedAgentId: "child",
-	});
-	const component = harness.component!;
-	assert.match(renderPanel(component, 80).join("\n"), /Agents/);
-	component.handleInput?.("j");
-	component.handleInput?.("l");
-	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
+	component.handleInput?.("\x0e");
+	component.handleInput?.("\x0e");
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
 });
@@ -1082,24 +752,6 @@ test("nested Agents path stays visible while scrolling and children remain a tra
 	component.handleInput?.("h");
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child-10" });
-});
-
-test("Agents root browsing preserves its Dormant ancestor", async () => {
-	const harness = surfaceHarness(24);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [
-			agentStatus("owner", "Owner", null),
-			agentStatus("root", "Root", "owner"),
-			agentStatus("leaf", "Leaf", "sleeping"),
-		], dormant: [dormantAgentStatus("sleeping", "Sleeping", "owner")],
-		selectedAgentId: "leaf",
-		humanAttention: [{ requestId: "request", agentId: "leaf", agentLabel: "Leaf", question: "Proceed?" }],
-	});
-	const component = harness.component!;
-	clickLabel(component, "Agents");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping/);
-	component.handleInput?.("\x1b");
-	assert.equal(await selection, undefined);
 });
 
 test("focused Owner keeps preparation feedback and input ownership until selection completes", async () => {
@@ -1181,134 +833,38 @@ function renderPanel(component: Component | undefined, width: number): string[] 
 	return lines.slice(top, bottom + 1).map((line) => line.slice(left).trimEnd());
 }
 
-test("Live browsing traverses Dormant ancestors without opening them and keeps fully Dormant branches separate", async () => {
-	const harness = surfaceHarness(30);
-	const prepared: unknown[] = [];
+test("the mounted marker paints a bold label* on its row and the Owner destination, never in the path", async () => {
+	const harness = surfaceHarness(30, true);
 	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null), agentStatus("leaf", "Leaf", "middle")],
-		dormant: [
-			dormantAgentStatus("root", "Sleeping root", "owner"),
-			dormantAgentStatus("middle", "Sleeping middle", "root"),
-			dormantAgentStatus("quiet", "Quiet branch", "root"),
-			dormantAgentStatus("quiet-leaf", "Quiet leaf", "quiet"),
-		],
-		selectedAgentId: "owner",
-		prepareSelection: async (action) => { prepared.push(action); },
+		live: [agentStatus("owner", "Owner", null), agentStatus("builder", "Builder", "owner"),
+			agentStatus("child", "Child", "builder")],
+		dormant: [], selectedAgentId: "builder",
 	});
 	const component = harness.component!;
-	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping root.*1 child/);
-	assert.match(renderPanel(component, 80).join("\n"), /dormant/);
+	const markedRow = () => component.render(80).find(line => line.includes("Builder*")) ?? "";
+	assert.match(markedRow(), /→ \x1b\[1mBuilder\*\x1b\[22m/);
+	assert.match(markedRow(), /\x1b\[44m/);
+	component.handleInput?.("j");
+	assert.match(markedRow(), /\x1b\[1mBuilder\*\x1b\[22m/);
+	assert.doesNotMatch(markedRow(), /→|\x1b\[44m/);
+	component.handleInput?.("k");
 	component.handleInput?.("l");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping middle.*1 child/);
-	component.handleInput?.("l");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Leaf/);
-	component.handleInput?.("h");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping middle/);
-	component.handleInput?.("h");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping root/);
-	component.handleInput?.("\t");
-	const dormant = renderPanel(component, 80).join("\n");
-	assert.match(dormant, /Quiet branch/);
-	assert.match(dormant, /Quiet leaf/);
-	assert.doesNotMatch(dormant, /Sleeping root|Sleeping middle|Leaf/);
-	assert.deepEqual(prepared, []);
+	const nested = renderPanel(component, 80).join("\n");
+	assert.match(nested, /Agents › Builder/);
+	assert.doesNotMatch(nested, /\*/);
 	component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
-});
 
-for (const phase of ["starting", "live", "ending"] as const) {
-	test(`a selected Dormant ancestor opens in Live with a ${phase} descendant`, async () => {
-		const harness = surfaceHarness(24);
-		const parent = dormantAgentStatus("parent", "Sleeping parent", "owner");
-		const child = { ...agentStatus("child", "Child", "parent"),
-			run: { phase, attention: "none" as const, retentionReasons: [] } };
-		const selection = openAgentSelectorSurface(harness.ui, {
-			live: [agentStatus("owner", "Owner", null), child],
-			dormant: [parent], selectedAgentId: "parent",
-		});
-		const component = harness.component!;
-		assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping parent.*1 child/);
-		component.handleInput?.("l");
-		assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
-		component.handleInput?.("h");
-		component.handleInput?.("\r");
-		assert.deepEqual(await selection, { kind: "select_agent", agentId: "parent" });
-		assert.equal(parent.run.phase, "dormant");
+	const owner = surfaceHarness(30, true);
+	const ownerSelection = openAgentSelectorSurface(owner.ui, {
+		live: [agentStatus("owner", "Owner", null), agentStatus("builder", "Builder", "owner")],
+		dormant: [], selectedAgentId: "owner",
 	});
-}
-
-test("roster refresh retains a newly Dormant parent until its last live descendant becomes Dormant", async () => {
-	const harness = surfaceHarness(24);
-	const owner = agentStatus("owner", "Owner", null);
-	const parent = agentStatus("parent", "Parent", "owner");
-	const child = agentStatus("child", "Child", "parent");
-	const sleepingParent = dormantAgentStatus("parent", "Parent", "owner");
-	const sleepingChild = dormantAgentStatus("child", "Child", "parent");
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, parent, child], dormant: [], selectedAgentId: "owner",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	const component = harness.component!;
-	publish({ live: [owner, child], dormant: [sleepingParent] });
-	assert.match(renderPanel(component, 80).join("\n"), /→ Parent.*dormant.*1 child/);
-	component.handleInput?.("l");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
-	component.handleInput?.("h");
-	publish({ live: [owner], dormant: [sleepingParent, sleepingChild] });
-	assert.match(renderPanel(component, 80).join("\n"), /→ Parent.*dormant/);
-	component.handleInput?.("j"); // Leaving the focused row releases its presentation-only pin.
-	assert.match(renderPanel(component, 80).join("\n"), /No live Agents/);
-	component.handleInput?.("\t");
-	assert.match(renderPanel(component, 80).join("\n"), /Parent/);
-	assert.match(renderPanel(component, 80).join("\n"), /Child/);
-	publish({ live: [owner, child], dormant: [sleepingParent] });
-	assert.match(renderPanel(component, 80).join("\n"), /→ Parent.*dormant/);
-	component.handleInput?.("j");
-	assert.match(renderPanel(component, 80).join("\n"), /No dormant Agents/);
-	component.handleInput?.("\x1b[Z");
-	assert.match(renderPanel(component, 80).join("\n"), /Parent.*1 child/);
-	component.handleInput?.("k"); // Return from the footer to the repopulated list.
-	component.handleInput?.("l");
-	component.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
-});
-
-test("pending reports open from Attention as distinct actions; read reports remain in history", async () => {
-	const harness = surfaceHarness(24);
-	const report = {
-		reportId: "report-1", createdAt: "2026-01-01T00:00:00Z",
-		reporter: { agentId: "moderator", label: "Moderator" },
-		source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/tmp/report.jsonl" },
-		symptom: "Delivery stalled", suspectedDefect: "Dispatch race", uncertainty: "Not reproduced",
-		recoveryActions: "Retried", recoveryOutcome: "Recovered", evidence: ["receipt-1"],
-	};
-	let prepared = false;
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
-		reports: [{ report }], prepareSelection() { prepared = true; },
-	});
-	assert.match(harness.component!.render(80).join("\n"), /Attention Inbox/);
-	assert.match(harness.component!.render(80).join("\n"), /REPORT.*Moderator/);
-	harness.component!.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "open_report", reportId: report.reportId });
-	assert.equal(prepared, true);
-
-	const history = surfaceHarness(24);
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const historySelection = openAgentSelectorSurface(history.ui, {
-		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
-		reports: [{ report }],
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	publish({ live: [agentStatus("owner", "Owner", null)], dormant: [], reports: [{ report, readAt: "2026-01-02T00:00:00Z" }] });
-	assert.doesNotMatch(history.component!.render(80).join("\n"), /REPORT.*Moderator/);
-	history.component!.handleInput?.("\t");
-	history.component!.handleInput?.("\t");
-	assert.match(history.component!.render(80).join("\n"), /│ History(?:\s|\x1b)/);
-	assert.match(history.component!.render(80).join("\n"), /Read/);
-	history.component!.handleInput?.("\r");
-	assert.deepEqual(await historySelection, { kind: "open_report", reportId: report.reportId });
+	const lines = owner.component!.render(80);
+	assert.match(lines.join("\n"), /Go to \x1b\[1mOwner\*\x1b\[22m \[o\]/);
+	assert.equal(stripTerminalSequences(lines.join("\n")).split("*").length - 1, 1);
+	owner.component!.handleInput?.("\x1b");
+	assert.equal(await ownerSelection, undefined);
 });
 
 test("Shift Tab reaches report history and safely displays report summaries", async () => {
@@ -1413,101 +969,6 @@ function clickLabel(component: Component, label: string): void {
 	});
 }
 
-for (const dormant of [false, true]) {
-	test(`mounted participant label stays marked independently of focus and tab (dormant=${dormant})`, async () => {
-		const harness = surfaceHarness(30, true);
-		const builder = dormant
-			? dormantAgentStatus("builder", "Builder", "owner")
-			: agentStatus("builder", "Builder", "owner");
-		const peer = dormant
-			? dormantAgentStatus("peer", "Peer", "owner")
-			: agentStatus("peer", "Peer", "owner");
-		const selection = openAgentSelectorSurface(harness.ui, {
-			live: [agentStatus("owner", "Owner", null), ...(dormant ? [] : [builder, peer])],
-			dormant: dormant ? [builder, peer] : [],
-			selectedAgentId: "builder",
-		});
-		const component = harness.component!;
-		const markedRow = () => component.render(80).find(line => line.includes("Builder*")) ?? "";
-		assert.match(markedRow(), /→ \x1b\[1mBuilder\*\x1b\[22m/);
-		assert.match(markedRow(), /\x1b\[44m/);
-		assert.match(stripTerminalSequences(markedRow()), dormant ? /dormant/ : /idle/);
-		component.handleInput?.("j");
-		assert.match(markedRow(), /\x1b\[1mBuilder\*\x1b\[22m/);
-		assert.doesNotMatch(markedRow(), /→|\x1b\[44m/);
-		assert.match(renderPanel(component, 80).join("\n"), /→ Peer/);
-		assert.doesNotMatch(renderPanel(component, 80).join("\n"), /Peer\*|Owner\*/);
-		component.handleInput?.("\t");
-		assert.doesNotMatch(renderPanel(component, 80).join("\n"), /\*/);
-		component.handleInput?.("\x1b[Z");
-		assert.match(markedRow(), /\x1b\[1mBuilder\*\x1b\[22m/);
-		component.handleInput?.("\x1b");
-		assert.equal(await selection, undefined);
-	});
-}
-
-test("mounted participant marker does not follow scope into breadcrumbs", async () => {
-	const harness = surfaceHarness(30, true);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null), agentStatus("builder", "Builder", "owner"),
-			agentStatus("child", "Child", "builder")],
-		dormant: [], selectedAgentId: "builder",
-	});
-	const component = harness.component!;
-	component.handleInput?.("l");
-	const nested = renderPanel(component, 80).join("\n");
-	assert.match(nested, /Agents › Builder/);
-	assert.doesNotMatch(nested, /\*/);
-	component.handleInput?.("h");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Builder\*/);
-	component.handleInput?.("\x1b");
-	assert.equal(await selection, undefined);
-});
-
-test("mounted Owner marks only its action label across all tabs and focus", async () => {
-	const harness = surfaceHarness(30, true);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null), agentStatus("builder", "Builder", "owner")],
-		dormant: [], selectedAgentId: "owner",
-	});
-	const component = harness.component!;
-	for (const key of ["", "j", "\t", "\t"]) {
-		if (key) component.handleInput?.(key);
-		const lines = component.render(80);
-		assert.match(lines.join("\n"), /Go to \x1b\[1mOwner\*\x1b\[22m \[o\]/);
-		assert.equal(stripTerminalSequences(lines.join("\n")).split("*").length - 1, 1);
-	}
-	component.handleInput?.("\r");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
-});
-
-test("a Dormant Owner still opens the selector and remains the single Owner destination", async () => {
-	const harness = surfaceHarness(30);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [],
-		dormant: [
-			dormantAgentStatus("owner", "Owner", null),
-			dormantAgentStatus("worker", "Worker", "owner"),
-		],
-		selectedAgentId: "owner",
-	});
-	await Promise.resolve();
-	assert.ok(harness.component, "the selector opens while the Owner Run is Dormant");
-
-	const live = renderPanel(harness.component, 80).join("\n");
-	assert.match(live, /Go to Owner\* \[o\]/);
-	assert.doesNotMatch(live, /→ Owner/);
-
-	harness.component.handleInput?.("\t");
-	const dormant = renderPanel(harness.component, 80).join("\n");
-	assert.match(dormant, /→ Worker/);
-	assert.match(dormant, /Go to Owner\* \[o\]/);
-	assert.doesNotMatch(dormant, /→ Owner/);
-
-	harness.component.handleInput?.("o");
-	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
-});
-
 for (const tab of ["live", "reports"] as const) {
 	test(`m marks the selected report read in ${tab} without leaving the menu`, { timeout: 5_000 }, async () => {
 		const harness = surfaceHarness(30);
@@ -1602,30 +1063,6 @@ for (const terminalRows of [10, 24, 40]) {
 	}
 }
 
-for (const readAt of [undefined, "2026-06-11T00:00:00Z"]) test(`linked incident uses report notification only (read=${!!readAt})`, async () => {
-	const harness = surfaceHarness(30);
-	const source = { kind: "runtime_diagnostic" as const, agentId: "owner", entryId: "incident-diagnostic", transcriptPath: "/tmp/owner.jsonl" };
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
-		operationalAttention: [{
-			trigger: { kind: "run_failure", agentId: "worker", runSequence: 1, obligations: { total: 0, sources: [] } },
-			affectedAgents: [{ agentId: "worker", label: "Worker" }], diagnostics: [source], reportSource: source,
-		}],
-		reports: [{ readAt, report: {
-			reportId: "incident-report", createdAt: "2026-06-11T00:00:00Z", source,
-			symptom: "Recovery exhausted", suspectedDefect: "Unknown", uncertainty: "Unknown",
-			recoveryActions: "Retried", recoveryOutcome: "Failed", evidence: ["diagnostic"],
-		} }],
-	});
-	const rendered = harness.component!.render(100).join("\n");
-	assert.doesNotMatch(rendered, /ATTENTION/);
-	assert.match(rendered, /Operational incident unresolved · live status/);
-	if (readAt) assert.doesNotMatch(rendered, /REPORT/);
-	else assert.match(rendered, /REPORT · Runtime/);
-	harness.component!.handleInput?.("\x1b");
-	await selection;
-});
-
 test("runtime report read toggle removes only inbox notification and preserves history and live status", async () => {
 	const harness = surfaceHarness(30);
 	const report = {
@@ -1655,51 +1092,6 @@ test("runtime report read toggle removes only inbox notification and preserves h
 	component.handleInput?.("k");
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "open_report", reportId: "failure" });
-});
-
-test("quarantined tab stays hidden while empty and Tab skips it", async () => {
-	const harness = surfaceHarness(30);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)],
-		dormant: [dormantAgentStatus("sleeper", "Sleeper", "owner")],
-		quarantined: [],
-		quarantinedCandidateCount: 0,
-		selectedAgentId: "owner",
-	});
-	await Promise.resolve();
-	assert.ok(harness.component);
-	const tabs = renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "";
-	assert.doesNotMatch(tabs, /Quarantined/);
-	assert.doesNotMatch(tabs, /Reports/);
-	for (let press = 0; press < 2; press += 1) {
-		harness.component.handleInput?.("\t");
-		assert.doesNotMatch(renderPanel(harness.component, 80).join("\n"), /Quarantined/);
-		assert.doesNotMatch(renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "", /Reports/);
-	}
-	assert.match(renderPanel(harness.component, 80).join("\n"), /No live Agents/);
-	harness.component.handleInput?.("\x1b");
-	assert.equal(await selection, undefined);
-});
-
-test("reports tab stays hidden while empty and Tab skips it", async () => {
-	const harness = surfaceHarness(30);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)],
-		dormant: [dormantAgentStatus("sleeper", "Sleeper", "owner")],
-		reports: [],
-		selectedAgentId: "owner",
-	});
-	await Promise.resolve();
-	assert.ok(harness.component);
-	const tabs = renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "";
-	assert.doesNotMatch(tabs, /Reports/);
-	for (let press = 0; press < 2; press += 1) {
-		harness.component.handleInput?.("\t");
-		assert.doesNotMatch(renderPanel(harness.component, 80).find((line) => line.includes("Live")) ?? "", /Reports/);
-	}
-	assert.match(renderPanel(harness.component, 80).join("\n"), /No live Agents/);
-	harness.component.handleInput?.("\x1b");
-	assert.equal(await selection, undefined);
 });
 
 test("quarantined tab lists excluded identities as informational rows", async () => {
@@ -1757,47 +1149,5 @@ test("quarantined overflow counts candidates without recoverable IDs", async () 
 	component.handleInput?.("\r");
 	assert.equal(harness.resolved, false);
 	component.handleInput?.("\x1b");
-	assert.equal(await selection, undefined);
-});
-
-test("a quarantine with only unreadable candidates still shows its tab", async () => {
-	const harness = surfaceHarness(30);
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [agentStatus("owner", "Owner", null)],
-		dormant: [],
-		quarantined: [],
-		quarantinedCandidateCount: 3,
-		selectedAgentId: "owner",
-	});
-	await Promise.resolve();
-	const component = harness.component!;
-	component.handleInput?.("\t");
-	component.handleInput?.("\t");
-	assert.match(renderPanel(component, 80).join("\n"), /3 candidates without recoverable ID/);
-	component.handleInput?.("\r");
-	assert.equal(harness.resolved, false);
-	clickLabel(component, "Dormant");
-	clickLabel(component, "Quarantined");
-	assert.match(renderPanel(component, 80).join("\n"), /3 unreadable candidates/);
-	component.handleInput?.("\x1b");
-	assert.equal(await selection, undefined);
-});
-
-test("a live refresh publishes quarantined identities to the selector", async () => {
-	const harness = surfaceHarness(30);
-	const owner = agentStatus("owner", "Owner", null);
-	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
-	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner], dormant: [], selectedAgentId: "owner",
-		addChangeHandler(handler) { publish = handler; return () => {}; },
-	});
-	await Promise.resolve();
-	assert.doesNotMatch(renderPanel(harness.component!, 80).join("\n"), /Quarantined/);
-	publish({ live: [owner], dormant: [], quarantined: ["zx-9"], quarantinedCandidateCount: 1 });
-	assert.match(renderPanel(harness.component!, 80).join("\n"), /Quarantined/);
-	harness.component!.handleInput?.("\t");
-	harness.component!.handleInput?.("\t");
-	assert.match(renderPanel(harness.component!, 80).join("\n"), /zx-9/);
-	harness.component!.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });

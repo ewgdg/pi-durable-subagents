@@ -7,7 +7,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { resolveCommittedAgentMessageTargetId } from "../src/coordination/agent-message-target.ts";
 import { resolveAgentTarget } from "../src/coordination/agent-target.ts";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
-import { RequestEvidence } from "../src/coordination/request-evidence.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
@@ -260,13 +260,13 @@ test("a rejected ambiguous Request is not retained as canonical Request evidence
 	const author = record(authorAgentId, "Owner", authorSession);
 	const first = record("first-review-agent", "native-input-review");
 	const second = record("second-review-agent", "native-input-review");
-	const evidence = new RequestEvidence(new Map([
+	const { requestRelationships } = requestCoordination(new Map([
 		[authorAgentId, author],
 		[first.identity.agentId, first],
 		[second.identity.agentId, second],
 	]));
 
-	assert.deepEqual(evidence.residualRelationshipsFor(author), { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
+	assert.deepEqual(requestRelationships.relationshipsFor(author), { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
 });
 
 test("an unresolved ambiguous Request stays out of relationship reconciliation", () => {
@@ -285,13 +285,13 @@ test("an unresolved ambiguous Request stays out of relationship reconciliation",
 	const author = record(authorAgentId, "Owner", authorSession);
 	const first = record("first-review-agent", "native-input-review");
 	const second = record("second-review-agent", "native-input-review");
-	const evidence = new RequestEvidence(new Map([
+	const { requestRelationships } = requestCoordination(new Map([
 		[authorAgentId, author],
 		[first.identity.agentId, first],
 		[second.identity.agentId, second],
 	]));
 
-	assert.deepEqual(evidence.residualRelationshipsFor(author), { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
+	assert.deepEqual(requestRelationships.relationshipsFor(author), { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
 });
 
 test("an error result plus Request Delivery remains contradictory evidence", () => {
@@ -339,14 +339,14 @@ test("an error result plus Request Delivery remains contradictory evidence", () 
 	const author = record(authorAgentId, "Owner", authorSession);
 	const first = record(targetAgentId, "native-input-review", targetSession);
 	const second = record("second-review-agent", "native-input-review");
-	const evidence = new RequestEvidence(new Map([
+	const { requestRelationships } = requestCoordination(new Map([
 		[authorAgentId, author],
 		[first.identity.agentId, first],
 		[second.identity.agentId, second],
 	]));
 
 	assert.throws(
-		() => evidence.residualRelationshipsFor(author),
+		() => requestRelationships.relationshipsFor(author),
 		/error result and Delivery/,
 	);
 });

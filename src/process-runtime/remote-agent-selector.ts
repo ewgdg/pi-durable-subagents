@@ -1,23 +1,13 @@
-import { copyToClipboard } from "@earendil-works/pi-coding-agent";
-import { openModeratorReportSurface } from "../presentation/moderator-report-surface.ts";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
 import type {
 	RemoteAgentSelectorAction,
 	RemoteAgentSelectorSnapshot,
 } from "../control/agent-control-protocol.ts";
 import type { HumanPresentationCoordinatorView } from "../coordination/workflow-coordinator.ts";
-import {
-	openAgentSelectorSurface,
-	type AgentSelectorAction,
-} from "../presentation/agent-selector-surface.ts";
+import type { AgentSelectorAction } from "../presentation/agent-selector-projection.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
 import type { PostMortemAgentView } from "../presentation/post-mortem-agent-view-surface.ts";
 import type { PostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";
-import type {
-	ControlBackedChildPresentationHandlers,
-	OwnerParticipantPresentationHandlers,
-} from "./remote-participant-control.ts";
+import type { OwnerParticipantPresentationHandlers } from "./remote-participant-control.ts";
 
 export type AgentSelectionSession = Readonly<{
 	prepare(action: AgentSelectorAction, signal?: AbortSignal): Promise<void>;
@@ -25,27 +15,6 @@ export type AgentSelectionSession = Readonly<{
 	preparedView(): DurableAgentView | undefined;
 	postMortemView(): PostMortemAgentView | undefined;
 }>;
-
-const AGENTS_OWNER_ARGUMENT = "owner";
-export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner]";
-
-type AgentsCommandMode = "selector" | "owner";
-
-export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
-	const argument = args.trim();
-	if (!argument) return "selector";
-	if (argument === AGENTS_OWNER_ARGUMENT) return "owner";
-	throw new Error(AGENTS_COMMAND_USAGE);
-}
-
-export function getAgentsArgumentCompletions(argumentPrefix: string): {
-	value: string;
-	label: string;
-}[] | null {
-	return AGENTS_OWNER_ARGUMENT.startsWith(argumentPrefix.trim())
-		? [{ value: AGENTS_OWNER_ARGUMENT, label: AGENTS_OWNER_ARGUMENT }]
-		: null;
-}
 
 /** Capture every selector input at one scoped Owner presentation boundary. */
 export function createAgentSelectorSnapshot(
@@ -172,95 +141,6 @@ export function createOwnerAgentPresentationHandlers(
 				: { kind: "selected" };
 		},
 	};
-}
-
-/** Register the real child-local selector against its truthful Pi TUI context. */
-export function registerRemoteAgentsCommand(
-	pi: ExtensionAPI,
-	presentation: ControlBackedChildPresentationHandlers,
-): void {
-	pi.registerCommand("agents", {
-		description: "Show Agents in the current Workflow",
-		getArgumentCompletions: getAgentsArgumentCompletions,
-		handler: async (args, ctx) => {
-			if (parseAgentsCommandArgument(args) === "owner") {
-				const snapshot = await presentation.snapshot();
-				// The Owner exists in the roster whatever its Run phase, so /agents owner
-				// still returns to it while a stopped Owner Run is Dormant.
-				const owner = [...snapshot.live, ...snapshot.dormant].find(
-					(status) => status.agentId === status.workflowId,
-				);
-				if (!owner) throw new Error("Agent selector roster has no Owner");
-				await presentation.select({
-					kind: "select_agent",
-					agentId: owner.agentId,
-				});
-				return;
-			}
-			let reopenSelector = true;
-			while (reopenSelector) {
-				reopenSelector = false;
-				let currentSnapshot: RemoteAgentSelectorSnapshot | undefined;
-				let publishSnapshot: ((snapshot: RemoteAgentSelectorSnapshot) => void) | undefined;
-				// Listen before the RPC: changes delivered while it is pending take
-				// precedence over its result and are replayed when the surface mounts.
-				const removeChangeHandler = presentation.addChangeHandler?.((snapshot) => {
-					currentSnapshot = snapshot;
-					publishSnapshot?.(snapshot);
-				});
-				try {
-					const snapshot = await presentation.snapshot();
-					currentSnapshot ??= snapshot;
-					let postMortemResult: Awaited<ReturnType<typeof presentation.select>> | undefined;
-					const action = await openAgentSelectorSurface(ctx.ui, {
-						...currentSnapshot,
-						addChangeHandler(handler) {
-							publishSnapshot = handler;
-							handler(currentSnapshot!);
-							return () => { publishSnapshot = undefined; };
-						},
-						async setReportRead(reportId, read) {
-							await presentation.setReportRead(reportId, read);
-							currentSnapshot = await presentation.snapshot();
-							return currentSnapshot.reports;
-						},
-						async prepareSelection(action) {
-							if (action.kind === "open_report") return;
-							postMortemResult = await presentation.select(
-								action as RemoteAgentSelectorAction,
-							);
-						},
-						onSelectionError(error) {
-							ctx.ui.notify(
-								`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
-								"error",
-							);
-						},
-					});
-					if (action?.kind === "open_report") {
-						const item = currentSnapshot.reports.find(({ report }) => report.reportId === action.reportId);
-						if (!item) throw new Error("Report is unavailable");
-						const reporter = "reporter" in item.report ? item.report.reporter : undefined;
-						const outcome = await openModeratorReportSurface(ctx.ui, item, {
-							setRead: (read) => presentation.setReportRead(item.report.reportId, read),
-							copyReport: copyToClipboard,
-							prepareReporter: reporter ? async () => {
-								postMortemResult = await presentation.select({ kind: "select_agent", agentId: reporter.agentId });
-							} : undefined,
-						});
-						if (outcome !== "view_reporter") {
-							reopenSelector = true;
-						}
-					}
-					if (postMortemResult?.kind === "post_mortem") {
-						reopenSelector = postMortemResult.outcome === "agents";
-					}
-				} finally {
-					removeChangeHandler?.();
-				}
-			}
-		},
-	});
 }
 
 function throwIfCancelled(signal: AbortSignal | undefined): void {

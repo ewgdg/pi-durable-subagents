@@ -6,25 +6,38 @@ import {
 	FramedAgentControlChannel,
 	type AgentControlIdentity,
 	type AgentControlProtocol,
+	type ControlServeMap,
 } from "../src/control/agent-control-channel.ts";
 import { AGENT_CONTROL_PROTOCOL_VERSION } from "../src/control/child-bootstrap-contract.ts";
 import type { ControlTransport } from "../src/control/control-transport.ts";
 import { createInMemoryControlTransportPair } from "../src/control/in-memory-control-transport.ts";
 
+const ValueSchema = Type.Object({ value: Type.String() }, { additionalProperties: false });
 const protocol = {
-	methods: {
-		"test.echo": {
-			request: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-			response: Type.Object({ echoed: Type.String() }, { additionalProperties: false }),
+	childToOwner: {
+		methods: {
+			"test.report": {
+				request: ValueSchema,
+				response: Type.Object({ accepted: Type.Boolean() }, { additionalProperties: false }),
+			},
 		},
-		"test.wait": {
-			request: Type.Object({}, { additionalProperties: false }),
-			response: Type.Object({ completed: Type.Boolean() }, { additionalProperties: false }),
+		events: {
+			"test.progress": { payload: ValueSchema },
 		},
 	},
-	events: {
-		"test.changed": {
-			payload: Type.Object({ value: Type.String() }, { additionalProperties: false }),
+	ownerToChild: {
+		methods: {
+			"test.echo": {
+				request: ValueSchema,
+				response: Type.Object({ echoed: Type.String() }, { additionalProperties: false }),
+			},
+			"test.wait": {
+				request: Type.Object({}, { additionalProperties: false }),
+				response: Type.Object({ completed: Type.Boolean() }, { additionalProperties: false }),
+			},
+		},
+		events: {
+			"test.changed": { payload: ValueSchema },
 		},
 	},
 } as const satisfies AgentControlProtocol;
@@ -45,20 +58,29 @@ function createChannels(options: {
 	const owner = new FramedAgentControlChannel({
 		identity,
 		protocol,
+		side: "owner",
 		transport: ownerTransport,
 		maximumFrameBytes: options.maximumFrameBytes,
 	});
 	const child = new FramedAgentControlChannel({
 		identity,
 		protocol,
+		side: "child",
 		transport: childTransport,
 		maximumFrameBytes: options.maximumFrameBytes,
 	});
 	return { owner, child, ownerTransport, childTransport };
 }
 
+function echoServeMap(): ControlServeMap<typeof protocol.ownerToChild> {
+	return {
+		"test.echo": ({ value }) => ({ echoed: value }),
+		"test.wait": () => ({ completed: true }),
+	};
+}
+
 async function closesWith(
-	channel: FramedAgentControlChannel<typeof protocol>,
+	channel: FramedAgentControlChannel<typeof protocol, "owner">,
 	pattern: RegExp,
 ): Promise<void> {
 	await assert.rejects(new Promise<never>((_resolve, reject) => {
@@ -69,10 +91,7 @@ async function closesWith(
 test("Control Channel correlates validated requests fragmented at every UTF-8 boundary", async (t) => {
 	const { owner, child } = createChannels({ fragmentSizes: [1] });
 	t.after(async () => Promise.all([owner.close(), child.close()]));
-	child.onRequest(({ method, payload }) => {
-		assert.equal(method, "test.echo");
-		return { echoed: payload.value };
-	});
+	child.serve(echoServeMap());
 
 	assert.deepEqual(await owner.request("test.echo", { value: "界🙂process" }), {
 		echoed: "界🙂process",
@@ -84,7 +103,7 @@ test("Control Channel accepts coalesced frames and preserves event order through
 	t.after(() => owner.close());
 	const observed: string[] = [];
 	owner.onEvent(async ({ event, payload, sequence }) => {
-		assert.equal(event, "test.changed");
+		assert.equal(event, "test.progress");
 		if (sequence === 1) await new Promise((resolve) => setTimeout(resolve, 5));
 		observed.push(payload.value);
 	});
@@ -92,7 +111,7 @@ test("Control Channel accepts coalesced frames and preserves event order through
 		...identity,
 		type: "event",
 		sequence: index + 1,
-		event: "test.changed",
+		event: "test.progress",
 		payload: { value },
 	})).join("\n") + "\n";
 
@@ -103,7 +122,7 @@ test("Control Channel accepts coalesced frames and preserves event order through
 
 test("Control Channel serializes writes while the transport applies backpressure", async () => {
 	const transport = new BackpressuredTransport();
-	const channel = new FramedAgentControlChannel({ identity, protocol, transport });
+	const channel = new FramedAgentControlChannel({ identity, protocol, side: "owner", transport });
 	const first = channel.sendEvent("test.changed", { value: "first" });
 	const second = channel.sendEvent("test.changed", { value: "second" });
 
@@ -125,10 +144,13 @@ test("Control Channel explicitly cancels the exact remote request and ignores it
 	let remoteSignal: AbortSignal | undefined;
 	let release!: () => void;
 	const held = new Promise<void>((resolve) => { release = resolve; });
-	child.onRequest(async ({ signal }) => {
-		remoteSignal = signal;
-		await held;
-		return { completed: true };
+	child.serve({
+		...echoServeMap(),
+		async "test.wait"(_payload, signal) {
+			remoteSignal = signal;
+			await held;
+			return { completed: true };
+		},
 	});
 	const abort = new AbortController();
 	const result = owner.request("test.wait", {}, abort.signal);
@@ -143,7 +165,7 @@ test("Control Channel explicitly cancels the exact remote request and ignores it
 
 test("Control Channel rejects already-aborted requests without writing a frame", async () => {
 	const transport = new RecordingTransport();
-	const channel = new FramedAgentControlChannel({ identity, protocol, transport });
+	const channel = new FramedAgentControlChannel({ identity, protocol, side: "owner", transport });
 	const abort = new AbortController();
 	abort.abort();
 	await assert.rejects(
@@ -180,7 +202,7 @@ test("Control Channel fail-closes on a skipped event sequence", async (t) => {
 		...identity,
 		type: "event",
 		sequence: 2,
-		event: "test.changed",
+		event: "test.progress",
 		payload: { value: "late" },
 	})}\n`));
 	await closed;
@@ -203,10 +225,7 @@ test("Control Channel fail-closes identity mismatches and unknown response or ca
 test("Control Channel idempotently ignores cancellation after the exact request is terminal", async (t) => {
 	const { owner, child, ownerTransport } = createChannels();
 	t.after(async () => Promise.all([owner.close(), child.close()]));
-	child.onRequest(({ method, payload }) => {
-		if (method !== "test.echo") throw new Error("unexpected method");
-		return { echoed: payload.value };
-	});
+	child.serve(echoServeMap());
 	assert.deepEqual(await owner.request("test.echo", { value: "first" }), { echoed: "first" });
 	await ownerTransport.write(new TextEncoder().encode(`${JSON.stringify({
 		...identity,
@@ -244,7 +263,7 @@ test("Control Channel enforces the byte limit per frame without rejecting coales
 		...identity,
 		type: "event",
 		sequence,
-		event: "test.changed",
+		event: "test.progress",
 		payload: { value: "x" },
 	});
 	const coalesced = `${small(1)}\n${small(2)}\n`;
@@ -265,7 +284,7 @@ test("Control Channel rejects an oversized line before dispatching a valid coale
 		...identity,
 		type: "event",
 		sequence: 1,
-		event: "test.changed",
+		event: "test.progress",
 		payload: { value: "must-not-dispatch" },
 	});
 	const closed = closesWith(owner, /control_channel_frame_too_large/);
@@ -281,10 +300,7 @@ test("Control Channel rejects an oversized outgoing frame without poisoning late
 	child.onEvent(({ sequence, payload }) => {
 		received.push({ sequence, value: payload.value });
 	});
-	child.onRequest(({ method, payload }) => {
-		if (method !== "test.echo") throw new Error("unexpected method");
-		return { echoed: payload.value };
-	});
+	child.serve(echoServeMap());
 	await assert.rejects(
 		owner.sendEvent("test.changed", { value: "x".repeat(500) }),
 		/control_channel_frame_too_large/,
@@ -298,10 +314,7 @@ test("Control Channel rejects an oversized outgoing frame without poisoning late
 test("Control Channel keeps ancient terminal response and cancellation frames idempotent with bounded state", async (t) => {
 	const { owner, child, ownerTransport, childTransport } = createChannels();
 	t.after(async () => Promise.all([owner.close(), child.close()]));
-	child.onRequest(({ method, payload }) => {
-		if (method !== "test.echo") throw new Error("unexpected method");
-		return { echoed: payload.value };
-	});
+	child.serve(echoServeMap());
 	for (let index = 0; index < 1_100; index += 1) {
 		assert.deepEqual(await owner.request("test.echo", { value: String(index) }), { echoed: String(index) });
 	}
@@ -323,7 +336,7 @@ test("Control Channel keeps ancient terminal response and cancellation frames id
 
 test("Control Channel isolates throwing close observers and still closes its transport", async () => {
 	const transport = new RecordingTransport();
-	const channel = new FramedAgentControlChannel({ identity, protocol, transport });
+	const channel = new FramedAgentControlChannel({ identity, protocol, side: "owner", transport });
 	let remainingObserverCalled = false;
 	channel.onClose(() => { throw new Error("observer failed"); });
 	channel.onClose(() => { remainingObserverCalled = true; });
@@ -337,7 +350,7 @@ test("Control Channel isolates throwing close observers and still closes its tra
 test("Control Channel deterministically rejects outstanding requests on local and peer close", async () => {
 	for (const closePeer of [false, true]) {
 		const { owner, child } = createChannels();
-		child.onRequest(() => new Promise(() => undefined));
+		child.serve({ ...echoServeMap(), "test.wait": () => new Promise(() => undefined) });
 		const pending = owner.request("test.wait", {});
 		await new Promise((resolve) => setImmediate(resolve));
 		await (closePeer ? child.close() : owner.close());
@@ -349,11 +362,13 @@ test("Control Channel deterministically rejects outstanding requests on local an
 test("Control Channel returns synchronous and asynchronous handler failures without an unhandled rejection", async (t) => {
 	const { owner, child } = createChannels();
 	t.after(async () => Promise.all([owner.close(), child.close()]));
-	child.onRequest(({ method, payload }) => {
-		if (method !== "test.echo") throw new Error("unexpected method");
-		if (payload.value === "sync") throw new Error("synchronous failure");
-		if (payload.value === "async") return Promise.reject(new Error("asynchronous failure"));
-		return { echoed: payload.value };
+	child.serve({
+		...echoServeMap(),
+		"test.echo"({ value }) {
+			if (value === "sync") throw new Error("synchronous failure");
+			if (value === "async") return Promise.reject(new Error("asynchronous failure"));
+			return { echoed: value };
+		},
 	});
 	await assert.rejects(owner.request("test.echo", { value: "sync" }), /request_failed: synchronous failure/);
 	await assert.rejects(owner.request("test.echo", { value: "async" }), /request_failed: asynchronous failure/);
@@ -371,8 +386,62 @@ test("Control Channel validates local payloads, JSON safety, and remote results"
 		owner.request("test.wait", { hidden: undefined } as never),
 		/control_channel_invalid_request|control_channel_malformed_frame/,
 	);
-	child.onRequest(() => ({ wrong: true }));
+	child.serve({ ...echoServeMap(), "test.echo": () => ({ wrong: true }) as never });
 	await assert.rejects(owner.request("test.echo", { value: "x" }), /control_channel_invalid_response/);
+});
+
+test("Control Channel closes on a request from the wrong direction, like an unknown method", async () => {
+	for (const method of ["test.echo", "test.unknown"]) {
+		const { owner, childTransport } = createChannels();
+		owner.serve({ "test.report": () => ({ accepted: true }) });
+		const closed = closesWith(owner, new RegExp(`control_channel_invalid_request: ${method}`));
+		await childTransport.write(new TextEncoder().encode(`${JSON.stringify({
+			...identity,
+			type: "request",
+			requestId: `${identity.agentId}:1`,
+			method,
+			payload: { value: "x" },
+		})}\n`));
+		await closed;
+	}
+});
+
+test("Control Channel closes on an event from the wrong direction", async () => {
+	const { owner, childTransport } = createChannels();
+	owner.onEvent(() => undefined);
+	const closed = closesWith(owner, /control_channel_invalid_event: test.changed/);
+	await childTransport.write(new TextEncoder().encode(`${JSON.stringify({
+		...identity,
+		type: "event",
+		sequence: 1,
+		event: "test.changed",
+		payload: { value: "x" },
+	})}\n`));
+	await closed;
+});
+
+test("Control Channel refuses to send an inbound-only method or event without writing a frame", async () => {
+	const transport = new RecordingTransport();
+	const channel = new FramedAgentControlChannel({ identity, protocol, side: "owner", transport });
+	await assert.rejects(
+		// @ts-expect-error the Owner side cannot request a child→Owner method
+		channel.request("test.report", { value: "x" }),
+		/control_channel_invalid_request: test.report/,
+	);
+	await assert.rejects(
+		// @ts-expect-error the Owner side cannot send a child→Owner event
+		channel.sendEvent("test.progress", { value: "x" }),
+		/control_channel_invalid_event: test.progress/,
+	);
+	assert.equal(transport.writes.length, 0);
+	await channel.close();
+});
+
+test("Control Channel serve maps must handle every inbound method", async () => {
+	const { child } = createChannels();
+	// @ts-expect-error "test.wait" has no handler
+	child.serve({ "test.echo": ({ value }) => ({ echoed: value }) });
+	await child.close();
 });
 
 class RecordingTransport implements ControlTransport {

@@ -56,15 +56,20 @@ import type { ProcessChildSessionFactory } from "../runtime/process-child-sessio
 import type { AgentRunHandle, AgentRunFailure } from "../runtime/agent-runtime-host.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
-import { statusOf, withAgentTranscriptObservations, type AgentRecord } from "./agent-record.ts";
-import { detectDependencyDeadlocks } from "./dependency-deadlock.ts";
+import { statusOf, waitingFactsOf, withAgentTranscriptObservations, type AgentRecord } from "./agent-record.ts";
+import type { BlockedDelivery } from "./message-delivery-scheduler.ts";
 import type { MessageCoordinator } from "./messages.ts";
+import type { RequestEvidence } from "./request-evidence.ts";
+import type { RequestRelationships } from "./request-relationships.ts";
+import type { HumanRequestCoordinator } from "./human-requests.ts";
 import {
 	OperationReviewWatcher,
 	SYSTEM_OPERATION_REVIEW_CLOCK,
 	type OperationReviewClock,
 	type OperationReviewSnapshot,
 } from "./operation-review.ts";
+import { assessProgress, type AgentProgressFacts, type ProgressAssessment, type ProgressSnapshot } from "./progress-verdict.ts";
+import { awaitsCanonicalAnswer } from "./answer-arbitration.ts";
 
 export const MAX_AUTOMATIC_MODERATOR_ATTEMPTS = 2;
 
@@ -181,6 +186,8 @@ export class OperationalIncidentCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #messages: MessageCoordinator;
+	readonly #requestEvidence: RequestEvidence;
+	readonly #requestRelationships: RequestRelationships;
 	/**
 	 * Agents a human typed into whose latest settlement happened while still selected.
 	 * Volatile by design: the free reminder it earns is a concession to a live human
@@ -222,6 +229,9 @@ export class OperationalIncidentCoordinator {
 		ownerIdentity: OwnerIdentity;
 		sessionFactory: ProcessChildSessionFactory;
 		messages: MessageCoordinator;
+		requestEvidence: RequestEvidence;
+		requestRelationships: RequestRelationships;
+		humanRequests: HumanRequestCoordinator;
 		workflowPolicy: WorkflowPolicyStore;
 		integrateAgent(record: AgentRecord): void;
 		isShuttingDown(): boolean;
@@ -240,6 +250,8 @@ export class OperationalIncidentCoordinator {
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#sessionFactory = options.sessionFactory;
 		this.#messages = options.messages;
+		this.#requestEvidence = options.requestEvidence;
+		this.#requestRelationships = options.requestRelationships;
 		this.#workflowPolicy = options.workflowPolicy;
 		this.#deliveryProgressClock = options.deliveryProgressClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#integrateAgent = options.integrateAgent;
@@ -262,9 +274,14 @@ export class OperationalIncidentCoordinator {
 			hasAnswerObligation: (agentId) => {
 				const record = this.#agents.get(agentId);
 				return record !== undefined &&
-					this.#messages.answerObligationRequestIds(record).length > 0;
+					this.#requestRelationships.answerOwedRequestIds(record).length > 0;
 			},
 			onReviewStateChanged: () => this.#scheduleReconciliation(),
+		});
+		this.#messages.subscribeDeliveryProgress(() => void this.#scheduleReconciliation());
+		options.humanRequests.subscribeHumanWaiting({
+			humanWaitingBegan: (toolCall) => this.#operationReviews.beginHumanWaiting(toolCall),
+			humanResultCommitBegan: (toolCall) => this.#operationReviews.beginHumanResultCommit(toolCall),
 		});
 		if (!options.agents.has(options.ownerIdentity.agentId)) {
 			throw new Error("invariant_violation: Workflow Owner is unavailable");
@@ -305,7 +322,7 @@ export class OperationalIncidentCoordinator {
 				cause === "failure" &&
 				!this.#isShuttingDown()
 			) {
-				const requestIds = [...this.#messages.answerObligationRequestIds(record)].sort();
+				const requestIds = [...this.#requestRelationships.answerOwedRequestIds(record)].sort();
 				const snapshot: RunFailureSnapshot = {
 					kind: "run_failure",
 					key: JSON.stringify(["run_failure", record.identity.agentId, handle.sequence]),
@@ -355,7 +372,7 @@ export class OperationalIncidentCoordinator {
 	#recordRunFailure(snapshot: RunFailureSnapshot, record: AgentRecord, failure?: AgentRunFailure): void {
 		if (this.#reportedFailures.has(snapshot.key)) return;
 		const facts = `Agent: ${record.identity.metadata.label} (${snapshot.agentId})\nRun ${snapshot.run.sequence}\n${this.#failureText(failure)}`;
-		const outgoingRequests = this.#messages.outstandingRequestIdsFor(record);
+		const outgoingRequests = this.#requestRelationships.outstandingRequestIds(record);
 		const affectedRequests = [...new Set([...snapshot.requestIds, ...outgoingRequests])].sort();
 		const diagnostic = this.#retainDiagnostic(new Error(facts));
 		this.#publishRuntimeReport({
@@ -453,8 +470,19 @@ export class OperationalIncidentCoordinator {
 		this.#humanInterruptedAgentIds.add(agentId);
 	}
 
-	deliveryProgressChanged(): void {
-		void this.#scheduleReconciliation();
+	/**
+	 * Owner Settlement Parking input. Agents left out of the snapshot are no
+	 * progress source, for themselves or for the Agents awaiting them:
+	 * - The parked Owner keeps its native prompt active, so a child awaiting the
+	 *   Owner's Answer must not inherit that prompt and keep the Owner parked forever.
+	 * - Moderator startup counts only through the bounded recovery inspection, so a
+	 *   hung startup stops keeping the Owner parked once that inspection times out.
+	 */
+	hasProgressingAgentForOwnerParking(): boolean {
+		const assessment = this.#assess([...this.#agents.values()].filter((record) =>
+			record.identity.agentId !== this.#ownerIdentity.agentId &&
+			!(this.#isModerator(record) && record.host.observe().phase === "starting")));
+		return [...assessment.verdicts.values()].includes("progressing");
 	}
 
 	hasAutonomousRecoveryProgress(): boolean {
@@ -483,14 +511,6 @@ export class OperationalIncidentCoordinator {
 			toolCall: source,
 			policyIntervalMs: this.#workflowPolicy.current().operationReviewIntervalMs,
 		});
-	}
-
-	beginHumanWaiting(toolCall: ToolCallPointer): void {
-		this.#operationReviews.beginHumanWaiting(toolCall);
-	}
-
-	beginHumanResultCommit(toolCall: ToolCallPointer): void {
-		this.#operationReviews.beginHumanResultCommit(toolCall);
 	}
 
 	reconcileCommittedToolResults(agentId: string): void {
@@ -586,7 +606,7 @@ export class OperationalIncidentCoordinator {
 		this.#attemptByModeratorAgentId.delete(moderatorAgentId);
 		const originalObligationRemains = attempt.affectedAgentIds.some((agentId) => {
 			const affected = this.#agents.get(agentId);
-			return affected !== undefined && this.#messages.hasUnsettledAnswerObligation(
+			return affected !== undefined && this.#requestRelationships.hasUnsettledAnswerObligation(
 				affected,
 				attempt.requestIds,
 			);
@@ -737,7 +757,7 @@ export class OperationalIncidentCoordinator {
 	async #inspectWorkflow(): Promise<void> {
 		if (this.#isShuttingDown()) return;
 		await this.#boundaryHooks.beforeEvidenceInspection?.();
-		const inspections = await this.#messages.refreshTranscriptFacts();
+		const inspections = await this.#requestRelationships.refresh();
 		if (this.#isShuttingDown()) return;
 		const toRecover: RunFailureSnapshot[] = [];
 		const recoveringKeys = new Set<string>();
@@ -751,7 +771,7 @@ export class OperationalIncidentCoordinator {
 				if (successor <= snapshot.run.sequence) continue;
 				const source = this.#reportSourcesBySnapshot.get(snapshot);
 				if (!source) throw new Error("Reported Run failure has no retained report source");
-				this.#appendRuntimeReportFinding(source, { key: `successor:${successor}`, summary: `Successor Run ${successor} started for Agent ${snapshot.agentId}. This establishes resumption, not successful completion. Original Answer obligations remain: ${this.#messages.hasUnsettledAnswerObligation(affected, snapshot.requestIds)}.`, evidence: [`Inspected through: ${JSON.stringify(statusOf(affected).primaryEvidence.inspectedThrough)}`] });
+				this.#appendRuntimeReportFinding(source, { key: `successor:${successor}`, summary: `Successor Run ${successor} started for Agent ${snapshot.agentId}. This establishes resumption, not successful completion. Original Answer obligations remain: ${this.#requestRelationships.hasUnsettledAnswerObligation(affected, snapshot.requestIds)}.`, evidence: [`Inspected through: ${JSON.stringify(statusOf(affected).primaryEvidence.inspectedThrough)}`] });
 				this.#onAttentionChanged();
 				this.#reportedRunFailures.delete(key);
 			}
@@ -764,10 +784,12 @@ export class OperationalIncidentCoordinator {
 				}
 			snapshots.push(snapshot);
 			}
-			const deliveryStalls = this.#observeDeliveryStalls();
+			const blockedDeliveries = this.#messages.blockedDeliveries();
+			const assessment = this.#assessOrdinary(blockedDeliveries);
+			const deliveryStalls = this.#observeDeliveryStalls(assessment, blockedDeliveries);
 			snapshots.push(...deliveryStalls);
 			snapshots.push(...this.#observeOperationReviews());
-			const dependencyDeadlocks = this.#observeDependencyDeadlocks();
+			const dependencyDeadlocks = this.#observeDependencyDeadlocks(assessment);
 			snapshots.push(...dependencyDeadlocks);
 			// A closed Dependency Deadlock is one normalized condition, so its members are
 			// neither reminded nor independently moderated. A Delivery Stall only keeps the
@@ -789,7 +811,7 @@ export class OperationalIncidentCoordinator {
 					deadlockNormalizedAgentIds.has(record.identity.agentId) ||
 					deliveryStallStalledAgentIds.has(record.identity.agentId)
 				) continue;
-				const snapshot = this.#observeObligationStall(record);
+				const snapshot = this.#observeObligationStall(record, assessment);
 				if (snapshot) snapshots.push(snapshot);
 			}
 			const currentKeys = new Set(snapshots.map(({ key }) => key));
@@ -860,14 +882,14 @@ export class OperationalIncidentCoordinator {
 	#scheduleObligationReminder(
 		snapshot: ObligationStallSnapshot,
 	): boolean {
-		const requestId = this.#messages.foregroundRequestId(this.#requireAgent(snapshot.agentId));
+		const requestId = this.#requestRelationships.foregroundRequestId(this.#requireAgent(snapshot.agentId));
 		if (!requestId) {
 			throw new Error(
 				`invariant_violation: Agent ${snapshot.agentId} has an invalid Answer obligation set`,
 			);
 		}
 		const recipient = this.#requireAgent(snapshot.agentId);
-		const requestTitle = this.#messages.requestTitle(requestId);
+		const requestTitle = this.#requestEvidence.requestMetadata(requestId).title;
 		const reminderEntryIds = () => obligationReminderEntryIds({
 			recipientAgentId: snapshot.agentId,
 			transcript: recipient.transcript.inspect(),
@@ -904,7 +926,7 @@ export class OperationalIncidentCoordinator {
 				requestTitle,
 			}),
 			inspectProof,
-			isSuppressed: () => this.#isSuspensionBlocked(recipient) || !this.#messages.hasUnsettledAnswerObligation(
+			isSuppressed: () => this.#isWaiting(recipient, this.#assessOrdinary()) || !this.#requestRelationships.hasUnsettledAnswerObligation(
 				recipient,
 				[requestId],
 			),
@@ -1091,9 +1113,8 @@ export class OperationalIncidentCoordinator {
 		}
 		const requestSet = {
 			total: snapshot.requestIds.length,
-			sources: this.#messages.requestSources(
-				snapshot.requestIds.slice(0, MAX_MODERATOR_REQUEST_SOURCES),
-			),
+			sources: snapshot.requestIds.slice(0, MAX_MODERATOR_REQUEST_SOURCES)
+				.map((requestId) => this.#requestEvidence.requestMetadata(requestId).source),
 		};
 		if (snapshot.kind === "delivery_stall") {
 			return { kind: snapshot.kind, agentIds: snapshot.affectedAgentIds, requests: requestSet,
@@ -1121,29 +1142,71 @@ export class OperationalIncidentCoordinator {
 		};
 	}
 
-	#isSettledWithoutProgress(record: AgentRecord): boolean {
+	/**
+	 * Obligation Stall policy over the verdict. Only an Agent settled without
+	 * attention qualifies: a parent parked in Agent Wait gets no reminder of its own;
+	 * its stalled child does, and the Request graph stays under Deadlock observation.
+	 */
+	#isStalledWithoutAttention(record: AgentRecord, assessment: ProgressAssessment): boolean {
 		const run = record.host.observe();
-		if (
-			run.phase !== "live" ||
-			run.work !== "settled" ||
-			record.host.currentRunFailed() ||
-			run.attention !== "none" ||
-			this.#messages.hasDeliveryProgress(record) ||
-			record.host.hasRetentionReason("interactive_selection") ||
-			record.host.hasRetentionReason("interruption_hold")
-		) {
-			return false;
-		}
-		if (this.#isSuspensionBlocked(record)) return false;
-		// Moderator Requests may depend on another Moderator; ordinary incident
-		// detection keeps its existing non-Moderator dependency graph.
-		return !this.#operationReviews.hasUnresolvedCall(record.identity.agentId) &&
-			!this.#hasExternalProgress(record, new Set(), this.#isModerator(record));
+		return run.phase !== "dormant" && run.attention === "none" &&
+			assessment.verdicts.get(record.identity.agentId) === "stalled";
+	}
+
+	#isWaiting(record: AgentRecord, assessment: ProgressAssessment): boolean {
+		return assessment.verdicts.get(record.identity.agentId) === "waiting";
+	}
+
+	/** A Moderator's own checks consider dependencies on other Moderators too. */
+	#assessAllAgents(): ProgressAssessment {
+		return this.#assess([...this.#agents.values()]);
+	}
+
+	/** Ordinary incident detection excludes Moderators from the dependency graph. */
+	#assessOrdinary(blockedDeliveries: readonly BlockedDelivery[] = []): ProgressAssessment {
+		return this.#assess([...this.#agents.values()].filter((record) => !this.#isModerator(record)), blockedDeliveries);
+	}
+
+	#assess(records: readonly AgentRecord[], blockedDeliveries: readonly BlockedDelivery[] = []): ProgressAssessment {
+		return assessProgress(withAgentTranscriptObservations(this.#agents.values(),
+			() => this.#progressSnapshot(records, blockedDeliveries)));
+	}
+
+	/** The one place host observations become Progress Verdict facts. */
+	#progressSnapshot(records: readonly AgentRecord[], blockedDeliveries: readonly BlockedDelivery[]): ProgressSnapshot {
+		return {
+			agents: records.map((record) => {
+				const agentId = record.identity.agentId;
+				const run = record.host.observe();
+				return {
+					...waitingFactsOf(record),
+					agentId,
+					...(run.phase === "dormant" ? {} : { work: run.work }),
+					currentRunFailed: record.host.currentRunFailed(),
+					retentionReasons: run.retentionReasons.map(({ reason }) => reason),
+					unresolvedOperationReview: this.#operationReviews.hasUnresolvedCall(agentId),
+					deliveryProgress: this.#messages.hasDeliveryProgress(record),
+					answerObligationRequestIds: this.#requestRelationships.answerOwedRequestIds(record),
+					// A committed Answer removes its dependency edge even while requester-side
+					// Answer Delivery remains outstanding for Wait.
+					unansweredRequests: this.#unansweredRequests(record),
+				};
+			}),
+			blockedDeliveries,
+		};
+	}
+
+	#unansweredRequests(requester: AgentRecord): AgentProgressFacts["unansweredRequests"] {
+		const requestIds = this.#requestRelationships.outstandingRequestIds(requester);
+		const states = this.#messages.answerArbitration.inspect(requester, requestIds);
+		return requestIds
+			.filter((_, index) => awaitsCanonicalAnswer(states[index]!))
+			.map((requestId) => ({ requestId, targetAgentId: this.#requestEvidence.requestMetadata(requestId).targetAgentId }));
 	}
 
 	#scheduleModeratorObligationReminder(handling: OperationalIncidentHandling): void {
 		const recipient = this.#requireAgent(handling.moderatorAgentId!);
-		if (!this.#isSettledWithoutProgress(recipient)) return;
+		if (!this.#isStalledWithoutAttention(recipient, this.#assessAllAgents())) return;
 		const inspectProof = () => inspectModeratorObligationReminder({
 			moderatorAgentId: recipient.identity.agentId,
 			transcript: recipient.transcript.inspect(),
@@ -1155,7 +1218,7 @@ export class OperationalIncidentCoordinator {
 			messageId: moderatorObligationReminderDeliveryId(recipient.identity.agentId),
 			commitIfCurrent: commit => this.#reconciliationLane.run(async () => {
 				if (this.#handlingByKey.get(handling.snapshot.key) !== handling ||
-					this.#isSuspensionBlocked(recipient) ||
+					this.#isWaiting(recipient, this.#assessAllAgents()) ||
 					handling.moderatorAgentId !== recipient.identity.agentId ||
 					!this.#conditionRemains(handling.snapshot)) return "suppressed";
 				// Clearance/resolve uses this same lane. Only native transcript ACK may
@@ -1166,7 +1229,7 @@ export class OperationalIncidentCoordinator {
 			customMessage: createModelVisibleModeratorObligationReminder(),
 			inspectProof,
 			isSuppressed: () => this.#handlingByKey.get(handling.snapshot.key) !== handling ||
-				this.#isSuspensionBlocked(recipient) ||
+				this.#isWaiting(recipient, this.#assessAllAgents()) ||
 				handling.moderatorAgentId !== recipient.identity.agentId ||
 				!this.#conditionRemains(handling.snapshot),
 		}).then((admission) => {
@@ -1178,11 +1241,12 @@ export class OperationalIncidentCoordinator {
 
 	#observeObligationStall(
 		record: AgentRecord,
+		assessment: ProgressAssessment,
 	): ObligationStallSnapshot | undefined {
 		const requestIds = [
 			...record.host.requestRelationshipIds("answer_owed"),
 		].sort();
-		if (requestIds.length === 0 || !this.#isSettledWithoutProgress(record)) return undefined;
+		if (requestIds.length === 0 || !this.#isStalledWithoutAttention(record, assessment)) return undefined;
 		const inspectedThrough = statusOf(record).primaryEvidence.inspectedThrough;
 		return {
 			kind: "obligation_stall",
@@ -1195,7 +1259,11 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#conditionRemains(snapshot: OperationalConditionSnapshot): boolean {
-		if (snapshot.kind === "delivery_stall") return this.#observeDeliveryStalls().some(({ key }) => key === snapshot.key);
+		if (snapshot.kind === "delivery_stall") {
+			const blockedDeliveries = this.#messages.blockedDeliveries();
+			return this.#observeDeliveryStalls(this.#assessOrdinary(blockedDeliveries), blockedDeliveries)
+				.some(({ key }) => key === snapshot.key);
+		}
 		if (snapshot.kind === "operation_review") {
 			return this.#observeOperationReviews().some(
 				(review) => review.key === snapshot.key,
@@ -1204,91 +1272,43 @@ export class OperationalIncidentCoordinator {
 		if (snapshot.kind === "obligation_stall") {
 			const affected = this.#agents.get(snapshot.agentId);
 			return affected !== undefined &&
-				this.#observeObligationStall(affected)?.key === snapshot.key;
+				this.#observeObligationStall(affected, this.#assessOrdinary())?.key === snapshot.key;
 		}
 			if (snapshot.kind === "run_failure") {
 				const affected = this.#agents.get(snapshot.agentId);
 				if (!affected) return false;
 				if (affected.host.latestStartedRunSequence() > snapshot.run.sequence) return false;
-				return this.#messages.hasUnsettledAnswerObligation(
+				return this.#requestRelationships.hasUnsettledAnswerObligation(
 				affected,
 				snapshot.requestIds,
 			);
 		}
-		return this.#observeDependencyDeadlocks().some(({ key }) => key === snapshot.key);
+		return this.#observeDependencyDeadlocks(this.#assessOrdinary()).some(({ key }) => key === snapshot.key);
 	}
 
 
-	#observeDeliveryStalls(): readonly DeliveryStallSnapshot[] {
-		const blocked = this.#messages.blockedDeliveries();
-		const snapshots: DeliveryStallSnapshot[] = [];
-		for (const delivery of blocked) {
-			const affected = new Set<string>();
-			const requests = new Set<string>();
-			for (const root of this.#agents.values()) {
-				if (this.#isModerator(root) || this.#deliveryPathExcluded(root)) continue;
-				const run = root.host.observe();
-				// A running model is a progress source, not a timed obligation.
-				if (run.phase !== "live" || (run.work === "active" && run.attention !== "agent_wait")) continue;
-				const obligations = this.#messages.answerObligationRequestIds(root);
-				if (obligations.length === 0) continue;
-				const visit = (record: AgentRecord, path: string[], edges: string[]): void => {
-					const agentId = record.identity.agentId;
-					if (path.includes(agentId) || this.#deliveryPathExcluded(record)) return;
-					const currentRun = record.host.observe();
-					if (agentId !== delivery.recipientAgentId && (
-						currentRun.phase === "starting" ||
-						(currentRun.phase === "live" && currentRun.work === "active" && currentRun.attention === "none")
-					)) return;
-					const nextPath = [...path, agentId];
-					if (agentId === delivery.recipientAgentId) {
-						for (const id of nextPath) affected.add(id);
-						for (const id of [...obligations, ...edges]) requests.add(id);
-					}
-					for (const edge of this.#messages.requestRelationships(
-						this.#messages.outstandingRequestIdsFor(record),
-					)) {
-						const target = this.#agents.get(edge.targetAgentId);
-						if (target && !this.#isModerator(target)) visit(target, nextPath, [...edges, edge.requestId]);
-					}
-				};
-				visit(root, [], []);
-			}
-			if (requests.size === 0) continue;
-			const affectedAgentIds = [...affected].sort((a, b) => a.localeCompare(b));
-			const stalledAgentIds = new Set<string>([delivery.recipientAgentId]);
-			for (const candidate of this.#agents.values()) {
-				if (
-					this.#messages.outstandingRequestIdsFor(candidate).includes(delivery.messageId)
-				) stalledAgentIds.add(candidate.identity.agentId);
-			}
-			snapshots.push({
-				kind: "delivery_stall",
-				key: JSON.stringify(["delivery_stall", delivery.messageId]),
-				affectedAgentIds,
-				stalledAgentIds: [...stalledAgentIds].sort(),
-				requestIds: [...requests].sort(),
-				inspectedThrough: affectedAgentIds.map((id) => statusOf(this.#requireAgent(id)).primaryEvidence.inspectedThrough),
-				delivery: { messageId: delivery.messageId, recipientAgentId: delivery.recipientAgentId },
-				reason: delivery.reason,
-			});
-		}
-		return snapshots;
-	}
-
-	#deliveryPathExcluded(record: AgentRecord): boolean {
-		const run = record.host.observe();
-		return run.suspension !== undefined ||
-			(run.phase !== "dormant" && run.attention === "input_required") ||
-			record.host.hasRetentionReason("interactive_selection") ||
-			record.host.hasRetentionReason("interruption_hold");
+	#observeDeliveryStalls(
+		assessment: ProgressAssessment,
+		blockedDeliveries: readonly BlockedDelivery[],
+	): readonly DeliveryStallSnapshot[] {
+		const reasonByMessageId = new Map(blockedDeliveries.map(({ messageId, reason }) => [messageId, reason]));
+		return assessment.deliveryStalls.map((path) => ({
+			kind: "delivery_stall",
+			key: JSON.stringify(["delivery_stall", path.messageId]),
+			affectedAgentIds: path.affectedAgentIds,
+			stalledAgentIds: path.stalledAgentIds,
+			requestIds: path.requestIds,
+			inspectedThrough: path.affectedAgentIds.map((id) => statusOf(this.#requireAgent(id)).primaryEvidence.inspectedThrough),
+			delivery: { messageId: path.messageId, recipientAgentId: path.recipientAgentId },
+			reason: reasonByMessageId.get(path.messageId)!,
+		}));
 	}
 
 	#observeOperationReviews(): readonly OperationReviewConditionSnapshot[] {
 		return this.#operationReviews.expiredReviews().flatMap((review) => {
 			const record = this.#agents.get(review.toolCall.agentId);
 			if (!record || record.host.observe().suspension) return [];
-			const requestIds = [...this.#messages.answerObligationRequestIds(record)].sort();
+			const requestIds = [...this.#requestRelationships.answerOwedRequestIds(record)].sort();
 			if (requestIds.length === 0) return [];
 			return [{
 				kind: "operation_review" as const,
@@ -1301,25 +1321,8 @@ export class OperationalIncidentCoordinator {
 		});
 	}
 
-	#observeDependencyDeadlocks(): readonly DependencyDeadlockSnapshot[] {
-		const ordinaryAgents = [...this.#agents.values()].filter(
-			(record) => !this.#isModerator(record),
-		);
-		const eligibleAgentIds = ordinaryAgents.flatMap((record) =>
-			this.#isDeadlockEligible(record) ? [record.identity.agentId] : []
-		);
-		// Answer Delivery may still be outstanding for Wait, but a committed
-		// Answer no longer depends on progress from its responder.
-		const requests = ordinaryAgents.flatMap(record =>
-			this.#messages.unansweredRequestRelationships(
-				record.identity.agentId,
-				this.#messages.outstandingRequestIdsFor(record),
-			)
-		);
-		return detectDependencyDeadlocks({
-			eligibleAgentIds,
-			requests,
-		}).map((component) => ({
+	#observeDependencyDeadlocks(assessment: ProgressAssessment): readonly DependencyDeadlockSnapshot[] {
+		return assessment.deadlocks.map((component) => ({
 			kind: "dependency_deadlock",
 			key: JSON.stringify([
 				"dependency_deadlock",
@@ -1330,87 +1333,9 @@ export class OperationalIncidentCoordinator {
 			affectedAgentIds: component.agentIds,
 			requestIds: component.requestIds,
 			inspectedThrough: component.agentIds.map(
-				(agentId) => statusOf(this.#agents.get(agentId)!).primaryEvidence.inspectedThrough,
+				(agentId) => statusOf(this.#requireAgent(agentId)).primaryEvidence.inspectedThrough,
 			),
 		}));
-	}
-
-	#isDeadlockEligible(record: AgentRecord): boolean {
-		const run = record.host.observe();
-		return !run.suspension && run.phase === "live" &&
-			run.work === "settled" &&
-			(run.attention === "none" || run.attention === "agent_wait") &&
-			!record.host.currentRunFailed() &&
-			!this.#operationReviews.hasUnresolvedCall(
-				record.identity.agentId,
-			) &&
-			run.retentionReasons.length > 0 &&
-			run.retentionReasons.every(
-				({ reason }) => reason === "awaiting_answer" || reason === "answer_owed" ||
-					(reason === "pending_delivery" && !this.#messages.hasDeliveryProgress(record)),
-			);
-	}
-
-	#isSuspensionBlocked(record: AgentRecord): boolean {
-		const pending = [record];
-		const visited = new Set<string>();
-		let suspendedPath = false;
-		while (pending.length) {
-			const current = pending.pop()!;
-			const agentId = current.identity.agentId;
-			if (visited.has(agentId)) continue;
-			visited.add(agentId);
-			if (current.host.observe().suspension) {
-				suspendedPath = true;
-				continue;
-			}
-			const requests = this.#messages.unansweredRequestRelationships(
-				agentId, this.#messages.outstandingRequestIdsFor(current),
-			);
-			// A different runnable or stalled leaf must not be hidden by one suspended
-			// descendant. Cycles may have a suspended exit, but a suspension-free cycle is
-			// still a deadlock; delivery/deadlock inspection remains edge-local.
-			if (requests.length === 0) return false;
-			for (const { targetAgentId } of requests) {
-				const target = this.#agents.get(targetAgentId);
-				if (!target) return false;
-				pending.push(target);
-			}
-		}
-		return suspendedPath;
-	}
-
-	#hasExternalProgress(record: AgentRecord, path: Set<string>, includeModerators = false): boolean {
-		const agentId = record.identity.agentId;
-		if (path.has(agentId)) return false;
-		path.add(agentId);
-		try {
-			const requestIds = this.#messages.outstandingRequestIdsFor(record);
-			for (const targetAgentId of this.#messages.requestTargetAgentIds(requestIds)) {
-				const target = this.#agents.get(targetAgentId);
-				if (!target || (!includeModerators && this.#isModerator(target))) continue;
-				const run = target.host.observe();
-				if (run.phase === "starting") return true;
-				if (
-					run.phase === "live" &&
-					(
-						run.work === "active" ||
-						run.attention === "input_required" ||
-						this.#messages.hasDeliveryProgress(target) ||
-						target.host.hasRetentionReason("interactive_selection")
-					)
-				) return true;
-				if (
-					run.phase === "live" &&
-					run.work === "settled" &&
-					!target.host.hasRetentionReason("interruption_hold") &&
-					this.#hasExternalProgress(target, path, includeModerators)
-				) return true;
-			}
-			return false;
-		} finally {
-			path.delete(agentId);
-		}
 	}
 
 	#isModerator(record: AgentRecord): boolean {
@@ -1480,7 +1405,7 @@ export class OperationalIncidentCoordinator {
 				kind: "successor_run_started",
 				successorRunSequence: affected.host.latestStartedRunSequence(),
 			},
-			originalObligationsRemain: this.#messages.hasUnsettledAnswerObligation(
+			originalObligationsRemain: this.#requestRelationships.hasUnsettledAnswerObligation(
 				affected,
 				snapshot.requestIds,
 			),

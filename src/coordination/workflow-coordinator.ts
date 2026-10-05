@@ -4,9 +4,8 @@ import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import { ModeratorReportStore } from "./moderator-reports.ts";
-import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
+import { validateReportToUserInput, type ReportToUserInput, type ReportToUserReceipt, type ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
-import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
 import type { ObligationFrame } from "../protocol/obligation-focus.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { createRunSuspensionNotice, inspectRunSuspensionNotice } from "../protocol/run-suspension-notice.ts";
@@ -47,7 +46,6 @@ import {
 } from "../protocol/runtime-configuration.ts";
 import { AgentRuntimeSupervisor } from "../runtime/agent-runtime-supervisor.ts";
 import type {
-	AgentRunHandle,
 	AgentRunSuspension,
 	ProjectionInputSubmission,
 } from "../runtime/agent-runtime-host.ts";
@@ -74,11 +72,12 @@ import type {
 	HumanRequestInput,
 } from "../protocol/human-request.ts";
 import { RunSupervisor } from "./run-supervision.ts";
+import { RequestEvidence } from "./request-evidence.ts";
+import { RequestRelationships } from "./request-relationships.ts";
 import type {
 	RunControlInput,
 	RunControlReceipt,
 } from "../protocol/run-control.ts";
-import { SerialLane } from "../runtime/serial-lane.ts";
 import type {
 	AgentTemplateCatalogueEntry,
 	AgentTemplateCatalogueSnapshot,
@@ -86,11 +85,6 @@ import type {
 } from "../templates/agent-templates.ts";
 import { WorkflowPolicyStore, writeExcludedModels } from "../policy/workflow-policy.ts";
 import { parseExcludedModels, type ModelPolicySnapshot } from "../policy/model-exclusion.ts";
-import {
-	WorkflowExecutionScheduler,
-	type AgentExecutionRole,
-	type WorkflowExecutionPermit,
-} from "./workflow-execution-scheduler.ts";
 import type { ColdWorkflowRecovery } from "../bootstrap/cold-host-discovery.ts";
 import { piSessionRecency } from "../pi-integration/session-recency.ts";
 import {
@@ -105,16 +99,15 @@ import type {
 } from "../protocol/moderator-control.ts";
 import { isModeratorIdentity, type EntryPointer } from "../protocol/moderator-input.ts";
 import type { OperationReviewClock } from "./operation-review.ts";
-import { participantLifecycleHandlers } from "../bootstrap/agent-extension.ts";
 import type {
 	AgentActivitySnapshot,
 	AgentActivityStatus,
 } from "../presentation/agent-activity-surface.ts";
-import { participantCoordinatorHandlers } from "../tools/owner-surfaces.ts";
+import { createViewBackedParticipantHandlers } from "./view-backed-participant-handlers.ts";
 import type {
 	AgentSearchInput,
 	AgentSearchResult,
-} from "../tools/participant-coordination-tools.ts";
+} from "../tools/coordination-tool-catalogue.ts";
 import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
 import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import { createOwnerAgentPresentationHandlers } from "../process-runtime/remote-agent-selector.ts";
@@ -122,12 +115,13 @@ import type {
 	DurableAgentView,
 	PhysicalAgentViewSurface,
 } from "../presentation/agent-view-surface.ts";
-import type {
-	PostMortemAgentPresenter,
-	PostMortemAgentView,
-} from "../presentation/post-mortem-agent-view-surface.ts";
-import type { TerminalProjection } from "../presentation/terminal-projection.ts";
-import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
+import type { PostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";
+import {
+	InteractiveSelection,
+	type AgentPresentationSelection,
+	type HumanInputDisposition,
+} from "./interactive-selection.ts";
+import { collectCleanupFailure, collectSettledCleanupFailures } from "./cleanup-failures.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type AgentRosterStatus = AgentStatus & Readonly<{
@@ -149,8 +143,6 @@ export type {
 	AgentMessageReceipt,
 	MessageBoundaryHooks,
 } from "./messages.ts";
-
-export type HumanInputDisposition = "continue" | "submitted" | "discarded";
 
 type GuardedCoordinationToolResult =
 	| GuardedHumanToolResult
@@ -189,21 +181,6 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	setReportRead(reportId: string, read: boolean): void;
 }>;
 
-export type AgentPresentationSelection =
-	| Readonly<{ kind: "selected"; view?: DurableAgentView }>
-	| PostMortemAgentView;
-
-type ActiveDurableAgentView = {
-	record: AgentRecord;
-	attachment: DurableAgentViewAttachment;
-	failed: boolean;
-};
-
-type AgentViewTarget = Readonly<{
-	projection: TerminalProjection;
-	retryIfChanged: boolean;
-}>;
-
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	humanInputMode(): "agent" | "answer" | "run_suspended";
 	answerTargetAgent(toolCallId: string): string | undefined;
@@ -227,14 +204,14 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	guardToolResult(
 		message: MessageEndEvent["message"],
 	): GuardedCoordinationToolResult | undefined;
-	reconcileHumanToolResults(): void;
+	/** Starts with reconcileCommittedToolResults; callers refresh transcript facts first. */
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(submissionSequence?: number): Promise<void>;
 	obligationFrames(): readonly ObligationFrame[];
-	ensureExecution(): Promise<void>;
+	/** Checks the Workflow shutdown fence and Run Suspension; never waits. */
+	assertNotShutDownOrSuspended(): void;
 	beginToolExecution(toolCallId: string, toolName: string): void;
 	reconcileCommittedToolResults(): void;
-	endExecution(): void;
 }>;
 
 export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
@@ -259,6 +236,8 @@ export class WorkflowCoordinator {
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
 	readonly #sessionFactory: ProcessChildSessionFactory;
+	readonly #requestEvidence: RequestEvidence;
+	readonly #requestRelationships: RequestRelationships;
 	readonly #messages: MessageCoordinator;
 	readonly #agentWaits: AgentWaitCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
@@ -272,16 +251,9 @@ export class WorkflowCoordinator {
 		authorityOrderBuilds: 0,
 	};
 	#cachedAuthorityOrder: readonly AgentRecord[] | undefined;
-	readonly #agentViewLane = new SerialLane();
 	readonly #postMortemAgentPresenter: PostMortemAgentPresenter | undefined;
-	#activeAgentView: ActiveDurableAgentView | undefined;
+	readonly #selection: InteractiveSelection;
 	readonly #workflowPolicy: WorkflowPolicyStore;
-	readonly #executionScheduler: WorkflowExecutionScheduler;
-	readonly #waitingForExecution = new Set<string>();
-	readonly #executionPermits = new Map<
-		string,
-		Readonly<{ handle: AgentRunHandle; permit: WorkflowExecutionPermit }>
-	>();
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	readonly #quarantinedCandidateCount: number;
@@ -332,7 +304,6 @@ export class WorkflowCoordinator {
 			options.recoveredWorkflow?.agentIdBySpawnSource ?? [],
 		);
 		this.#workflowPolicy = options.workflowPolicy ?? new WorkflowPolicyStore();
-		this.#executionScheduler = new WorkflowExecutionScheduler(this.#workflowPolicy);
 		this.#ownerIdentity = identity;
 		this.#agents.set(identity.agentId, {
 			identity,
@@ -383,18 +354,6 @@ export class WorkflowCoordinator {
 				}, diagnostic);
 				this.#notifyAgentActivityChanged();
 			},
-			onRuntimeQuit: (agentId, projection) => {
-				const selected = this.#activeAgentView;
-				if (
-					selected?.record.identity.agentId !== agentId ||
-					selected.attachment.projection() !== projection
-				) return false;
-				// Native Owner shutdown follows terminal restoration after child exit.
-				// Fence admissions and release Wait now, before dead Control can start
-				// moderation or leave the Owner waiting for an Answer that cannot arrive.
-				this.#beginShutdown();
-				return true;
-			},
 			ownerIdentity: identity,
 			entryModulePath: options.entryModulePath,
 			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
@@ -405,8 +364,7 @@ export class WorkflowCoordinator {
 				if (role === "ordinary") {
 					const resolveView = () => this.forAgent(agentId);
 					return {
-						coordination: participantCoordinatorHandlers("ordinary", resolveView),
-						lifecycle: participantLifecycleHandlers(resolveView),
+						...createViewBackedParticipantHandlers("ordinary", resolveView),
 						presentation: createOwnerAgentPresentationHandlers(
 							resolveView,
 							agentId,
@@ -416,8 +374,7 @@ export class WorkflowCoordinator {
 				}
 				const resolveView = () => this.forModerator(agentId);
 				return {
-					coordination: participantCoordinatorHandlers("moderator", resolveView),
-					lifecycle: participantLifecycleHandlers(resolveView),
+					...createViewBackedParticipantHandlers("moderator", resolveView),
 					presentation: createOwnerAgentPresentationHandlers(
 						resolveView,
 						agentId,
@@ -459,32 +416,36 @@ export class WorkflowCoordinator {
 			this.#agents.set(recovered.identity.agentId, record);
 			parent.children.push(recovered.identity.agentId);
 		}
+		this.#requestEvidence = new RequestEvidence(
+			this.#agents,
+			this.#quarantinedAgentIds,
+			this.#quarantinedWorkflowAgentIds,
+		);
+		this.#requestRelationships = new RequestRelationships({
+			agents: this.#agents,
+			requestEvidence: this.#requestEvidence,
+		});
 		this.#messages = new MessageCoordinator({
 			agents: this.#agents,
+			requestEvidence: this.#requestEvidence,
+			requestRelationships: this.#requestRelationships,
 			quarantinedAgentIds: this.#quarantinedAgentIds,
 			quarantinedWorkflowAgentIds: this.#quarantinedWorkflowAgentIds,
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
 			deliveryProgressClock: options.deliveryProgressClock,
-			onDeliveryProgressChanged: () => {
-				this.#operationalIncidents?.deliveryProgressChanged();
-				this.#notifyAgentActivityChanged();
-			},
-			isWaitingForCapacity: (agentId) => this.#waitingForExecution.has(agentId),
-			preemptAgentWait: (record, reserveDelivery) =>
-				this.#agentWaits.preemptForInboundRequest(record, reserveDelivery),
 			workflowPolicy: this.#workflowPolicy,
 		});
 		this.#agentWaits = new AgentWaitCoordinator({
 			agents: this.#agents,
 			messages: this.#messages,
+			requestEvidence: this.#requestEvidence,
+			requestRelationships: this.#requestRelationships,
+			answerArbitration: this.#messages.answerArbitration,
 			boundaryHooks: options.agentWaitBoundaryHooks,
 			clock: options.agentWaitClock,
-			suspendExecution: (record) => {
-				this.#releaseExecution(record.identity.agentId);
-			},
-			resumeExecution: (record) =>
-				this.#ensureExecution(record.identity.agentId),
+			assertNotShutDownOrSuspended: (record) =>
+				this.#assertNotShutDownOrSuspended(record.identity.agentId),
 			rejectsSuspendedResponders: this.#interaction === "headless",
 		});
 		this.#humanRequests = new HumanRequestCoordinator({
@@ -497,15 +458,6 @@ export class WorkflowCoordinator {
 					this.#messages.prepareInterruptionInLane(record);
 					await record.host.interruptCurrentRunInLane();
 				});
-			},
-			suspendExecution: (record) => {
-				this.#releaseExecution(record.identity.agentId);
-			},
-			beginHumanWaiting: (source) => {
-				this.#operationalIncidents.beginHumanWaiting(source);
-			},
-			beginHumanResultCommit: (source) => {
-				this.#operationalIncidents.beginHumanResultCommit(source);
 			},
 			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
 		});
@@ -520,6 +472,9 @@ export class WorkflowCoordinator {
 			ownerIdentity: identity,
 			sessionFactory,
 			messages: this.#messages,
+			requestEvidence: this.#requestEvidence,
+			requestRelationships: this.#requestRelationships,
+			humanRequests: this.#humanRequests,
 			workflowPolicy: this.#workflowPolicy,
 			integrateAgent: (record) => this.#integrateAgent(record),
 			isShuttingDown: () => this.#shuttingDown,
@@ -539,12 +494,26 @@ export class WorkflowCoordinator {
 			deliveryProgressClock: options.deliveryProgressClock,
 			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
 		});
+		this.#selection = new InteractiveSelection({
+			agents: this.#agents,
+			quarantinedAgentIds: this.#quarantinedAgentIds,
+			ownerIdentity: identity,
+			messages: this.#messages,
+			runSupervisor: this.#runSupervisor,
+			humanRequests: this.#humanRequests,
+			sessionFactory,
+			beginShutdown: () => this.#beginShutdown(),
+			diagnostics: this.#ownerDiagnostics,
+			onActivityChanged: () => this.#notifyAgentActivityChanged(),
+		});
+		this.#messages.subscribeDeliveryProgress(() => this.#notifyAgentActivityChanged());
 		for (const record of this.#agents.values()) this.#integrateAgent(record);
 		this.#spawner = new DefaultChildSpawner({
 			agents: this.#agents,
 			agentIdBySpawnSource: this.#agentIdBySpawnSource,
 			sessionFactory,
 			messages: this.#messages,
+			requestRelationships: this.#requestRelationships,
 			integrateAgent: (record) => this.#integrateAgent(record),
 			boundaryHooks: options.spawnBoundaryHooks,
 			isShuttingDown: () => this.#shuttingDown,
@@ -553,7 +522,7 @@ export class WorkflowCoordinator {
 
 	async initialize(): Promise<void> {
 		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
-		await this.#messages.refreshTranscriptFacts();
+		await this.#requestRelationships.refresh();
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
 	}
 
@@ -690,6 +659,15 @@ export class WorkflowCoordinator {
 	}
 
 	#agentView(agentId: string): AgentCoordinatorView {
+		// Human Requests, Agent Wait and Operation Review reconcile independently, in
+		// this fixed order; then parked Waits across the Workflow re-check Answers.
+		// Operation Review also schedules the incident evaluation the safe boundary awaits.
+		const reconcileCommittedToolResults = () => {
+			this.#humanRequests.reconcileCommittedResults(agentId);
+			this.#agentWaits.reconcileCommittedResults(agentId);
+			this.#operationalIncidents.reconcileCommittedToolResults(agentId);
+			this.#agentWaits.reconcileCommittedAnswers();
+		};
 		return {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
 			modelPolicy: () => this.modelPolicy(),
@@ -716,8 +694,8 @@ export class WorkflowCoordinator {
 			},
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			search: (input) => this.#searchFor(agentId, input),
-			openIncomingRequests: () => this.#messages.openIncomingRequests(agentId),
-			inspectRequest: (requestId) => this.#messages.inspectRequest(agentId, requestId),
+			openIncomingRequests: () => this.#requestRelationships.openIncomingRequests(this.#requireAgent(agentId)),
+			inspectRequest: (requestId) => this.#requestEvidence.inspectRequest(this.#requireAgent(agentId), requestId),
 			message: (toolCallId, input) => {
 				this.#assertAdmissionOpen();
 				return this.#messages.execute(agentId, toolCallId, input);
@@ -742,17 +720,17 @@ export class WorkflowCoordinator {
 			selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
 				this.#assertAdmissionOpen();
-				return this.#openAgentPresentation(targetAgentId);
+				return this.#selection.openPresentation(targetAgentId);
 			},
 			openAgentView: (targetAgentId) => {
 				this.#assertAdmissionOpen();
-				return this.#openAgentView(targetAgentId);
+				return this.#selection.openView(targetAgentId);
 			},
 			bindPhysicalAgentSurface: (surface) =>
 				this.#postMortemAgentPresenter?.bindPhysicalSurface(surface) ?? (() => undefined),
 			focusHumanAnswer: (targetAgentId, requestId) => {
 				this.#assertAdmissionOpen();
-				return this.#focusHumanAnswer(targetAgentId, requestId);
+				return this.#selection.focusHumanAnswer(targetAgentId, requestId);
 			},
 			askHuman: (toolCallId, input, signal) => {
 				this.#assertAdmissionOpen();
@@ -762,8 +740,6 @@ export class WorkflowCoordinator {
 				this.#humanRequests.guardResultCommit(agentId, message) ??
 				this.#messages.guardResultCommit(agentId, message) ??
 				this.#agentWaits.guardResultCommit(agentId, message),
-			reconcileHumanToolResults: () =>
-				this.#humanRequests.reconcileCommittedResults(agentId),
 			// These surfaces belong to the human Workflow Owner even while a child
 			// Runtime supplies the selected interactive mode.
 			hasPendingHumanQuestions: () => this.#humanRequests.hasPendingQuestions(),
@@ -777,15 +753,16 @@ export class WorkflowCoordinator {
 			},
 			operationalAttention: () =>
 				this.#operationalIncidents.attentionItems(this.#ownerIdentity.agentId),
+			// Committed tool results, then Answer relationship sync and the scheduler's
+			// safe boundary, then Operational Incident evaluation last.
 			reachSafeBoundary: async () => {
-				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
-				this.#agentWaits.reconcileCommittedAnswers();
+				reconcileCommittedToolResults();
 				await this.#messages.reachSafeBoundary(agentId);
 				await this.#operationalIncidents.reachSafeBoundary();
 			},
 			beginExecution: (submissionSequence) =>
 				this.#beginExecution(agentId, submissionSequence),
-			ensureExecution: () => this.#ensureExecution(agentId),
+			assertNotShutDownOrSuspended: () => this.#assertNotShutDownOrSuspended(agentId),
 			beginToolExecution: (toolCallId, toolName) => {
 				this.#assertAdmissionOpen();
 				this.#operationalIncidents.admitToolExecution(
@@ -794,13 +771,8 @@ export class WorkflowCoordinator {
 					toolName,
 				);
 			},
-			reconcileCommittedToolResults: () => {
-				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
-				this.#agentWaits.reconcileCommittedResults(agentId);
-				this.#agentWaits.reconcileCommittedAnswers();
-			},
-			obligationFrames: () => this.#messages.obligationFrames(agentId),
-			endExecution: () => this.#releaseExecution(agentId),
+			reconcileCommittedToolResults,
+			obligationFrames: () => this.#requestRelationships.obligationFrames(this.#requireAgent(agentId)),
 		};
 	}
 
@@ -808,18 +780,8 @@ export class WorkflowCoordinator {
 		if (this.#shuttingDown) return false;
 		// The entire Workflow matters: a waiting parent contributes no execution,
 		// but its progressing descendant (or a recovering Moderator) still does.
-		for (const record of this.#agents.values()) {
-			// Isolated resumption blocks ordinary Delivery, not the resumed execution.
-			if (record.identity.agentId === this.#ownerIdentity.agentId ||
-				this.#waitingForExecution.has(record.identity.agentId) ||
-				record.host.currentInterruptionHold() || record.host.currentRunSuspension()) continue;
-			const run = record.host.observe();
-			// Moderator startup belongs to the bounded recovery inspection below.
-			// A hung startup must stop counting when that inspection times out.
-			if ((run.phase === "starting" && !this.#isModerator(record.identity.agentId)) || run.phase === "ending" ||
-				(run.phase === "live" && run.work === "active" && run.attention === "none")) return true;
-		}
-		return this.#messages.hasAutonomousDeliveryProgress() ||
+		return this.#operationalIncidents.hasProgressingAgentForOwnerParking() ||
+			this.#messages.hasAutonomousDeliveryProgress() ||
 			this.#operationalIncidents.hasAutonomousRecoveryProgress();
 	}
 
@@ -1144,12 +1106,9 @@ export class WorkflowCoordinator {
 	}
 
 	#agentActivityStatus(record: AgentRecord): AgentActivityStatus {
-		const activeView = this.#activeAgentView;
 		return {
 			...this.#rosterStatus(record),
-			failed: record.host.currentRunFailed() || (
-				activeView?.record === record && activeView.failed
-			),
+			failed: record.host.currentRunFailed() || this.#selection.selectedViewFailed(record),
 		};
 	}
 
@@ -1216,336 +1175,28 @@ export class WorkflowCoordinator {
 		return identity !== undefined && isModeratorIdentity(identity);
 	}
 
-	#executionRole(agentId: string): AgentExecutionRole {
-		if (agentId === this.#ownerIdentity.agentId) return "owner";
-		return this.#isModerator(agentId) ? "moderator" : "child";
-	}
-
 	#integrateAgent(record: AgentRecord): void {
 		// Recovery, ordinary spawning, and Moderator admission all integrate after
 		// adding the record and its parent relationship. Run changes do not alter ancestry.
 		this.#cachedAuthorityOrder = undefined;
-		record.host.setRunSuspensionHandler((suspension, handle) => {
-			// Quota suspension is process-local: it stops this exact Run and releases its
-			// execution permit. Nothing durable has to be recorded or restored.
-			if (!suspension) return;
-			this.#releaseExecution(record.identity.agentId, handle);
-			if (this.#interaction === "headless") this.#noticeSupervisorOfSuspension(record, suspension);
+		record.host.setRunSuspensionHandler((suspension) => {
+			// Run Suspension is process-local: nothing durable has to be recorded or restored.
+			if (suspension && this.#interaction === "headless") {
+				this.#noticeSupervisorOfSuspension(record, suspension);
+			}
 		});
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged(record.identity.agentId));
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged(record.identity.agentId));
-		record.host.addEndedHandler((handle) => {
-			// A terminal Runtime fault can bypass participant executionEnd. Tie the
-			// fallback release to the exact ended Run so it cannot affect a successor.
-			this.#releaseExecution(record.identity.agentId, handle);
-		});
 		record.host.setProjectionInputSettledHandler(() => {
 			void this.#messages.requestRelease(record).catch((error) =>
 				this.#reportAgentRuntimeReleaseError(error)
 			);
 		});
-		record.host.setRunStartedHandler(async (handle) => {
-			await this.#bindViewedRunInLane(record, handle);
-		});
-		record.host.setRunEndingHandler(async (handle, cause) => {
-			await this.#handleViewedRunEndingInLane(record, handle, cause);
-		});
+		this.#selection.integrate(record);
+		this.#requestRelationships.integrate(record);
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
 		this.#notifyAgentActivityChanged(record.identity.agentId);
-	}
-
-	#openAgentPresentation(agentId: string): Promise<AgentPresentationSelection> {
-		return this.#agentViewLane.run(async () => {
-			if (agentId === this.#ownerIdentity.agentId) {
-				const active = this.#activeAgentView;
-				if (active) await this.#closeActiveAgentViewInLane(active);
-				return { kind: "selected" };
-			}
-			const active = this.#activeAgentView;
-			if (active?.record.identity.agentId === agentId) return { kind: "selected" };
-			const record = this.#requireAgent(agentId);
-			let target: AgentViewTarget;
-			try {
-				target = await this.#acquireAgentViewTarget(record);
-			} catch (error) {
-				if (
-					record.host.observe().phase !== "dormant" ||
-					record.host.currentProjection()
-				) throw error;
-				const transcript = record.transcript.inspect();
-				if (!transcript.transcriptPath) throw error;
-				return {
-					kind: "post_mortem",
-					agentId,
-					label: record.identity.metadata.label,
-					transcript,
-					preparationError: boundedPreparationError(error),
-				};
-			}
-			if (active) {
-				await this.#switchActiveAgentViewToTargetInLane(active, record, target);
-				return { kind: "selected" };
-			}
-			let attachment!: DurableAgentViewAttachment;
-			attachment = new DurableAgentViewAttachment({
-				agentId,
-				label: record.identity.metadata.label,
-				projection: target.projection,
-				requestClose: () => this.#closeAgentView(attachment),
-				reportFailure: (error) => this.#reportAgentViewError(error),
-			});
-			this.#activeAgentView = {
-				record,
-				attachment,
-				failed: false,
-			};
-			this.#notifyAgentActivityChanged();
-			return { kind: "selected", view: attachment };
-		});
-	}
-
-	async #openAgentView(agentId: string): Promise<DurableAgentView | undefined> {
-		const selection = await this.#openAgentPresentation(agentId);
-		if (selection.kind === "post_mortem") {
-			throw new Error(selection.preparationError);
-		}
-		return selection.view;
-	}
-
-	async #acquireAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
-		const phase = record.host.observe().phase;
-		if (phase === "starting") {
-			const initializingProjection = await waitForInitializingProjection(record);
-			if (initializingProjection) {
-				// Run startup deliberately waits for session_start UI. Entering its lane
-				// here would deadlock the only human surface that can settle a startup
-				// modal. The exact bound Run cannot change during these synchronous steps.
-				record.host.addRetentionReason("interactive_selection");
-				return { projection: initializingProjection, retryIfChanged: false };
-			}
-		}
-		if ((phase === "dormant" || record.host.currentRunSuspension()) && !record.host.currentProjection()) {
-			return this.#prepareAgentViewTarget(record);
-		}
-		const liveTarget = await record.host.lane.run(() => {
-			// Release may have won the lane after selection observed an ending Runtime.
-			// Re-check at the serialized boundary instead of applying a stale live path
-			// to the now-dormant Agent.
-			if (
-				record.host.observe().phase === "dormant" &&
-				!record.host.currentProjection()
-			) return undefined;
-			return this.#acquireAgentViewTargetInLane(record);
-		});
-		return liveTarget ?? this.#prepareAgentViewTarget(record);
-	}
-
-	async #prepareAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
-		const preparation = record.host.lane.run(async () => {
-			if (record.host.currentProjection()) {
-				record.host.addRetentionReason("interactive_selection");
-				return;
-			}
-			return record.host.prepareInLane(["interactive_selection"]);
-		});
-		// Preparation can pause in session_start UI. Attach the published projection
-		// without waiting behind the modal that this view must let the human settle.
-		const projection = await waitForStartupProjection(record, preparation);
-		// Readiness continues after publication because session_start UI may need the
-		// attached view. If it later fails, close only that exact unusable attachment.
-		void preparation.catch((error) => {
-			void this.#agentViewLane.run(async () => {
-				const active = this.#activeAgentView;
-				if (
-					!active ||
-					active.record !== record ||
-					active.attachment.projection() !== projection
-				) return;
-				this.#reportAgentViewError(error);
-				await this.#closeActiveAgentViewInLane(active);
-			}).catch((cleanupError) => this.#reportAgentViewError(cleanupError));
-		});
-		record.host.addRetentionReason("interactive_selection");
-		return { projection, retryIfChanged: false };
-	}
-
-	async #acquireAgentViewTargetInLane(record: AgentRecord): Promise<AgentViewTarget> {
-		record.host.addRetentionReason("interactive_selection");
-		const projection = record.host.currentProjection();
-		if (projection) return { projection, retryIfChanged: true };
-		record.host.removeRetentionReason("interactive_selection");
-		throw new Error(
-			`invariant_violation: live Agent ${record.identity.agentId} has no presentation projection`,
-		);
-	}
-
-	async #switchActiveAgentViewToTargetInLane(
-		active: ActiveDurableAgentView,
-		record: AgentRecord,
-		initialTarget: AgentViewTarget,
-	): Promise<void> {
-		let target = initialTarget;
-		while (true) {
-			const previousRecord = active.record;
-			const previousProjection = active.attachment.projection();
-			let presentationReady: Promise<void> | undefined;
-			let requestPreviousRunRelease = false;
-			let targetChanged = false;
-			await previousRecord.host.lane.run(() => {
-				targetChanged = record.host.currentProjection() !== target.projection;
-				if (targetChanged) return;
-				active.record = record;
-				active.failed = false;
-				presentationReady = active.attachment.retarget({
-					agentId: record.identity.agentId,
-					label: record.identity.metadata.label,
-					projection: target.projection,
-				});
-			});
-			if (targetChanged) {
-				await this.#releaseUnpublishedAgentViewTarget(record, target);
-				if (!target.retryIfChanged) {
-					throw new Error(
-						`stale_run: selected Agent ${record.identity.agentId} changed during view preparation`,
-					);
-				}
-				target = await this.#acquireAgentViewTarget(record);
-				continue;
-			}
-			// The previous Runtime still renders its loading selector until the
-			// physical handoff completes. Releasing it earlier can freeze that view.
-			try {
-				await presentationReady;
-			} finally {
-				await previousRecord.host.lane.run(() => {
-					if (previousRecord.host.currentProjection() !== previousProjection) return;
-					previousRecord.host.removeRetentionReason("interactive_selection");
-					requestPreviousRunRelease = true;
-				});
-				if (requestPreviousRunRelease) {
-					try {
-						await this.#messages.requestRelease(previousRecord);
-					} catch (error) {
-						this.#reportAgentViewError(error);
-					}
-				}
-				this.#notifyAgentActivityChanged();
-			}
-			return;
-		}
-	}
-
-	async #releaseUnpublishedAgentViewTarget(
-		record: AgentRecord,
-		_target: AgentViewTarget,
-	): Promise<void> {
-		await record.host.lane.run(() => {
-			record.host.removeRetentionReason("interactive_selection");
-		});
-		await this.#messages.requestRelease(record);
-	}
-
-	#closeAgentView(attachment: DurableAgentViewAttachment): Promise<void> {
-		return this.#agentViewLane.run(async () => {
-			const active = this.#activeAgentView;
-			if (!active || active.attachment !== attachment) {
-				attachment.settleClosed();
-				return;
-			}
-			await this.#closeActiveAgentViewInLane(active);
-		});
-	}
-
-	async #closeActiveAgentViewInLane(active: ActiveDurableAgentView): Promise<void> {
-		const cleanupErrors: unknown[] = [];
-		let requestRunRelease = false;
-		await collectCleanupFailure(
-			cleanupErrors,
-			() => active.record.host.cancelRuntimeInitialization(
-				active.attachment.projection(),
-				new Error("Agent view closed during Runtime initialization"),
-			),
-		);
-		await active.record.host.lane.run(async () => {
-			if (this.#activeAgentView !== active) return;
-			this.#activeAgentView = undefined;
-			// A closed selection cannot hold interactive retention for any projection:
-			// there is only one active view, and it is this one. Gating the removal on
-			// the attached projection used to leak the retention whenever that
-			// projection had already been replaced (Run fence, resumption, disposal),
-			// which then made the record permanently ineligible for Deadlock and other
-			// incident inspection that treats a live selection as external progress.
-			active.record.host.removeRetentionReason("interactive_selection");
-			if (
-				active.record.host.currentProjection() === active.attachment.projection()
-			) requestRunRelease = true;
-			active.attachment.settleClosed();
-		});
-		if (requestRunRelease) {
-			try {
-				await this.#messages.requestRelease(active.record);
-			} catch (error) {
-				cleanupErrors.push(error);
-			}
-		}
-		if (cleanupErrors.length > 0) {
-			throw new AggregateError(cleanupErrors, "Agent view cleanup failed");
-		}
-	}
-
-	async #bindViewedRunInLane(
-		record: AgentRecord,
-		handle: Readonly<{ sequence: number }>,
-	): Promise<void> {
-		const active = this.#activeAgentView;
-		if (!active || active.record !== record || !record.host.isCurrent(handle)) return;
-		const projection = record.host.currentProjection();
-		if (!projection) {
-			throw new Error(
-				`invariant_violation: viewed Agent ${record.identity.agentId} started without a projection`,
-			);
-		}
-		if (active.attachment.projection() !== projection) {
-			throw new Error(
-				`invariant_violation: viewed Agent ${record.identity.agentId} changed Runtime projection during Run admission`,
-			);
-		}
-		record.host.addRetentionReason("interactive_selection");
-		active.failed = false;
-		this.#notifyAgentActivityChanged();
-	}
-
-	async #handleViewedRunEndingInLane(
-		record: AgentRecord,
-		handle: Readonly<{ sequence: number }>,
-		cause: "failure" | "termination" | "shutdown",
-	): Promise<void> {
-		const active = this.#activeAgentView;
-		if (
-			!active ||
-			active.record !== record ||
-			!record.host.isCurrent(handle) ||
-			record.host.currentProjection() !== active.attachment.projection()
-		) return;
-		if (record.host.observe().phase === "starting") {
-			// Initialization cancellation disposes this not-yet-usable projection;
-			// unlike an admitted Run, it cannot remain as a Dormant attached view.
-			this.#activeAgentView = undefined;
-			active.attachment.settleClosed();
-			this.#notifyAgentActivityChanged();
-			return;
-		}
-		if (cause !== "failure") return;
-		active.failed = true;
-		this.#notifyAgentActivityChanged();
-	}
-
-	#reportAgentViewError(error: unknown): void {
-		this.#ownerDiagnostics.push({
-			type: "error",
-			message: `Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
-		});
 	}
 
 	/**
@@ -1596,21 +1247,6 @@ export class WorkflowCoordinator {
 		});
 	}
 
-	#focusHumanAnswer(agentId: string, requestId: string): Promise<void> {
-		return this.#agentViewLane.run(() => {
-			if (!this.#humanRequests.hasPendingRequest(agentId, requestId)) {
-				throw new Error("stale_request: Human Request is no longer pending");
-			}
-			const active = this.#activeAgentView;
-			if (!active || active.record.identity.agentId !== agentId) {
-				throw new Error(
-					`invariant_violation: Human Request Agent ${agentId} is not selected`,
-				);
-			}
-			active.attachment.projection().focusEditor();
-		});
-	}
-
 	async #beginExecution(
 		agentId: string,
 		submissionSequence?: number,
@@ -1624,19 +1260,13 @@ export class WorkflowCoordinator {
 			this.#assertInputSubmissionAdmissible(record, inputSubmission);
 			return record.host.currentHandle() ?? await record.host.startInLane();
 		});
-		if (this.#executionPermits.has(agentId)) {
-			throw new Error(
-				`invariant_violation: Agent ${agentId} execution already holds Workflow capacity`,
-			);
-		}
-		await this.#ensureExecution(agentId);
 		// No await may separate these final checks from the successful lifecycle
 		// response: termination can fence the submission and replace the exact Run.
+		this.#assertNotShutDownOrSuspended(agentId);
 		this.#assertInputSubmissionAdmissible(record, inputSubmission);
 		if (!record.host.isCurrent(handle)) {
 			throw new Error("stale_run: execution admission lost its exact Agent Run");
 		}
-		this.#assertAdmissionOpen();
 	}
 
 	#captureInputSubmission(
@@ -1663,44 +1293,11 @@ export class WorkflowCoordinator {
 		}
 	}
 
-	async #ensureExecution(agentId: string): Promise<void> {
+	#assertNotShutDownOrSuspended(agentId: string): void {
 		this.#assertAdmissionOpen();
-		const record = this.#requireAgent(agentId);
-		if (record.host.runSuspensionBlocksExecution()) throw new Error("run_suspended: explicit resume is required");
-		if (this.#executionPermits.has(agentId)) return;
-		const run = record.host.observe();
-		if (run.phase !== "live" || run.attention === "input_required") return;
-		const handle = record.host.currentHandle();
-		if (!handle) return;
-		const role = this.#executionRole(agentId);
-		this.#waitingForExecution.add(agentId);
-		this.#operationalIncidents.deliveryProgressChanged();
-		const permit = await this.#executionScheduler.admit(
-			role,
-			role === "child"
-				? record.host.exactRunCancellationSignal(handle)
-				: undefined,
-		).finally(() => {
-			this.#waitingForExecution.delete(agentId);
-			this.#operationalIncidents.deliveryProgressChanged();
-		});
-		if (!permit) return;
-		if (record.host.runSuspensionBlocksExecution()) {
-			permit.release();
-			throw new Error("run_suspended: execution admission was suspended");
+		if (this.#requireAgent(agentId).host.runSuspensionBlocksExecution()) {
+			throw new Error("run_suspended: explicit resume is required");
 		}
-		if (this.#shuttingDown) {
-			permit.release();
-			this.#assertAdmissionOpen();
-		}
-		this.#executionPermits.set(agentId, { handle, permit });
-	}
-
-	#releaseExecution(agentId: string, handle?: AgentRunHandle): void {
-		const execution = this.#executionPermits.get(agentId);
-		if (!execution || (handle !== undefined && execution.handle !== handle)) return;
-		this.#executionPermits.delete(agentId);
-		execution.permit.release();
 	}
 
 	#handleHumanInput(
@@ -1723,43 +1320,7 @@ export class WorkflowCoordinator {
 		// Mark before submission: the settlement this input causes must observe the mark
 		// so a Stall after deselection can clear it.
 		this.#operationalIncidents.noteHumanInterruption(agentId);
-		return this.#agentViewLane.run(async () => {
-			const active = this.#activeAgentView;
-			if (!active || active.record.identity.agentId !== agentId) {
-				return await this.#runSupervisor.resumeFromHuman(agentId, text, images, submissionSequence)
-					? "submitted"
-					: "continue";
-			}
-			return active.record.host.lane.run(async () => {
-				if (this.#activeAgentView !== active) return "discarded";
-				if (
-					inputSubmission !== undefined &&
-					active.record.host.projectionInputSubmissionIsFenced(inputSubmission)
-				) return "discarded";
-				const currentHandle = active.record.host.currentHandle();
-				if (
-					currentHandle &&
-					active.attachment.projection() === active.record.host.currentProjection()
-				) {
-					if (active.record.host.currentResumptionHold()) {
-						return await this.#runSupervisor.resumeFromHumanInLane(
-							active.record,
-							text,
-							images,
-							submissionSequence,
-						)
-							? "submitted"
-							: "continue";
-					}
-					return "continue";
-				}
-				if (!currentHandle) {
-					await active.record.host.startInLane(["interactive_selection"]);
-				}
-				await this.#runSupervisor.submitFromHumanInLane(active.record, text, images, submissionSequence);
-				return "submitted";
-			});
-		});
+		return this.#selection.routeHumanInput(agentId, text, images, submissionSequence, inputSubmission);
 	}
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
@@ -1779,7 +1340,7 @@ export class WorkflowCoordinator {
 		await collectCleanupFailure(cleanupErrors, () => this.#operationalIncidents.reachSafeBoundary());
 		await collectCleanupFailure(
 			cleanupErrors,
-			() => this.#activeAgentView?.attachment.close(),
+			() => this.#selection.closeAtShutdown(),
 		);
 		await collectCleanupFailure(
 			cleanupErrors,
@@ -1834,106 +1395,4 @@ function searchRelevance(
 	if (label.startsWith(query)) return 1;
 	if (label.includes(query)) return 2;
 	return 3;
-}
-
-function waitForInitializingProjection(
-	record: AgentRecord,
-): Promise<TerminalProjection | undefined> {
-	const current = record.host.currentProjection();
-	if (current || record.host.observe().phase !== "starting") {
-		return Promise.resolve(current);
-	}
-	return new Promise((resolve) => {
-		const removeHandler = record.host.addStateChangeHandler(() => {
-			const projection = record.host.currentProjection();
-			if (!projection && record.host.observe().phase === "starting") return;
-			removeHandler();
-			resolve(projection);
-		});
-	});
-}
-
-function waitForStartupProjection(
-	record: AgentRecord,
-	startup: Promise<unknown>,
-): Promise<TerminalProjection> {
-	const current = record.host.currentProjection();
-	if (current) return Promise.resolve(current);
-	return new Promise((resolve, reject) => {
-		let settled = false;
-		let removeHandler: () => void = () => undefined;
-		const settle = (
-			result: { projection: TerminalProjection } | { error: unknown },
-		) => {
-			if (settled) return;
-			settled = true;
-			removeHandler();
-			if ("projection" in result) resolve(result.projection);
-			else reject(result.error);
-		};
-		const inspectProjection = () => {
-			const projection = record.host.currentProjection();
-			if (projection) settle({ projection });
-		};
-		removeHandler = record.host.addStateChangeHandler(inspectProjection);
-		inspectProjection();
-		void startup.then(
-			() => {
-				const projection = record.host.currentProjection();
-				if (projection) settle({ projection });
-				else {
-					settle({
-						error: new Error(
-							`invariant_violation: selected Agent ${record.identity.agentId} prepared without a presentation projection`,
-						),
-					});
-				}
-			},
-			(error) => settle({ error }),
-		);
-	});
-}
-
-const MAX_PREPARATION_ERROR_BYTES = 2_000;
-
-function boundedPreparationError(error: unknown): string {
-	const message = error instanceof Error ? error.message : String(error);
-	const nonEmpty = message.length > 0 ? message : "Runtime preparation failed";
-	if (Buffer.byteLength(nonEmpty, "utf8") <= MAX_PREPARATION_ERROR_BYTES) return nonEmpty;
-	const ellipsis = "…";
-	const maximumContentBytes = MAX_PREPARATION_ERROR_BYTES - Buffer.byteLength(ellipsis, "utf8");
-	let bounded = "";
-	for (const character of nonEmpty) {
-		if (Buffer.byteLength(bounded + character, "utf8") > maximumContentBytes) break;
-		bounded += character;
-	}
-	return `${bounded}${ellipsis}`;
-}
-
-async function collectCleanupFailure(
-	errors: unknown[],
-	cleanup: () => unknown | Promise<unknown>,
-): Promise<void> {
-	try {
-		await cleanup();
-	} catch (error) {
-		appendCleanupFailure(errors, error);
-	}
-}
-
-function collectSettledCleanupFailures(
-	errors: unknown[],
-	results: readonly PromiseSettledResult<unknown>[],
-): void {
-	for (const result of results) {
-		if (result.status === "rejected") appendCleanupFailure(errors, result.reason);
-	}
-}
-
-function appendCleanupFailure(errors: unknown[], error: unknown): void {
-	if (error instanceof AggregateError) {
-		for (const nested of error.errors) appendCleanupFailure(errors, nested);
-		return;
-	}
-	errors.push(error);
 }

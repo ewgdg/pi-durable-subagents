@@ -1,4 +1,4 @@
-type RuntimeQueue = { steering: string[]; followUp: string[] };
+export type RuntimeQueue = { steering: string[]; followUp: string[] };
 
 /** Removes native queued text immediately, retaining the existing clearQueue contract. */
 export class RetainedRuntimeQueue {

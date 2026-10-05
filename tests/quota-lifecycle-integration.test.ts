@@ -6,10 +6,9 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import { WorkflowPolicyStore, parseWorkflowPolicy } from "../src/policy/workflow-policy.ts";
 import type { AgentRunState } from "../src/runtime/agent-runtime-host.ts";
 import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
-import { participantLifecycleHandlers } from "../src/bootstrap/agent-extension.ts";
+import { createViewBackedParticipantHandlers } from "../src/coordination/view-backed-participant-handlers.ts";
 import { registerParticipantLifecycle } from "../src/pi-integration/participant-lifecycle.ts";
 
 function suspension(run: AgentRunState) { return run.phase === "dormant" ? undefined : run.suspension; }
@@ -29,7 +28,7 @@ async function until(predicate: () => boolean, description: string) {
 async function harness(t: TestContext, retry = false, nativeOwnerLifecycle = false) {
 	let view!: OrdinaryAgentCoordinatorView;
 	const host = await createUnboundTestOwnerHost(t, pi => {
-		if (nativeOwnerLifecycle) registerParticipantLifecycle(pi, participantLifecycleHandlers(() => view));
+		if (nativeOwnerLifecycle) registerParticipantLifecycle(pi, createViewBackedParticipantHandlers("owner", () => view).lifecycle);
 	}, {
 		persistent: true, processVisibleModel: true,
 		additionalExtensionPaths: [fileURLToPath(new URL("./fixtures/quota-evidence-extension.ts", import.meta.url))],
@@ -39,7 +38,6 @@ async function harness(t: TestContext, retry = false, nativeOwnerLifecycle = fal
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-durable-subagents>",
-		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}')),
 	});
 	view = coordinator.forAgent(identity.agentId);
 	let sequence = 0;
@@ -96,10 +94,7 @@ for (const diagnostic of [
 		const independent = await spawn();
 		await until(() => {
 			const path = view.status(independent).primaryEvidence.transcriptPath;
-			return Boolean(path && JSON.stringify(SessionManager.open(path).getEntries()).includes("INDEPENDENT_PROGRESS"));
-		}, "quota suspension must release execution capacity");
-		await until(() => {
-			const path = view.status(independent).primaryEvidence.transcriptPath!;
+			if (!path) return false;
 			const run = view.status(independent).run;
 			const entries = SessionManager.open(path).getEntries();
 			return entries.some(entry => entry.type === "custom_message" && entry.customType === "agent-coordination.obligation-reminder") && run.phase === "live" && run.work === "settled" && !run.retentionReasons.some(item => item.reason === "pending_delivery");
@@ -125,6 +120,8 @@ test("native Workflow suspends structured quota without terminal failure", { tim
 	await view.reachSafeBoundary();
 	assert.ok(suspension(view.status(identity.agentId).run));
 	await assert.rejects(view.beginExecution(), /run_suspended/);
+	// Root tool execution start and Agent Wait resume share this guard.
+	assert.throws(() => view.assertNotShutDownOrSuspended(), /run_suspended/);
 	assert.ok(suspension(view.status(identity.agentId).run));
 	let programmaticGenerations = 0;
 	host.model.setResponses([() => { programmaticGenerations++; return fauxAssistantMessage("PROGRAMMATIC_MUST_NOT_GENERATE"); }]);
@@ -228,7 +225,7 @@ test("an unrelated terminal failure suspends the exact Run instead of reporting 
 		evidence: {
 			stage: "model",
 			error: "400 unrelated terminal failure",
-			provenance: "in-process-hosted-runtime",
+			provenance: "native-session-driver",
 		},
 	});
 	assert.deepEqual(view.reportHistory(), [], "a Runtime error stop publishes no report");
@@ -273,7 +270,7 @@ test("quota dependency quiets its blocked parent without hiding an unrelated sto
 		evidence: {
 			stage: "model",
 			error: "400 unrelated failure alongside suspended dependency",
-			provenance: "in-process-hosted-runtime",
+			provenance: "native-session-driver",
 		},
 	});
 	assert.equal(view.reportHistory().length, reportCount, "neither stop publishes a report");

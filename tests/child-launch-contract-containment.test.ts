@@ -5,13 +5,11 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { SessionManager, type AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
-import type { WorkflowCoordinator, AgentSpawnReceipt } from "../src/coordination/workflow-coordinator.ts";
+import type { AgentSpawnReceipt } from "../src/coordination/workflow-coordinator.ts";
 import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
-import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
-import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
+import { createTestOwnerHost } from "./support/pi-host.ts";
+import { createTestOwnerExtension } from "./support/owner-extension.ts";
 import { executeAndCommitRegisteredTool } from "./support/agent-session.ts";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-contract.ts";
@@ -19,12 +17,9 @@ import { PiChildProcessRuntime, type StartPiChildProcessRuntimeOptions } from ".
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 
 test("permanent launch rejection publishes one durable unread report without Owner cooperation", { timeout: 10_000 }, async (t) => {
-	let owner!: ReturnType<WorkflowCoordinator["forAgent"]>;
-	const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner), { persistent: true });
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
-	owner = coordinator.forAgent(identity.agentId);
-	await bindTestOwnerHost(host, "tui");
+	const ownerExtension = createTestOwnerExtension();
+	const host = await createTestOwnerHost(t, ownerExtension.extension, { persistent: true });
+	const owner = ownerExtension.owner();
 	let notifiedWithUnreadReport = false;
 	const unsubscribe = owner.addAgentActivityChangeHandler(() => {
 		if (owner.agentActivity().reports?.some(item => !item.readAt)) notifiedWithUnreadReport = true;
@@ -79,12 +74,9 @@ test("permanent launch rejection publishes one durable unread report without Own
 });
 
 test("an unsaved Owner gets direct launch-block attention without losing the original diagnostic", { timeout: 10_000 }, async (t) => {
-	let owner!: ReturnType<WorkflowCoordinator["forAgent"]>;
-	const host = await createUnboundTestOwnerHost(t, createAgentBoundExtension(() => owner));
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = await createTestWorkflowCoordinator(host, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
-	owner = coordinator.forAgent(identity.agentId);
-	await bindTestOwnerHost(host, "tui");
+	const ownerExtension = createTestOwnerExtension();
+	const host = await createTestOwnerHost(t, ownerExtension.extension);
+	const owner = ownerExtension.owner();
 	assert.equal(host.session.sessionManager.getSessionFile(), undefined);
 	const executable = process.execPath;
 	try {
@@ -172,8 +164,8 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 	};
 	for (const [content, expected, remedy] of [
 		// This error is authored inside the child, so a contract disagreement must name the Owner host it needs.
-		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 11, the received bootstrap descriptor is version 7/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
-		[JSON.stringify({ ...legacy, protocolVersion: 11 }), /schema_drift.*missing descriptor fields: interaction, excludedTools/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
+		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 12, the received bootstrap descriptor is version 7/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
+		[JSON.stringify({ ...legacy, protocolVersion: 12 }), /schema_drift.*missing descriptor fields: interaction, excludedTools/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
 		// A handoff defect involves no host-wide block, so it asks for a relaunch instead.
 		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/, /^control_bootstrap_invalid: descriptor could not be read as JSON\. Relaunch this Agent/],
 	] as const) {

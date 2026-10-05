@@ -27,7 +27,7 @@ test("a retained Run stop stays visible despite pending work or compaction", () 
 	assert.deepEqual(quotaStatus, { kind: "suspended", suspension: quota });
 	assert.match(formatSelectedAgentIdentity({ ...identity, status: quotaStatus }, theme), /<warning>Suspended · Usage limit reached<\/warning>/);
 
-	const runtimeError = { reason: "runtime_error" as const, evidence: { stage: "model", error: "400 unrelated terminal failure", provenance: "in-process-hosted-runtime" } };
+	const runtimeError = { reason: "runtime_error" as const, evidence: { stage: "model", error: "400 unrelated terminal failure", provenance: "native-session-driver" } };
 	const errorStatus = selectedAgentWorkStatus({
 		phase: "live", work: "settled", attention: "none", retentionReasons: [],
 		suspension: runtimeError,
@@ -40,7 +40,7 @@ test("a retained Run stop outranks a stale native failure flag", () => {
 	// The supervisor establishes a suspension instead of marking the Run failed, but
 	// the child-side mirror still reports its native agent_end outcome. The retained
 	// stop must stay visible until the Run genuinely ends.
-	const suspension = { reason: "runtime_error" as const, evidence: { stage: "model", error: "400 terminal provider error", provenance: "pi-child-hosted-runtime" } };
+	const suspension = { reason: "runtime_error" as const, evidence: { stage: "model", error: "400 terminal provider error", provenance: "native-session-driver" } };
 	assert.deepEqual(selectedAgentWorkStatus({
 		phase: "live", work: "settled", attention: "none", retentionReasons: [],
 		suspension,

@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { AgentRecord } from "./agent-record.ts";
 import { MessageCoordinator } from "./messages.ts";
+import type { RequestRelationships } from "./request-relationships.ts";
 import { resolveOrdinaryAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
 	type AgentSpawnInput,
@@ -22,10 +23,7 @@ import {
 	toolCallPointerKey,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
-import type {
-	AgentRunHandle,
-	RunRetentionReason,
-} from "../runtime/agent-runtime-host.ts";
+import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
 import {
@@ -86,6 +84,7 @@ export class DefaultChildSpawner {
 	readonly #boundaryHooks: SpawnBoundaryHooks;
 	readonly #isShuttingDown: () => boolean;
 	readonly #messages: MessageCoordinator;
+	readonly #requestRelationships: RequestRelationships;
 	readonly #integrateAgent: (record: AgentRecord) => void;
 	readonly #agentIdBySpawnSource: Map<string, string>;
 
@@ -94,6 +93,7 @@ export class DefaultChildSpawner {
 		agentIdBySpawnSource?: Map<string, string>;
 		sessionFactory: ProcessChildSessionFactory;
 		messages: MessageCoordinator;
+		requestRelationships: RequestRelationships;
 		integrateAgent(record: AgentRecord): void;
 		boundaryHooks?: SpawnBoundaryHooks;
 		isShuttingDown(): boolean;
@@ -102,6 +102,7 @@ export class DefaultChildSpawner {
 		this.#agentIdBySpawnSource = options.agentIdBySpawnSource ?? new Map();
 		this.#sessionFactory = options.sessionFactory;
 		this.#messages = options.messages;
+		this.#requestRelationships = options.requestRelationships;
 		this.#integrateAgent = options.integrateAgent;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#isShuttingDown = options.isShuttingDown;
@@ -235,7 +236,8 @@ export class DefaultChildSpawner {
 		this.#agentIdBySpawnSource.set(toolCallPointerKey(source), agentId);
 		parent.children.push(agentId);
 		this.#integrateAgent(child);
-		this.#addRetentionReason(parent, "awaiting_answer", requestId);
+		// The child's Identity makes its Creation Request canonical.
+		this.#requestRelationships.sync(parent);
 		const creationDelivery = {
 			recipient: child, requestId, fromAgentId: callerAgentId, title: input.title, question: input.request, source,
 		};
@@ -361,14 +363,6 @@ export class DefaultChildSpawner {
 		if (this.#agentIdBySpawnSource.has(toolCallPointerKey(source))) {
 			throw new Error("invariant_violation: Agent Spawn source already has a child");
 		}
-	}
-
-	#addRetentionReason(
-		record: AgentRecord,
-		reason: RunRetentionReason,
-		requestId?: string,
-	): void {
-		record.host.addRetentionReason(reason, requestId);
 	}
 
 	#requireAgent(agentId: string): AgentRecord {

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 
@@ -18,6 +21,26 @@ test("installed Pi module path follows the package-declared public import", () =
 		resolveInstalledPiModulePath(),
 		join(getPackageDir(), publicImport as string),
 	);
+});
+
+// Windows CI regression: Node flushes a cold compile cache synchronously inside
+// process.exit. For the unbundled Pi graph that took over 6 seconds on Windows,
+// past the Owner's shutdown grace, so a graceful child was force-killed (exit 1).
+test("Pi child entry leaves the module compile cache disabled so exit never flushes it", () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-child-entry-"));
+	const stubPiModulePath = join(directory, "pi-stub.mjs");
+	writeFileSync(stubPiModulePath, [
+		"import { getCompileCacheDir } from \"node:module\";",
+		"export async function main() {",
+		"\tprocess.stdout.write(JSON.stringify({ compileCacheDir: getCompileCacheDir() ?? null }));",
+		"}",
+	].join("\n"));
+	const { NODE_COMPILE_CACHE: _cache, NODE_DISABLE_COMPILE_CACHE: _disabled, ...environment } = process.env;
+	const output = execFileSync(process.execPath, [
+		fileURLToPath(new URL("../src/process-runtime/pi-child-entry.mjs", import.meta.url)),
+		stubPiModulePath,
+	], { encoding: "utf8", env: environment, timeout: 4_000 });
+	assert.deepEqual(JSON.parse(output), { compileCacheDir: null });
 });
 
 test("Pi child CLI launch uses the exact session and immutable explicit resources", () => {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { afterEach } from "node:test";
+import test from "node:test";
 
 import {
 	fauxAssistantMessage,
@@ -14,13 +14,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
-import {
-	createAgentBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
-import { registerHerdrQuestionAttention } from "../src/pi-integration/herdr-question-attention.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
-import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
+import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
+import { createTestOwnerExtension } from "./support/owner-extension.ts";
 import {
 	inspectCommittedHumanRequestResult,
 	resolveCommittedHumanRequest,
@@ -28,13 +25,12 @@ import {
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import {
-	bindTestOwnerHost,
+	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 	type TestCleanupRegistrar,
+	type TestOwnerHost,
 	type TestOwnerHostOptions,
 } from "./support/pi-host.ts";
-
-const pendingCleanups = new Set<() => Promise<void>>();
 
 /**
  * A presentation hand-off on an idle host lands in milliseconds, but the same work has
@@ -43,12 +39,6 @@ const pendingCleanups = new Set<() => Promise<void>>();
  */
 const SELECTED_FRAME_DEADLINE_MS = 45_000;
 const SELECTED_FRAME_POLL_INTERVAL_MS = 20;
-
-afterEach(async () => {
-	const cleanups = [...pendingCleanups];
-	pendingCleanups.clear();
-	await Promise.allSettled(cleanups.map((cleanup) => cleanup()));
-});
 
 test("one native text Answer is the sole result and releases the sequential sibling barrier", async (t) => {
 	const { host, coordinator, view, child } = await createHumanRequestChild(t);
@@ -132,7 +122,7 @@ test("one native text Answer is the sole result and releases the sequential sibl
 	);
 	assert.deepEqual(view.humanAttention(), []);
 
-	await coordinator.shutdown(async () => host.runtime.dispose());
+	await host.runtime.dispose();
 });
 
 test("registered Human Request schema rejects blank and malformed questions before attention", async (t) => {
@@ -176,7 +166,7 @@ test("registered Human Request schema rejects blank and malformed questions befo
 		(entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError,
 	), true);
 
-	await coordinator.shutdown(async () => host.runtime.dispose());
+	await host.runtime.dispose();
 });
 
 test("blank and image-bearing submissions do not resolve as Human Answers", async (t) => {
@@ -228,7 +218,7 @@ test("blank and image-bearing submissions do not resolve as Human Answers", asyn
 		1,
 	);
 
-	await coordinator.shutdown(async () => host.runtime.dispose());
+	await host.runtime.dispose();
 });
 
 test("Alt+Enter delivery and extension commands retain native behavior", async (t) => {
@@ -306,7 +296,7 @@ export default function answerModeCommandProbe(pi) {
 		answer: "Answer now",
 	});
 
-	await coordinator.shutdown(async () => host.runtime.dispose());
+	await host.runtime.dispose();
 });
 
 test("an unrecognized slash-prefixed string is ordinary Answer text", async (t) => {
@@ -336,7 +326,7 @@ test("an unrecognized slash-prefixed string is ordinary Answer text", async (t) 
 	assert.ok(result && result.type === "message" && result.message.role === "toolResult");
 	assert.equal((result.message.details as { answer: string }).answer, "/not-a-command keep this literal");
 
-	await coordinator.shutdown(async () => host.runtime.dispose());
+	await host.runtime.dispose();
 });
 
 test("primary Enter answers literally while Alt+Enter expands a prompt template", async (t) => {
@@ -409,7 +399,7 @@ test("primary Enter answers literally while Alt+Enter expands a prompt template"
 			true,
 		);
 	} finally {
-		await coordinator.shutdown(async () => host.runtime.dispose());
+		await host.runtime.dispose();
 	}
 });
 
@@ -487,19 +477,8 @@ test("different Agents wait and commit Human Answers independently", async (t) =
 });
 
 test("a precommit Run fence rejects and restores the provisional Answer", async (t) => {
-	let ownerView: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
 	let selectedChild: HumanRequestChild | undefined;
-	const host = await createUnboundTestOwnerHost(t,
-		createAgentBoundExtension(() => {
-			if (!ownerView) throw new Error("Owner view unavailable");
-			return ownerView;
-		}),
-		{ persistent: true, processVisibleModel: true },
-	);
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	let coordinator!: WorkflowCoordinator;
-	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-durable-subagents>",
+	const ownerExtension = createTestOwnerExtension({
 		humanRequestBoundaryHooks: {
 			beforeResultCommit: ({ failExactRun }) => {
 				selectedChild?.projection?.projection().dispatchInput("newer draft");
@@ -508,9 +487,10 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 		},
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
-	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
-	ownerView = coordinator.forAgent(identity.agentId);
-	await bindTestOwnerHost(host, "tui");
+	const host = await createTestOwnerHost(t, ownerExtension.extension,
+		{ persistent: true, processVisibleModel: true },
+	);
+	const ownerView = ownerExtension.owner();
 	const child = await spawnLiveChild(host, ownerView);
 	selectedChild = child;
 	const toolCallId = "answer-before-fence";
@@ -544,7 +524,7 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 	assert.match(textContent(result.message.content), /Agent Run is no longer available/);
 	assert.deepEqual(ownerView.humanAttention(), []);
 
-	await coordinator.shutdown(async () => host.runtime.dispose());
+	await host.runtime.dispose();
 });
 
 test("a committed Answer remains canonical after later Run failure and reopened inspection", async (t) => {
@@ -596,107 +576,81 @@ test("a committed Answer remains canonical after later Run failure and reopened 
 		},
 	);
 
-	await coordinator.shutdown(async () => host.runtime.dispose());
+	await host.runtime.dispose();
 });
 
 test("Human Request fails before input_required when no interactive Agent editor exists", async (t) => {
-	let view: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-	const host = await createUnboundTestOwnerHost(t,
-		(pi) => createAgentBoundExtension(() => {
-			if (!view) throw new Error("View unavailable");
-			return view;
-		})(pi),
-	);
+	// The Owner has no Ask User tool and no Agent editor, so Human Request is
+	// called through its participant view on a host without surfaces.
+	const host = await createTestOwnerHost(t, () => {});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	let coordinator!: WorkflowCoordinator;
-	coordinator = await createTestWorkflowCoordinator(host, identity, {
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-durable-subagents>",
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
-	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
-	view = coordinator.forAgent(identity.agentId);
-	await bindTestOwnerHost(host, "tui");
+	const view = coordinator.forAgent(identity.agentId);
+	const input = { question: "This cannot be presented." };
 	const toolCallId = "ask-without-projection";
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("ask_user", { question: "This cannot be presented." }, { id: toolCallId }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The unavailable request failed."),
-	]);
-	await host.session.prompt("Attempt an unavailable request.");
-	await host.session.waitForIdle();
+	host.session.sessionManager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("ask_user", input, { id: toolCallId }),
+		{ stopReason: "toolUse" },
+	));
+	await assert.rejects(
+		view.askHuman(toolCallId, input, new AbortController().signal),
+		/interactive Agent editor/,
+	);
 	assert.notEqual(observedAttention(view, identity.agentId), "input_required");
 	assert.deepEqual(view.humanAttention(), []);
-	const result = host.session.sessionManager.getEntries().find(
-		(entry) =>
-			entry.type === "message" &&
-			entry.message.role === "toolResult" &&
-			entry.message.toolCallId === toolCallId,
-	);
-	assert.ok(result && result.type === "message" && result.message.role === "toolResult");
-	assert.equal(result.message.isError, true);
-	assert.match(textContent(result.message.content), /interactive Agent editor/);
-
-	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-for (const completion of ["answer", "interrupt", "shutdown"] as const) {
-	test(`Herdr coalesces real questions across reload and ${completion}`, { timeout: 10_000 }, async (t) => {
-		let view: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-		const attentionEvents: unknown[] = [];
-		const host = await createUnboundTestOwnerHost(t, (pi) => {
-			createAgentBoundExtension(() => view!)(pi);
-			registerHerdrQuestionAttention(pi, () => view);
-		}, {
-			persistent: true, processVisibleModel: true,
-			additionalExtensionFactories: [(pi) => {
-				pi.events.on("herdr:blocked", (data) => attentionEvents.push(data));
-			}],
-		});
-		const identity = adoptOrValidateOwnerIdentity(host.runtime);
-		const coordinator = await createTestWorkflowCoordinator(host, identity, {
-			entryModulePath: "<inline:pi-durable-subagents>",
-			incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
-		});
-		view = coordinator.forAgent(identity.agentId);
-		await bindTestOwnerHost(host, "tui");
-		host.model.setResponses(Array.from({ length: 8 }, () => (context) => {
-			const answered = context.messages.some((message) => message.role === "toolResult" && message.toolName === "ask_user");
-			return answered
-				? fauxAssistantMessage(fauxToolCall("agent_message", {
-					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Human answered.",
-				}, { id: "answer-creation" }), { stopReason: "toolUse" })
-				: fauxAssistantMessage(fauxToolCall("ask_user", { question: "Choose an option." },
-					{ id: "ask-option" }), { stopReason: "toolUse" });
-		}));
-		const children: string[] = [];
-		for (let index = 0; index < 2; index++) {
-			const input = { title: "Fixture request", request: "Ask the human for a decision." };
-			const toolCallId = `spawn-question-${index}`;
-			host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", input, { id: toolCallId }), { stopReason: "toolUse" }));
-			const receipt = await view.spawn(toolCallId, input);
-			assert.ok("agentId" in receipt && receipt.agentId);
-			children.push(receipt.agentId);
-			await waitForInputRequired(view, receipt.agentId);
-		}
-		assert.equal(view.hasPendingHumanQuestions(), true);
-		assert.deepEqual(attentionEvents, [{ active: true, label: "An agent needs your input" }]);
+async function createHerdrQuestionWorkflow(t: TestCleanupRegistrar) {
+	const attentionEvents: unknown[] = [];
+	const ownerExtension = createTestOwnerExtension({
+		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
+	});
+	const host = await createTestOwnerHost(t, ownerExtension.extension, {
+		persistent: true, processVisibleModel: true,
+		additionalExtensionFactories: [(pi) => {
+			pi.events.on("herdr:blocked", (data) => attentionEvents.push(data));
+		}],
+	});
+	const view = ownerExtension.owner();
+	host.model.setResponses(Array.from({ length: 8 }, () => (context) => {
+		const answered = context.messages.some((message) => message.role === "toolResult" && message.toolName === "ask_user");
+		return answered
+			? fauxAssistantMessage(fauxToolCall("agent_message", {
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Human answered.",
+			}, { id: "answer-creation" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage(fauxToolCall("ask_user", { question: "Choose an option." },
+				{ id: "ask-option" }), { stopReason: "toolUse" });
+	}));
+	const children: string[] = [];
+	for (let index = 0; index < 2; index++) {
+		const input = { title: "Fixture request", request: "Ask the human for a decision." };
+		const toolCallId = `spawn-question-${index}`;
+		host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", input, { id: toolCallId }), { stopReason: "toolUse" }));
+		const receipt = await view.spawn(toolCallId, input);
+		assert.ok("agentId" in receipt && receipt.agentId);
+		children.push(receipt.agentId);
+		await waitForInputRequired(view, receipt.agentId);
+	}
+	assert.equal(view.hasPendingHumanQuestions(), true);
+	assert.deepEqual(attentionEvents, [{ active: true, label: "An agent needs your input" }]);
+	return { host, ownerExtension, view, children, attentionEvents };
+}
 
-		await host.session.reload();
-		assert.deepEqual(attentionEvents, [
-			{ active: true, label: "An agent needs your input" },
-			{ active: false },
-			{ active: true, label: "An agent needs your input" },
-		]);
+for (const completion of ["answer", "interrupt", "shutdown"] as const) {
+	test(`Herdr coalesces real questions until ${completion}`, { timeout: 10_000 }, async (t) => {
+		const { host, ownerExtension, view, children, attentionEvents } = await createHerdrQuestionWorkflow(t);
+		const coordinator = ownerExtension.coordinator();
 		await coordinator.forAgent(children[0]!).resumeFromHuman("Use option A.", undefined);
-		await waitForCondition(() => view!.humanAttention().length === 1);
+		await waitForCondition(() => view.humanAttention().length === 1);
 		assert.equal(view.hasPendingHumanQuestions(), true);
-		assert.equal(attentionEvents.length, 3, "answering one question must not clear the other");
+		assert.equal(attentionEvents.length, 1, "answering one question must not clear the other");
 		if (completion === "answer") {
 			await coordinator.forAgent(children[1]!).resumeFromHuman("Use option B.", undefined);
 		} else if (completion === "shutdown") {
-			await coordinator.shutdown(async () => host.runtime.dispose());
+			await host.runtime.dispose();
 		} else {
 			const cancelInput = { operation: "interrupt" as const, agentId: children[1]! };
 			host.session.sessionManager.appendMessage(fauxAssistantMessage(
@@ -704,13 +658,27 @@ for (const completion of ["answer", "interrupt", "shutdown"] as const) {
 			));
 			await view.control("cancel-question", cancelInput);
 		}
-		await waitForCondition(() => !view!.hasPendingHumanQuestions());
+		await waitForCondition(() => !view.hasPendingHumanQuestions());
 		assert.deepEqual(attentionEvents.at(-1), { active: false });
-		assert.equal(attentionEvents.length, 4);
-		await coordinator.shutdown(async () => host.runtime.dispose());
-		assert.equal(attentionEvents.length, 4, "shutdown must not release someone else's blocker");
+		assert.equal(attentionEvents.length, 2);
+		await host.runtime.dispose();
+		assert.equal(attentionEvents.length, 2, "shutdown must not release someone else's blocker");
 	});
 }
+
+test("an Owner reload ends pending questions and releases Herdr attention once", { timeout: 10_000 }, async (t) => {
+	const { host, ownerExtension, attentionEvents } = await createHerdrQuestionWorkflow(t);
+
+	// Reload replaces the Workflow Coordinator, and Human attention ends with it.
+	await host.session.reload();
+	assert.equal(ownerExtension.owner().hasPendingHumanQuestions(), false);
+	assert.deepEqual(attentionEvents, [
+		{ active: true, label: "An agent needs your input" },
+		{ active: false },
+	]);
+	await host.runtime.dispose();
+	assert.equal(attentionEvents.length, 2, "shutdown must not release someone else's blocker");
+});
 
 async function createHumanRequestChild(
 	t: TestCleanupRegistrar,
@@ -723,24 +691,14 @@ async function createHumanRequestChild(
 	| "agentDir"
 	| "noPromptTemplates"
 >) {
-	let ownerView: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-	const host = await createUnboundTestOwnerHost(t,
-		createAgentBoundExtension(() => {
-			if (!ownerView) throw new Error("Human Request owner view is unavailable");
-			return ownerView;
-		}),
-		{ persistent: true, processVisibleModel: true, ...options },
-	);
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	let coordinator!: WorkflowCoordinator;
-	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-durable-subagents>",
+	const ownerExtension = createTestOwnerExtension({
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
-	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
-	const view = coordinator.forAgent(identity.agentId);
-	ownerView = view;
-	await bindTestOwnerHost(host, "tui");
+	const host = await createTestOwnerHost(t, ownerExtension.extension,
+		{ persistent: true, processVisibleModel: true, ...options },
+	);
+	const coordinator = ownerExtension.coordinator();
+	const view = ownerExtension.owner();
 	const child = await spawnLiveChild(host, view);
 	return {
 		host,
@@ -752,8 +710,8 @@ async function createHumanRequestChild(
 }
 
 async function spawnLiveChild(
-	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
-	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	host: TestOwnerHost,
+	view: OrdinaryAgentCoordinatorView,
 ): Promise<{
 	agentId: string;
 	sessionFile: string;
@@ -799,8 +757,8 @@ const activeChildViews = new WeakMap<object, NonNullable<HumanRequestChild["proj
 let childMessageSequence = 0;
 
 async function sendChildMessage(
-	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
-	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	host: TestOwnerHost,
+	view: OrdinaryAgentCoordinatorView,
 	child: HumanRequestChild,
 	content: string,
 ): Promise<void> {
@@ -829,7 +787,7 @@ async function sendChildMessage(
 }
 
 async function submitChildInput(
-	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	view: OrdinaryAgentCoordinatorView,
 	child: HumanRequestChild,
 	text: string,
 	submitKey = "\r",
@@ -839,7 +797,7 @@ async function submitChildInput(
 }
 
 async function selectChildView(
-	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	view: OrdinaryAgentCoordinatorView,
 	child: HumanRequestChild,
 ): Promise<void> {
 	if (!child.projection || child.projection.agentId !== child.agentId) {
@@ -871,7 +829,7 @@ async function waitForChildEntry(
 }
 
 async function waitForChildSessionFile(
-	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
+	host: TestOwnerHost,
 	agentId: string,
 ): Promise<string> {
 	const sessionDirectory = host.session.sessionManager.getSessionDir();
@@ -891,14 +849,14 @@ async function waitForChildSessionFile(
 }
 
 async function waitForInputRequired(
-	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	view: OrdinaryAgentCoordinatorView,
 	agentId: string,
 ): Promise<void> {
 	await waitForCondition(() => observedAttention(view, agentId) === "input_required");
 }
 
 function observedAttention(
-	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	view: OrdinaryAgentCoordinatorView,
 	agentId: string,
 ): "none" | "input_required" | "agent_wait" | "dormant" {
 	const run = view.status(agentId).run;
@@ -963,13 +921,7 @@ function textContent(content: readonly unknown[]): string {
 }
 
 test("a replacement coordinator does not restore unanswered historical Human Requests", async (t) => {
-	let view: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-	const host = await createUnboundTestOwnerHost(t,
-		(pi) => createAgentBoundExtension(() => {
-			if (!view) throw new Error("View unavailable");
-			return view;
-		})(pi),
-	);
+	const host = await createUnboundTestOwnerHost(t, () => {});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const manager = host.session.sessionManager;
 	// Neither a missing result nor a non-user Run fence leaves an answerable call:
@@ -993,8 +945,7 @@ test("a replacement coordinator does not restore unanswered historical Human Req
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-durable-subagents>",
 	});
-	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
-	view = coordinator.forAgent(identity.agentId);
+	const view = coordinator.forAgent(identity.agentId);
 
 	assert.deepEqual(view.humanAttention(), []);
 	assert.equal(view.hasPendingHumanQuestions(), false);

@@ -446,7 +446,7 @@ test("Owner prompts retain their prepared Template snapshot until resource reloa
 	assert.doesNotMatch(promptAfterReload, /first-delegate/);
 });
 
-test("an invalid initial Workflow Policy admits the Owner with the default policy and a warning", async (t) => {
+test("an initial Workflow Policy setting the removed execution limit admits the Owner with the default policy and a warning", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const policyPath = join(
 		host.services.agentDir,
@@ -454,11 +454,11 @@ test("an invalid initial Workflow Policy admits the Owner with the default polic
 		"pi-durable-subagents.json",
 	);
 	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
-	await writeFile(policyPath, '{"maxConcurrentAgentRuns": 0}', "utf8");
+	await writeFile(policyPath, '{"maxConcurrentAgentRuns": 8}', "utf8");
 
 	await bindTestOwnerHost(host, "tui");
 
-	const reason = "Workflow Policy maxConcurrentAgentRuns must be a positive safe integer";
+	const reason = 'Workflow Policy contains unknown field "maxConcurrentAgentRuns"';
 	assert.ok(host.session.getActiveToolNames().includes("agent_spawn"));
 	assert.equal(host.ui.widgets.has("agent-coordination.blockage"), false);
 	assert.deepEqual(host.services.diagnostics, [{ type: "error", message: reason }]);
@@ -588,7 +588,21 @@ test("/agents models toggles durable model exclusions from the Owner session", {
 		persistent: true,
 		processVisibleModel: true,
 	});
+	const templateDirectory = join(host.services.agentDir, "agents");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(join(templateDirectory, "delegate.md"), [
+		"---",
+		"name: owner-model-delegate",
+		"useWhen: Use the Owner model.",
+		"models:",
+		"  - id: coordination-test/deterministic-owner",
+		"    thinking: off",
+		"---",
+		"Delegate context.",
+	].join("\n"), "utf8");
 	await bindTestOwnerHost(host, "tui");
+	const spawnGuidance = () => host.session.getToolDefinition("agent_spawn")?.promptGuidelines?.join("\n") ?? "";
+	assert.match(spawnGuidance(), /model: coordination-test\/deterministic-owner/);
 	const command = host.session.extensionRunner.getCommand("agents");
 	assert.ok(command);
 	const handled = command.handler(
@@ -625,6 +639,9 @@ test("/agents models toggles durable model exclusions from the Owner session", {
 
 	surface.handleInput?.("\x1b");
 	await handled;
+	// The Owner's own Spawn guidance stops offering a Template whose only model is now banned.
+	assert.match(spawnGuidance(), /## Available Agent Templates Snapshot/);
+	assert.doesNotMatch(spawnGuidance(), /owner-model-delegate/);
 	await host.runtime.dispose();
 });
 

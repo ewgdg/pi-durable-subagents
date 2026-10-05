@@ -5,8 +5,8 @@ import type {
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import {
-	type OrdinaryAgentCoordinatorView,
+import type {
+	OrdinaryAgentCoordinatorView,
 	WorkflowCoordinator,
 } from "../coordination/workflow-coordinator.ts";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
@@ -34,6 +34,10 @@ import { transcriptFromSessionManager } from "../pi-integration/session-manager-
 import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 import { OwnerRecoveryError } from "./owner-recovery-error.ts";
 
+export type ConstructWorkflowCoordinator = (
+	...args: ConstructorParameters<typeof WorkflowCoordinator>
+) => WorkflowCoordinator;
+
 type InitializedWorkflow = {
 	policy: WorkflowPolicyStore;
 	prepareOwnerReplacement(): Promise<void>;
@@ -53,6 +57,7 @@ export async function initializeOwnerWorkflow(options: {
 	bridge: InteractiveHostBridge;
 	interaction: WorkflowInteraction;
 	entryModulePath: string;
+	constructWorkflowCoordinator: ConstructWorkflowCoordinator;
 	event: SessionStartEvent;
 	onOwnerIdentified(): void;
 }): Promise<(() => OrdinaryAgentCoordinatorView) | undefined> {
@@ -93,7 +98,7 @@ export async function initializeOwnerWorkflow(options: {
 		ownerIdentity: identity,
 		ownerSessionManager: runtime.session.sessionManager,
 	});
-	const coordinator = new WorkflowCoordinator(runtime, identity, {
+	const coordinator = options.constructWorkflowCoordinator(runtime, identity, {
 		entryModulePath,
 		operationalIncidentPresentation: new OperationalIncidentSurface(),
 		postMortemAgentPresenter: new OwnerPostMortemAgentPresenter(ctx.ui),

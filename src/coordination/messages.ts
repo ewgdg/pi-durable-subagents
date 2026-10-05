@@ -1,4 +1,3 @@
-import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { scheduleDeliveryFailureNotice } from "./delivery-failure-notifications.ts";
 import { findAuthoredSupervisoryResumeMessages } from "../protocol/run-control.ts";
 import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
@@ -8,7 +7,6 @@ import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { resolveAgentMessageReferences } from "../protocol/message-reference.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import type { JsonValue } from "@earendil-works/pi-ai";
-import { isDeepStrictEqual } from "node:util";
 
 import {
 	requireAgentRecord,
@@ -35,8 +33,9 @@ import type {
 	AgentRequestRetryReceipt,
 	RequestCancellationReceipt,
 } from "./message-receipts.ts";
-import { RequestEvidence } from "./request-evidence.ts";
-import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
+import type { RequestEvidence } from "./request-evidence.ts";
+import type { RequestRelationships } from "./request-relationships.ts";
+import { AnswerArbitration } from "./answer-arbitration.ts";
 import {
 	createMessageDeliveryItem,
 	inspectAnswerDelivery,
@@ -58,14 +57,12 @@ import {
 	createCreationRequestDeliveryItem,
 	inspectCreationRequestDelivery,
 } from "../protocol/creation-request.ts";
-import type { AgentWaitResult } from "../protocol/agent-wait.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
 import type {
 	AgentRunHandle,
 	RunResumptionHandle,
 } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
-import type { UnresolvedAgentRequest } from "./dependency-deadlock.ts";
 import { resolveCommittedAgentMessageTargetId } from "./agent-message-target.ts";
 
 export type { AgentMessageInput } from "../protocol/message.ts";
@@ -117,20 +114,23 @@ export class MessageCoordinator {
 	readonly #boundaryHooks: MessageBoundaryHooks;
 	readonly #deliveryScheduler: MessageDeliveryScheduler;
 	readonly #requestEvidence: RequestEvidence;
+	readonly #requestRelationships: RequestRelationships;
+	readonly answerArbitration: AnswerArbitration;
+	#waitPreemptionSubscriber: IncomingRequestWaitPreemptor | undefined;
+	readonly #deliveryProgressSubscribers = new Set<() => void>();
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
+		requestEvidence: RequestEvidence;
+		requestRelationships: RequestRelationships;
 		quarantinedAgentIds?: ReadonlySet<string>;
 		quarantinedWorkflowAgentIds?: ReadonlySet<string>;
 		isShuttingDown(): boolean;
 		boundaryHooks?: MessageBoundaryHooks;
-		preemptAgentWait?: IncomingRequestWaitPreemptor;
 		workflowPolicy: WorkflowPolicyStore;
 		deliveryProgressClock?: import("./operation-review.ts").OperationReviewClock;
-		onDeliveryProgressChanged?(): void;
-		isWaitingForCapacity?(agentId: string): boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
@@ -138,26 +138,46 @@ export class MessageCoordinator {
 			options.quarantinedWorkflowAgentIds ?? this.#quarantinedAgentIds;
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
-		this.#requestEvidence = new RequestEvidence(
-			this.#agents,
-			this.#quarantinedAgentIds,
-			this.#quarantinedWorkflowAgentIds,
-		);
+		this.#requestEvidence = options.requestEvidence;
+		this.#requestRelationships = options.requestRelationships;
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			scheduleDeliveryDispatch: this.#boundaryHooks.scheduleDeliveryDispatch,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
 			afterResumeReservation: this.#boundaryHooks.afterResumeReservation,
-			preemptAgentWait: options.preemptAgentWait,
+			preemptAgentWait: (record, reserveDelivery) =>
+				this.#waitPreemptionSubscriber?.(record, reserveDelivery) ?? Promise.resolve(),
 			workflowPolicy: options.workflowPolicy,
 			deliveryProgressClock: options.deliveryProgressClock,
-			onDeliveryProgressChanged: options.onDeliveryProgressChanged,
-			isWaitingForCapacity: options.isWaitingForCapacity,
+			onDeliveryProgressChanged: () => {
+				for (const subscriber of this.#deliveryProgressSubscribers) subscriber();
+			},
 			onDeliveryFailure: failure => scheduleDeliveryFailureNotice({
 				failure, author: this.#requireAgent(failure.delivery.deliveryItem.source.agentId),
 				scheduler: this.#deliveryScheduler, isShuttingDown: this.#isShuttingDown,
 			}),
 		});
+		this.answerArbitration = new AnswerArbitration({
+			requestEvidence: this.#requestEvidence,
+			isDirectDeliveryInFlight: (recipientAgentId, messageId) =>
+				this.#deliveryScheduler.isDirectDeliveryInFlight(recipientAgentId, messageId),
+		});
+	}
+
+	/**
+	 * Agent Wait subscribes here because it depends on this module. Without a
+	 * subscriber no Run can be parked in a Wait, so there is nothing to preempt.
+	 */
+	subscribeWaitPreemption(subscriber: IncomingRequestWaitPreemptor): void {
+		if (this.#waitPreemptionSubscriber) {
+			throw new Error("invariant_violation: Wait preemption already has a subscriber");
+		}
+		this.#waitPreemptionSubscriber = subscriber;
+	}
+
+	/** Consumers subscribe in their own constructors, so hand-wired Workflows keep this glue. */
+	subscribeDeliveryProgress(subscriber: () => void): void {
+		this.#deliveryProgressSubscribers.add(subscriber);
 	}
 
 
@@ -188,7 +208,7 @@ export class MessageCoordinator {
 	}
 
 	recoveryRequestIds(record: AgentRecord): readonly string[] {
-		return this.#requestEvidence.obligationFrames(record).flatMap(frame => {
+		return this.#requestRelationships.obligationFrames(record).flatMap(frame => {
 			const request = this.#requestEvidence.findRequest(frame.requestId);
 			// Recovery may continue a retained duty; this is not Request redelivery.
 			if (!request) return [frame.requestId];
@@ -256,46 +276,15 @@ export class MessageCoordinator {
 
 	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
 
-	obligationFrames(agentId: string) { return this.#requestEvidence.obligationFrames(this.#requireAgent(agentId)); }
-
-	openIncomingRequests(agentId: string): OpenIncomingRequestList {
-		return this.#requestEvidence.openIncomingRequests(this.#requireAgent(agentId));
-	}
-
-	inspectRequest(agentId: string, requestId: string): RequestInspection {
-		return this.#requestEvidence.inspectRequest(this.#requireAgent(agentId), requestId);
-	}
-
-	foregroundRequestId(record: AgentRecord): string | undefined {
-		return this.#requestEvidence.obligationFrames(record).at(-1)?.requestId;
-	}
-
 	shutdownDeliveryProgress(): void { this.#deliveryScheduler.shutdownProgress(); }
 
 	integrate(record: AgentRecord): void {
-		record.host.setRunStartInitializer(
-			() => this.#requestEvidence.refreshRelationshipsFor(record),
-		);
 		record.host.addSettledHandler((_handle, settlement) => {
 			if (settlement === "failed") {
 				this.#requestEvidence.discardAdmittedAuthorshipBy(record);
 			}
 		});
 		this.#deliveryScheduler.integrate(record);
-	}
-
-	async refreshTranscriptFacts(): Promise<ReadonlyMap<AgentRecord, TranscriptInspection>> {
-		return this.#requestEvidence.refreshRelationships();
-	}
-
-	requestSources(requestIds: readonly string[]): readonly ToolCallPointer[] {
-		return requestIds.map(
-			(requestId) => this.#requestEvidence.requestMetadata(requestId).source,
-		);
-	}
-
-	requestTitle(requestId: string): string {
-		return this.#requestEvidence.requestMetadata(requestId).title;
 	}
 
 	// Re-arbitrate retrieval at the native commit edge so a direct Delivery that
@@ -323,47 +312,16 @@ export class MessageCoordinator {
 			agentId: callerAgentId, transcript: caller.transcript.inspect(), toolCallId: message.toolCallId, toolName: "agent_message",
 		}).source, input);
 		if (input.operation !== "retry") return undefined;
-		const request = this.#requestEvidence.requireCallerAuthoredMessage(
-			caller,
-			input.messageId,
-		);
-		if (request.kind !== "request") return undefined;
-		const answer = this.#requestEvidence.findAnswer(request);
-		if (!answer) return undefined;
-		const expected = {
-			disposition: "answer_delivered" as const,
-			requestMessageId: request.messageId,
-			requestTitle: request.title,
-			answerId: answer.messageId,
-			fromAgentId: answer.fromAgentId,
-			answer: answer.answer,
-			answerSource: answer.source,
-		};
-		if (!isDeepStrictEqual(message.details, expected)) return undefined;
-		const deliveryEvidence = inspectAnswerDelivery({
-			requesterAgentId: callerAgentId,
-			transcript: caller.transcript.inspect(),
-			answer,
-		}).deliveryEvidence;
-		const result: JsonValue | undefined = deliveryEvidence
-			? {
-				disposition: "answer_already_delivered",
-				requestMessageId: request.messageId,
-				requestTitle: request.title,
-				answerId: answer.messageId,
-				deliveryEvidence,
-			}
-			: this.#deliveryScheduler.hasDispatchReservation(
-				callerAgentId,
-				answer.messageId,
-			)
-				? {
-					requestMessageId: request.messageId,
-					messageStatus: "unknown",
-					reason: "inspection_incomplete",
-				}
-				: undefined;
-		if (!result) return undefined;
+		const prepared = message.details as Extract<AgentRequestRetryReceipt, { disposition: "answer_delivered" }>;
+		if (prepared.requestMessageId !== input.messageId) {
+			throw new Error(`invariant_violation: retry ${message.toolCallId} retrieved an Answer for a different Request`);
+		}
+		const reconfirmation = this.answerArbitration.reconfirm(caller, [prepared]);
+		if (reconfirmation.outcome === "unchanged") return undefined;
+		// The commit-edge indeterminate receipt has always omitted targetAgentId.
+		const result: JsonValue = reconfirmation.outcome === "replaced"
+			? reconfirmation.slots[0]!
+			: { requestMessageId: prepared.requestMessageId, messageStatus: "unknown", reason: "inspection_incomplete" };
 		return {
 			message: {
 				...message,
@@ -371,74 +329,6 @@ export class MessageCoordinator {
 				details: result,
 			},
 		};
-	}
-
-	outstandingRequestIds(
-		callerAgentId: string,
-		waitSource: ToolCallPointer,
-		selectors?: readonly string[],
-	): readonly string[] {
-		const caller = this.#requireAgent(callerAgentId);
-		const requestMessageIds = this.#requestEvidence.outstandingRequestIdsAt(
-			caller,
-			waitSource,
-			selectors,
-		);
-		if (requestMessageIds.length === 0) {
-			throw new Error(
-				"invalid_input: Agent Wait requires at least one outstanding outbound Agent Request",
-			);
-		}
-		return requestMessageIds;
-	}
-
-	waitAnswers(
-		callerAgentId: string,
-		requestMessageIds: readonly string[],
-	): AgentWaitResult | undefined {
-		const caller = this.#requireAgent(callerAgentId);
-		const answers = requestMessageIds.map((requestId) => {
-			const answer = this.#requestEvidence.callerWaitAnswer(caller, requestId);
-			return answer?.disposition === "answer_delivered" &&
-				this.#deliveryScheduler.hasDispatchReservation(
-					callerAgentId,
-					answer.answerId,
-				)
-				? undefined
-				: answer;
-		});
-		return answers.every((answer) => answer !== undefined)
-			? { answers }
-			: undefined;
-	}
-
-	requestTargetAgentIds(requestIds: readonly string[]): readonly string[] {
-		return requestIds.map(
-			(requestId) => this.#requestEvidence.requestMetadata(requestId).targetAgentId,
-		);
-	}
-
-	requestRelationships(requestIds: readonly string[]): readonly (UnresolvedAgentRequest & { requestTitle: string })[] {
-		return requestIds.map((requestId) => {
-			const request = this.#requestEvidence.requestMetadata(requestId);
-			return {
-				requestId,
-				requestTitle: request.title,
-				fromAgentId: request.fromAgentId,
-				targetAgentId: request.targetAgentId,
-			};
-		});
-	}
-
-	unansweredRequestRelationships(
-		callerAgentId: string,
-		requestIds: readonly string[],
-	): readonly UnresolvedAgentRequest[] {
-		const caller = this.#requireAgent(callerAgentId);
-		return this.requestRelationships(requestIds).filter(
-			({ requestId }) =>
-				this.#requestEvidence.callerWaitAnswer(caller, requestId) === undefined,
-		);
 	}
 
 	/**
@@ -509,23 +399,6 @@ export class MessageCoordinator {
 		};
 	}
 
-	answerObligationRequestIds(responder: AgentRecord): readonly string[] {
-		return this.#requestEvidence.residualRelationshipsFor(responder)
-			.answerOwedRequestIds;
-	}
-
-	outstandingRequestIdsFor(requester: AgentRecord): readonly string[] {
-		return this.#requestEvidence.outstandingRequestIdsFor(requester);
-	}
-
-	hasUnsettledAnswerObligation(
-		responder: AgentRecord,
-		requestIds: readonly string[],
-	): boolean {
-		const remaining = new Set(this.answerObligationRequestIds(responder));
-		return requestIds.some((requestId) => remaining.has(requestId));
-	}
-
 	async send(
 		callerAgentId: string,
 		toolCallId: string,
@@ -555,7 +428,7 @@ export class MessageCoordinator {
 		}
 		if (message.kind === "message") {
 			const frames = await sender.host.lane.run(
-				() => this.#requestEvidence.obligationFrames(sender),
+				() => this.#requestRelationships.obligationFrames(sender),
 			);
 			for (const frame of frames) {
 				if (frame.requesterAgentId === message.targetAgentId) {
@@ -584,7 +457,8 @@ export class MessageCoordinator {
 			};
 		}
 		if (message.kind === "request") {
-			sender.host.addRetentionReason("awaiting_answer", message.messageId);
+			this.#requestEvidence.rememberAdmittedRequest(message);
+			this.#requestRelationships.sync(sender);
 		}
 		const delivery = this.#scheduleGeneralMessage(recipient, message);
 		if (
@@ -599,7 +473,7 @@ export class MessageCoordinator {
 			if (message.kind !== "request") {
 				this.#deliveryScheduler.recordAdmissionFailure(recipient, delivery, new Error("Confirmed Delivery admission failure"));
 			}
-			if (message.kind === "request") sender.host.removeRetentionReason("awaiting_answer", message.messageId);
+			if (message.kind === "request") this.#rollBackInitialRequestAdmission(sender, message.messageId);
 			return {
 				...identity,
 				messageStatus: "not_sent",
@@ -618,13 +492,20 @@ export class MessageCoordinator {
 		}
 		// Only initial send owns non-creation rollback; scheduler failures alone
 		// cannot distinguish this from a failed retry of an existing Request.
-		if (message.kind === "request") this.#deliveryScheduler.discardUncreatedDeliveryProgress(message.messageId);
-		if (message.kind === "request") sender.host.removeRetentionReason("awaiting_answer", message.messageId);
+		if (message.kind === "request") {
+			this.#deliveryScheduler.discardUncreatedDeliveryProgress(message.messageId);
+			this.#rollBackInitialRequestAdmission(sender, message.messageId);
+		}
 		return {
 			...identity,
 			messageStatus: "not_sent",
 			reason: admission,
 		};
+	}
+
+	#rollBackInitialRequestAdmission(sender: AgentRecord, requestId: string): void {
+		this.#requestEvidence.forgetAdmittedRequest(requestId);
+		this.#requestRelationships.sync(sender);
 	}
 
 	recordCreationRequestFailure(options: CreationRequestScheduling, error: unknown): void {
@@ -663,16 +544,8 @@ export class MessageCoordinator {
 			isIncomingRequest: true,
 			isDeliveryBlocked: () =>
 				this.#deliveryScheduler.isDeliveryBlocked(recipient, "deferred") ||
-				this.#requestEvidence.isIncomingRequestBlocked(recipient, requestId),
-			afterCommit: () => {
-				const request = this.#requestEvidence.requireRequest(requestId);
-				if (
-					this.#requestEvidence.findAnswer(request) === undefined &&
-					this.#requestEvidence.findCancellation(request) === undefined
-				) {
-					recipient.host.addRetentionReason("answer_owed", requestId);
-				}
-			},
+				this.#requestRelationships.isIncomingRequestBlocked(recipient, requestId),
+			afterCommit: () => this.#requestRelationships.sync(recipient),
 		};
 	}
 
@@ -702,10 +575,7 @@ export class MessageCoordinator {
 		record: AgentRecord,
 		handle: AgentRunHandle,
 	): Promise<boolean> {
-		this.#reconcileAnswerDeliveries(record);
-		if (this.#reconcileCommittedAnswerAuthorship(record)) {
-			await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
-		}
+		await this.#syncRequestRelationshipsInLane(record);
 		// Workflow activity, not Request retention, owns parking eligibility. A
 		// different child can still be working after the last Answer is reconciled.
 		return this.#deliveryScheduler.beginParkingInLane(record, handle);
@@ -716,7 +586,7 @@ export class MessageCoordinator {
 	}
 
 	async reachSafeBoundary(agentId: string): Promise<void> {
-		await this.refreshTranscriptFacts();
+		await this.#requestRelationships.refresh();
 		if (this.#isShuttingDown()) return Promise.resolve();
 		const record = this.#requireAgent(agentId);
 		// Confirmed Run disposal already owns this Agent lane and fences its volatile
@@ -725,13 +595,18 @@ export class MessageCoordinator {
 		if (record.host.observe().phase === "ending" || record.host.isInterrupting()) {
 			return Promise.resolve();
 		}
-		await record.host.lane.run(async () => {
-			this.#reconcileAnswerDeliveries(record);
-			if (this.#reconcileCommittedAnswerAuthorship(record)) {
-				await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
-			}
-		});
+		await record.host.lane.run(() => this.#syncRequestRelationshipsInLane(record));
 		return this.#deliveryScheduler.reachSafeBoundary(record);
+	}
+
+	/**
+	 * One sync of both relationship reasons; the queue advances once if the
+	 * Agent's owed set shrank. Shared by the safe boundary and Owner parking.
+	 */
+	async #syncRequestRelationshipsInLane(record: AgentRecord): Promise<void> {
+		if (this.#requestRelationships.sync(record).answerOwedShrank) {
+			await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
+		}
 	}
 
 	discardSchedulingInLane(record: AgentRecord): void {
@@ -760,7 +635,7 @@ export class MessageCoordinator {
 		toolCallId: string,
 		providedInput: AgentMessageInput,
 	): Promise<AgentMessageReceipt> {
-		await this.refreshTranscriptFacts();
+		await this.#requestRelationships.refresh();
 		const caller = this.#requireAgent(callerAgentId);
 		let committedInput = resolveCommittedAgentMessageInput({
 			agentId: callerAgentId,
@@ -976,7 +851,7 @@ export class MessageCoordinator {
 				request,
 			});
 			this.#requestEvidence.rememberAdmittedCancellation(cancellation);
-			caller.host.removeRetentionReason("awaiting_answer", request.messageId);
+			this.#requestRelationships.sync(caller);
 			return { disposition: "admitted", request, responder, cancellation } as const;
 		});
 		if (admitted.disposition === "answered") {
@@ -1182,55 +1057,20 @@ export class MessageCoordinator {
 				reason: "inspection_incomplete",
 			};
 		}
-		const answer = this.#requestEvidence.findAnswer(request);
-		if (answer) {
-			const answerDelivery = inspectAnswerDelivery({
-				requesterAgentId: requester.identity.agentId,
-				transcript: requester.transcript.inspect(),
-				answer,
-			});
-			const canonicalAnswer = inspectCanonicalMessage({
-				message: answer,
-				authorTranscript: responder.transcript.inspect(),
-				deliveryEvidence: answerDelivery.deliveryEvidence,
-			});
-			if (canonicalAnswer.state !== "canonical") {
+		const [answer] = this.answerArbitration.inspect(requester, [request.messageId]);
+		switch (answer!.state) {
+			case "retrievable":
+			case "delivered":
+				return answer.slot;
+			case "indeterminate":
+			case "direct_delivery_in_flight":
 				return {
 					...retryIdentity,
 					messageStatus: "unknown",
 					reason: "inspection_incomplete",
 				};
-			}
-			if (
-				!answerDelivery.deliveryEvidence &&
-				this.#deliveryScheduler.hasDispatchReservation(
-					requester.identity.agentId,
-					answer.messageId,
-				)
-			) {
-				return {
-					...retryIdentity,
-					messageStatus: "unknown",
-					reason: "inspection_incomplete",
-				};
-			}
-			return answerDelivery.deliveryEvidence
-				? {
-					disposition: "answer_already_delivered",
-					requestMessageId: request.messageId,
-					requestTitle: request.title,
-					answerId: answer.messageId,
-					deliveryEvidence: answerDelivery.deliveryEvidence,
-				}
-				: {
-					disposition: "answer_delivered",
-					requestMessageId: request.messageId,
-					requestTitle: request.title,
-					answerId: answer.messageId,
-					fromAgentId: answer.fromAgentId,
-					answer: answer.answer,
-					answerSource: answer.source,
-				};
+			case "unanswered":
+				break;
 		}
 		if (requestDelivery.deliveryEvidence) {
 			return {
@@ -1366,89 +1206,26 @@ export class MessageCoordinator {
 				: undefined,
 			isDeliveryBlocked: message.kind === "request" || message.deliveryMode === "background"
 				? () => this.#deliveryScheduler.isDeliveryBlocked(recipient, message.deliveryMode) ||
-					(message.kind === "request" && this.#requestEvidence.isIncomingRequestBlocked(recipient, message.messageId)) ||
-					(message.deliveryMode === "background" && this.answerObligationRequestIds(recipient).length > 0)
+					(message.kind === "request" && this.#requestRelationships.isIncomingRequestBlocked(recipient, message.messageId)) ||
+					(message.deliveryMode === "background" && this.#requestRelationships.answerOwedRequestIds(recipient).length > 0)
 				: undefined,
 			suppressesAfterCommitMessageId: message.kind === "request_cancellation"
 				? message.requestId
 				: undefined,
-			afterCommit: message.kind === "request"
+			afterCommit: message.kind === "answer"
 				? () => {
-					if (
-						this.#requestEvidence.findAnswer(message) === undefined &&
-						this.#requestEvidence.findCancellation(message) === undefined
-					) {
-						recipient.host.addRetentionReason("answer_owed", message.messageId);
-					}
+					this.#requestRelationships.sync(recipient);
+					const responder = this.#requireAgent(message.fromAgentId);
+					void responder.host.lane.run(async () => {
+						if (this.#requestRelationships.sync(responder).answerOwedShrank) {
+							await this.#deliveryScheduler.requestQueueAdvancedInLane(responder);
+						}
+					});
 				}
-					: message.kind === "answer"
-					? () => {
-						recipient.host.removeRetentionReason(
-							"awaiting_answer",
-							message.requestId,
-						);
-						if (!this.#requestEvidence.isAnswerAwaitingAuthorResult(message)) {
-							const responder = this.#requireAgent(message.fromAgentId);
-							void responder.host.lane.run(async () => {
-								responder.host.removeRetentionReason(
-									"answer_owed",
-									message.requestId,
-								);
-								await this.#deliveryScheduler.requestQueueAdvancedInLane(responder);
-							});
-						}
-					}
-					: message.kind === "request_cancellation"
-						? () => {
-							recipient.host.removeRetentionReason(
-								"answer_owed",
-								message.requestId,
-							);
-							const requester = this.#requireAgent(message.fromAgentId);
-							void requester.host.lane.run(() =>
-								requester.host.removeRetentionReason(
-									"awaiting_answer",
-									message.requestId,
-								)
-							);
-						}
-						: undefined,
+				: message.kind === "request" || message.kind === "request_cancellation"
+					? () => this.#requestRelationships.sync(recipient)
+					: undefined,
 		};
-	}
-
-	#reconcileCommittedAnswerAuthorship(responder: AgentRecord): boolean {
-		const unresolved = new Set(this.answerObligationRequestIds(responder));
-		let changed = false;
-		for (const requestId of responder.host.requestRelationshipIds("answer_owed")) {
-			if (unresolved.has(requestId)) continue;
-			responder.host.removeRetentionReason("answer_owed", requestId);
-			changed = true;
-		}
-		return changed;
-	}
-
-	#reconcileAnswerDeliveries(requester: AgentRecord): void {
-		for (const requestId of requester.host.requestRelationshipIds("awaiting_answer")) {
-			const request = this.#requestEvidence.findRequest(requestId);
-			if (!request) {
-				requester.host.removeRetentionReason("awaiting_answer", requestId);
-				continue;
-			}
-			const answer = this.#requestEvidence.findAnswer(request);
-			if (!answer) continue;
-			if (answer.targetAgentId !== requester.identity.agentId) continue;
-			const delivery = inspectAnswerDelivery({
-				requesterAgentId: requester.identity.agentId,
-				transcript: requester.transcript.inspect(),
-				answer,
-			});
-			if (delivery.deliveryEvidence) {
-				requester.host.removeRetentionReason(
-					"awaiting_answer",
-					answer.requestId,
-				);
-			}
-		}
 	}
 
 	/**

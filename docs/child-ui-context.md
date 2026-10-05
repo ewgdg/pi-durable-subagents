@@ -25,7 +25,7 @@ Hidden terminal input and interactive terminal queries are not a coordination ch
 
 ## Child `/agents`
 
-The Runtime Bridge registers `/agents` inside every process child. It requests a scoped selector snapshot from the Owner containing the live and dormant roster, selected Agent, Human Attention, and Operational Attention. The child renders the normal selector through its own `ctx.ui`.
+The Runtime Bridge registers `/agents` inside every process child through the same registrar and Agents Navigation loop as the Owner session; only the navigation adapter differs. The child's Control adapter requests a scoped selector snapshot from the Owner containing the live and dormant roster, selected Agent, Human Attention, and Operational Attention. The child renders the normal selector through its own `ctx.ui`.
 
 Selection remains authoritative in the Owner:
 

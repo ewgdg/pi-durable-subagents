@@ -23,18 +23,12 @@ import {
 } from "../src/control/named-pipe-control-transport.ts";
 
 const windowsOnly = process.platform === "win32" ? test : test.skip;
+const valueSchema = Type.Object({ value: Type.String() }, { additionalProperties: false });
+// Echo runs both ways: the contract case has the Owner ask the child, admission cases have children ask the Owner.
+const echo = { "test.echo": { request: valueSchema, response: valueSchema } } as const;
 const protocol = {
-	methods: {
-		"test.echo": {
-			request: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-			response: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-		},
-	},
-	events: {
-		"test.changed": {
-			payload: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-		},
-	},
+	childToOwner: { methods: echo, events: {} },
+	ownerToChild: { methods: echo, events: { "test.changed": { payload: valueSchema } } },
 } as const satisfies AgentControlProtocol;
 const identity = {
 	protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
@@ -96,11 +90,11 @@ windowsOnly("Control Channel contract runs unchanged over connected named-pipe A
 	const accepted = listener.accept();
 	const ownerTransport = await connectControlTransport(listener.endpoint, { platform: "win32" });
 	const childTransport = await accepted;
-	const owner = new FramedAgentControlChannel({ identity, protocol, transport: ownerTransport });
-	const child = new FramedAgentControlChannel({ identity, protocol, transport: childTransport });
+	const owner = new FramedAgentControlChannel({ identity, protocol, side: "owner", transport: ownerTransport });
+	const child = new FramedAgentControlChannel({ identity, protocol, side: "child", transport: childTransport });
 	t.after(async () => Promise.allSettled([owner.close(), child.close()]));
 	const events: string[] = [];
-	child.onRequest(({ payload }) => ({ value: payload.value }));
+	child.serve({ "test.echo": ({ value }) => ({ value }) });
 	child.onEvent(({ payload }) => { events.push(payload.value); });
 
 	assert.deepEqual(await owner.request("test.echo", { value: "pipe🙂" }), { value: "pipe🙂" });
@@ -133,11 +127,12 @@ windowsOnly("named-pipe admission preserves one-shot authenticated Hello binding
 		connectionToken: "one-shot-token",
 		expectedSessionId: "expected-session",
 	}, (channel) => {
-		channel.onRequest(({ payload }) => ({ value: `bound:${payload.value}` }));
+		channel.serve({ "test.echo": ({ value }) => ({ value: `bound:${value}` }) });
 	});
 	const child = new FramedAgentControlChannel({
 		identity,
 		protocol,
+		side: "child",
 		transport: await connectControlTransport(listener.endpoint, { platform: "win32" }),
 	});
 	t.after(async () => child.close().catch(() => undefined));
@@ -151,6 +146,7 @@ windowsOnly("named-pipe admission preserves one-shot authenticated Hello binding
 	const duplicate = new FramedAgentControlChannel({
 		identity,
 		protocol,
+		side: "child",
 		transport: await connectControlTransport(listener.endpoint, { platform: "win32" }),
 	});
 	const duplicateClosed = new Promise<void>((resolve) => duplicate.onClose(() => resolve()));

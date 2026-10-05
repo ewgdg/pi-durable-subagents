@@ -1,5 +1,6 @@
 import {
 	EvidenceUnavailableError,
+	waitingFactsOf,
 	type AgentRecord,
 } from "./agent-record.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
@@ -23,6 +24,7 @@ import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 
 import { DeliveryProgress, type DeliveryBlockageReason, type DeliveryProgressStage } from "./delivery-progress.ts";
 import { SYSTEM_OPERATION_REVIEW_CLOCK, type OperationReviewClock } from "./operation-review.ts";
+import { waitingReason } from "./progress-verdict.ts";
 
 type ScheduledDeliveryBase = Readonly<{
 	messageId: string;
@@ -117,7 +119,7 @@ type TrackedDeliveryProgress = {
 	failure?: { reason: string; outcome: MessageDeliveryFailure["outcome"] };
 };
 
-type BlockedDelivery = Readonly<{
+export type BlockedDelivery = Readonly<{
 	messageId: string;
 	recipientAgentId: string;
 	reason: DeliveryBlockageReason;
@@ -157,7 +159,6 @@ export class MessageDeliveryScheduler {
 	readonly #progressClock: OperationReviewClock;
 	readonly #progressChanged: () => void;
 	readonly #onDeliveryFailure: ((failure: MessageDeliveryFailure) => void | Promise<void>) | undefined;
-	readonly #isWaitingForCapacity: (agentId: string) => boolean;
 	readonly #pendingByAgent = new Map<string, Map<string, ScheduledDelivery>>();
 	readonly #activeModeratorReminderByAgent = new Map<string, { settled: boolean }>();
 	readonly #activeDeferredByAgent = new Map<string, ActivePromptDelivery>();
@@ -185,12 +186,10 @@ export class MessageDeliveryScheduler {
 		deliveryProgressClock?: OperationReviewClock;
 		onDeliveryProgressChanged?(): void;
 		onDeliveryFailure?(failure: MessageDeliveryFailure): void | Promise<void>;
-		isWaitingForCapacity?(agentId: string): boolean;
 	}) {
 		this.#onDeliveryFailure = options.onDeliveryFailure;
 		this.#progressClock = options.deliveryProgressClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#progressChanged = options.onDeliveryProgressChanged ?? (() => undefined);
-		this.#isWaitingForCapacity = options.isWaitingForCapacity ?? (() => false);
 		this.#scheduleReleaseEvaluationHook = options.scheduleReleaseEvaluation;
 		this.#scheduleDeliveryDispatchHook = options.scheduleDeliveryDispatch;
 		this.#afterSteerFreeze = options.afterSteerFreeze;
@@ -230,8 +229,7 @@ export class MessageDeliveryScheduler {
 		for (const item of this.#progress.values()) {
 			const { record, delivery, watcher } = item;
 			if (delivery.inspectProof() || delivery.isSuppressed?.() || item.failed ||
-				delivery.isReady?.() === false || record.host.blocksOrdinaryDelivery() ||
-				this.#isWaitingForCapacity(record.identity.agentId)) continue;
+				delivery.isReady?.() === false || record.host.blocksOrdinaryDelivery()) continue;
 			const run = record.host.observe();
 			if (run.phase === "dormant" || (run.phase === "live" && run.attention === "input_required")) continue;
 			if (watcher.observe(this.#deliveryWaitIsLegitimate(item))) continue;
@@ -248,13 +246,8 @@ export class MessageDeliveryScheduler {
 
 	#deliveryWaitIsLegitimate(item: TrackedDeliveryProgress): boolean {
 		const { record, delivery } = item;
+		if (waitingReason(waitingFactsOf(record)) !== undefined) return true;
 		const run = record.host.observe();
-		if (
-			record.host.hasRetentionReason("interactive_selection") ||
-			record.host.blocksOrdinaryDelivery() ||
-			(run.phase !== "dormant" && run.attention === "input_required") ||
-			this.#isWaitingForCapacity(record.identity.agentId)
-		) return true;
 		// Dispatched work belongs to delivery machinery until proof commits; its
 		// prompt Promise must not turn subsequent model duration into a deadline.
 		// Unrelated recipient work cannot restore a lost scheduling continuation.
@@ -457,7 +450,7 @@ export class MessageDeliveryScheduler {
 			// later retries merely coalesce with. Dispatched or proven work is owned
 			// by normal transcript reconciliation and must retain its reservation.
 			if (
-				!this.hasDispatchReservation(record.identity.agentId, delivery.messageId) &&
+				!this.#hasDispatchReservation(record.identity.agentId, delivery.messageId) &&
 				!delivery.inspectProof()
 			) {
 				pending.delete(delivery.messageId);
@@ -556,10 +549,18 @@ export class MessageDeliveryScheduler {
 	hasScheduling(recipientAgentId: string, messageId: string): boolean {
 		return this.#reservedResumeByAgent.get(recipientAgentId)?.delivery.messageId === messageId ||
 			this.#pendingByAgent.get(recipientAgentId)?.has(messageId) === true ||
-			this.hasDispatchReservation(recipientAgentId, messageId);
+			this.#hasDispatchReservation(recipientAgentId, messageId);
 	}
 
-	hasDispatchReservation(recipientAgentId: string, messageId: string): boolean {
+	/**
+	 * The one reservation question shared outside the scheduler: is direct
+	 * Delivery of this Message to this recipient frozen or dispatched?
+	 */
+	isDirectDeliveryInFlight(recipientAgentId: string, messageId: string): boolean {
+		return this.#hasDispatchReservation(recipientAgentId, messageId);
+	}
+
+	#hasDispatchReservation(recipientAgentId: string, messageId: string): boolean {
 		return this.#activeDeferredByAgent.get(recipientAgentId)?.deliveries.some(delivery => delivery.messageId === messageId) === true ||
 			this.#activeWaitPreemptionByAgent.get(recipientAgentId)?.deliveries.some(delivery => delivery.messageId === messageId) === true ||
 			this.#frozenSteerByAgent.get(recipientAgentId)?.deliveries.some(
@@ -777,7 +778,7 @@ export class MessageDeliveryScheduler {
 			// Only scheduling still owned by this drain lost its continuation.
 			// A different dispatched Message keeps its existing Pi continuation.
 			for (const delivery of this.#pendingByAgent.get(record.identity.agentId)?.values() ?? []) {
-				if (this.hasDispatchReservation(record.identity.agentId, delivery.messageId)) continue;
+				if (this.#hasDispatchReservation(record.identity.agentId, delivery.messageId)) continue;
 				this.#failDeliveryProgress(delivery, error);
 				this.#pendingByAgent.get(record.identity.agentId)?.delete(delivery.messageId);
 			}
@@ -944,7 +945,7 @@ export class MessageDeliveryScheduler {
 					if (!handle || !record.host.isCurrent(handle)) return;
 					const owned = deliveries.filter(delivery =>
 						this.#progress.get(delivery.messageId)?.delivery === delivery &&
-						this.hasDispatchReservation(record.identity.agentId, delivery.messageId));
+						this.#hasDispatchReservation(record.identity.agentId, delivery.messageId));
 					if (owned.length === 0) return;
 					try {
 						if (!owned.some(delivery => !delivery.inspectProof())) return;
@@ -1010,7 +1011,7 @@ export class MessageDeliveryScheduler {
 		) return false;
 		// Native steering is one-at-a-time: earlier input can start Agent Wait
 		// while this input is still queued. Its reservation already owns Delivery.
-		if (this.hasDispatchReservation(record.identity.agentId, trigger.messageId)) return true;
+		if (this.#hasDispatchReservation(record.identity.agentId, trigger.messageId)) return true;
 		const steer = trigger.deliveryMode === "steer"
 			? this.#eligibleSteerDeliveries(record, this.#eligibleDeliveries(pending))
 				// Preemption leaves partial Answers available for a fresh aggregate;
@@ -1208,7 +1209,7 @@ export class MessageDeliveryScheduler {
 				delivery.deliveryMode === "steer" && "deliveryItem" in delivery &&
 				// Wait preemption queues before turn_end, but its Delivery proof may
 				// not exist yet. The reservation already owns that dispatch.
-				!this.hasDispatchReservation(record.identity.agentId, delivery.messageId),
+				!this.#hasDispatchReservation(record.identity.agentId, delivery.messageId),
 		);
 		const suppressedAfterBatch = new Set(
 			steer.flatMap(({ suppressesAfterCommitMessageId }) =>

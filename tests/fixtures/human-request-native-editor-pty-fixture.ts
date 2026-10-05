@@ -5,10 +5,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 
-import {
-	createAgentActivityExtension,
-	createAgentBoundExtension,
-} from "../../src/bootstrap/agent-extension.ts";
+import { createViewBackedParticipantHandlers } from "../../src/coordination/view-backed-participant-handlers.ts";
+import { registerParticipantLifecycle } from "../../src/pi-integration/participant-lifecycle.ts";
+import { installAgentActivityDock } from "../../src/presentation/agent-activity-surface.ts";
+import { registerCoordinationTools } from "../../src/tools/coordination-tools.ts";
 import type { OrdinaryAgentCoordinatorView } from "../../src/coordination/workflow-coordinator.ts";
 import type { HumanAnswerCandidate } from "../../src/protocol/human-request.ts";
 import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
@@ -97,21 +97,25 @@ const view = {
 		}
 		return undefined;
 	},
-	reconcileHumanToolResults() {},
 	refreshTranscriptFacts() {},
 	async reachSafeBoundary() {},
 	async beginExecution() {},
-	async ensureExecution() {},
+	assertNotShutDownOrSuspended() {},
 	beginToolExecution() {},
 	reconcileCommittedToolResults() {},
-	endExecution() {},
 	async spawn() { throw new Error("unused"); },
 } as unknown as OrdinaryAgentCoordinatorView;
 
+// An ordinary-role surface over the fake view, composed from the shared registrars.
 const extension: ExtensionFactory = (pi) => {
-	createAgentActivityExtension(() => view)(pi);
-	createAgentBoundExtension(() => view)(pi);
+	const handlers = createViewBackedParticipantHandlers("ordinary", () => view);
+	registerCoordinationTools(pi, "ordinary", handlers.coordination);
+	registerParticipantLifecycle(pi, handlers.lifecycle);
 	pi.on("session_start", (_event, ctx) => {
+		installAgentActivityDock(ctx.ui, {
+			snapshot: () => view.agentActivity(),
+			addChangeHandler: (handler) => view.addAgentActivityChangeHandler(handler),
+		});
 		ctx.ui.setEditorText("native draft");
 	});
 };

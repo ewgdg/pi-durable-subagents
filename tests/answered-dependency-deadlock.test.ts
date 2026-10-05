@@ -2,6 +2,7 @@ import type { ReportToUserInput } from "../src/protocol/moderator-report.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { HumanRequestCoordinator } from "../src/coordination/human-requests.ts";
 import { MessageCoordinator } from "../src/coordination/messages.ts";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
@@ -10,6 +11,7 @@ import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import type { AgentRuntimeHost } from "../src/runtime/agent-runtime-host.ts";
 import type { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import { participant, requestHistory } from "./support/request-history.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 for (const ownerAnswered of [false, true]) {
 	test(`a ${ownerAnswered ? "committed-undelivered Answer does not hide" : "genuine unanswered Owner dependency opens"} the core/publication cycle`, async (t) => {
@@ -45,17 +47,21 @@ for (const ownerAnswered of [false, true]) {
 			record.host = {
 				observe: () => ({ phase: "live", work: "settled", attention: "agent_wait", retentionReasons }),
 				currentRunFailed: () => false,
+				blocksOrdinaryDelivery: () => false,
 				hasRetentionReason: (reason: string) => retentionReasons.some(item => item.reason === reason),
 				requestRelationshipIds: () => [],
 				removeRetentionReason: () => {},
 			} as unknown as AgentRuntimeHost;
 		}
 		const workflowPolicy = new WorkflowPolicyStore();
-		const messages = new MessageCoordinator({ agents: history.agents, workflowPolicy, isShuttingDown: () => false });
+		const coordination = requestCoordination(history.agents);
+		const messages = new MessageCoordinator({ agents: history.agents, ...coordination, workflowPolicy, isShuttingDown: () => false });
 		let creationAttempts = 0;
 		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
-			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, workflowPolicy,
+			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, ...coordination, workflowPolicy,
+			humanRequests: new HumanRequestCoordinator({ agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity,
+				interruptRun() { throw new Error("Unexpected human interruption"); } }),
 			sessionFactory: {
 				admitProcessRuntimePlatform() { creationAttempts++; throw new Error("Test platform unavailable"); },
 			} as unknown as ProcessChildSessionFactory,
@@ -68,7 +74,7 @@ for (const ownerAnswered of [false, true]) {
 			retainDiagnostic: () => ({ agentId: "requester", entryId: owner.manager.appendCustomEntry("diagnostic", {}) }),
 		});
 		t.after(() => { incidents.shutdown(); messages.shutdownDeliveryProgress(); });
-		incidents.deliveryProgressChanged();
+		incidents.reconcileCommittedToolResults("requester");
 		await incidents.reachSafeBoundary();
 		assert.equal(creationAttempts, ownerAnswered ? 1 : 0);
 		const attention = incidents.attentionItems("requester");
@@ -81,9 +87,10 @@ for (const ownerAnswered of [false, true]) {
 		assert.ok(reports[0]?.evidence.includes(`Original trigger: ${JSON.stringify({
 			kind: "dependency_deadlock",
 			agentIds: ["publication", "responder"],
-			requests: { total: 2, sources: messages.requestSources([coreToPublication, publicationToCore].sort()) },
+			requests: { total: 2, sources: [coreToPublication, publicationToCore].sort()
+				.map(requestId => coordination.requestEvidence.requestMetadata(requestId).source) },
 		})}`));
-		assert.ok(messages.outstandingRequestIdsFor(core.record).includes(coreToOwner),
+		assert.ok(coordination.requestRelationships.outstandingRequestIds(core.record).includes(coreToOwner),
 			"the undelivered Owner Answer remains outstanding for all-answer Wait");
 	});
 }

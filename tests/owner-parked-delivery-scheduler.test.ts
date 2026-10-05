@@ -198,10 +198,10 @@ for (const scenario of ["safe boundary", "replaced reservation", "replaced reser
 		await lane.run(() => {});
 		assert.deepEqual(failures, scenario.startsWith("failed") ? ["failure"] : []);
 		if (scenario.startsWith("replaced")) {
-			assert.equal(scheduler.hasDispatchReservation("recipient", "second"), true);
+			assert.equal(scheduler.isDirectDeliveryInFlight("recipient", "second"), true);
 			assert.deepEqual(committed, []);
 		} else if (scenario === "safe boundary") {
-			assert.equal(scheduler.hasDispatchReservation("recipient", "first"), false);
+			assert.equal(scheduler.isDirectDeliveryInFlight("recipient", "first"), false);
 			assert.deepEqual(committed, ["first"]);
 		}
 	});
@@ -285,10 +285,10 @@ for (const scenario of [
 		await lane.run(() => {});
 		assert.deepEqual(failures, scenario.startsWith("failed settlement") ? ["failure"] : []);
 		if (replaced && !scenario.startsWith("failed settlement")) {
-			assert.equal(scheduler.hasDispatchReservation("recipient", "second"), true);
+			assert.equal(scheduler.isDirectDeliveryInFlight("recipient", "second"), true);
 			assert.deepEqual(committed, []);
 		} else if (scenario === "safe boundary") {
-			assert.equal(scheduler.hasDispatchReservation("recipient", "first"), false);
+			assert.equal(scheduler.isDirectDeliveryInFlight("recipient", "first"), false);
 			assert.deepEqual(committed, ["first"]);
 		}
 	});

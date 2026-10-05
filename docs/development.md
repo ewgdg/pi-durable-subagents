@@ -6,6 +6,12 @@ Pi supplies the package's Pi peer modules. Compatibility is defined jointly by a
 
 Process-isolated Agent Runtimes select local IPC internally: Unix-domain sockets on Unix platforms and native named pipes on Windows. This transport choice is not user-configurable.
 
+## Coordination module wiring
+
+The Workflow Coordinator is a composition root. It constructs coordination modules in dependency order: Request evidence, Request Relationships, Message coordination, Agent Wait, Human Requests, Run Supervision, Operational Incident detection, Interactive Selection, then the Spawner. It holds no closure that reads a module constructed after it; callbacks into its own steps (Agent integration, begin shutdown, participant view resolution) are allowed.
+
+A protocol link is one whose absence changes coordination outcomes: Delivery, waits, incidents, Operation Review, or shutdown. Each one is either a required constructor argument, for commands a module issues, or a subscription the consuming module makes in its own constructor, for notifications it consumes. For example, Operational Incident detection subscribes to Message coordination's Delivery progress and to Human Requests' human waiting, and Interactive Selection subscribes to native quit of child Runtimes. A test that hand-wires these modules therefore gets the production glue, and omitting a link is a type error. Optional callbacks remain only for clocks, boundary hooks used by tests, presentation adapters, and the Agent activity change notification.
+
 ## Running tests
 
 `npm test` is the complete regression suite. Use the supervised npm entry points for all development runs: `test:fast` (four concurrent files), `test:process` (serial), and `test:conformance` (serial, the focused compatibility gate). Direct `node --test` execution bypasses containment and is not supported for development runs.
@@ -17,6 +23,22 @@ npm run test:process -- --file=agent-request.test.ts --test-name-pattern='reques
 npm run test:fast -- --file=host-shape.test.ts
 npm run test:conformance -- --file=host-shape.test.ts --list
 ```
+
+## Where child Runtime tests live
+
+Test the Owner–child Control seam in one process through the Child Control Loopback (`tests/support/child-control-loopback.ts`): the real Owner-side proxy and Owner serving, a real child connection and binding, the in-memory transport, and a faux Pi session. Delivery, cancellation, interrupt, queue clearing, Moderator reminders, compaction, settlement, idle custom startup, faults, and reload continuity belong there, in the fast suite.
+
+Keep a test in the process suite only when its subject is something the loopback lacks:
+
+- the PTY and terminal bytes;
+- the launch contract and extension shell: CLI arguments, bootstrap, the startup tool filter, extension load order, inherited input preflights, and file-backed snapshot inputs;
+- hello and admission over an OS transport;
+- a real reload;
+- process exit, kill, and shutdown grace.
+
+Keep one end-to-end process smoke per role (ordinary and Moderator).
+
+Cases that inject an event ordering a real child cannot produce on demand (for example a compaction edge without a Run, or dispatch completion racing settlement) use the scripted link in `tests/support/scripted-child-control-link.ts`.
 
 ## Deadlines and containment
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
-import { RequestEvidence } from "../src/coordination/request-evidence.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 import { createMessageDelivery, type MessageDeliveryItem } from "../src/protocol/message-delivery.ts";
 import { deriveMessageIdentity, type ToolCallPointer } from "../src/protocol/identities.ts";
 import { participant } from "./support/request-history.ts";
@@ -13,7 +13,7 @@ function history() {
 	const recipient = participant("recipient");
 	const other = participant("other");
 	const agents = new Map([author, recipient, other].map(agent => [agent.record.identity.agentId, agent.record]));
-	const evidence = new RequestEvidence(agents);
+	const { requestEvidence: evidence, requestRelationships: relationships } = requestCoordination(agents);
 	let sequence = 0;
 	function call(agent: Participant, input: Record<string, unknown>, result: (source: ToolCallPointer) => object) {
 		const toolCallId = `call-${++sequence}`;
@@ -44,7 +44,7 @@ function history() {
 			source => ({ messageId: deriveMessageIdentity(source), requestMessageId: incoming.requestMessageId,
 				requestTitle: incoming.title, messageStatus: "sent" }));
 	}
-	return { author, recipient, other, evidence, call, deliver, request, answer };
+	return { author, recipient, other, evidence, relationships, call, deliver, request, answer };
 }
 
 test("outstanding Requests list delivered unanswered obligations without repeating bodies", () => {
@@ -55,10 +55,10 @@ test("outstanding Requests list delivered unanswered obligations without repeati
 	const answered = h.request("Already completed work", "Done instructions.");
 	h.answer(answered);
 	const before = h.recipient.manager.getEntries().length;
-	assert.deepEqual(h.evidence.openIncomingRequests(h.recipient.record), { requests: [{
+	assert.deepEqual(h.relationships.openIncomingRequests(h.recipient.record), { requests: [{
 		requestMessageId: open.requestMessageId, requesterAgentId: "author", title: open.title,
 	}] });
-	assert.deepEqual(h.evidence.openIncomingRequests(h.author.record), { requests: [] });
+	assert.deepEqual(h.relationships.openIncomingRequests(h.author.record), { requests: [] });
 	assert.equal(h.recipient.manager.getEntries().length, before, "listing is passive");
 });
 
@@ -98,12 +98,12 @@ test("Cancellation Delivery resolves the incoming obligation and keeps the Reque
 	const request = h.request("Cancel this work", "Instructions that remain inspectable.");
 	const source = h.call(h.author, { operation: "cancel", requestMessageId: request.requestMessageId, reason: "No longer needed." },
 		pointer => ({ messageId: deriveMessageIdentity(pointer), targetAgentId: "recipient", messageStatus: "sent" }));
-	assert.deepEqual(h.evidence.openIncomingRequests(h.recipient.record), { requests: [{
+	assert.deepEqual(h.relationships.openIncomingRequests(h.recipient.record), { requests: [{
 		requestMessageId: request.requestMessageId, requesterAgentId: "author", title: request.title,
 	}] }, "only Delivery, not the requester's commitment, resolves the incoming obligation");
 	h.deliver(h.recipient, { source, projection: { kind: "request_cancellation", cancellationId: deriveMessageIdentity(source),
 		requestMessageId: request.requestMessageId, fromAgentId: "author", reason: "No longer needed." } });
-	assert.deepEqual(h.evidence.openIncomingRequests(h.recipient.record), { requests: [] });
+	assert.deepEqual(h.relationships.openIncomingRequests(h.recipient.record), { requests: [] });
 	assert.equal(h.evidence.inspectRequest(h.recipient.record, request.requestMessageId).question, request.question);
 });
 

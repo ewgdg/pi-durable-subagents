@@ -19,13 +19,14 @@ import type { Static } from "typebox";
 
 import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import { AgentControlAdmissionBroker } from "../control/agent-control-admission.ts";
-import {
+import type {
+	ControlEvent,
 	FramedAgentControlChannel,
-	type ControlEvent,
 } from "../control/agent-control-channel.ts";
 import {
 	agentControlProtocol,
 	RuntimeSnapshotSchema,
+	type ChildToOwnerControl,
 } from "../control/agent-control-protocol.ts";
 import { createPlatformControlListener } from "../control/control-platform.ts";
 import {
@@ -41,7 +42,7 @@ import { ChildLaunchContractGuard } from "./child-launch-contract.ts";
 import { materializeNewChildSystemPromptArtifact } from "./child-system-prompt-artifact.ts";
 import { buildPiChildCliLaunch } from "./pi-child-cli-launch.ts";
 import {
-	dispatchParticipantRequestToOwner,
+	serveOwnerParticipant,
 	type OwnerParticipantRequestHandlers,
 } from "./remote-participant-control.ts";
 import {
@@ -88,8 +89,8 @@ export type PiChildRuntimeReady = Readonly<{
 	mode: "tui";
 	hasUI: true;
 }>;
-export type PiChildRuntimeEvent = ControlEvent<typeof agentControlProtocol>;
-export type PiChildRuntimeChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
+export type PiChildRuntimeEvent = ControlEvent<ChildToOwnerControl>;
+export type PiChildRuntimeChannel = FramedAgentControlChannel<typeof agentControlProtocol, "owner">;
 
 export type StartPiChildProcessRuntimeOptions = Readonly<{
 	workflowId: string;
@@ -309,31 +310,8 @@ export class PiChildProcessRuntime {
 					expectedSessionId: bootstrap.expectedSessionId,
 				},
 				(candidate) => {
-					candidate.onRequest((request) =>
-						dispatchParticipantRequestToOwner(
-							options.ownerRequestHandlers,
-							request,
-							{
-								waitProgress: (toolCallId, progress) => {
-									void candidate.sendEvent("coordination.wait.progress", {
-										toolCallId,
-										progress,
-									}).catch(() => undefined);
-								},
-							},
-						)
-					);
-					const removePresentationChangeHandler = options.ownerRequestHandlers
-						?.presentation.addChangeHandler?.((snapshot) => {
-							void candidate.sendEvent("presentation.agents.changed", {
-								...snapshot,
-								live: [...snapshot.live],
-								dormant: [...snapshot.dormant],
-								humanAttention: [...snapshot.humanAttention],
-								operationalAttention: [...snapshot.operationalAttention],
-							}).catch(() => undefined);
-						}) ?? (() => undefined);
-					candidate.onEvent((event) => {
+					// Startup observes child events before any later subscriber.
+					eventHandlers.add((event) => {
 						if (event.event === "runtime.ready") settleReady(event.payload);
 						if (event.event === "runtime.startupComplete") settleStartupComplete(event.payload);
 						if (event.event === "runtime.fault") {
@@ -341,10 +319,9 @@ export class PiChildProcessRuntime {
 								`child_runtime_fault: ${event.payload.code}: ${event.payload.message}`,
 							));
 						}
-						for (const handler of eventHandlers) handler(event);
 					});
+					serveOwnerParticipant(candidate, options.ownerRequestHandlers, eventHandlers);
 					candidate.onClose((cause) => {
-						removePresentationChangeHandler();
 						rejectReady(cause);
 						rejectStartupFault(cause);
 					});

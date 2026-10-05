@@ -14,6 +14,9 @@ import type { ControlTransport, ControlTransportListener } from "./control-trans
 
 const DEFAULT_MAXIMUM_CONTROL_FRAME_BYTES = 1024 * 1024;
 
+/** The broker listens for children, so every channel it admits is the Owner's side. */
+type OwnerControlChannel<P extends AgentControlProtocol> = FramedAgentControlChannel<P, "owner">;
+
 export type ExpectedAgentControlAdmission = Readonly<{
 	agentId: string;
 	connectionToken: string;
@@ -22,8 +25,8 @@ export type ExpectedAgentControlAdmission = Readonly<{
 
 type PendingAdmission<P extends AgentControlProtocol> = Readonly<{
 	expected: ExpectedAgentControlAdmission;
-	configure: (channel: FramedAgentControlChannel<P>) => void;
-	resolve: (channel: FramedAgentControlChannel<P>) => void;
+	configure: (channel: OwnerControlChannel<P>) => void;
+	resolve: (channel: OwnerControlChannel<P>) => void;
 	reject: (error: Error) => void;
 	removeAbortListener: () => void;
 }>;
@@ -61,9 +64,9 @@ export class AgentControlAdmissionBroker<P extends AgentControlProtocol> {
 
 	admit(
 		expected: ExpectedAgentControlAdmission,
-		configure: (channel: FramedAgentControlChannel<P>) => void,
+		configure: (channel: OwnerControlChannel<P>) => void,
 		signal?: AbortSignal,
-	): Promise<FramedAgentControlChannel<P>> {
+	): Promise<OwnerControlChannel<P>> {
 		if (signal?.aborted) return Promise.reject(abortError());
 		if (this.#closed) {
 			return Promise.reject(new Error("control_admission_closed: broker is closed"));
@@ -75,7 +78,7 @@ export class AgentControlAdmissionBroker<P extends AgentControlProtocol> {
 		if (this.#pending.has(expected.connectionToken)) {
 			return Promise.reject(new Error("control_admission_duplicate_token: token is already pending"));
 		}
-		return new Promise<FramedAgentControlChannel<P>>((resolve, reject) => {
+		return new Promise<OwnerControlChannel<P>>((resolve, reject) => {
 			let removeAbortListener: () => void = () => undefined;
 			const pending: PendingAdmission<P> = {
 				expected,
@@ -163,6 +166,7 @@ export class AgentControlAdmissionBroker<P extends AgentControlProtocol> {
 			const channel = new FramedAgentControlChannel({
 				identity,
 				protocol: this.#protocol,
+				side: "owner",
 				transport: candidate,
 				maximumFrameBytes: this.#maximumFrameBytes,
 			});

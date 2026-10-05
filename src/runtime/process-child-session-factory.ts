@@ -19,9 +19,8 @@ import {
 } from "../protocol/moderator-input.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { RuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
-import {
-	PiChildHostedRuntime,
-} from "../process-runtime/pi-child-hosted-runtime.ts";
+import { PiChildHostedRuntime } from "../process-runtime/pi-child-hosted-runtime.ts";
+import { createPiChildProcessProjection } from "../process-runtime/pi-child-process-projection.ts";
 import {
 	DEFAULT_CHILD_STARTUP_TIMEOUT_MILLISECONDS,
 	PiChildProcessRuntime,
@@ -96,11 +95,14 @@ type ParticipantHandlers =
 	| OwnerParticipantRequestHandlers<"ordinary">
 	| OwnerParticipantRequestHandlers<"moderator">;
 
+/** Reports whether a native quit of this projection was handled. */
+export type RuntimeQuitSubscriber = (agentId: string, projection: HostedAgentProjection | undefined) => boolean;
+
 /** Launches every non-Owner Runtime in a fresh Pi process. */
 export class ProcessChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
 	readonly #launchContract: ChildLaunchContractGuard;
-	readonly #onRuntimeQuit: ((agentId: string, projection: HostedAgentProjection) => boolean) | undefined;
+	#runtimeQuitSubscriber: RuntimeQuitSubscriber | undefined;
 	readonly #templateLoads = new Map<string, Promise<Readonly<{
 		discovery: AgentTemplateDiscovery;
 		snapshot: AgentTemplateCatalogueSnapshot;
@@ -122,7 +124,6 @@ export class ProcessChildSessionFactory {
 	constructor(options: {
 		ownerRuntime: AgentSessionRuntime;
 		onLaunchBlocked?(error: Error): void;
-		onRuntimeQuit?(agentId: string, projection: HostedAgentProjection): boolean;
 		ownerIdentity: OwnerIdentity;
 		entryModulePath: string;
 		packageRoot?: string;
@@ -141,7 +142,6 @@ export class ProcessChildSessionFactory {
 	}) {
 		this.#ownerRuntime = options.ownerRuntime;
 		this.#launchContract = new ChildLaunchContractGuard(undefined, options.onLaunchBlocked);
-		this.#onRuntimeQuit = options.onRuntimeQuit;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#entryModulePath = options.entryModulePath;
 		this.#packageRoot = options.packageRoot ?? resolve(dirname(options.entryModulePath), "..");
@@ -150,6 +150,17 @@ export class ProcessChildSessionFactory {
 		this.#modelExclusions = options.modelExclusions;
 		this.#ownerRequestHandlers = options.ownerRequestHandlers;
 		this.#interaction = options.interaction;
+	}
+
+	/**
+	 * Interactive Selection subscribes because only it knows which projection the
+	 * human is viewing. Without a subscriber no native quit is handled.
+	 */
+	subscribeRuntimeQuit(subscriber: RuntimeQuitSubscriber): void {
+		if (this.#runtimeQuitSubscriber) {
+			throw new Error("invariant_violation: Runtime quit already has a subscriber");
+		}
+		this.#runtimeQuitSubscriber = subscriber;
 	}
 
 	admitProcessRuntimePlatform(): void {
@@ -514,10 +525,11 @@ export class ProcessChildSessionFactory {
 			) as StartPiChildProcessRuntimeOptions["ownerRequestHandlers"],
 			...(this.#interaction === undefined ? {} : { interaction: this.#interaction }),
 		});
-		const runtime = new PiChildHostedRuntime(
-			launch,
-			(projection) => this.#onRuntimeQuit?.(identity.agentId, projection) === true,
-		);
+		const runtime = new PiChildHostedRuntime({
+			link: launch,
+			createProjection: () => createPiChildProcessProjection(launch),
+			onQuit: (projection) => this.#runtimeQuitSubscriber?.(identity.agentId, projection) === true,
+		});
 		return { runtime, ready: runtime.ready };
 	}
 

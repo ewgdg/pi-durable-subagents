@@ -92,7 +92,7 @@ context and carry no current coordination authority.
 
 ## Shared relationship source progress
 
-Each `RequestEvidence` coordinator owns one source cursor map and one disposable
+Each `RequestRelationships` coordinator owns one source cursor map and one disposable
 Request-change journal for the current roster/source epoch. The collector copies
 new entries from the adapters' existing `requestChanges` journals once, and indexes
 Creation Request IDs by direct spawner once per epoch. Each Agent graph retains its
@@ -123,7 +123,7 @@ See [the comparison and scope](research/shared-relationship-sources.md).
 Run the focused transcript contracts with:
 
 ```sh
-node --test tests/agent-transcript.test.ts tests/transcript-facts.test.ts tests/request-evidence.test.ts tests/relationship-refresh.test.ts
+node --test tests/agent-transcript.test.ts tests/transcript-facts.test.ts tests/request-evidence.test.ts tests/request-relationships.test.ts
 node --expose-gc benchmarks/transcript-consumption.ts
 node --expose-gc benchmarks/relationship-refresh.ts
 ```

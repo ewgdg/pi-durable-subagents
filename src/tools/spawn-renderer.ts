@@ -12,7 +12,6 @@ import type {
 } from "../coordination/workflow-coordinator.ts";
 import { formatKnownAgentIdentity } from "../presentation/agent-identity.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
-import { renderToolError } from "./coordination-renderers.ts";
 import { renderCoordinationBlock } from "./message-renderer.ts";
 
 export function renderAgentSpawnCall(
@@ -46,12 +45,8 @@ export function renderAgentSpawnResult(
 	result: AgentToolResult<AgentSpawnReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ args: AgentSpawnInput; isError: boolean }>,
+	context: Readonly<{ args: AgentSpawnInput }>,
 ): Text {
-	if (!options.isPartial && context.isError) return renderToolError(result, options, theme);
-	if (options.isPartial || result.details === undefined) {
-		return new Text(theme.fg("accent", "resolving configuration…"), 0, 0);
-	}
 	const receipt = result.details;
 	let text = theme.fg(spawnStatusColor(receipt.spawnStatus), receipt.spawnStatus);
 	if ("messageStatus" in receipt) {

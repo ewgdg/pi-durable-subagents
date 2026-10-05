@@ -8,9 +8,11 @@ import { AgentWaitCoordinator } from "../src/coordination/agent-waits.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import type { AgentRuntimeHost, AgentRunHandle, AgentRunEndCause, AgentRuntimeDelivery } from "../src/runtime/agent-runtime-host.ts";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
+import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import type { PiChildProcessLaunch, PiChildProcessRuntime, PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { participant } from "./support/request-history.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 const CUSTOM_TYPE = "agent-coordination.delivery-failure";
 
@@ -30,7 +32,7 @@ for (const operation of ["send", "request"] as const) test(`${operation}: admitt
 	assert.equal(notice.delivery.inspectedThrough.agentId, "recipient");
 	assert.match(notice.guidance, /poll.*retry.*cancel.*escalate/);
 	assert.equal(h.recipient.dispatches.length, 1, "notification does not retry");
-	assert.equal(h.messages.outstandingRequestIdsFor(h.author.record).length, operation === "request" ? 1 : 0);
+	assert.equal(h.relationships.outstandingRequestIds(h.author.record).length, operation === "request" ? 1 : 0);
 	h.recipient.end("failure");
 	await flush();
 	assert.equal(h.notices().length, 1, "completion and Run failure are one attempt");
@@ -142,7 +144,7 @@ for (const failure of ["startup", "boundary", "capacity"] as const) test(
 	assert.ok("requestMessageId" in receipt);
 	assert.ok("messageStatus" in receipt && receipt.messageStatus === "not_sent");
 	assert.equal(receipt.reason, failure === "capacity" ? "capacity_exhausted" : "target_unavailable");
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.author.record), []);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.author.record), []);
 	assert.ok(!h.messages.blockedDeliveries().some(item => item.messageId === receipt.requestMessageId));
 	assert.doesNotThrow(() => h.messages.hasAutonomousDeliveryProgress());
 	await assert.rejects(h.message("poll-rejected", { operation: "poll", messageId: receipt.requestMessageId }), /unknown_identity/);
@@ -159,7 +161,7 @@ for (const status of ["sent", "unknown"] as const) test(
 	h.recipient.record.host.startInLane = async () => { throw new Error("recipient unavailable"); };
 	const retry = await h.message("retry-unavailable", { operation: "retry", messageId: receipt.requestMessageId });
 	assert.equal("messageStatus" in retry && retry.messageStatus, "not_sent");
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.author.record), [receipt.requestMessageId]);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.author.record), [receipt.requestMessageId]);
 	assert.ok(h.messages.blockedDeliveries().some(item => item.messageId === receipt.requestMessageId));
 });
 
@@ -284,11 +286,11 @@ function harness(t: { after(fn: () => void): void }, boundaryHooks?: MessageBoun
 	const recipient = runtimeParticipant("recipient", false);
 	const agents = new Map([author, recipient].map(p => [p.record.identity.agentId, p.record]));
 	const state = { shutdown: false };
-	const messages = new MessageCoordinator({ agents, workflowPolicy: new WorkflowPolicyStore(), boundaryHooks,
+	const coordination = requestCoordination(agents);
+	const messages = new MessageCoordinator({ agents, ...coordination, workflowPolicy: new WorkflowPolicyStore(), boundaryHooks,
 		isShuttingDown: () => state.shutdown,
-		preemptAgentWait: (record, reserve) => waits.preemptForInboundRequest(record, reserve),
 	});
-	const waits = new AgentWaitCoordinator({ agents, messages, suspendExecution: () => undefined, resumeExecution: async () => undefined });
+	const waits = new AgentWaitCoordinator({ agents, messages, ...coordination, answerArbitration: messages.answerArbitration, assertNotShutDownOrSuspended: () => undefined });
 	for (const p of [author, recipient]) messages.integrate(p.record);
 	const originalEnd = recipient.end;
 	recipient.end = cause => { messages.discardSchedulingInLane(recipient.record); originalEnd(cause); };
@@ -299,7 +301,7 @@ function harness(t: { after(fn: () => void): void }, boundaryHooks?: MessageBoun
 		author.manager.appendMessage({ role: "toolResult", toolCallId: id, toolName: "agent_message", content: [{ type: "text", text: JSON.stringify(result) }], details: result, isError: false, timestamp: Date.now() });
 		return result;
 	};
-	return { author, recipient, messages, waits, message,
+	return { author, recipient, messages, relationships: coordination.requestRelationships, waits, message,
 		get shutdown() { return state.shutdown; }, set shutdown(value: boolean) { state.shutdown = value; },
 		send: (operation: "send" | "request") => message("original", operation === "send"
 			? { operation, targetAgent: "recipient", content: "Work" }
@@ -335,6 +337,7 @@ function runtimeParticipant(agentId: string, commitOnDispatch: boolean) {
 		discardAndEndInLane: async (cause: AgentRunEndCause) => runtime.end(cause),
 		addEndedHandler: (handler: (handle: AgentRunHandle, cause: AgentRunEndCause) => void) => { ended.add(handler); return () => ended.delete(handler); },
 		addRetentionReason() {}, removeRetentionReason() {}, hasRetentionReason: () => false,
+		replaceRequestRelationships() {}, requestRelationshipIds: () => [],
 		finishIsolatedResumptionInLane() {}, releaseIfEligibleInLane: () => "retained",
 		blocksOrdinaryDelivery: () => runtime.blocked,
 		currentWorkState: () => attention === "agent_wait" || runtime.active ? "active" : "settled",
@@ -374,7 +377,7 @@ for (const outcome of ["dispatch_rejected", "channel_loss", "process_exit", "com
 		onEvent: (handler: (event: PiChildRuntimeEvent) => void) => { eventHandlers.add(handler); return () => eventHandlers.delete(handler); },
 		dispose: async () => {},
 	} as unknown as PiChildProcessLaunch;
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
 	await runtime.ready;
 	t.after(() => { void runtime.dispose(); });
 	h.recipient.dispatchOverride = input => runtime.deliver(input);

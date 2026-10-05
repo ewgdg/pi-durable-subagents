@@ -16,7 +16,7 @@ Select a subagent to enter its complete Pi session and interact with it directly
 
 - **Owner-directed Workflows:** the current Pi session, in the TUI or a headless mode, becomes the durable Workflow Owner. Fork or clone it into a fresh, independent Workflow. See [Owner Workflow](docs/owner-workflow.md).
 - **Durable child Agents:** Agents create configurable, context-isolated children with `agent_spawn`. See [Agent spawning](docs/agent-spawning.md).
-- **Messaging and Requests:** `agent_message` sends Messages and titled Requests; `agent_wait` joins their Answers without holding child execution capacity. See [Agent messaging](docs/agent-messaging.md).
+- **Messaging and Requests:** `agent_message` sends Messages and titled Requests; `agent_wait` joins their Answers. See [Agent messaging](docs/agent-messaging.md).
 - **Visible obligations:** `agent_observe` lists and retrieves your outstanding Requests.
 - **Human decisions:** in the TUI, a spawned Agent can block on one free-form Human Answer with `ask_user`. See [Human Requests](docs/human-requests.md).
 - **Run supervision:** Owners and Direct Spawners inspect, interrupt, resume, or terminate exact Runs with `agent_observe` and `agent_control`. See [Run supervision](docs/run-supervision.md).

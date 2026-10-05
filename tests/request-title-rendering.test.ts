@@ -5,7 +5,7 @@ import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { renderMessageProjection } from "../src/tools/message-delivery-renderer.ts";
 import { renderAgentMessageCall, renderAgentMessageResult } from "../src/tools/message-renderer.ts";
 import { renderAgentSpawnCall } from "../src/tools/spawn-renderer.ts";
-import { renderAgentWaitResult } from "../src/tools/coordination-renderers.ts";
+import { renderAgentWaitProgress, renderAgentWaitResult } from "../src/tools/coordination-renderers.ts";
 
 const theme = {
 	fg: (_color: string, text: string) => text,
@@ -52,11 +52,11 @@ test("direct Request and Answer delivery display the originating Request title",
 test("Wait progress and both Answer outcomes retain the Request title", () => {
 	initTheme("dark");
 	const context = { state: {}, isError: false };
-	const progress = renderAgentWaitResult({
+	const progress = renderAgentWaitProgress({
 		content: [], details: { waitingFor: [{
 			requestMessageId: answer.requestMessageId, responderAgentId: answer.fromAgentId, requestTitle,
 		}] },
-	}, { ...options, isPartial: true }, theme, context).render(160).join("\n");
+	}, theme, context).render(160).join("\n");
 	assert.match(progress, /Confirm checkpoint storage constants/);
 	for (const entry of [answer, {
 		disposition: "answer_already_delivered" as const,

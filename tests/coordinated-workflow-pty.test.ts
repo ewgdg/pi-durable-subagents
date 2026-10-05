@@ -539,11 +539,14 @@ test("interactive /reload keeps a selected process child alive after inherited e
 			"const isChild = process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP !== undefined;",
 			"const record = (event) => appendFileSync(evidencePath, `${JSON.stringify({ ...event, pid: process.pid })}\\n`);",
 			"export default function childInputPreflight(pi) {",
+			"  let latestInput;",
 			"  if (isChild) {",
 			"    pi.on('session_start', (event) => record({ kind: 'session_start', reason: event.reason }));",
 			"    pi.on('session_shutdown', (event) => record({ kind: 'session_shutdown', reason: event.reason }));",
+			"    pi.on('agent_settled', () => record({ kind: 'agent_settled', input: latestInput }));",
 			"  }",
 			"  pi.on('input', (event) => {",
+			"    latestInput = event.text;",
 			"    if (event.text === 'CLI child before reload') {",
 			"      return { action: 'transform', text: 'CLI child transformed before reload' };",
 			"    }",
@@ -578,6 +581,17 @@ test("interactive /reload keeps a selected process child alive after inherited e
 			"CLI child transformed before reload",
 		);
 
+		// The response renders before Pi ends the child's run, and Pi refuses /reload
+		// while a run is active ("Wait for the current response to finish before
+		// reloading."). Pi clears its active-run flag before agent_settled hooks run.
+		await waitForChildLifecycleEvidence(
+			childLifecycleEvidence,
+			(entries) => entries.find((entry) =>
+				entry.kind === "agent_settled" && entry.input !== undefined &&
+				// The input hooks can see the already transformed text again before the run settles.
+				["CLI child before reload", "CLI child transformed before reload"].includes(entry.input)
+			),
+		);
 		terminal.write("\x15");
 		await appendFile(activeBroker.extensionPath, "\n// Selected-child reload regression generation.\n");
 		terminal.write("/reload\r");
@@ -962,11 +976,10 @@ async function waitForFile(path: string): Promise<void> {
 	throw new Error(`Timed out waiting for ${path}`);
 }
 
-type ChildLifecycleEvidence = Readonly<{
-	kind: "session_start" | "session_shutdown";
-	reason: string;
-	pid: number;
-}>;
+type ChildLifecycleEvidence = Readonly<
+	| { kind: "session_start" | "session_shutdown"; reason: string; pid: number }
+	| { kind: "agent_settled"; input?: string; pid: number }
+>;
 
 async function waitForChildLifecycleEvidence(
 	path: string,

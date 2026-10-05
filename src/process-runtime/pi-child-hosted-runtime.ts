@@ -13,12 +13,39 @@ import type {
 	HostedRuntimeEvent,
 } from "../runtime/hosted-agent-runtime.ts";
 import type { HostedAgentProjection } from "../runtime/hosted-agent-projection.ts";
-import { createPiChildProcessProjection } from "./pi-child-process-projection.ts";
-import {
-	type PiChildProcessLaunch,
-	type PiChildProcessRuntime,
-	type PiChildRuntimeEvent,
+import type {
+	PiChildRuntimeChannel,
+	PiChildRuntimeEvent,
+	PiChildRuntimeSnapshot,
 } from "./pi-child-process-runtime.ts";
+
+/** The admitted child Control the proxy talks to. */
+export type ChildControlLinkAdmission = Readonly<{
+	snapshot: PiChildRuntimeSnapshot;
+	channel: Pick<PiChildRuntimeChannel, "request" | "onClose">;
+}>;
+
+/**
+ * The narrow port the Owner-side child proxy depends on. The process launch
+ * satisfies it over a PTY child; the Child Control loopback over an in-memory pair.
+ */
+export type ChildControlLink = Readonly<{
+	ready(): Promise<ChildControlLinkAdmission>;
+	onEvent(handler: (event: PiChildRuntimeEvent) => void): () => void;
+	exited: Promise<Readonly<{ exitCode: number; signal: number }>>;
+	dispose(): Promise<void>;
+}>;
+
+export type PiChildHostedRuntimeOptions = Readonly<{
+	link: ChildControlLink;
+	/**
+	 * Builds the child's presentation; a child without a terminal has none. The
+	 * proxy builds it only after observing the link's exit, so a dead child fences
+	 * its Run before presentation reports the same exit.
+	 */
+	createProjection?: () => HostedAgentProjection;
+	onQuit?: (projection: HostedAgentProjection | undefined) => boolean;
+}>;
 
 type SettlementWaiter = {
 	started: boolean;
@@ -28,13 +55,13 @@ type SettlementWaiter = {
 	reject(error: unknown): void;
 };
 
-/** Adapt one pending/admitted real Pi child to the common Runtime supervisor. */
+/** Adapt one pending/admitted Pi child to the common Runtime supervisor. */
 export class PiChildHostedRuntime implements HostedAgentRuntime {
-	readonly projection: HostedAgentProjection;
+	readonly projection: HostedAgentProjection | undefined;
 	readonly ready: Promise<void>;
-	readonly #launch: PiChildProcessLaunch;
-	readonly #onQuit: ((projection: HostedAgentProjection) => boolean) | undefined;
-	readonly #admitted: Promise<PiChildProcessRuntime>;
+	readonly #link: ChildControlLink;
+	readonly #onQuit: PiChildHostedRuntimeOptions["onQuit"];
+	readonly #admitted: Promise<ChildControlLinkAdmission>;
 	readonly #handlers = new Set<(event: HostedRuntimeEvent) => void>();
 	readonly #settlementWaiters = new Set<SettlementWaiter>();
 	readonly #dispatchCompletions = new Map<string, {
@@ -58,15 +85,12 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#reminderAdmissionAbort: AbortController | undefined;
 	#disposePromise: Promise<void> | undefined;
 
-	constructor(
-		launch: PiChildProcessLaunch,
-		onQuit?: (projection: HostedAgentProjection) => boolean,
-	) {
-		this.#launch = launch;
+	constructor({ link, createProjection, onQuit }: PiChildHostedRuntimeOptions) {
+		this.#link = link;
 		this.#onQuit = onQuit;
 		// Fence volatile Run state before presentation reports the same process exit.
 		// Otherwise Owner restoration can race cleanup intentions over dead Control.
-		void launch.exited.then(
+		void link.exited.then(
 			(exit) => {
 				if (this.#shutdownExpected) return;
 				this.#endTransport(new Error(
@@ -75,16 +99,16 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			},
 			(error: unknown) => this.#endTransport(error),
 		);
-		const projection = createPiChildProcessProjection(launch);
-		this.projection = Object.freeze({
+		const projection = createProjection?.();
+		this.projection = projection === undefined ? undefined : Object.freeze({
 			...projection,
 			dispose: () => {
 				this.#shutdownExpected = true;
 				return projection.dispose();
 			},
 		});
-		this.#removeEventHandler = launch.onEvent((event) => this.#handleEvent(event));
-		this.#admitted = launch.ready();
+		this.#removeEventHandler = link.onEvent((event) => this.#handleEvent(event));
+		this.#admitted = link.ready();
 		this.ready = this.#admitted.then((runtime) => {
 			this.#adoptSnapshot(runtime.snapshot);
 			this.#removeChannelCloseHandler = runtime.channel.onClose((cause) => {
@@ -164,7 +188,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		}).finally(() => this.#dispatchCompletions.delete(deliveryId));
 		if (!confirmation) return { completion };
 		const transcriptCommit = response.then((result) =>
-			result.transcriptCommitted && confirmation.inspectCommit()
+			result.transcriptCommitted && (confirmation.inspectCommit?.() ?? true)
 		);
 		return { completion, transcriptCommit };
 	}
@@ -254,7 +278,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			this.#reminderAdmissionAbort?.abort();
 			this.#clearCompaction();
 			try {
-				await this.#launch.dispose();
+				await this.#link.dispose();
 			} finally {
 				this.#removeChannelCloseHandler();
 				this.#removeEventHandler();
@@ -264,9 +288,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		return this.#disposePromise;
 	}
 
-	#adoptSnapshot(
-		snapshot: PiChildProcessRuntime["snapshot"],
-	): void {
+	#adoptSnapshot(snapshot: PiChildRuntimeSnapshot): void {
 		// Descendant inheritance must observe one coherent child state, never fields
 		// copied from different Runtime generations.
 		this.#snapshot = {
@@ -338,19 +360,13 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			return;
 		}
 		if (event.event === "agent.end") {
-			if (event.payload.outcome === "interrupted") this.#cancellation.abort();
+			// The child's Native Session Driver classified this Run end; adopt it unchanged.
+			const { outcome, willRetry, failure, quota } = event.payload;
+			if (outcome === "aborted") this.#cancellation.abort();
 			this.#emit({
-				type: "agent_end",
-				outcome: event.payload.outcome === "completed"
-					? "completed"
-					: event.payload.outcome === "interrupted"
-						? "aborted"
-						: "error",
-				willRetry: event.payload.willRetry,
-				...(event.payload.outcome === "failed" && event.payload.error !== undefined
-					? { failure: { stage: "model", error: event.payload.error, provenance: "pi-child-hosted-runtime" } }
-					: {}),
-				...(event.payload.outcome === "failed" && event.payload.quota ? { quota: event.payload.quota } : {}),
+				type: "agent_end", outcome, willRetry,
+				...(failure ? { failure } : {}),
+				...(quota ? { quota } : {}),
 			});
 			return;
 		}

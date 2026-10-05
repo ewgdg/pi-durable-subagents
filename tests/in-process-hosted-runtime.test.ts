@@ -1,164 +1,70 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-
+import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
+import { createTestOwnerHost } from "./support/pi-host.ts";
 
-const snapshot = {
-	cwd: "/runtime/project",
-	model: { provider: "test", modelId: "model" },
-	thinking: "high" as const,
-	tools: ["read"],
-	skills: ["skill"],
-	skillSources: [{ name: "skill", filePath: "/runtime/skill/SKILL.md" }],
-	fileExtensionPaths: ["/runtime/extension.ts"],
-	projectTrusted: true,
-	sessionId: "runtime-session",
-};
+async function ownerRuntime(t: Parameters<typeof createTestOwnerHost>[0], extension?: ExtensionFactory) {
+	const host = await createTestOwnerHost(t, pi => {
+		registerSessionStartup(pi);
+		return extension?.(pi);
+	}, { fauxTokensPerSecond: 100_000 });
+	const runtime = InProcessHostedRuntime.fromSession({ session: host.session, services: host.services, projection: undefined });
+	return { host, runtime };
+}
 
-test("InProcessHostedRuntime translates Pi lifecycle and owns Pi intentions", async () => {
-	const listeners = new Set<(event: unknown) => void>();
-	const cancellation = new AbortController();
-	const calls: string[] = [];
-	const session = {
-		isIdle: true,
-		pendingMessageCount: 2,
-		agent: { signal: cancellation.signal },
-		subscribe(listener: (event: unknown) => void) {
-			listeners.add(listener);
-			return () => listeners.delete(listener);
-		},
-		clearQueue() {
-			calls.push("clear");
-			return { steering: ["steer"], followUp: ["follow-up"] };
-		},
-		async abort() {
-			calls.push("abort");
-		},
-		async waitForIdle() {
-			calls.push("wait");
-		},
-		dispose() {
-			calls.push("dispose");
-		},
-		sendUserMessage: async () => undefined,
-		sendCustomMessage: async () => undefined,
-	} as unknown as AgentSession;
-	const projection = {
-		sessionId: snapshot.sessionId,
-		presentation: { render: () => [], invalidate() {} },
-		screenView: {
-			async begin() {},
-			async end() {},
-		},
-		physicalTerminal: {
-			async beginAttachment() { return () => undefined; },
-			async endAttachment() {},
-			pauseOutput() {},
-			resumeOutput() {},
-		},
-		resize() {},
-		dispatchInput() {},
-		focusEditor() {},
-		addChangeHandler: () => () => undefined,
-		addFailureHandler: () => () => undefined,
-		addExitRequestHandler: () => () => undefined,
-		isProcessingInput: () => false,
-		fenceInputSubmissions() {},
-		inputSubmissionIsFenced: () => false,
-		whenInputIdle: async () => undefined,
-		ready: async () => undefined,
-		cancelInitialization: () => undefined,
-		dispose: async () => undefined,
-	};
-	const runtime = new InProcessHostedRuntime({
-		session,
-		projection,
-		inspectSnapshot: () => snapshot,
-	});
+test("the Owner Runtime publishes the driver's Run end unchanged", { timeout: 5000 }, async t => {
+	const { host, runtime } = await ownerRuntime(t);
 	const events: HostedRuntimeEvent[] = [];
-	runtime.subscribe((event) => events.push(event));
-
-	for (const listener of listeners) {
-		listener({ type: "agent_start" });
-		listener({
-			type: "agent_end",
-			messages: [{ role: "assistant", stopReason: "error" }],
-			willRetry: false,
-		});
-		listener({ type: "agent_settled" });
-	}
-
-	assert.deepEqual(events, [
-		{ type: "state_changed" },
-		{ type: "agent_end", outcome: "error", willRetry: false },
+	runtime.subscribe(event => events.push(event));
+	host.model.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 upstream provider exploded" })]);
+	await runtime.deliver({ kind: "user", content: "Start the Run." }).completion;
+	await runtime.waitForIdle();
+	assert.deepEqual(events.filter(event => event.type !== "state_changed"), [
+		{
+			type: "agent_end", outcome: "error", willRetry: false,
+			failure: { stage: "model", error: "400 upstream provider exploded", provenance: "native-session-driver" },
+		},
 		{ type: "agent_settled" },
 	]);
-	assert.deepEqual(runtime.snapshot(), snapshot);
 	assert.equal(runtime.workState(), "settled");
-	assert.equal(runtime.queuedInputCount(), 2);
-	assert.equal(runtime.cancellationSignal(), cancellation.signal);
-	assert.deepEqual(await runtime.clearQueue(), {
-		steering: ["steer"],
-		followUp: ["follow-up"],
-	});
-	await runtime.abort();
-	await runtime.waitForIdle();
-	await runtime.dispose();
-	assert.deepEqual(calls, ["clear", "abort", "wait", "dispose"]);
 });
 
-test("compaction end clears presentation before Pi releases its native controller", () => {
- let nativeCompacting = false;
- let emit!: (event: unknown) => void;
- const session = {
-  get isCompacting() { return nativeCompacting; },
-  subscribe(listener: (event: unknown) => void) { emit = listener; return () => undefined; },
- } as unknown as AgentSession;
- const runtime = new InProcessHostedRuntime({ session, projection: undefined, inspectSnapshot: () => snapshot });
- const states: boolean[] = [];
- runtime.subscribe(event => { if (event.type === "state_changed") states.push(runtime.isCompacting()); });
- for (const outcome of [{ aborted: false }, { aborted: true }, { aborted: false, errorMessage: "failed" }]) {
-  nativeCompacting = true;
-  emit({ type: "compaction_start", reason: "threshold" });
-  assert.equal(runtime.isCompacting(), true);
-  emit({ type: "compaction_end", reason: "threshold", ...outcome });
-  assert.equal(runtime.isCompacting(), false);
-  nativeCompacting = false;
- }
- assert.deepEqual(states, [true, false, true, false, true, false]);
+test("an Owner Delivery confirms only when the driver proof and the caller's inspection agree", { timeout: 5000 }, async t => {
+	const { host, runtime } = await ownerRuntime(t);
+	host.model.setResponses([fauxAssistantMessage("First handled."), fauxAssistantMessage("Second handled.")]);
+	const confirmed = runtime.deliver({ kind: "user", content: "Confirmed by both." }, { inspectCommit: () => true });
+	assert.equal(await confirmed.transcriptCommit, true);
+	await confirmed.completion;
+	const refused = runtime.deliver({ kind: "user", content: "Refused by the caller." }, { inspectCommit: () => false });
+	assert.equal(await refused.transcriptCommit, false);
+	await refused.completion;
 });
 
-test("a delivered user message confirms its commit before the Run completes", async () => {
-	const listeners = new Set<(event: unknown) => void>();
-	const entries: unknown[] = [{ type: "message", message: { role: "assistant" } }];
-	const session = {
-		isCompacting: false,
-		subscribe(listener: (event: unknown) => void) {
-			listeners.add(listener);
-			return () => listeners.delete(listener);
-		},
-		sessionManager: { getEntries: () => entries },
-		// Pi publishes message_end to session listeners before it appends the entry,
-		// and the Run it starts outlives the commit proof.
-		sendUserMessage(content: string) {
-			const message = { role: "user", content };
-			for (const listener of listeners) listener({ type: "message_end", message });
-			entries.push({ type: "message", message });
-			return new Promise<void>(() => undefined);
-		},
-	} as unknown as AgentSession;
-	const runtime = new InProcessHostedRuntime({
-		session,
-		projection: undefined,
-		inspectSnapshot: () => snapshot,
+test("an Owner user Delivery proves commit by the caller's text rule", { timeout: 5000 }, async t => {
+	const { host, runtime } = await ownerRuntime(t, pi => {
+		pi.on("input", event => ({ action: "transform", text: `${event.text}\n\nAppended by an Owner input extension.` }));
 	});
+	host.model.setResponses([fauxAssistantMessage("Leading handled."), fauxAssistantMessage("Exact handled.")]);
+	const leading = runtime.deliver({ kind: "user", content: "Human input." }, { userCommitText: "leading" });
+	assert.equal(await leading.transcriptCommit, true);
+	await leading.completion;
+	const exact = runtime.deliver({ kind: "user", content: "Human input." }, { userCommitText: "exact" });
+	assert.equal(await exact.transcriptCommit, false);
+	await exact.completion;
+});
 
-	const dispatch = runtime.deliver({ kind: "user", content: "Resume the Run." }, {
-		inspectCommit: () => JSON.stringify(entries.at(-1)).includes("Resume the Run."),
-	});
-
-	assert.equal(await dispatch.transcriptCommit, true);
+test("the Owner Runtime rejects Moderator reminder delivery because Moderators run as child processes", { timeout: 5000 }, async t => {
+	const { host, runtime } = await ownerRuntime(t);
+	let commitAttempts = 0;
+	await assert.rejects(
+		runtime.deliverModeratorReminder(async commit => { commitAttempts++; return commit(); }),
+		/owner_runtime_hosts_no_moderator/,
+	);
+	assert.equal(commitAttempts, 0);
+	assert.equal(host.session.sessionManager.getEntries().some(entry => entry.type === "custom_message"), false);
 });

@@ -6,14 +6,13 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+
+import { registerParticipantNativeSessionPolicy } from "../src/pi-integration/participant-native-session-policy.ts";
 import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
-import type {
-	ModeratorAgentCoordinatorView,
-	OrdinaryAgentCoordinatorView,
-} from "../src/coordination/workflow-coordinator.ts";
+	registerCoordinationTools,
+	type CoordinationToolHandlers,
+} from "../src/tools/coordination-tools.ts";
 import {
 	renderAgentControlCall,
 	renderAgentControlResult,
@@ -39,20 +38,28 @@ const moderatorTools = [
 	"moderator_control",
 	"report_to_user",
 ] as const;
+// Conformance checks registration and rendering only; no handler may run.
+const unavailableHandlers = new Proxy({}, {
+	get: () => () => {
+		throw new Error("Role conformance does not execute coordination behavior");
+	},
+}) as CoordinationToolHandlers<"ordinary"> & CoordinationToolHandlers<"moderator">;
+
+function roleTools(
+	role: "ordinary" | "moderator",
+	resolveAgentLabel?: (agentId: string) => string | undefined,
+): ExtensionFactory {
+	return (pi) => { registerCoordinationTools(pi, role, unavailableHandlers, { resolveAgentLabel }); };
+}
+
 const plainTheme = {
 	fg: (_color: string, text: string) => text,
 	bg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-test("child session surfaces cancel native session replacement", async (t) => {
-	const unavailableView = () => {
-		throw new Error("Child session command conformance does not execute coordination behavior");
-	};
-	const extension = createAgentBoundExtension(
-		unavailableView as () => OrdinaryAgentCoordinatorView,
-	);
-	const host = await createTestOwnerHost(t, extension, { persistent: true });
+test("participant native session policy cancels native session replacement", async (t) => {
+	const host = await createTestOwnerHost(t, registerParticipantNativeSessionPolicy, { persistent: true });
 	const sessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(sessionFile);
 	assert.deepEqual(
@@ -73,20 +80,10 @@ test("child session surfaces cancel native session replacement", async (t) => {
 	await host.runtime.dispose();
 });
 
-test("role-bound extensions expose strict sequential tools with compact native renderers", async (t) => {
+test("role tool registration exposes strict sequential tools with compact native renderers", async (t) => {
 	for (const role of ["ordinary", "moderator"] as const) {
 		await t.test(role, async (t) => {
-			const unavailableView = () => {
-				throw new Error("Role conformance does not execute coordination behavior");
-			};
-			const extension = role === "ordinary"
-				? createAgentBoundExtension(
-					unavailableView as () => OrdinaryAgentCoordinatorView,
-				)
-				: createModeratorBoundExtension(
-					unavailableView as () => ModeratorAgentCoordinatorView,
-				);
-			const host = await createTestOwnerHost(t, extension, {
+			const host = await createTestOwnerHost(t, roleTools(role), {
 				processVisibleModel: false,
 			});
 			const expectedTools = role === "ordinary" ? ordinaryTools : moderatorTools;
@@ -109,20 +106,10 @@ test("role-bound extensions expose strict sequential tools with compact native r
 });
 
 test("coordination renderers keep routine receipts compact", async (t) => {
-	const rendererView = {
-		agentLabel: (agentId: string) =>
-			agentId === "child-agent" ? "Researcher" : undefined,
-	};
-	const ordinaryHost = await createTestOwnerHost(t,
-		createAgentBoundExtension(
-			() => rendererView as unknown as OrdinaryAgentCoordinatorView,
-		),
-	);
-	const moderatorHost = await createTestOwnerHost(t,
-		createModeratorBoundExtension(
-			() => rendererView as unknown as ModeratorAgentCoordinatorView,
-		),
-	);
+	const agentLabel = (agentId: string) =>
+		agentId === "child-agent" ? "Researcher" : undefined;
+	const ordinaryHost = await createTestOwnerHost(t, roleTools("ordinary", agentLabel));
+	const moderatorHost = await createTestOwnerHost(t, roleTools("moderator", agentLabel));
 	const cases = [
 		{
 			host: ordinaryHost,
@@ -317,7 +304,6 @@ test("Agent Control rendering shows compact identities while collapsed and full 
 		},
 		{ expanded: false, isPartial: false },
 		plainTheme,
-		{ isError: false },
 		resolveAgentLabel,
 	).render(120).join("\n");
 	assert.match(result, /held · Researcher · 983c81e3/);
@@ -330,7 +316,6 @@ test("Agent Control rendering shows compact identities while collapsed and full 
 		},
 		{ expanded: true, isPartial: false },
 		plainTheme,
-		{ isError: false },
 		resolveAgentLabel,
 	).render(160).join("\n");
 	assert.match(expandedResult, new RegExp(`held · Researcher · ${agentId}`));
@@ -353,7 +338,6 @@ test("Agent Control renders a sent Resume receipt in the Message receipt languag
 		},
 		{ expanded: false, isPartial: false },
 		trackingTheme,
-		{ isError: false },
 		() => "Researcher",
 	).render(120).join("\n");
 
@@ -363,14 +347,7 @@ test("Agent Control renders a sent Resume receipt in the Message receipt languag
 
 test("Human Request owns a transcript-native question and Answer shell", async (t) => {
 	initTheme("dark");
-	const unavailableView = () => {
-		throw new Error("Renderer conformance does not execute coordination behavior");
-	};
-	const host = await createTestOwnerHost(t,
-		createAgentBoundExtension(
-			unavailableView as () => OrdinaryAgentCoordinatorView,
-		),
-	);
+	const host = await createTestOwnerHost(t, roleTools("ordinary"));
 	const tool = host.session.getToolDefinition("ask_user");
 	assert.ok(tool?.renderCall);
 	assert.ok(tool.renderResult);
@@ -441,7 +418,7 @@ function assertProviderCompatibleObjectSchema(schema: unknown, toolName: string)
 }
 
 test("report publication failure remains visible instead of claiming pending or retained", async (t) => {
-	const host = await createTestOwnerHost(t, createModeratorBoundExtension(() => ({} as ModeratorAgentCoordinatorView)));
+	const host = await createTestOwnerHost(t, roleTools("moderator"));
 	const tool = host.session.getToolDefinition("report_to_user");
 	assert.ok(tool?.renderResult);
 	const lines = tool.renderResult({
@@ -457,7 +434,7 @@ test("report publication failure remains visible instead of claiming pending or 
 });
 
 test("Moderator report guidance requires current exact primary evidence", async (t) => {
-	const host = await createTestOwnerHost(t, createModeratorBoundExtension(() => ({} as ModeratorAgentCoordinatorView)));
+	const host = await createTestOwnerHost(t, roleTools("moderator"));
 	const guidance = host.session.getToolDefinition("report_to_user")?.promptGuidelines?.join("\n") ?? "";
 	assert.match(guidance, /exact toolCallId/);
 	assert.match(guidance, /matching toolResult/);

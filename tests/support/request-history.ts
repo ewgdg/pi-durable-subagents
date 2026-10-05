@@ -42,29 +42,41 @@ export function requestHistory() {
 		});
 		return requestId;
 	}
-	function answer(requestId: string, from = responder, to = requester) {
+	/**
+	 * Commits the author result and requester Delivery unless a stage is withheld;
+	 * a withheld Delivery can be committed later through `deliver`.
+	 */
+	function answer(
+		requestId: string,
+		from = responder,
+		to = requester,
+		stages: Readonly<{ authorResult?: boolean; delivered?: boolean }> = {},
+	) {
 		const source = appendCall(from, `answer-${++sequence}`, {
 			operation: "answer",
 			requestId,
 			answer: "Completed.",
 		});
-		appendResult(from.manager, source, {
+		const answerId = deriveMessageIdentity(source);
+		if (stages.authorResult !== false) appendResult(from.manager, source, {
 			requestTitle: "Fixture request",
-			messageId: deriveMessageIdentity(source),
+			messageId: answerId,
 			requestMessageId: requestId,
 			messageStatus: "sent",
 		});
-		appendDelivery(to.manager, {
+		const deliver = () => appendDelivery(to.manager, {
 			source,
 			projection: {
 				requestTitle: "Fixture request",
 				kind: "answer",
-				answerId: deriveMessageIdentity(source),
+				answerId,
 				requestMessageId: requestId,
 				fromAgentId: from.record.identity.agentId,
 				answer: "Completed.",
 			},
 		});
+		const deliveryEntryId = stages.delivered === false ? undefined : deliver();
+		return { source, answerId, deliveryEntryId, deliver };
 	}
 }
 
@@ -121,7 +133,7 @@ function appendDelivery(
 	item: Parameters<typeof createMessageDelivery>[0][number],
 ) {
 	const delivery = createMessageDelivery([item]);
-	manager.appendCustomMessageEntry(
+	return manager.appendCustomMessageEntry(
 		delivery.customType,
 		delivery.content,
 		delivery.display,

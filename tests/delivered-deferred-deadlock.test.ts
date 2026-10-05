@@ -4,6 +4,7 @@ import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentWaitCoordinator } from "../src/coordination/agent-waits.ts";
+import { HumanRequestCoordinator } from "../src/coordination/human-requests.ts";
 import { MessageCoordinator } from "../src/coordination/messages.ts";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
@@ -12,6 +13,7 @@ import type { AgentRuntimeHost, AgentRunHandle, AgentRuntimeDelivery } from "../
 import type { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { participant, requestHistory } from "./support/request-history.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 
 for (const delivered of [false, true]) {
 	test(`${delivered ? "proven" : "unproven"} Deferred prompt ${delivered ? "permits" : "excludes"} dependency deadlock handling during agent_wait`, { timeout: 5_000 }, async t => {
@@ -39,6 +41,8 @@ for (const delivered of [false, true]) {
 				setRunStartInitializer() {}, addSettledHandler: () => () => {}, addEndedHandler: () => () => {},
 				addRetentionReason: (reason: string) => { retention.add(reason); },
 				removeRetentionReason: (reason: string) => { retention.delete(reason); },
+				// The fixture pins each worker's Request Relationships; projection writes are ignored.
+				replaceRequestRelationships() {},
 				hasRetentionReason: (reason: string) => retention.has(reason),
 				blocksOrdinaryDelivery: () => false,
 				currentWorkState: () => attention === "agent_wait" ? "active" : "settled",
@@ -61,17 +65,20 @@ for (const delivered of [false, true]) {
 			} as unknown as AgentRuntimeHost;
 		}
 		const workflowPolicy = new WorkflowPolicyStore();
-		const messages = new MessageCoordinator({ agents: history.agents, workflowPolicy, isShuttingDown: () => false });
+		const coordination = requestCoordination(history.agents);
+		const messages = new MessageCoordinator({ agents: history.agents, ...coordination, workflowPolicy, isShuttingDown: () => false });
 		for (const p of [owner, worker, peer]) messages.integrate(p.record);
-		const waits = new AgentWaitCoordinator({ agents: history.agents, messages,
-			clock: { schedule: () => () => {} }, suspendExecution() {}, async resumeExecution() {},
+		const waits = new AgentWaitCoordinator({ agents: history.agents, messages, ...coordination, answerArbitration: messages.answerArbitration,
+			clock: { schedule: () => () => {} }, assertNotShutDownOrSuspended() {},
 		});
 		const abort = new AbortController();
 		const pendingWaits: Promise<unknown>[] = [];
 		let creationAttempts = 0;
 		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
-			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, workflowPolicy,
+			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, ...coordination, workflowPolicy,
+			humanRequests: new HumanRequestCoordinator({ agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity,
+				interruptRun() { throw new Error("Unexpected human interruption"); } }),
 			sessionFactory: { admitProcessRuntimePlatform() { creationAttempts++; throw new Error("Test platform unavailable"); } } as unknown as ProcessChildSessionFactory,
 			integrateAgent() { throw new Error("Unexpected runtime creation"); }, isShuttingDown: () => false,
 			reportError(error) { throw error; },
@@ -92,29 +99,33 @@ for (const delivered of [false, true]) {
 		assert.equal(dispatchCount, 1);
 		assert.ok(commitDelivery);
 		if (delivered) commitDelivery();
-		for (const p of [worker, peer]) {
+		// A dispatched Deferred prompt commits its proof when its turn starts, so the
+		// worker reaches agent_wait only once proven. Unproven, only the peer waits.
+		const waiting = delivered ? [worker, peer] : [peer];
+		for (const p of waiting) {
 			p.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "wait" }), { stopReason: "toolUse" }));
-			const waiting = waits.wait(p.record.identity.agentId, "wait", {}, abort.signal);
-			pendingWaits.push(waiting);
-			void waiting.catch(() => {});
+			const result = waits.wait(p.record.identity.agentId, "wait", {}, abort.signal);
+			pendingWaits.push(result);
+			void result.catch(() => {});
 		}
 		for (let i = 0; i < 8; i++) await setImmediate();
 		for (const p of [worker, peer]) {
 			const run = p.record.host.observe();
 			assert.equal(run.phase, "live");
-			assert.ok("attention" in run && run.attention === "agent_wait");
+			assert.equal("attention" in run && run.attention, waiting.includes(p) ? "agent_wait" : "none");
 		}
 		assert.equal(promptSettled, false);
 		// Repeated queue advancement must not redispatch the original task.
 		await messages.deliveryEligibilityChanged(worker.record);
 		await messages.deliveryEligibilityChanged(worker.record);
-		incidents.deliveryProgressChanged();
+		incidents.reconcileCommittedToolResults("requester");
 		await incidents.reachSafeBoundary();
 		assert.equal(creationAttempts, delivered ? 1 : 0);
 		if (!delivered) assert.deepEqual(incidents.attentionItems("requester"), []);
 		if (delivered) assert.ok(reports[0]?.evidence.includes(`Original trigger: ${JSON.stringify({
 			kind: "dependency_deadlock", agentIds: ["peer", "responder"],
-			requests: { total: 2, sources: messages.requestSources([workerToPeer, peerToWorker].sort()) },
+			requests: { total: 2, sources: [workerToPeer, peerToWorker].sort()
+				.map(requestId => coordination.requestEvidence.requestMetadata(requestId).source) },
 		})}`));
 		assert.equal(messages.hasDeliveryProgress(worker.record), !delivered);
 		assert.equal(dispatchCount, 1, "Delivery is not repeated while its prompt remains unresolved");

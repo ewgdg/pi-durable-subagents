@@ -1,29 +1,15 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { classifyQuotaEvidence } from "../runtime/quota-evidence.ts";
-import { RetainedRuntimeQueue } from "../runtime/retained-runtime-queue.ts";
-import { ModeratorReminderAdmission } from "./moderator-reminder-admission.ts";
-import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
-import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-mode.ts";
-
 import * as hostPi from "@earendil-works/pi-coding-agent";
 import type {
 	AgentSession,
-	AgentSessionEvent,
 	AgentSessionRuntime,
 	ExtensionAPI,
-	ExtensionContext,
 	ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import { readFile, realpath, stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
+import { readFile, stat } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 
 import { FramedAgentControlChannel } from "../control/agent-control-channel.ts";
-import {
-	agentControlProtocol,
-	type RemoteAgentSelectorSnapshot,
-} from "../control/agent-control-protocol.ts";
+import { agentControlProtocol } from "../control/agent-control-protocol.ts";
 import { connectControlTransport } from "../control/control-platform.ts";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
@@ -33,32 +19,19 @@ import {
 } from "../control/control-protocol-schemas.ts";
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
+import { registerSessionStartup } from "../pi-integration/session-startup.ts";
+import { installAgentActivityDock } from "../presentation/agent-activity-surface.ts";
 import {
-	bindSessionStartup,
-	isStartupPreparationBusy,
-	registerSessionStartup,
-	waitForStartupRelease,
-	type SessionStartupAdmission,
-} from "../pi-integration/session-startup.ts";
-import {
-	installAgentActivityDock,
-	type AgentActivitySnapshot,
-	type AgentActivitySource,
-} from "../presentation/agent-activity-surface.ts";
-import {
-	createParticipantInputHandler,
-	deferPrimaryInputQueued,
 	type ParticipantLifecycleHandlers,
 	registerParticipantLifecycle,
 } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 import {
-	participantCoordinationToolNames,
-	registerParticipantCoordinationTools,
-} from "../tools/participant-coordination-tools.ts";
+	coordinationToolActivation,
+	registerCoordinationTools,
+} from "../tools/coordination-tools.ts";
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
-import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
-import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
+import { registerAgentsCommand } from "../tools/agents-command.ts";
 import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
 import {
 	CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE,
@@ -66,155 +39,84 @@ import {
 	CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE,
 } from "./child-process-environment.ts";
-import { childRuntimeInputs, type ChildRuntimeInputHandler } from "./child-runtime-input-registry.ts";
-import { ChildTurnCompactionGateway } from "./child-turn-compaction-gateway.ts";
-import { NativeInputSubmissionIdentity } from "./native-input-submission-identity.ts";
+import { registerChildBindingHooks } from "./child-binding-hooks.ts";
+import { ChildControlConnection } from "./child-control-connection.ts";
+import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-mode.ts";
+import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
 import {
-	TerminalInputSubmissionAcknowledger,
-	type TerminalInputSubmissionAcknowledgmentBinding,
-} from "./terminal-input-submission-acknowledger.ts";
+	canonicalFilePath,
+	type ChildExplicitSystemPrompt,
+	type ChildLaunchFacts,
+} from "./child-runtime-snapshot.ts";
 import {
 	createControlBackedChildParticipantHandlers,
 	createControlBackedChildPresentationHandlers,
 	type ChildParticipantControlRequester,
 } from "./remote-participant-control.ts";
-import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
 import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
-import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
 
-type ChildChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
-
-type DeliveryExecution = {
-	admitted: boolean;
-	finished: boolean;
-	started: boolean;
-	signal?: AbortSignal;
-	checkpoint?: () => void;
-};
-
-type ChildRuntimeBinding = {
-	context: ExtensionContext;
-	runtime: AgentSessionRuntime;
-	retainedQueue: RetainedRuntimeQueue;
-	turnCompaction: ChildTurnCompactionGateway;
-	startupAdmission: SessionStartupAdmission;
-	nativeInputHandoff?: { submissionSequence: number; transfer: () => void; transferred: boolean };
-	reminderAdmission: ModeratorReminderAdmission;
-	pendingDeliveries: Map<string, () => Promise<void>>;
-	deliveryExecution: AsyncLocalStorage<DeliveryExecution>;
-	activity: RemoteAgentActivitySource;
-	publishRuntimeSnapshot(): Promise<void>;
-	setPresentationVisible(visible: boolean): void;
-	handleOwnerRequest(
-		request: Parameters<Parameters<ChildChannel["onRequest"]>[0]>[0],
-	): Promise<unknown>;
-	handleOwnerEvent(event: Parameters<Parameters<ChildChannel["onEvent"]>[0]>[0]): void;
-	handleControlClose(): void;
-	dispose(): void;
-};
-
-type ChildControlState = {
-	channel: ChildChannel;
-	waitProgressHandlers: Map<string, (progress: AgentWaitProgress) => void>;
-	currentBinding?: ChildRuntimeBinding;
-	currentRunId?: string;
-	latestRunId?: string;
-	currentRunOutcome: "completed" | "interrupted" | "failed";
-	nativeRunSequence: number;
-	queueIntentionTail: Promise<void>;
-	shutdownStarted: boolean;
-	inputSubmissionAcknowledger: TerminalInputSubmissionAcknowledger;
-	nativeInputIdentity: NativeInputSubmissionIdentity;
-};
-
 const CHILD_CONTROL_REGISTRY_KEY = "__piAgentCoordinationChildControls";
 const globalChildControlRegistry = globalThis as typeof globalThis & {
-	[CHILD_CONTROL_REGISTRY_KEY]?: WeakMap<AgentSession, ChildControlState>;
+	[CHILD_CONTROL_REGISTRY_KEY]?: WeakMap<AgentSession, ChildControlConnection>;
 };
 // Pi retains the exact AgentSession across /reload. Preserve its authenticated
-// Control and sequence continuity; every extension generation replaces currentBinding.
+// Control connection; every extension generation binds a fresh Runtime binding.
 const childControls = (
 	globalChildControlRegistry[CHILD_CONTROL_REGISTRY_KEY] ??= new WeakMap()
 );
 
+/**
+ * The bridge extension shell: everything that touches Pi extension registration,
+ * the terminal, the bootstrap descriptor, or process globals. Child Runtime
+ * behaviour lives in the Child Control Connection and its bindings.
+ */
 const childRuntimeBridge: ExtensionFactory = async (pi) => {
-	let state: ChildControlState | undefined;
+	let connection: ChildControlConnection | undefined;
 	registerSessionStartup(pi);
+	registerChildBindingHooks(pi, () => connection);
 	const resolveAgentLabel = (agentId: string) =>
-		state?.currentBinding?.activity.agentLabel(agentId);
+		connection?.currentBinding?.activity.agentLabel(agentId);
 	registerMessageDeliveryRenderer(pi, resolveAgentLabel);
 	const bootstrap = await readBootstrapDescriptor();
-	const resolveAnswerTargetAgent = (toolCallId: string) => {
-		const runtime = state?.currentBinding?.runtime;
-		return runtime === undefined
-			? undefined
-			: answerCallTargetAgentId({
-				responderAgentId: bootstrap.agentId,
-				transcript: transcriptFromSessionManager(
-					runtime.session.sessionManager,
-				).inspect(),
-				toolCallId,
-			});
-	};
+	let boundRuntime: AgentSessionRuntime | undefined;
+	const resolveAnswerTargetAgent = (toolCallId: string) => boundRuntime === undefined
+		? undefined
+		: answerCallTargetAgentId({
+			responderAgentId: bootstrap.agentId,
+			transcript: transcriptFromSessionManager(boundRuntime.session.sessionManager).inspect(),
+			toolCallId,
+		});
 	const interactiveBridge = installInteractiveHostBridge(hostPi);
-	const participantRequest: ChildParticipantControlRequester = (method, payload, signal) => {
-		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
-		return state.channel.request(method, payload, signal);
+	const requireConnection = () => {
+		if (!connection) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
+		return connection;
 	};
+	const participantRequest: ChildParticipantControlRequester = (method, payload, signal) =>
+		requireConnection().request(method, payload, signal);
 	const waitProgress = {
-		subscribe(toolCallId: string, handler: (progress: AgentWaitProgress) => void) {
-			if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
-			if (state.waitProgressHandlers.has(toolCallId)) {
-				throw new Error(`child_runtime_wait_progress_exists: ${toolCallId}`);
-			}
-			state.waitProgressHandlers.set(toolCallId, handler);
-			return () => state?.waitProgressHandlers.delete(toolCallId);
-		},
+		subscribe: (toolCallId: string, handler: Parameters<ChildControlConnection["waitProgress"]["subscribe"]>[1]) =>
+			requireConnection().waitProgress.subscribe(toolCallId, handler),
 	};
 	const nativeInputIdentity = {
-		current: () => state?.nativeInputIdentity.current(),
-		take: () => state?.nativeInputIdentity.take(),
+		current: () => connection?.nativeInputIdentity.current(),
+		take: () => connection?.nativeInputIdentity.take(),
 	};
-	// The bridge extension loads before inherited extensions. Capture the exact
-	// terminal submission before any inherited input preflight can yield while
-	// later PTY submissions continue advancing the terminal high-water mark.
-	pi.on("input", (event) => {
-		if (event.source !== "interactive" || event.streamingBehavior === "followUp") {
-			return { action: "continue" };
-		}
-		const current = state;
-		if (!current) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
-		current.nativeInputIdentity.beginInput();
-		return { action: "continue" };
-	});
-	// Release child-local turn admission before the later participant lifecycle
-	// handler asks the Owner to admit this exact execution.
-	pi.on("agent_start", () => {
-		const current = state;
-		const sequence = current?.nativeInputIdentity.current();
-		if (!current || sequence === undefined) return;
-		if (!current.currentRunId) {
-			current.currentRunId = nativeRunId(++current.nativeRunSequence);
-			current.latestRunId = current.currentRunId;
-			current.currentRunOutcome = "completed";
-		}
-		current.currentBinding?.turnCompaction.completeNativeTurn(sequence);
-	});
-	registerRemoteAgentsCommand(
-		pi,
-		{
+	registerAgentsCommand(pi, {
+		kind: "participant",
+		presentation: {
 			...createControlBackedChildPresentationHandlers(participantRequest),
 			addChangeHandler(handler) {
-				if (!state) throw new Error("child_runtime_not_initialized");
-				const activity = requireCurrentBinding(state).activity;
+				const binding = connection?.currentBinding;
+				if (!binding) throw new Error("child_runtime_not_initialized");
+				const activity = binding.activity;
 				return activity.addChangeHandler(() => handler(activity.selectorSnapshot()));
 			},
 		},
-	);
+	});
 	let participantLifecycle: ParticipantLifecycleHandlers;
-	let refreshOrdinaryAgentTools: ((refresh?: boolean) => Promise<void>) | undefined;
+	let refreshSpawnGuidance: ((refresh?: boolean) => Promise<void>) | undefined;
 	// Pi stops terminal input handling together with a hidden TUI. A blocked ask_user
 	// therefore has to keep this Agent's native editor live to receive the human's
 	// keystrokes, which the Owner forwards into this process's PTY.
@@ -238,22 +140,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		const coordination = { ...participant.coordination, holdNativeEditorWhileAsking };
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
-		registerParticipantCoordinationTools(
-			pi,
-			"ordinary",
-			coordination,
-			resolveAgentLabel,
-			undefined,
-			resolveAnswerTargetAgent,
-		);
-		refreshOrdinaryAgentTools = async (refresh = false) => registerParticipantCoordinationTools(
-			pi,
-			"ordinary",
-			coordination,
-			resolveAgentLabel,
-			await coordination.agentTemplateSnapshot(refresh),
-			resolveAnswerTargetAgent,
-		);
+		const coordinationTools = registerCoordinationTools(pi, "ordinary", coordination, { resolveAgentLabel, resolveAnswerTargetAgent });
+		refreshSpawnGuidance = async (refresh = false) =>
+			coordinationTools.refreshSpawnGuidance(await coordination.agentTemplateSnapshot(refresh));
 	} else {
 		const participant = createControlBackedChildParticipantHandlers(
 			"moderator",
@@ -264,36 +153,14 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		const coordination = { ...participant.coordination, holdNativeEditorWhileAsking };
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
-		registerParticipantCoordinationTools(
-			pi,
-			"moderator",
-			coordination,
-			resolveAgentLabel,
-			undefined,
-			resolveAnswerTargetAgent,
-		);
+		registerCoordinationTools(pi, "moderator", coordination, { resolveAgentLabel, resolveAnswerTargetAgent });
 	}
 	registerParticipantNativeSessionPolicy(pi);
-	const publishCurrentRuntimeSnapshot = async () => {
-		const binding = state?.currentBinding;
-		if (binding) await binding.publishRuntimeSnapshot();
-	};
-	const deferRuntimeSnapshot = () => {
-		queueMicrotask(() => void publishCurrentRuntimeSnapshot().catch((error: unknown) => {
-			if (state) return reportFault(state.channel, "runtime_snapshot_failed", error);
-		}));
-	};
-	pi.on("model_select", deferRuntimeSnapshot);
-	pi.on("thinking_level_select", deferRuntimeSnapshot);
-	pi.on("session_before_compact", (event) =>
-		state?.currentBinding?.turnCompaction.beforeCompaction(event)
-	);
-	// Active tools have no Pi change event. This authoritative pre-generation
-	// boundary publishes extension-driven tool mutations before they can execute.
-	pi.on("before_agent_start", publishCurrentRuntimeSnapshot);
+	// Terminal wiring belongs to this extension generation; Pi reload replaces it.
+	let disposeTerminalWiring = () => undefined as void;
 
 	pi.on("session_start", async (event, ctx) => {
-		if (state) throw new Error("child_runtime_bridge_rebound: session replacement is not supported");
+		if (connection) throw new Error("child_runtime_bridge_rebound: session replacement is not supported");
 		if (ctx.mode !== "tui" || !ctx.hasUI) {
 			throw new Error("child_runtime_bridge_requires_tui: expected mode=tui and hasUI=true");
 		}
@@ -308,168 +175,70 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		if (retained && event.reason !== "reload") {
 			throw new Error("child_runtime_bridge_rebound: session replacement is not supported");
 		}
-		if (retained) {
-			state = retained;
-		} else {
-			const transport = await connectControlTransport(bootstrap.endpoint);
-			const channel = new FramedAgentControlChannel({
-				identity: {
-					protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
-					workflowId: bootstrap.workflowId,
-					agentId: bootstrap.agentId,
+		const currentConnection = retained ?? new ChildControlConnection(new FramedAgentControlChannel({
+			identity: {
+				protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
+				workflowId: bootstrap.workflowId,
+				agentId: bootstrap.agentId,
+			},
+			protocol: agentControlProtocol,
+			side: "child",
+			transport: await connectControlTransport(bootstrap.endpoint),
+		}));
+		if (!retained) childControls.set(runtime.session, currentConnection);
+		connection = currentConnection;
+		boundRuntime = runtime;
+		const channel = currentConnection.channel;
+		let binding;
+		try {
+			binding = currentConnection.bind({
+				runtime,
+				launchFacts: await readChildLaunchFacts(runtime, bootstrap.agentId),
+				participantLifecycle,
+				hostShell: {
+					notify: (message, type) => ctx.ui.notify(message, type),
+					setPresentationVisible: capture.setPresentationVisible,
+					shutDown: () => ctx.shutdown(),
 				},
-				protocol: agentControlProtocol,
-				transport,
 			});
-			const exactNativeInputIdentity = new NativeInputSubmissionIdentity();
-			const inputSubmissionAcknowledger = new TerminalInputSubmissionAcknowledger(
-				(sequence) => {
-					exactNativeInputIdentity.observeTerminalSubmission(sequence);
-					// Pi resolves getUserInput() in this same input turn. Delay only to
-					// the check phase so runtime.input.started enters ordered Control first.
-					setImmediate(() => void channel.sendEvent(
-						"runtime.input.submissionAcknowledged",
-						{ sequence },
-					).catch(() => undefined));
-				},
-			);
-			state = {
-				channel,
-				waitProgressHandlers: new Map(),
-				currentRunOutcome: "completed",
-				nativeRunSequence: 0,
-				queueIntentionTail: Promise.resolve(),
-				shutdownStarted: false,
-				inputSubmissionAcknowledger,
-				nativeInputIdentity: exactNativeInputIdentity,
-			};
-			childControls.set(runtime.session, state);
-			channel.onRequest((request) => requireCurrentBinding(state as ChildControlState)
-				.handleOwnerRequest(request));
-			channel.onEvent((event) => requireCurrentBinding(state as ChildControlState)
-				.handleOwnerEvent(event));
-			channel.onClose(() => state?.currentBinding?.handleControlClose());
+		} catch (error) {
+			await currentConnection.reportFault("runtime_startup_failed", error);
+			await channel.close().catch(() => undefined);
+			throw error;
 		}
-		const currentState = state;
-		if (retained) currentState.currentBinding?.dispose();
-		const inputSubmissionAcknowledgment = currentState.inputSubmissionAcknowledger.bind();
-		const removeInputSubmissionListener = ctx.ui.onTerminalInput((data) => {
-			inputSubmissionAcknowledgment.handleInput(data);
+		const exactBinding = binding;
+		const removeTerminalInputListener = ctx.ui.onTerminalInput((data) => {
+			exactBinding.terminalInput(data);
 			return undefined;
 		});
-		let binding!: ChildRuntimeBinding;
-		const inputLifecycle = {
-			async started() {
-				const sequence = currentState.nativeInputIdentity.beginInput();
-				await currentState.channel.sendEvent("runtime.input.started", { sequence });
-				return sequence;
-			},
-			async completed(sequence: number) {
-				binding.turnCompaction.completeNativeTurn(sequence);
-				if (!currentState.nativeInputIdentity.complete(sequence)) return;
-				await currentState.channel.sendEvent("runtime.input.completed", { sequence });
-			},
+		const removeInputLifecycleObserver = bindChildInteractiveInputLifecycle(runtime.session, {
+			started: () => exactBinding.inputStarted(),
+			completed: (sequence) => exactBinding.inputCompleted(sequence),
+		});
+		disposeTerminalWiring = () => {
+			removeInputLifecycleObserver();
+			removeTerminalInputListener();
 		};
-		const completeDiscardedInput = async () => {
-			const sequence = currentState.nativeInputIdentity.current();
-			if (sequence === undefined) {
-				throw new Error("child_runtime_active_input_identity_unavailable");
-			}
-			await inputLifecycle.completed(sequence);
-		};
-		binding = createChildRuntimeBinding(
-			currentState,
-			runtime,
-			ctx,
-			capture.setPresentationVisible,
-			bootstrap.agentId,
-			inputSubmissionAcknowledgment,
-			removeInputSubmissionListener,
-			bindChildInteractiveInputLifecycle(runtime.session, inputLifecycle),
-		);
-		currentState.currentBinding = binding;
-		currentState.shutdownStarted = false;
 		// The entry's inline input tail loads after every Pi extension. Replace its delegates
 		// on every bridge generation while keeping lifecycle and Control available first.
-		const participantInput = createParticipantInputHandler(
-			participantLifecycle,
-			completeDiscardedInput,
-			{ deferPrimaryInputQueued: false },
-		);
-		const handleInput: ChildRuntimeInputHandler = async (input, context) => {
-			const submissionSequence = currentState.nativeInputIdentity.current();
-			const transfer = input.source === "interactive" && input.streamingBehavior !== "followUp"
-				? binding.startupAdmission.captureInputHandoff()
-				: undefined;
-			const handoff = transfer && submissionSequence !== undefined
-				? { submissionSequence, transfer, transferred: false }
-				: undefined;
-			if (handoff) binding.nativeInputHandoff = handoff;
-			let result: Awaited<ReturnType<typeof participantInput>>;
-			try {
-				result = await participantInput(input, context);
-			} catch (error) {
-				if (!handoff?.transferred) throw error;
-				context.ui.notify(`Agent input failed: ${errorMessage(error)}`, "error");
-				result = { action: "handled" };
-			} finally {
-				if (binding.nativeInputHandoff === handoff) binding.nativeInputHandoff = undefined;
-			}
-			// The forwarded prompt owns this exact input now. Even a failed remote
-			// acknowledgment must not let the original input enter preparation again.
-			if (handoff?.transferred) return { action: "handled" };
-			if (
-				input.source === "extension" &&
-				result.action === "continue" &&
-				binding.turnCompaction.shouldDiscardActiveDeliveryInput()
-			) return { action: "handled" };
-			const sequence = currentState.nativeInputIdentity.current();
-			if (
-				input.source === "interactive" &&
-				result.action === "continue" &&
-				input.streamingBehavior === undefined
-			) {
-				if (sequence === undefined) {
-					throw new Error("child_runtime_active_input_identity_unavailable");
-				}
-				await binding.turnCompaction.reserveNativeTurn(sequence);
-			}
-			// Pi queues a direct streaming steer inside the current model cycle. It
-			// produces no successor agent_start to consume this submission identity.
-			if (
-				input.source === "interactive" &&
-				input.streamingBehavior === "steer" &&
-				sequence !== undefined
-			) {
-				await inputLifecycle.completed(sequence);
-			}
-			if (
-				input.source === "interactive" &&
-				input.streamingBehavior === "steer" &&
-				result.action === "continue"
-			) deferPrimaryInputQueued(participantLifecycle, context);
-			return result;
-		};
-		const channel = currentState.channel;
 		childRuntimeInputs.set(ctx.sessionManager, {
-			input: handleInput,
+			input: exactBinding.handleInput,
 			async completeStartup() {
 				try {
 					applyStartupToolFilter(pi, bootstrap, retained !== undefined);
-					await binding.publishRuntimeSnapshot();
+					await exactBinding.publishRuntimeSnapshot();
 					// Reload reports current state but does not re-enforce the initial selection.
 					if (!retained) {
-						await channel.sendEvent("runtime.startupComplete", await runtimeSnapshot(binding.runtime, ctx));
+						await channel.sendEvent("runtime.startupComplete", await exactBinding.runtimeSnapshot());
 					}
 				} catch (error) {
-					await reportFault(channel, "runtime_startup_failed", error);
+					await currentConnection.reportFault("runtime_startup_failed", error);
 					await channel.close().catch(() => undefined);
 					throw error;
 				}
 			},
 		});
 		try {
-			assertExpectedSession(binding.runtime, bootstrap);
 			if (!retained) {
 				await channel.sendHello({
 					connectionToken: bootstrap.connectionToken,
@@ -477,17 +246,15 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				});
 			}
 			if (bootstrap.ownerPresentation) {
-				await refreshOrdinaryAgentTools?.(event.reason === "reload");
-			}
-			if (bootstrap.ownerPresentation) {
-				binding.activity.update(
+				await refreshSpawnGuidance?.(event.reason === "reload");
+				exactBinding.activity.update(
 					await participantRequest("presentation.agents.snapshot", {}),
 				);
-				installAgentActivityDock(ctx.ui, binding.activity, {
+				installAgentActivityDock(ctx.ui, exactBinding.activity, {
 					openAgentsMenu: extensionCommandAction(pi, "/agents"),
 				});
 			}
-			await binding.publishRuntimeSnapshot();
+			await exactBinding.publishRuntimeSnapshot();
 			if (retained) return;
 			await channel.sendEvent("runtime.ready", {
 				sessionId: ctx.sessionManager.getSessionId(),
@@ -495,372 +262,75 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				hasUI: true,
 			});
 		} catch (error) {
-			await reportFault(channel, "runtime_startup_failed", error);
+			await currentConnection.reportFault("runtime_startup_failed", error);
 			await channel.close().catch(() => undefined);
 			throw error;
 		}
 	});
 
 	pi.on("session_shutdown", async (event) => {
-		const current = state;
-		if (!current) return;
+		disposeTerminalWiring();
 		// Reload invalidates this extension runner but retains the exact AgentSession
-		// and process. The fresh session_start evaluation rebinds the same channel.
-		if (event.reason !== "reload") current.shutdownStarted = true;
-		const binding = current.currentBinding;
-		binding?.dispose();
-		if (event.reason !== "reload" && current.currentBinding === binding) {
-			current.currentBinding = undefined;
-		}
-		await current.channel.sendEvent("session.shutdown", { reason: event.reason })
-			.catch(() => undefined);
+		// and process. The fresh session_start evaluation rebinds the same connection.
+		await connection?.endGeneration(event.reason);
 	});
 };
 
-/** Binds one session generation to its already-connected child Control. */
-export function createChildRuntimeBinding(
-	state: ChildControlState,
+/**
+ * Capture what this process was launched with, once per extension generation:
+ * the environment declares the explicit system prompt and context-file choice, and
+ * Pi's resource loader must hold exactly that file-backed prompt.
+ */
+async function readChildLaunchFacts(
 	runtime: AgentSessionRuntime,
-	context: ExtensionContext,
-	setPresentationVisible: (visible: boolean) => void,
 	agentId: string,
-	inputSubmissionAcknowledgment: TerminalInputSubmissionAcknowledgmentBinding,
-	removeInputSubmissionListener: () => void,
-	removeInputLifecycleObserver: () => void,
-): ChildRuntimeBinding {
-	let binding!: ChildRuntimeBinding;
-	let disposed = false;
-	const activity = new RemoteAgentActivitySource(agentId);
-	const deliveryExecution = new AsyncLocalStorage<DeliveryExecution>();
-	const startupAdmission = bindSessionStartup(runtime.session);
-	const removeNativeStartupObserver = startupAdmission.observeNativeStartup({
-		beforeStart() {
-			const execution = deliveryExecution.getStore();
-			if (!execution?.admitted || execution.finished || execution.started) return;
-			execution.checkpoint!();
-		},
-		started(signal) {
-			const execution = deliveryExecution.getStore();
-			if (!execution?.admitted || execution.finished || execution.started) return;
-			execution.started = true;
-			execution.signal = signal;
-		},
-	});
-	const turnCompaction = new ChildTurnCompactionGateway(
-		runtime.session,
-		(message) => context.ui.notify(message, "warning"),
-	);
-	const reminderAdmission = new ModeratorReminderAdmission({
-		admit: operation => turnCompaction.admit(operation),
-		prepare: () => turnCompaction.prepareIdleCustomTurn(),
-		isIdle: () => runtime.session.isIdle && !startupAdmission.isPreparing,
-		async commit(signal) {
-			const delivery = {
-				kind: "custom" as const,
-				message: createModelVisibleModeratorObligationReminder(),
-				triggerTurn: true,
-			};
-			const proof = observeDeliveryCommit(runtime, context.sessionManager, delivery, signal);
-			const { completion } = startupAdmission.dispatchCustom(delivery.message, { triggerTurn: true }, () => {
-				signal.throwIfAborted();
-				turnCompaction.signal.throwIfAborted();
-			});
-			void completion.then(
-				() => queueMicrotask(() => proof.settle(false)),
-				error => proof.reject(error),
-			);
-			// Proof is child-local: no Owner reconciliation or host lane is needed.
-			if (!await proof.result) throw new Error("moderator_reminder_commit_missing");
-		},
-	});
-	const removeLifecycleSubscription = runtime.session.subscribe((event) => {
-		if (event.type === "compaction_start") {
-			void state.channel.sendEvent("runtime.compaction.started", {}).catch(() => undefined);
-		}
-		// Pi emits this edge for success, failure, and cancellation alike.
-		if (event.type === "compaction_end") {
-			void state.channel.sendEvent("runtime.compaction.completed", {}).catch(() => undefined);
-		}
-		void reportRuntimeLifecycle(state, binding, event).catch((error: unknown) =>
-			reportFault(state.channel, "runtime_lifecycle_failed", error)
-		);
-	});
-	const publishRuntimeSnapshot = async () => {
-		await state.channel.sendEvent(
-			"runtime.snapshot.changed",
-			await runtimeSnapshot(runtime, context),
-		);
+): Promise<ChildLaunchFacts> {
+	const loadContextFilesValue = process.env[CHILD_PROCESS_LOAD_CONTEXT_FILES_ENVIRONMENT_VARIABLE];
+	if (loadContextFilesValue !== "0" && loadContextFilesValue !== "1") {
+		throw new Error("child_runtime_load_context_files_mismatch: load-context-files marker is invalid");
+	}
+	return {
+		agentId,
+		systemPrompt: await readExplicitSystemPrompt(runtime),
+		loadContextFiles: loadContextFilesValue === "1",
+		bridgeExtensionPath: await canonicalFilePath(ENTRY_MODULE_PATH, runtime.cwd),
 	};
-	binding = {
-		context,
-		runtime,
-		retainedQueue: new RetainedRuntimeQueue(() => runtime.session.clearQueue()),
-		turnCompaction,
-		startupAdmission,
-		reminderAdmission,
-		pendingDeliveries: new Map(),
-		deliveryExecution,
-		activity,
-		publishRuntimeSnapshot,
-		setPresentationVisible,
-		handleOwnerRequest: (request) => handleOwnerRequest(state, binding, request),
-		handleOwnerEvent(event) {
-			if (event.event === "presentation.agents.changed") {
-				binding.activity.update(event.payload);
-			} else if (event.event === "coordination.wait.progress") {
-				state.waitProgressHandlers.get(event.payload.toolCallId)?.(event.payload.progress);
-			}
-		},
-		handleControlClose() {
-			if (state.shutdownStarted) return;
-			state.shutdownStarted = true;
-			state.waitProgressHandlers.clear();
-			binding.dispose();
-			if (state.currentBinding === binding) state.currentBinding = undefined;
-			context.shutdown();
-		},
-		dispose() {
-			if (disposed) return;
-			disposed = true;
-			reminderAdmission.cancel();
-			turnCompaction.dispose();
-			removeNativeStartupObserver();
-			startupAdmission.dispose();
-			deliveryExecution.disable();
-			removeInputLifecycleObserver();
-			inputSubmissionAcknowledgment.dispose();
-			removeInputSubmissionListener();
-			removeLifecycleSubscription();
-		},
-	};
-	return binding;
 }
 
-function requireCurrentBinding(state: ChildControlState): ChildRuntimeBinding {
-	if (!state.currentBinding) {
-		throw new Error("child_runtime_control_unavailable: Runtime binding is unavailable");
+async function readExplicitSystemPrompt(
+	runtime: AgentSessionRuntime,
+): Promise<ChildExplicitSystemPrompt | null> {
+	const mode = process.env[CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE];
+	if (mode !== undefined && mode !== "append" && mode !== "replace") {
+		throw new Error("child_runtime_system_prompt_mismatch: mode is invalid");
 	}
-	return state.currentBinding;
-}
-
-async function handleOwnerRequest(
-	state: ChildControlState,
-	binding: ChildRuntimeBinding,
-	request: Parameters<Parameters<ChildChannel["onRequest"]>[0]>[0],
-): Promise<unknown> {
-	switch (request.method) {
-		case "runtime.snapshot":
-			return runtimeSnapshot(binding.runtime, binding.context);
-		case "moderatorReminder.prepare": {
-			const cancel = () => binding.reminderAdmission.cancel();
-			request.signal.addEventListener("abort", cancel, { once: true });
-			try {
-				if (request.signal.aborted) throw requestCancellationError(request.signal);
-				return { prepared: await binding.reminderAdmission.prepare(request.payload.reservationId) };
-			} finally { request.signal.removeEventListener("abort", cancel); }
-		}
-		case "moderatorReminder.finish": {
-			const cancel = () => binding.reminderAdmission.cancel();
-			request.signal.addEventListener("abort", cancel, { once: true });
-			try {
-				if (request.signal.aborted) { cancel(); throw requestCancellationError(request.signal); }
-				const outcome = await binding.reminderAdmission.finish(request.payload.reservationId, request.payload.commit);
-				return { outcome };
-			} finally { request.signal.removeEventListener("abort", cancel); }
-		}
-		case "message.deliver": {
-			const { deliveryId, delivery } = request.payload;
-			let commit: ReturnType<typeof observeDeliveryCommit> | undefined;
-			const execution: DeliveryExecution = { admitted: false, finished: false, started: false };
-			const admissionCancellation = new AbortController();
-			const admissionSignal = AbortSignal.any([
-				request.signal, binding.turnCompaction.signal, admissionCancellation.signal,
-			]);
-			let startupCancellation: AbortSignal | undefined;
-			let completionTracked = false;
-			const finish = () => {
-				execution.finished = true;
-				binding.pendingDeliveries.delete(deliveryId);
-				binding.turnCompaction.completeDelivery(deliveryId);
-			};
-			const cancel = async () => {
-				admissionCancellation.abort(new Error(`child_turn_admission_cancelled: ${deliveryId}`));
-				binding.turnCompaction.cancelDelivery(deliveryId);
-				if (request.signal.aborted) commit?.reject(requestCancellationError(request.signal));
-				if (!execution.signal) return;
-				await sequenceQueueIntention(state, async () => {
-					// Native signal identity covers awaited start hooks as well as
-					// running work, without clearing or aborting a successor.
-					if (binding.runtime.session.agent.signal !== execution.signal) return;
-					binding.runtime.session.clearQueue();
-					await binding.runtime.session.abort();
-				});
-			};
-			const onAbort = () => {
-				void cancel().catch(error => reportFault(state.channel, "delivery_cancellation_failed", error));
-			};
-			binding.pendingDeliveries.set(deliveryId, cancel);
-			request.signal.addEventListener("abort", onAbort, { once: true });
-			try {
-				const admitDelivery = () => binding.turnCompaction.admitDelivery(deliveryId, async checkpoint => {
-					admissionSignal.throwIfAborted();
-					startupCancellation?.throwIfAborted();
-					await binding.turnCompaction.waitForCompaction();
-					checkpoint();
-					if (binding.runtime.session.isIdle && delivery.kind === "custom" && delivery.triggerTurn) {
-						await binding.turnCompaction.prepareIdleCustomTurn(delivery.workingZonePreparation);
-					}
-					checkpoint();
-					admissionSignal.throwIfAborted();
-					// Pi's manual compaction calls abort() itself. Capture native input
-					// cancellation only after that separate preparation phase finishes.
-					startupCancellation = binding.startupAdmission.signal;
-					const dispatchSignal = AbortSignal.any([admissionSignal, startupCancellation]);
-					const dispatchCommit = observeDeliveryCommit(binding.runtime, binding.context.sessionManager, delivery, binding.turnCompaction.signal);
-					commit = dispatchCommit;
-					const dispatchCheckpoint = () => {
-						checkpoint();
-						dispatchSignal.throwIfAborted();
-					};
-					const dispatch = () => {
-						dispatchCheckpoint();
-						execution.checkpoint = dispatchCheckpoint;
-						// Active queue admission belongs to this actual native execution.
-						execution.signal = binding.runtime.session.agent.signal;
-						execution.admitted = delivery.kind === "custom" && !binding.runtime.session.isIdle;
-						return binding.deliveryExecution.run(execution, () =>
-							// Pi reports preflight acceptance only after it has taken the submission
-							// into its own steering/follow-up queue, or begun that submission's own
-							// Run. Only the pre-dispatch fence may consult the session-wide startup
-							// cancellation: an unrelated abort() (Pi's manual compaction, a sibling
-							// Run interruption) poisons startupAdmission.signal, and re-checking it
-							// here would reject an input Pi already owns and will still deliver.
-							dispatchDelivery(binding, delivery, () => {
-								checkpoint();
-								admissionSignal.throwIfAborted();
-								execution.admitted = true;
-							})
-						);
-					};
-					const dispatched = binding.runtime.session.isIdle
-						? dispatch()
-						: await sequenceQueueIntention(state, dispatch);
-					// Native queue acceptance is not execution completion. Capture the
-					// session's settlement after dispatch, never preparation's earlier cycle.
-					const completion = dispatched.completion.then(() => binding.runtime.session.waitForIdle());
-					void completion.catch(error => dispatchCommit.reject(error));
-					await Promise.race([dispatched.preflight, completion]);
-					checkpoint();
-					return { completion, commit: dispatchCommit, modelCycleStarted: !binding.runtime.session.isIdle };
-				});
-				let admission: Awaited<ReturnType<typeof admitDelivery>>;
-				for (;;) {
-					try {
-						admission = await admitDelivery();
-						break;
-					} catch (error) {
-						if (delivery.kind !== "custom" || !isStartupPreparationBusy(error)) throw error;
-						commit?.settle(false);
-						commit = undefined;
-						// Native input may own startup while waiting for this compaction
-						// gate. Release the gate before waiting, then preserve the original
-						// custom queue mode when retrying this uncommitted admission.
-						await waitForStartupRelease(error.whenReleased,
-							AbortSignal.any([admissionSignal, startupCancellation!]));
-					}
-				}
-				const { completion } = admission;
-				completionTracked = true;
-				commit = admission.commit;
-				void completion.then(
-					() => {
-						queueMicrotask(() => commit?.settle(false));
-						return state.channel.sendEvent("message.dispatch.completed", { deliveryId });
-					},
-					error => {
-						commit?.reject(error);
-						return state.channel.sendEvent("message.dispatch.completed", { deliveryId, error: errorMessage(error) });
-					},
-				).catch(error => reportFault(state.channel, "delivery_completion_failed", error)).finally(finish);
-				return {
-					accepted: true,
-					transcriptCommitted: await commit.result,
-					modelCycleStarted: admission.modelCycleStarted,
-					queuedInputCount: binding.runtime.session.pendingMessageCount,
-				};
-			} finally {
-				request.signal.removeEventListener("abort", onAbort);
-				commit?.settle(false);
-				if (!completionTracked) finish();
-			}
-		}
-		case "message.cancel": {
-			const cancel = binding.pendingDeliveries.get(request.payload.deliveryId);
-			if (!cancel) return { accepted: false };
-			await cancel();
-			return { accepted: true };
-		}
-		case "queue.clear": {
-			const cleared = await binding.turnCompaction.admit(() =>
-				sequenceQueueIntention(state, () => {
-					requireReportedRun(state, request.payload.runId);
-					return binding.retainedQueue.clear();
-				})
-			);
-			return { ...cleared, queuedInputCount: binding.runtime.session.pendingMessageCount };
-		}
-		case "run.interrupt": {
-			binding.reminderAdmission.cancel();
-			// Queue intentions execute in Owner arrival order, so the interrupt takes the
-			// same turn-admission lane the native clear does. Without it an interrupt can
-			// overtake a clear that is still waiting for the admission, and its long
-			// session.abort() then runs first: the clear would remove the queued steer only
-			// after the interrupted turn had already settled.
-			const accepted = await binding.turnCompaction.admit(() =>
-				sequenceQueueIntention(state, async () => {
-					requireReportedRun(state, request.payload.runId);
-					// This revalidation runs immediately before mutation. A successor cycle
-					// that started while this request waited in the queue is the Agent's
-					// active generation too, and interrupting active generation is exactly
-					// what the Owner asked for; only a cycle the child never reported is drift.
-					if (state.currentRunId === undefined) return false;
-					await binding.runtime.session.abort();
-					return true;
-				})
-			);
-			return { accepted };
-		}
-		case "presentation.setVisible":
-			binding.setPresentationVisible(request.payload.visible);
-			return {};
-		case "runtime.shutdown":
-			state.shutdownStarted = true;
-			setImmediate(() => binding.context.shutdown());
-			return { accepted: true };
-		case "runtime.executionBegin":
-		case "runtime.humanInput":
-		case "runtime.primaryInputQueued":
-		case "runtime.humanInputMode":
-		case "runtime.guardToolResult":
-		case "runtime.rootToolExecutionStart":
-		case "runtime.safeBoundary":
-		case "runtime.executionEnd":
-		case "coordination.observe":
-		case "coordination.message":
-		case "coordination.wait":
-		case "coordination.control":
-		case "coordination.spawn":
-		case "coordination.templateSnapshot":
-		case "coordination.askHuman":
-		case "coordination.reportToUser":
-		case "presentation.reports.setRead":
-		case "coordination.moderatorControl":
-		case "presentation.agents.snapshot":
-		case "presentation.agents.select":
-			throw new Error(`child_runtime_direction_violation: ${request.method}`);
-		default:
-			return assertUnreachable(request);
+	const path = process.env[CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE];
+	if ((mode === undefined) !== (path === undefined)) {
+		throw new Error("child_runtime_system_prompt_mismatch: mode and path must be provided together");
 	}
+	if (mode === undefined) return null;
+	const resourceLoader = runtime.services.resourceLoader;
+	if (mode === "append") {
+		const appendPrompt = resourceLoader.getAppendSystemPrompt();
+		const appendSources = resourceLoader.getAppendSystemPromptSources();
+		if (appendPrompt.length !== 1 || appendSources.length !== 1) {
+			throw new Error("child_runtime_system_prompt_mismatch: expected one file-backed append prompt");
+		}
+		return {
+			mode,
+			filePath: await canonicalFilePath(appendSources[0]!.path, runtime.cwd),
+			body: appendPrompt[0]!,
+		};
+	}
+	const source = resourceLoader.getSystemPromptSource();
+	if (source === undefined) {
+		throw new Error("child_runtime_system_prompt_mismatch: expected one file-backed system prompt");
+	}
+	const body = resourceLoader.getSystemPrompt();
+	if (body === undefined) {
+		throw new Error("child_runtime_system_prompt_mismatch: prompt body is unavailable");
+	}
+	return { mode, filePath: await canonicalFilePath(source.path, runtime.cwd), body };
 }
 
 /**
@@ -874,400 +344,13 @@ function applyStartupToolFilter(
 	bootstrap: Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">,
 	retained: boolean,
 ): void {
-	const roleTools = participantCoordinationToolNames[bootstrap.role];
-	// A headless Workflow has no human to answer, so a question would block forever.
-	// The Agent escalates through its supervisor with agent_message instead.
-	const withheldTools = new Set<string>(bootstrap.interaction === "headless" ? ["ask_user"] : []);
+	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
+	const withheldTools = new Set<string>(roleTools.filter((name) => !activeTools.includes(name)));
 	const excludedNames = new Set(retained ? [] : bootstrap.excludedTools);
 	pi.setActiveTools([...new Set([
 		...pi.getActiveTools().filter((name) => !excludedNames.has(name)),
-		...roleTools,
+		...activeTools,
 	])].filter((name) => !withheldTools.has(name)));
-}
-
-async function runtimeSnapshot(
-	runtime: AgentSessionRuntime,
-	context: ExtensionContext,
-) {
-	const session = runtime.session;
-	const bridgePath = await canonicalFilePath(ENTRY_MODULE_PATH, runtime.cwd);
-	const extensions = await Promise.all(
-		runtime.services.resourceLoader.getExtensions().extensions
-			.map((extension) => extension.resolvedPath)
-			.filter((path) => !path.startsWith("<inline:"))
-			.map((path) => canonicalExtensionPath(path, runtime.cwd)),
-	);
-	const explicitSystemPromptModeValue = process.env[
-		CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE
-	];
-	if (
-		explicitSystemPromptModeValue !== undefined &&
-		explicitSystemPromptModeValue !== "append" &&
-		explicitSystemPromptModeValue !== "replace"
-	) {
-		throw new Error("child_runtime_system_prompt_mismatch: mode is invalid");
-	}
-	const explicitSystemPromptMode = explicitSystemPromptModeValue as
-		| "append"
-		| "replace"
-		| undefined;
-	const explicitSystemPromptPath = process.env[
-		CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE
-	];
-	if ((explicitSystemPromptMode === undefined) !== (explicitSystemPromptPath === undefined)) {
-		throw new Error("child_runtime_system_prompt_mismatch: mode and path must be provided together");
-	}
-	const appendPrompt = runtime.services.resourceLoader.getAppendSystemPrompt();
-	const appendSources = runtime.services.resourceLoader.getAppendSystemPromptSources();
-	if (explicitSystemPromptMode === "append"
-		&& (appendPrompt.length !== 1 || appendSources.length !== 1)) {
-		throw new Error("child_runtime_system_prompt_mismatch: expected one file-backed append prompt");
-	}
-	const systemPromptSource = runtime.services.resourceLoader.getSystemPromptSource();
-	if (explicitSystemPromptMode === "replace" && systemPromptSource === undefined) {
-		throw new Error("child_runtime_system_prompt_mismatch: expected one file-backed system prompt");
-	}
-	const explicitSystemPromptBody = explicitSystemPromptMode === undefined
-		? undefined
-		: explicitSystemPromptMode === "append"
-			? appendPrompt[0]
-			: runtime.services.resourceLoader.getSystemPrompt();
-	if (explicitSystemPromptMode !== undefined && explicitSystemPromptBody === undefined) {
-		throw new Error("child_runtime_system_prompt_mismatch: prompt body is unavailable");
-	}
-	const loadContextFilesValue = process.env[
-		CHILD_PROCESS_LOAD_CONTEXT_FILES_ENVIRONMENT_VARIABLE
-	];
-	if (loadContextFilesValue !== "0" && loadContextFilesValue !== "1") {
-		throw new Error("child_runtime_load_context_files_mismatch: load-context-files marker is invalid");
-	}
-	const sessionPath = context.sessionManager.getSessionFile();
-	if (!sessionPath) throw new Error("child_runtime_session_path_unavailable");
-	const tools = session.getActiveToolNames();
-	const skillSources = await Promise.all(
-		runtime.services.resourceLoader.getSkills().skills.map(async ({ name, filePath }) => ({
-			name,
-			filePath: await canonicalFilePath(filePath, runtime.cwd),
-		})),
-	);
-	return {
-		cwd: runtime.cwd,
-		model: requireModel(session.model),
-		thinking: session.thinkingLevel,
-		tools,
-		skills: skillSources.map(({ name }) => name),
-		skillSources,
-		extensions: extensions.filter((path) => path !== bridgePath),
-		projectTrusted: runtime.services.settingsManager.isProjectTrusted(),
-		sessionId: session.sessionId,
-		sessionPath,
-		systemPrompt: explicitSystemPromptMode === undefined
-			? null
-			: {
-				mode: explicitSystemPromptMode,
-				filePath: await canonicalFilePath(
-					explicitSystemPromptMode === "append"
-						? appendSources[0]!.path
-						: systemPromptSource!.path,
-					runtime.cwd,
-				),
-				body: explicitSystemPromptBody!,
-			},
-		loadContextFiles: loadContextFilesValue === "1",
-	};
-}
-
-async function reportRuntimeLifecycle(
-	state: ChildControlState,
-	binding: ChildRuntimeBinding,
-	event: AgentSessionEvent,
-): Promise<void> {
-	if (state.currentBinding !== binding) return;
-	const { runtime, activity } = binding;
-	if (event.type === "agent_start") {
-		activity.setScopeFailed(false);
-		// Only actual Pi execution owns transport cycle identity; Delivery admission does not.
-		state.currentRunId ??= nativeRunId(++state.nativeRunSequence);
-		state.latestRunId = state.currentRunId;
-		await state.channel.sendEvent("agent.start", {
-			runId: state.currentRunId,
-			queuedInputCount: runtime.session.pendingMessageCount,
-		});
-		return;
-	}
-	if (event.type === "agent_end") {
-		if (!state.currentRunId) return;
-		const assistant = [...event.messages]
-			.reverse()
-			.find((message) => message.role === "assistant");
-		// Pi can publish request-setup cancellation as an error-shaped message.
-		// The exact native Run's aborted signal owns that stop, not provider failure.
-		state.currentRunOutcome = assistant?.role === "assistant" && assistant.stopReason === "aborted"
-			? "interrupted"
-			: assistant?.role === "assistant" && assistant.stopReason === "error"
-				? runtime.session.agent.signal?.aborted ? "interrupted" : "failed"
-				: "completed";
-		activity.setScopeFailed(state.currentRunOutcome === "failed");
-		const quota = state.currentRunOutcome === "failed" && assistant?.role === "assistant"
-			? classifyQuotaEvidence(assistant) : undefined;
-		// Session subscribers are synchronous: drain before the first transport await
-		// so Pi cannot consume queued input before the Owner suspends a failed Run.
-		// Deliberate cancellation and configured retries keep their native behavior.
-		if (state.currentRunOutcome === "failed" && !event.willRetry) binding.retainedQueue.capture();
-		await state.channel.sendEvent("agent.end", {
-			runId: state.currentRunId,
-			outcome: state.currentRunOutcome,
-			willRetry: event.willRetry,
-			...(quota ? { quota } : {}),
-			queuedInputCount: runtime.session.pendingMessageCount,
-			...(assistant?.role === "assistant" && assistant.errorMessage
-				? { error: assistant.errorMessage }
-				: {}),
-		});
-		return;
-	}
-	if (event.type !== "agent_settled" || !state.currentRunId) return;
-	// Pi awaits extension settlement hooks before notifying session listeners.
-	// A hook can already have started a successor; the old edge cannot settle it.
-	if (runtime.session.isStreaming) return;
-	const runId = state.currentRunId;
-	await state.channel.sendEvent("agent.settled", {
-		runId,
-		outcome: state.currentRunOutcome,
-		queuedInputCount: runtime.session.pendingMessageCount,
-	});
-	if (state.currentBinding !== binding) return;
-	if (state.currentRunId === runId) state.currentRunId = undefined;
-}
-
-// Transport execution-cycle identity is child-reported and is separate from durable
-// Agent Run sequences. The child owns the format so the assignment sites and the
-// request validation below cannot drift apart.
-const NATIVE_RUN_ID_PREFIX = "native-run-";
-
-function nativeRunId(sequence: number): string {
-	return `${NATIVE_RUN_ID_PREFIX}${sequence}`;
-}
-
-function reportedRunSequence(runId: string): number | undefined {
-	if (!runId.startsWith(NATIVE_RUN_ID_PREFIX)) return undefined;
-	const digits = runId.slice(NATIVE_RUN_ID_PREFIX.length);
-	if (!/^[1-9]\d*$/.test(digits)) return undefined;
-	const sequence = Number(digits);
-	return Number.isSafeInteger(sequence) ? sequence : undefined;
-}
-
-/**
- * A run-scoped Owner request must name a cycle this child actually reported, so an
- * Owner whose identity drifted out of this child's history still fails loudly.
- *
- * It must not additionally require that the cycle is still the current or latest
- * one. A Delivery admission the Owner cancels can still commit its own turn while
- * the request waits in the queue, which legitimately advances the cycle between the
- * Owner's dispatch and this mutation boundary. That is ordinary concurrency, not
- * identity drift, and docs/run-supervision.md forbids faulting a successor cycle
- * for it. The check stays immediately before the mutation.
- */
-function requireReportedRun(state: ChildControlState, runId: string): void {
-	const sequence = reportedRunSequence(runId);
-	if (sequence === undefined || sequence > state.nativeRunSequence) {
-		throw new Error(
-			`stale_run: ${runId} does not name a child Run this Agent reported`,
-		);
-	}
-}
-
-function sequenceQueueIntention<T>(
-	state: ChildControlState,
-	operation: () => T | Promise<T>,
-): Promise<T> {
-	const result = state.queueIntentionTail.then(operation);
-	state.queueIntentionTail = result.then(
-		() => undefined,
-		() => undefined,
-	);
-	return result;
-}
-
-function dispatchDelivery(
-	binding: ChildRuntimeBinding,
-	delivery: AgentRuntimeDelivery,
-	checkpoint: () => void,
-): Readonly<{ completion: Promise<void>; preflight: Promise<void> }> {
-	if (delivery.kind === "custom") {
-		return binding.startupAdmission.dispatchCustom(delivery.message, {
-			triggerTurn: delivery.triggerTurn,
-			...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
-		}, checkpoint);
-	}
-	const content = typeof delivery.content === "string"
-		? [{ type: "text" as const, text: delivery.content }]
-		: [...delivery.content];
-	const text = content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
-	const images = content.flatMap((part) => part.type === "image" ? [part] : []);
-	let resolvePreflight!: () => void;
-	const preflight = new Promise<void>((resolve) => {
-		resolvePreflight = resolve;
-	});
-	const handoff = binding.nativeInputHandoff;
-	if (handoff && !handoff.transferred && delivery.forwardedInput?.submissionSequence === handoff.submissionSequence) {
-		checkpoint();
-		handoff.transfer();
-		handoff.transferred = true;
-	}
-	return {
-		completion: binding.runtime.session.prompt(text, {
-			expandPromptTemplates: false,
-			source: "extension",
-			...(images.length === 0 ? {} : { images }),
-			...(delivery.deliverAs === undefined
-				? {}
-				: { streamingBehavior: delivery.deliverAs }),
-			preflightResult() {
-				try {
-					checkpoint();
-				} catch (error) {
-					resolvePreflight();
-					throw error;
-				}
-				resolvePreflight();
-			},
-		}),
-		preflight,
-	};
-}
-
-function observeDeliveryCommit(
-	runtime: AgentSessionRuntime,
-	sessionManager: ExtensionContext["sessionManager"],
-	delivery: AgentRuntimeDelivery,
-	generationSignal: AbortSignal,
-): Readonly<{
-	result: Promise<boolean>;
-	settle(committed: boolean): void;
-	reject(error: unknown): void;
-}> {
-	let settleResult!: (committed: boolean) => void;
-	let rejectResult!: (error: unknown) => void;
-	let settled = false;
-	let unsubscribe: () => void = () => undefined;
-	const existingEntryIds = new Set(
-		sessionManager.getEntries().map((entry) => entry.id),
-	);
-	const finish = (settlement: () => void) => {
-		if (settled) return;
-		settled = true;
-		unsubscribe();
-		generationSignal.removeEventListener("abort", invalidate);
-		settlement();
-	};
-	const invalidate = () => finish(() => rejectResult(
-		new Error("child_turn_compaction_gateway_disposed"),
-	));
-	const result = new Promise<boolean>((resolve, reject) => {
-		settleResult = resolve;
-		rejectResult = reject;
-	});
-	// Dispatch/preflight can reject before admission reaches its commit await.
-	void result.catch(() => undefined);
-	generationSignal.addEventListener("abort", invalidate, { once: true });
-	unsubscribe = runtime.session.subscribe((event) => {
-		if (
-			event.type === "message_end" &&
-			matchesDeliveryMessage(delivery, event.message)
-		) {
-			// AgentSession notifies listeners immediately before its synchronous
-			// SessionManager append. Verify the writer's new exact entry after that edge;
-			// the lifecycle event alone is not durable transcript evidence.
-			queueMicrotask(() => finish(() => settleResult(
-				sessionManager.getEntries().some((entry) =>
-					!existingEntryIds.has(entry.id) && matchesDeliveryEntry(delivery, entry)
-				),
-			)));
-		}
-		if (event.type === "agent_settled") finish(() => settleResult(false));
-	});
-	if (generationSignal.aborted) invalidate();
-	return {
-		result,
-		settle: (committed) => finish(() => settleResult(committed)),
-		reject: (error) => finish(() => rejectResult(error)),
-	};
-}
-
-function matchesDeliveryEntry(
-	delivery: AgentRuntimeDelivery,
-	entry: ReturnType<ExtensionContext["sessionManager"]["getEntries"]>[number],
-): boolean {
-	if (delivery.kind === "custom") {
-		return entry.type === "custom_message" &&
-			entry.customType === delivery.message.customType &&
-			isDeepStrictEqual(entry.content, delivery.message.content) &&
-			entry.display === delivery.message.display &&
-			isDeepStrictEqual(
-				entry.details,
-				"details" in delivery.message ? delivery.message.details : undefined,
-			);
-	}
-	return entry.type === "message" && matchesDeliveryMessage(delivery, entry.message);
-}
-
-function matchesDeliveryMessage(
-	delivery: AgentRuntimeDelivery,
-	message: unknown,
-): boolean {
-	if (!message || typeof message !== "object" || !("role" in message)) return false;
-	if (delivery.kind === "custom") {
-		return message.role === "custom" &&
-			"customType" in message && message.customType === delivery.message.customType &&
-			"content" in message && isDeepStrictEqual(message.content, delivery.message.content) &&
-			"display" in message && message.display === delivery.message.display &&
-			isDeepStrictEqual(
-				"details" in message ? message.details : undefined,
-				"details" in delivery.message ? delivery.message.details : undefined,
-			);
-	}
-	if (message.role !== "user" || !("content" in message)) return false;
-	const content = typeof delivery.content === "string"
-		? [{ type: "text", text: delivery.content }]
-		: normalizeUserContent(delivery.content);
-	return isDeepStrictEqual(message.content, content);
-}
-
-function normalizeUserContent(
-	content: Extract<AgentRuntimeDelivery, { kind: "user" }>["content"] & readonly unknown[],
-): readonly unknown[] {
-	const text = content
-		.filter((part): part is Extract<(typeof content)[number], { type: "text" }> =>
-			typeof part === "object" && part !== null && "type" in part && part.type === "text"
-		)
-		.map((part) => part.text)
-		.join("\n");
-	const images = content.filter((part) =>
-		typeof part === "object" && part !== null && "type" in part && part.type === "image"
-	);
-	return [{ type: "text", text }, ...images];
-}
-
-function requireModel(model: AgentSessionRuntime["session"]["model"]) {
-	if (!model) throw new Error("child_runtime_model_unavailable: no active model");
-	return { provider: model.provider, modelId: model.id };
-}
-
-async function canonicalFilePath(path: string, cwd: string): Promise<string> {
-	return realpath(isAbsolute(path) ? path : resolve(cwd, path));
-}
-
-/** Pi built-in extension paths name no file and are already canonical. */
-function canonicalExtensionPath(path: string, cwd: string): Promise<string> | string {
-	return isBuiltinExtensionPath(path) ? path : canonicalFilePath(path, cwd);
-}
-
-
-
-async function reportFault(channel: ChildChannel, code: string, error: unknown): Promise<void> {
-	await channel.sendEvent("runtime.fault", { code, message: errorMessage(error) })
-		.catch(() => undefined);
 }
 
 function assertExpectedSession(runtime: AgentSessionRuntime, bootstrap: ChildProcessBootstrap): void {
@@ -1275,73 +358,6 @@ function assertExpectedSession(runtime: AgentSessionRuntime, bootstrap: ChildPro
 		throw new Error(
 			`child_runtime_session_mismatch: expected ${bootstrap.expectedSessionId}, received ${runtime.session.sessionId}`,
 		);
-	}
-}
-
-class RemoteAgentActivitySource implements AgentActivitySource {
-	#agentId: string;
-	readonly #handlers = new Set<() => void>();
-	#selector: RemoteAgentSelectorSnapshot | undefined;
-	#scopeFailed = false;
-
-	constructor(agentId: string) {
-		this.#agentId = agentId;
-	}
-
-	update(selector: RemoteAgentSelectorSnapshot): void {
-		this.#agentId = selector.selectedAgentId;
-		this.#selector = selector;
-		this.#notifyChanged();
-	}
-
-	setScopeFailed(failed: boolean): void {
-		if (this.#scopeFailed === failed) return;
-		this.#scopeFailed = failed;
-		this.#notifyChanged();
-	}
-
-	agentLabel(agentId: string): string | undefined {
-		const selector = this.#selector;
-		return selector
-			? [...selector.live, ...selector.dormant]
-				.find((agent) => agent.agentId === agentId)?.label
-			: undefined;
-	}
-
-	selectorSnapshot(): RemoteAgentSelectorSnapshot {
-		if (!this.#selector) throw new Error("child_runtime_activity_unavailable: selector snapshot is not initialized");
-		return this.#selector;
-	}
-
-	snapshot(): AgentActivitySnapshot {
-		const selector = this.#selector;
-		if (!selector) {
-			throw new Error("child_runtime_activity_unavailable: selector snapshot is not initialized");
-		}
-		const roster = [...selector.live, ...selector.dormant];
-		const scope = roster.find(({ agentId }) => agentId === this.#agentId);
-		if (!scope) {
-			throw new Error(`child_runtime_activity_unavailable: Agent ${this.#agentId} is absent`);
-		}
-		return {
-			scope: { ...scope, failed: this.#scopeFailed },
-			children: selector.live
-				.filter(({ directSpawnerAgentId }) => directSpawnerAgentId === this.#agentId)
-				.map((child) => ({ ...child, failed: false })),
-			answerMode: selector.humanAttention.some(({ agentId }) => agentId === this.#agentId),
-			humanAttention: selector.humanAttention,
-			operationalAttention: selector.operationalAttention,
-			reports: selector.reports,
-		};
-	}
-
-	addChangeHandler(handler: () => void): () => void {
-		this.#handlers.add(handler);
-		return () => this.#handlers.delete(handler);
-	}
-
-	#notifyChanged(): void {
-		for (const handler of this.#handlers) handler();
 	}
 }
 
@@ -1369,18 +385,6 @@ async function readBootstrapDescriptor(): Promise<ChildProcessBootstrap> {
 		throw new Error(`control_bootstrap_invalid: descriptor could not be read as JSON. ${childLaunchBlockGuidance("retry_agent_launch")}`);
 	}
 	return validateChildProcessBootstrap(value);
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
-function requestCancellationError(signal: AbortSignal): unknown {
-	return signal.reason ?? new DOMException("The Control request was cancelled", "AbortError");
-}
-
-function assertUnreachable(value: never): never {
-	throw new Error(`child_runtime_method_unavailable: ${String(value)}`);
 }
 
 export default childRuntimeBridge;
