@@ -74,12 +74,15 @@ export type ProgressAssessment = Readonly<{
 	deliveryStalls: readonly DeliveryStallPath[];
 }>;
 
-/** The single definition of a legitimate wait, shared with the delivery scheduler. */
+/**
+ * The single definition of a legitimate wait, shared with the delivery scheduler.
+ * Blocking reasons come first, so the reported reason is the strongest present.
+ */
 export function waitingReason(facts: WaitingFacts): WaitingReason | undefined {
 	if (facts.phase !== "dormant" && facts.attention === "input_required") return "input_required";
-	if (facts.interactiveSelection) return "interactive_selection";
 	if (facts.interruptionHold) return "interruption_hold";
 	if (facts.suspended) return "run_suspension";
+	if (facts.interactiveSelection) return "interactive_selection";
 	if (facts.isolatedResumption) return "isolated_resumption";
 	return undefined;
 }
@@ -126,18 +129,25 @@ function combineDependencies(
 	return verdicts;
 }
 
+/**
+ * Blocked waits (human input, a Hold, Run Suspension) outrank activity: the Agent
+ * cannot advance until they end. Explanatory waits (interactive selection,
+ * isolated resumption) never block execution; they only rescue a settled Agent
+ * from Stalled. Ranking them below Progressing keeps a parked Owner from waking
+ * while a selected or resumed child is still executing.
+ */
+const EXPLANATORY_WAITING_REASONS: ReadonlySet<WaitingReason> = new Set(["interactive_selection", "isolated_resumption"]);
+
 function localVerdict(facts: AgentProgressFacts): ProgressVerdict {
 	if (facts.phase === "dormant" || facts.currentRunFailed) return "inactive";
 	const reason = waitingReason(facts);
-	if (reason !== undefined && reason !== "isolated_resumption") return "waiting";
+	const isExplanatory = reason !== undefined && EXPLANATORY_WAITING_REASONS.has(reason);
+	if (reason !== undefined && !isExplanatory) return "waiting";
 	if (
 		facts.phase === "starting" || facts.phase === "ending" || facts.work === "active" ||
 		facts.deliveryProgress || facts.unresolvedOperationReview
 	) return "progressing";
-	// Isolated resumption only blocks ordinary Delivery, so it is a weaker wait than
-	// the reasons above and ranks below Progressing: resumed execution is real work,
-	// and a parked Owner must not wake while a resumed child is still executing.
-	if (reason === "isolated_resumption") return "waiting";
+	if (isExplanatory) return "waiting";
 	return "stalled";
 }
 

@@ -12,6 +12,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
+import { createTestOwnerExtension } from "./support/owner-extension.ts";
 import { executeAndCommitRegisteredTool } from "./support/agent-session.ts";
 
 for (const explicitWait of [false, true]) {
@@ -292,6 +293,48 @@ test("Owner stays parked while a supervisory resumed child executes in isolation
 	assert.equal(host.session.isIdle, false);
 	releaseResumed();
 	await withTimeout(resumedPrompt, 3_000, "Owner did not settle after resumed work answered");
+	assert.equal(host.session.isIdle, true);
+});
+
+test("Owner stays parked while a child the human selected keeps working", { timeout: 10_000 }, async (t) => {
+	const ownerExtension = createTestOwnerExtension();
+	const host = await createTestOwnerHost(t, ownerExtension.extension, { persistent: true, processVisibleModel: true });
+	let releaseChild!: () => void;
+	const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
+	t.after(releaseChild);
+	let childWorking = false;
+	const routeResponse = async (context: Context) => {
+		const serialized = JSON.stringify(context.messages);
+		if (hasDeliveredRequest(context) && !serialized.includes("spawn-to-select")) {
+			childWorking = true;
+			await childGate;
+			return fauxAssistantMessage(fauxToolCall("agent_message", {
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Selected work complete.",
+			}, { id: "answer-selected" }), { stopReason: "toolUse" });
+		}
+		if (!serialized.includes("spawn-to-select")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			title: "Fixture request",
+			request: "Work while the human watches.",
+		}, { id: "spawn-to-select" }), { stopReason: "toolUse" });
+		return fauxAssistantMessage("Waiting for the watched work.");
+	};
+	host.model.setResponses(Array.from({ length: 8 }, () => routeResponse));
+	let settled = false;
+	const prompt = host.session.prompt("Delegate watched work.").then(() => { settled = true; });
+	await waitUntil(() => childWorking && ownerAssistantTexts(host).includes("Waiting for the watched work."));
+	const receipt = host.session.sessionManager.getEntries().find((entry) => entry.type === "message" &&
+		entry.message.role === "toolResult" && entry.message.toolCallId === "spawn-to-select");
+	assert.ok(receipt?.type === "message" && receipt.message.role === "toolResult");
+	const { agentId } = receipt.message.details as { agentId: string };
+	// Selection explains why a settled Agent is not Stalled; it does not block work.
+	const selected = await ownerExtension.owner().openAgentView(agentId);
+	assert.ok(selected);
+	t.after(() => selected.close());
+	await new Promise<void>((resolve) => setTimeout(resolve, 50));
+	assert.equal(settled, false, "Owner settled while the selected child was still working");
+	assert.equal(host.session.isIdle, false);
+	releaseChild();
+	await withTimeout(prompt, 3_000, "Owner did not settle after the selected child answered");
 	assert.equal(host.session.isIdle, true);
 });
 

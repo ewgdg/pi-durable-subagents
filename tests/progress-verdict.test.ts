@@ -37,13 +37,15 @@ function verdicts(snapshot: Partial<ProgressSnapshot> & Pick<ProgressSnapshot, "
 	return Object.fromEntries(assessProgress({ blockedDeliveries: [], ...snapshot }).verdicts);
 }
 
-test("local facts map to one verdict with Inactive, Waiting, Progressing, Stalled precedence", () => {
+test("local facts map to one verdict: blocked waits outrank activity, explanatory waits only rescue a settled Agent", () => {
 	const rows: [string, AgentProgressFacts, string, string | undefined][] = [
 		["dormant", agent("a", { phase: "dormant", work: undefined, attention: undefined }), "inactive", undefined],
 		["failed current Run", agent("a", { currentRunFailed: true, work: "active" }), "inactive", undefined],
 		["failed Run under human attention", agent("a", { currentRunFailed: true, attention: "input_required" }), "inactive", "input_required"],
 		["human input during active work", agent("a", { work: "active", attention: "input_required" }), "waiting", "input_required"],
-		["interactive selection", agent("a", { work: "active", interactiveSelection: true }), "waiting", "interactive_selection"],
+		["settled under interactive selection", agent("a", { interactiveSelection: true }), "waiting", "interactive_selection"],
+		["selected and working", agent("a", { work: "active", interactiveSelection: true }), "progressing", "interactive_selection"],
+		["selected under an Interruption Hold", agent("a", { work: "active", interactiveSelection: true, interruptionHold: true }), "waiting", "interruption_hold"],
 		["Interruption Hold", agent("a", { interruptionHold: true }), "waiting", "interruption_hold"],
 		["suspended starting Run", agent("a", { phase: "starting", work: undefined, suspended: true }), "waiting", "run_suspension"],
 		["settled isolated resumption", agent("a", { isolatedResumption: true }), "waiting", "isolated_resumption"],
