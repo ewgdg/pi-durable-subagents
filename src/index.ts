@@ -9,11 +9,17 @@ import type {
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
+import {
+	initializeOwnerWorkflow,
+	type ConstructWorkflowCoordinator,
+} from "./bootstrap/owner-bootstrap.ts";
 import { OwnerRecoveryError } from "./bootstrap/owner-recovery-error.ts";
 import { ProtocolInvariantError } from "./protocol/identities.ts";
 import { headlessOwnerDiagnostics, showOwnerBlockage } from "./presentation/owner-diagnostics-surface.ts";
-import type { OrdinaryAgentCoordinatorView } from "./coordination/workflow-coordinator.ts";
+import {
+	WorkflowCoordinator,
+	type OrdinaryAgentCoordinatorView,
+} from "./coordination/workflow-coordinator.ts";
 import {
 	assertExtensionApiShape,
 	assertHostModuleShape,
@@ -35,7 +41,13 @@ import {
 
 const ENTRY_MODULE_PATH = import.meta.filename;
 
-const piAgentCoordination: ExtensionFactory = (pi) => {
+/**
+ * Build the Workflow Owner extension. Each Owner admission, including a reload,
+ * constructs its Workflow Coordinator through `constructWorkflowCoordinator`.
+ */
+export const createOwnerExtension = (
+	constructWorkflowCoordinator: ConstructWorkflowCoordinator,
+): ExtensionFactory => (pi) => {
 	let resolveOwnerView: (() => OrdinaryAgentCoordinatorView) | undefined;
 	assertExtensionApiShape(pi);
 	registerSessionStartup(pi);
@@ -90,6 +102,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				bridge,
 				interaction,
 				entryModulePath: ENTRY_MODULE_PATH,
+				constructWorkflowCoordinator,
 				event,
 				onOwnerIdentified: () => { ownerIdentified = true; },
 			});
@@ -152,4 +165,6 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	});
 };
 
-export default piAgentCoordination;
+export default createOwnerExtension(
+	(runtime, identity, options) => new WorkflowCoordinator(runtime, identity, options),
+);

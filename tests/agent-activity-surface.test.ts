@@ -12,10 +12,11 @@ import {
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 
-import { createAgentActivityExtension } from "../src/bootstrap/agent-extension.ts";
+import { extensionCommandAction } from "../src/pi-integration/extension-command-action.ts";
+import { createTestOwnerExtension } from "./support/owner-extension.ts";
+import { createTestOwnerHost, type TestOwnerHost } from "./support/pi-host.ts";
 import type {
 	AgentRosterStatus,
-	HumanPresentationCoordinatorView,
 } from "../src/coordination/workflow-coordinator.ts";
 import {
 	AgentActivityDock,
@@ -204,15 +205,9 @@ test("activity install forwards the Agents menu action to the installed dock", (
 	dock.dispose();
 });
 
-test("activity extension dispatches the registered Agents command on a dock click", async () => {
-	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
+test("a dock click submits the Agents command as editor input", () => {
 	const sent: Array<{ content: unknown; options: unknown }> = [];
 	const pi = {
-		on(event: string, handler: (...args: unknown[]) => unknown) {
-			const registered = handlers.get(event) ?? [];
-			registered.push(handler);
-			handlers.set(event, registered);
-		},
 		sendUserMessage(content: unknown, options: unknown) {
 			sent.push({ content, options });
 		},
@@ -224,14 +219,10 @@ test("activity extension dispatches the registered Agents command on a dock clic
 		},
 	} as unknown as ExtensionUIContext;
 
-	await createAgentActivityExtension(() => ({
-		agentActivity: () => ownerSnapshot,
-		addAgentActivityChangeHandler: () => () => {},
-		refreshAgentActivity: () => {},
-	} as unknown as HumanPresentationCoordinatorView))(pi);
-	const sessionStart = handlers.get("session_start")?.[0];
-	assert.ok(sessionStart);
-	await sessionStart({}, { ui });
+	installAgentActivityDock(ui, {
+		snapshot: () => ownerSnapshot,
+		addChangeHandler: () => () => {},
+	}, { openAgentsMenu: extensionCommandAction(pi, "/agents") });
 	assert.ok(installedFactory);
 	const dock = installedFactory(
 		{ requestRender() {}, hasOverlay: () => false } as unknown as TUI,
@@ -244,28 +235,44 @@ test("activity extension dispatches the registered Agents command on a dock clic
 	dock.dispose();
 });
 
-test("activity extension publishes native model-selection changes", async () => {
-	const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
-	const pi = {
-		on(event: string, handler: (...args: unknown[]) => unknown) {
-			const registered = handlers.get(event) ?? [];
-			registered.push(handler);
-			handlers.set(event, registered);
-		},
-	} as unknown as ExtensionAPI;
-	let refreshes = 0;
-	const view = {
-		refreshAgentActivity() {
-			refreshes += 1;
-		},
-	} as unknown as HumanPresentationCoordinatorView;
+test("the Owner's activity refreshes with its new model after a native model change", async (t) => {
+	const owner = createTestOwnerExtension();
+	const host = await createTestOwnerHost(t, owner.extension);
+	const alternate = registerAlternateModel(host);
+	const publishedModels: unknown[] = [];
+	const unsubscribe = owner.owner().addAgentActivityChangeHandler(() => {
+		publishedModels.push(owner.owner().agentActivity().scope.model);
+	});
+	t.after(unsubscribe);
 
-	await createAgentActivityExtension(() => view)(pi);
-	const modelSelect = handlers.get("model_select")?.[0];
-	assert.ok(modelSelect);
-	await modelSelect();
-	assert.equal(refreshes, 1);
+	await host.session.setModel(alternate);
+
+	assert.deepEqual(publishedModels.at(-1), { provider: alternate.provider, modelId: alternate.id });
 });
+
+function registerAlternateModel(host: TestOwnerHost) {
+	const provider = "coordination-test-alternate";
+	const owned = host.session.model;
+	assert.ok(owned);
+	host.services.modelRuntime.registerProvider(provider, {
+		name: "Alternate coordination test",
+		baseUrl: "http://coordination-test-alternate.invalid",
+		api: owned.api,
+		apiKey: "in-memory-test",
+		models: [{
+			id: "alternate-owner",
+			name: "Alternate Owner",
+			reasoning: owned.reasoning,
+			input: owned.input,
+			cost: owned.cost,
+			contextWindow: owned.contextWindow,
+			maxTokens: owned.maxTokens,
+		}],
+	});
+	const model = host.services.modelRuntime.getModel(provider, "alternate-owner");
+	assert.ok(model);
+	return model;
+}
 
 test("activity installs as one persistent native above-editor widget", () => {
 	const snapshots = source({

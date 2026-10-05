@@ -138,6 +138,9 @@ export function bindHiddenOwnerAgentExtension(options: {
 	registerParticipantLifecycle(pi, lifecycleHandlers, {
 		deferPrimaryInputQueued: false,
 	});
+	// The Owner Runtime reports thinking-level changes itself, but Pi publishes a
+	// native model change only through this extension event.
+	pi.on("model_select", () => resolveView().refreshAgentActivity());
 	pi.on("session_shutdown", () => {
 		unbindPrimarySteeringAdmission();
 		disposeSessionStartup(runtime.session);
