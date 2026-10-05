@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { RequestEvidence } from "../src/coordination/request-evidence.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { requestHistory } from "./support/request-history.ts";
@@ -22,13 +22,13 @@ test("reverse Requests and multiple incoming obligations resolve independently",
 	} }]);
 	h.requester.manager.appendCustomMessageEntry(delivery.customType, delivery.content, true, delivery.details);
 	const nested = h.request();
-	const evidence = new RequestEvidence(h.agents);
-	assert.deepEqual(evidence.obligationFrames(h.requester.record).map(frame => frame.requestId), [reverse]);
-	assert.deepEqual(evidence.obligationFrames(h.responder.record).map(frame => frame.requestId), [root, nested]);
-	assert.equal(evidence.obligationFrames(h.responder.record).at(-1)?.requestId, nested);
+	const relationships = requestCoordination(h.agents).requestRelationships;
+	assert.deepEqual(relationships.obligationFrames(h.requester.record).map(frame => frame.requestId), [reverse]);
+	assert.deepEqual(relationships.obligationFrames(h.responder.record).map(frame => frame.requestId), [root, nested]);
+	assert.equal(relationships.obligationFrames(h.responder.record).at(-1)?.requestId, nested);
 	h.answer(root);
-	assert.deepEqual(evidence.obligationFrames(h.responder.record).map(frame => frame.requestId), [nested]);
-	assert.deepEqual(evidence.outstandingRequestIdsFor(h.responder.record), [reverse]);
+	assert.deepEqual(relationships.obligationFrames(h.responder.record).map(frame => frame.requestId), [nested]);
+	assert.deepEqual(relationships.outstandingRequestIds(h.responder.record), [reverse]);
 });
 
 test("Answers require an explicit Request reference", async () => {
@@ -43,16 +43,16 @@ test("Wait captures Agent-owned dependencies regardless of incoming attention", 
 	const root = h.request();
 	const earlierDependency = h.request(h.responder, h.requester);
 	const nested = h.request();
-	const evidence = new RequestEvidence(h.agents);
+	const relationships = requestCoordination(h.agents).requestRelationships;
 	const waitSource = (id: string) => ({ agentId: "responder", toolCallId: id,
 		entryId: h.responder.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id }), { stopReason: "toolUse" })) });
-	assert.deepEqual(evidence.outstandingRequestIdsAt(h.responder.record, waitSource("nested-empty-wait")), [earlierDependency]);
+	assert.deepEqual(relationships.outstandingRequestIdsAt(h.responder.record, waitSource("nested-empty-wait")), [earlierDependency]);
 	const nestedDependency = h.request(h.responder, h.requester);
-	assert.deepEqual(evidence.outstandingRequestIdsAt(h.responder.record, waitSource("nested-wait")), [earlierDependency, nestedDependency]);
+	assert.deepEqual(relationships.outstandingRequestIdsAt(h.responder.record, waitSource("nested-wait")), [earlierDependency, nestedDependency]);
 	h.answer(nestedDependency, h.requester, h.responder);
 	h.answer(nested);
-	assert.equal(evidence.obligationFrames(h.responder.record).at(-1)?.requestId, root);
-	assert.deepEqual(evidence.outstandingRequestIdsAt(h.responder.record, waitSource("restored-wait")), [earlierDependency]);
+	assert.equal(relationships.obligationFrames(h.responder.record).at(-1)?.requestId, root);
+	assert.deepEqual(relationships.outstandingRequestIdsAt(h.responder.record, waitSource("restored-wait")), [earlierDependency]);
 });
 
 test("attention history survives native transcript reopen and compaction", async () => {
@@ -76,7 +76,7 @@ test("attention history survives native transcript reopen and compaction", async
 		await writeFile(path, [agent.manager.getHeader(), ...agent.manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n") + "\n");
 		agent.record.transcript = transcriptFromSessionManager(SessionManager.open(path));
 	}
-	const reopened = new RequestEvidence(h.agents);
+	const reopened = requestCoordination(h.agents).requestRelationships;
 	assert.equal(reopened.obligationFrames(h.responder.record).at(-1)?.requestId, third);
 	assert.deepEqual(reopened.obligationFrames(h.responder.record).map(frame => frame.requestId), [root, second, third]);
 	assert.equal(reopened.obligationFrames(h.requester.record).length, 2);
@@ -103,9 +103,9 @@ for (const cancelLatest of [true, false]) test(`cancelling a ${cancelLatest ? "l
 	const cancellation = createMessageDelivery([{ source, projection: { kind: "request_cancellation",
 		cancellationId: deriveMessageIdentity(source), requestMessageId: cancelled, fromAgentId: "requester", reason: "Withdraw this frame" } }]);
 	h.responder.manager.appendCustomMessageEntry(cancellation.customType, cancellation.content, true, cancellation.details);
-	const evidence = new RequestEvidence(h.agents);
-	assert.equal(evidence.obligationFrames(h.responder.record).at(-1)?.requestId, cancelLatest ? root : nested);
-	assert.deepEqual(evidence.outstandingRequestIdsFor(h.responder.record), [dependency, nestedDependency]);
+	const relationships = requestCoordination(h.agents).requestRelationships;
+	assert.equal(relationships.obligationFrames(h.responder.record).at(-1)?.requestId, cancelLatest ? root : nested);
+	assert.deepEqual(relationships.outstandingRequestIds(h.responder.record), [dependency, nestedDependency]);
 });
 
 test("cold focus recognizes an Answer delivered before its responder result appended", async () => {
@@ -122,10 +122,10 @@ test("cold focus recognizes an Answer delivered before its responder result appe
 	const path = join(await mkdtemp(join(tmpdir(), "interrupted-answer-")), "responder.jsonl");
 	await writeFile(path, [h.responder.manager.getHeader(), ...h.responder.manager.getEntries().slice(0, -1)].map(entry => JSON.stringify(entry)).join("\n") + "\n");
 	h.responder.record.transcript = transcriptFromSessionManager(SessionManager.open(path));
-	const recovered = new RequestEvidence(h.agents);
-	assert.ok(recovered.findAnswer(recovered.requireRequest(nested)));
-	assert.deepEqual(recovered.residualRelationshipsFor(h.responder.record).answerOwedRequestIds, [root]);
-	assert.equal(recovered.obligationFrames(h.responder.record).at(-1)?.requestId, root);
+	const recovered = requestCoordination(h.agents);
+	assert.ok(recovered.requestEvidence.findAnswer(recovered.requestEvidence.requireRequest(nested)));
+	assert.deepEqual(recovered.requestRelationships.relationshipsFor(h.responder.record).answerOwedRequestIds, [root]);
+	assert.equal(recovered.requestRelationships.obligationFrames(h.responder.record).at(-1)?.requestId, root);
 });
 
 test("startup presents recovered open obligations without binding subsequent dependencies", async () => {
@@ -144,13 +144,13 @@ test("startup presents recovered open obligations without binding subsequent dep
 	await writeFile(path, [h.responder.manager.getHeader(), ...h.responder.manager.getEntries().slice(0, -1)].map(entry => JSON.stringify(entry)).join("\n") + "\n");
 	h.responder.manager = SessionManager.open(path);
 	h.responder.record.transcript = transcriptFromSessionManager(h.responder.manager);
-	const evidence = new RequestEvidence(h.agents);
+	const relationships = requestCoordination(h.agents).requestRelationships;
 	const handlers = new Map<string, Function>();
 	registerParticipantLifecycle({
 		on: (name: string, handler: Function) => handlers.set(name, handler),
 		appendEntry: (type: string, data: unknown) => h.responder.manager.appendCustomEntry(type, data),
 	} as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI, {
-		executionStarted: async () => evidence.obligationFrames(h.responder.record),
+		executionStarted: async () => relationships.obligationFrames(h.responder.record),
 	} as import("../src/pi-integration/participant-lifecycle.ts").ParticipantLifecycleHandlers);
 	await handlers.get("agent_start")!({}, { sessionManager: h.responder.manager });
 	const presented = await handlers.get("context")!({ messages: [] }, { sessionManager: h.responder.manager });
@@ -159,8 +159,8 @@ test("startup presents recovered open obligations without binding subsequent dep
 	assert.doesNotMatch(JSON.stringify(presented.messages), /Use agent_observe operation/);
 	assert.match(JSON.stringify(presented.messages), new RegExp(root));
 	const dependency = h.request(h.responder, h.requester);
-	assert.deepEqual(evidence.obligationFrames(h.responder.record).map(frame => frame.requestId), [root]);
-	assert.ok(evidence.outstandingRequestIdsFor(h.responder.record).includes(dependency));
+	assert.deepEqual(relationships.obligationFrames(h.responder.record).map(frame => frame.requestId), [root]);
+	assert.ok(relationships.outstandingRequestIds(h.responder.record).includes(dependency));
 	h.responder.record.transcript = transcriptFromSessionManager(SessionManager.open(path));
-	assert.ok(new RequestEvidence(h.agents).outstandingRequestIdsFor(h.responder.record).includes(dependency));
+	assert.ok(requestCoordination(h.agents).requestRelationships.outstandingRequestIds(h.responder.record).includes(dependency));
 });

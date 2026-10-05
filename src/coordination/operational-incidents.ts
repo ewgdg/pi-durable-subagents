@@ -59,6 +59,8 @@ import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import { statusOf, waitingFactsOf, withAgentTranscriptObservations, type AgentRecord } from "./agent-record.ts";
 import type { BlockedDelivery } from "./message-delivery-scheduler.ts";
 import type { MessageCoordinator } from "./messages.ts";
+import type { RequestEvidence } from "./request-evidence.ts";
+import type { RequestRelationships } from "./request-relationships.ts";
 import type { HumanRequestCoordinator } from "./human-requests.ts";
 import {
 	OperationReviewWatcher,
@@ -184,6 +186,8 @@ export class OperationalIncidentCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #messages: MessageCoordinator;
+	readonly #requestEvidence: RequestEvidence;
+	readonly #requestRelationships: RequestRelationships;
 	/**
 	 * Agents a human typed into whose latest settlement happened while still selected.
 	 * Volatile by design: the free reminder it earns is a concession to a live human
@@ -225,6 +229,8 @@ export class OperationalIncidentCoordinator {
 		ownerIdentity: OwnerIdentity;
 		sessionFactory: ProcessChildSessionFactory;
 		messages: MessageCoordinator;
+		requestEvidence: RequestEvidence;
+		requestRelationships: RequestRelationships;
 		humanRequests: HumanRequestCoordinator;
 		workflowPolicy: WorkflowPolicyStore;
 		integrateAgent(record: AgentRecord): void;
@@ -244,6 +250,8 @@ export class OperationalIncidentCoordinator {
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#sessionFactory = options.sessionFactory;
 		this.#messages = options.messages;
+		this.#requestEvidence = options.requestEvidence;
+		this.#requestRelationships = options.requestRelationships;
 		this.#workflowPolicy = options.workflowPolicy;
 		this.#deliveryProgressClock = options.deliveryProgressClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#integrateAgent = options.integrateAgent;
@@ -266,7 +274,7 @@ export class OperationalIncidentCoordinator {
 			hasAnswerObligation: (agentId) => {
 				const record = this.#agents.get(agentId);
 				return record !== undefined &&
-					this.#messages.answerObligationRequestIds(record).length > 0;
+					this.#requestRelationships.answerOwedRequestIds(record).length > 0;
 			},
 			onReviewStateChanged: () => this.#scheduleReconciliation(),
 		});
@@ -314,7 +322,7 @@ export class OperationalIncidentCoordinator {
 				cause === "failure" &&
 				!this.#isShuttingDown()
 			) {
-				const requestIds = [...this.#messages.answerObligationRequestIds(record)].sort();
+				const requestIds = [...this.#requestRelationships.answerOwedRequestIds(record)].sort();
 				const snapshot: RunFailureSnapshot = {
 					kind: "run_failure",
 					key: JSON.stringify(["run_failure", record.identity.agentId, handle.sequence]),
@@ -364,7 +372,7 @@ export class OperationalIncidentCoordinator {
 	#recordRunFailure(snapshot: RunFailureSnapshot, record: AgentRecord, failure?: AgentRunFailure): void {
 		if (this.#reportedFailures.has(snapshot.key)) return;
 		const facts = `Agent: ${record.identity.metadata.label} (${snapshot.agentId})\nRun ${snapshot.run.sequence}\n${this.#failureText(failure)}`;
-		const outgoingRequests = this.#messages.outstandingRequestIdsFor(record);
+		const outgoingRequests = this.#requestRelationships.outstandingRequestIds(record);
 		const affectedRequests = [...new Set([...snapshot.requestIds, ...outgoingRequests])].sort();
 		const diagnostic = this.#retainDiagnostic(new Error(facts));
 		this.#publishRuntimeReport({
@@ -595,7 +603,7 @@ export class OperationalIncidentCoordinator {
 		this.#attemptByModeratorAgentId.delete(moderatorAgentId);
 		const originalObligationRemains = attempt.affectedAgentIds.some((agentId) => {
 			const affected = this.#agents.get(agentId);
-			return affected !== undefined && this.#messages.hasUnsettledAnswerObligation(
+			return affected !== undefined && this.#requestRelationships.hasUnsettledAnswerObligation(
 				affected,
 				attempt.requestIds,
 			);
@@ -746,7 +754,7 @@ export class OperationalIncidentCoordinator {
 	async #inspectWorkflow(): Promise<void> {
 		if (this.#isShuttingDown()) return;
 		await this.#boundaryHooks.beforeEvidenceInspection?.();
-		const inspections = await this.#messages.refreshTranscriptFacts();
+		const inspections = await this.#requestRelationships.refresh();
 		if (this.#isShuttingDown()) return;
 		const toRecover: RunFailureSnapshot[] = [];
 		const recoveringKeys = new Set<string>();
@@ -760,7 +768,7 @@ export class OperationalIncidentCoordinator {
 				if (successor <= snapshot.run.sequence) continue;
 				const source = this.#reportSourcesBySnapshot.get(snapshot);
 				if (!source) throw new Error("Reported Run failure has no retained report source");
-				this.#appendRuntimeReportFinding(source, { key: `successor:${successor}`, summary: `Successor Run ${successor} started for Agent ${snapshot.agentId}. This establishes resumption, not successful completion. Original Answer obligations remain: ${this.#messages.hasUnsettledAnswerObligation(affected, snapshot.requestIds)}.`, evidence: [`Inspected through: ${JSON.stringify(statusOf(affected).primaryEvidence.inspectedThrough)}`] });
+				this.#appendRuntimeReportFinding(source, { key: `successor:${successor}`, summary: `Successor Run ${successor} started for Agent ${snapshot.agentId}. This establishes resumption, not successful completion. Original Answer obligations remain: ${this.#requestRelationships.hasUnsettledAnswerObligation(affected, snapshot.requestIds)}.`, evidence: [`Inspected through: ${JSON.stringify(statusOf(affected).primaryEvidence.inspectedThrough)}`] });
 				this.#onAttentionChanged();
 				this.#reportedRunFailures.delete(key);
 			}
@@ -871,14 +879,14 @@ export class OperationalIncidentCoordinator {
 	#scheduleObligationReminder(
 		snapshot: ObligationStallSnapshot,
 	): boolean {
-		const requestId = this.#messages.foregroundRequestId(this.#requireAgent(snapshot.agentId));
+		const requestId = this.#requestRelationships.foregroundRequestId(this.#requireAgent(snapshot.agentId));
 		if (!requestId) {
 			throw new Error(
 				`invariant_violation: Agent ${snapshot.agentId} has an invalid Answer obligation set`,
 			);
 		}
 		const recipient = this.#requireAgent(snapshot.agentId);
-		const requestTitle = this.#messages.requestTitle(requestId);
+		const requestTitle = this.#requestEvidence.requestMetadata(requestId).title;
 		const reminderEntryIds = () => obligationReminderEntryIds({
 			recipientAgentId: snapshot.agentId,
 			transcript: recipient.transcript.inspect(),
@@ -915,7 +923,7 @@ export class OperationalIncidentCoordinator {
 				requestTitle,
 			}),
 			inspectProof,
-			isSuppressed: () => this.#isWaiting(recipient, this.#assessOrdinary()) || !this.#messages.hasUnsettledAnswerObligation(
+			isSuppressed: () => this.#isWaiting(recipient, this.#assessOrdinary()) || !this.#requestRelationships.hasUnsettledAnswerObligation(
 				recipient,
 				[requestId],
 			),
@@ -1102,9 +1110,8 @@ export class OperationalIncidentCoordinator {
 		}
 		const requestSet = {
 			total: snapshot.requestIds.length,
-			sources: this.#messages.requestSources(
-				snapshot.requestIds.slice(0, MAX_MODERATOR_REQUEST_SOURCES),
-			),
+			sources: snapshot.requestIds.slice(0, MAX_MODERATOR_REQUEST_SOURCES)
+				.map((requestId) => this.#requestEvidence.requestMetadata(requestId).source),
 		};
 		if (snapshot.kind === "delivery_stall") {
 			return { kind: snapshot.kind, agentIds: snapshot.affectedAgentIds, requests: requestSet,
@@ -1176,7 +1183,7 @@ export class OperationalIncidentCoordinator {
 					retentionReasons: run.retentionReasons.map(({ reason }) => reason),
 					unresolvedOperationReview: this.#operationReviews.hasUnresolvedCall(agentId),
 					deliveryProgress: this.#messages.hasDeliveryProgress(record),
-					answerObligationRequestIds: this.#messages.answerObligationRequestIds(record),
+					answerObligationRequestIds: this.#requestRelationships.answerOwedRequestIds(record),
 					// A committed Answer removes its dependency edge even while requester-side
 					// Answer Delivery remains outstanding for Wait.
 					unansweredRequests: this.#unansweredRequests(record),
@@ -1187,10 +1194,11 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#unansweredRequests(requester: AgentRecord): AgentProgressFacts["unansweredRequests"] {
-		const requestIds = this.#messages.outstandingRequestIdsFor(requester);
+		const requestIds = this.#requestRelationships.outstandingRequestIds(requester);
 		const states = this.#messages.answerArbitration.inspect(requester, requestIds);
-		return this.#messages.requestRelationships(requestIds)
-			.filter((_, index) => awaitsCanonicalAnswer(states[index]!));
+		return requestIds
+			.filter((_, index) => awaitsCanonicalAnswer(states[index]!))
+			.map((requestId) => ({ requestId, targetAgentId: this.#requestEvidence.requestMetadata(requestId).targetAgentId }));
 	}
 
 	#scheduleModeratorObligationReminder(handling: OperationalIncidentHandling): void {
@@ -1267,7 +1275,7 @@ export class OperationalIncidentCoordinator {
 				const affected = this.#agents.get(snapshot.agentId);
 				if (!affected) return false;
 				if (affected.host.latestStartedRunSequence() > snapshot.run.sequence) return false;
-				return this.#messages.hasUnsettledAnswerObligation(
+				return this.#requestRelationships.hasUnsettledAnswerObligation(
 				affected,
 				snapshot.requestIds,
 			);
@@ -1297,7 +1305,7 @@ export class OperationalIncidentCoordinator {
 		return this.#operationReviews.expiredReviews().flatMap((review) => {
 			const record = this.#agents.get(review.toolCall.agentId);
 			if (!record || record.host.observe().suspension) return [];
-			const requestIds = [...this.#messages.answerObligationRequestIds(record)].sort();
+			const requestIds = [...this.#requestRelationships.answerOwedRequestIds(record)].sort();
 			if (requestIds.length === 0) return [];
 			return [{
 				kind: "operation_review" as const,
@@ -1394,7 +1402,7 @@ export class OperationalIncidentCoordinator {
 				kind: "successor_run_started",
 				successorRunSequence: affected.host.latestStartedRunSequence(),
 			},
-			originalObligationsRemain: this.#messages.hasUnsettledAnswerObligation(
+			originalObligationsRemain: this.#requestRelationships.hasUnsettledAnswerObligation(
 				affected,
 				snapshot.requestIds,
 			),

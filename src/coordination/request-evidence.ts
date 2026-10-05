@@ -1,10 +1,6 @@
-import { resolveMessageReference } from "../protocol/message-reference.ts";
-import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
-import { summarizeRequestObligations, type OpenIncomingRequestList, type RequestInspection } from "../protocol/request-inspection.ts";
-import { coordinationEntries, indexedState, type RetainedTranscript } from "../transcript/retained-transcript.ts";
-import { setImmediate as yieldTurn } from "node:timers/promises";
+import type { RequestInspection } from "../protocol/request-inspection.ts";
+import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
 import {
-	withAgentTranscriptObservations,
 	EvidenceUnavailableError,
 	requireAgentRecord,
 	type AgentRecord,
@@ -14,11 +10,9 @@ import {
 	resolveCreationRequest,
 } from "../protocol/creation-request.ts";
 import {
-	compareCommittedToolCallOrder,
 	deriveMessageIdentity,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
-	type ToolCallPointer,
 } from "../protocol/identities.ts";
 import {
 	inspectAnswerDelivery,
@@ -42,22 +36,17 @@ import {
 	answerSourcesForRequest,
 	answerResultSources,
 	cancellationSourcesForRequest,
-	cancellationSourcesAfter,
 	answerSourceResultRequestId,
 	findAuthoredAgentMessageSource,
 	findAuthoredAgentMessageSources,
 	inspectCanonicalRequestResolution,
 	type CanonicalRequestResolution,
 } from "../protocol/request-resolution.ts";
-import type { RequestRelationshipSet } from "../runtime/agent-runtime-host.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
 	inspectCommittedAgentMessageTarget,
 	resolveCommittedAgentMessageTargetId,
 } from "./agent-message-target.ts";
-
-const REQUEST_STEPS_PER_TURN = 256;
-const REQUEST_CATCH_UP_SLICE_MS = 8;
 
 type Request = Extract<Message, { kind: "request" }>;
 type Answer = Extract<Message, { kind: "answer" }>;
@@ -72,12 +61,6 @@ export class RequestEvidence {
 	readonly #admittedRequestsById = new Map<string, Request>();
 	readonly #admittedAnswersByRequest = new Map<string, Answer>();
 	readonly #admittedCancellationsByRequest = new Map<string, Cancellation>();
-	readonly #relationshipGraphs = new WeakMap<AgentRecord, RelationshipGraph>();
-	#relationshipSources?: RelationshipSources;
-	#pendingRelationshipSources?: {
-		cursors: Map<AgentRecord, RelationshipCursor>;
-		pending: Generator<void>;
-	};
 
 	constructor(
 		agents: Map<string, AgentRecord>,
@@ -212,7 +195,7 @@ export class RequestEvidence {
 	findRequest(requestId: string): Request | undefined {
 		// A child's Identity already locates its Creation Request. Searching every
 		// history first makes each deadlock check reparse the whole workflow per child.
-		const creationRequest = this.#findCreationRequest(requestId);
+		const creationRequest = this.findCreationRequest(requestId);
 		if (creationRequest) return creationRequest;
 		for (const author of this.#agents.values()) {
 			const authorTranscript = author.transcript.inspect();
@@ -329,89 +312,6 @@ export class RequestEvidence {
 		return cancellations.length > 0;
 	}
 
-	outstandingRequestIdsAt(author: AgentRecord, waitSource: ToolCallPointer, selectors?: readonly string[]): readonly string[] {
-		if (waitSource.agentId !== author.identity.agentId) {
-			throw new Error("wrong_participant: Agent Wait source belongs to another Agent");
-		}
-		const transcript = author.transcript.inspect();
-		const requestIds = new Set(this.residualRelationshipsFor(author).awaitingAnswerRequestIds);
-		for (const candidate of cancellationSourcesAfter({
-			authorAgentId: author.identity.agentId,
-			transcript,
-			source: waitSource,
-		})) {
-			if (
-				candidate.input.operation === "cancel" &&
-				this.#findBoundAuthoredRequest(author, candidate.input.requestMessageId)
-			)
-				requestIds.add(candidate.input.requestMessageId);
-		}
-		const outstanding = [...requestIds]
-			.map((requestId) => this.requireRequest(requestId))
-			.filter(request => compareCommittedToolCallOrder(transcript, request.source, waitSource) < 0)
-			.sort((left, right) => compareCommittedToolCallOrder(transcript, left.source, right.source))
-			.flatMap((request) => {
-				const cancellation = this.findCancellation(request);
-				if (
-					cancellation &&
-					compareCommittedToolCallOrder(transcript, cancellation.source, waitSource) < 0
-				)
-					return [];
-
-				const answer = this.findAnswer(request);
-				if (!answer) return [request.messageId];
-				const delivery = inspectAnswerDelivery({
-					requesterAgentId: author.identity.agentId,
-					transcript,
-					answer,
-				}).deliveryEvidence;
-				if (delivery) return [];
-				return [request.messageId];
-			});
-		if (selectors === undefined) return outstanding;
-		if (!selectors.length) throw new Error("invalid_input: Agent Wait selection must not be empty");
-		const selected = new Set(selectors.map(selector => resolveMessageReference(transcript, waitSource, selector)));
-		// Validate every identity before returning the selected source-ordered snapshot.
-		for (const id of selected) {
-			const message = this.requireCallerAuthoredMessage(author, id);
-			if (message.kind !== "request") throw new Error(`wrong_message_kind: Message ${id} is not a Request`);
-			if (!outstanding.includes(id)) throw new Error(`invalid_state: Request ${id} is not outstanding`);
-		}
-		return outstanding.filter(id => selected.has(id));
-	}
-
-	obligationFrames(agent: AgentRecord): readonly ObligationFrame[] {
-		const owed = new Set(this.residualRelationshipsFor(agent).answerOwedRequestIds);
-		return obligationStack(agent.transcript.inspect(), agent.identity.agentId).filter(frame => owed.has(frame.requestId));
-	}
-
-	/**
-	 * A Creation Request holds the incoming Request slot until it is answered or
-	 * withdrawn: the child's activation contract comes before ordinary Requests,
-	 * so nothing may overtake it while the child has not yielded yet.
-	 * Delivered ordinary Requests are attention, not exclusive ownership, so later
-	 * Requests (including Steer Requests) may still reach the same responder.
-	 *
-	 * A responder parked in Agent Wait has already yielded for inbound work; the
-	 * activation contract can no longer be overtaken, and the slot must not
-	 * withhold attention from the Requests that park is waiting for
-	 * (docs/agent-messaging.md: a Deferred Request preempts the parked Wait with
-	 * one Request in live admission order regardless of Request ancestry).
-	 */
-	isIncomingRequestBlocked(responder: AgentRecord, requestId: string): boolean {
-		const foreground = this.obligationFrames(responder).at(-1);
-		// The Request already occupying the slot may be redelivered (retry) or
-		// cancelled; neither competes with itself.
-		if (!foreground || foreground.requestId === requestId) return false;
-		if (this.#findCreationRequest(foreground.requestId) === undefined) return false;
-		const run = responder.host.observe();
-		return !(run.phase === "live" && run.attention === "agent_wait");
-	}
-
-	openIncomingRequests(agent: AgentRecord): OpenIncomingRequestList {
-		return summarizeRequestObligations(this.obligationFrames(agent));
-	}
-
 	inspectRequest(agent: AgentRecord, selector: string): RequestInspection {
 		const reference = selector.trim();
 		if (!reference) throw new Error("invalid_input: Request reference must not be blank");
@@ -430,7 +330,7 @@ export class RequestEvidence {
 		const matchingIds = candidates.has(reference) ? [reference]
 			: [...candidates].filter(id => id.endsWith(reference));
 		const visible = matchingIds.flatMap<RequestInspection>(requestId => {
-			const authored = this.#findBoundAuthoredRequest(agent, requestId);
+			const authored = this.findAuthoredRequest(agent, requestId);
 			if (!authored && !incoming.has(requestId)) return [];
 			const request = authored ?? this.findRequest(requestId);
 			if (!request) {
@@ -463,236 +363,11 @@ export class RequestEvidence {
 		return request;
 	}
 
-	outstandingRequestIdsFor(agent: AgentRecord): readonly string[] {
-		return this.residualRelationshipsFor(agent).awaitingAnswerRequestIds;
-	}
-
-	residualRelationshipsFor(agent: AgentRecord): RequestRelationshipSet {
-		return withAgentTranscriptObservations(this.#agents.values(), () => {
-			const graph = this.#relationshipGraph(agent);
-			for (;;) {
-				this.#startRelationshipSourceUpdate();
-				while (this.#advanceRelationshipSourceUpdate()) { /* Synchronous read barrier. */ }
-				this.#startRelationshipUpdate(agent, graph, this.#relationshipSources!);
-				if (!graph.pending) return graph.result;
-				while (this.#advanceRelationshipUpdate(graph)) { /* Finish the shared cursor. */ }
-				// Evaluation can bind another Request source without a physical append.
-				// Collect those changes before declaring this reader caught up.
-			}
-		});
-	}
-
-	async refreshRelationships(): Promise<ReadonlyMap<AgentRecord, TranscriptInspection>> {
-		let result: ReadonlyMap<AgentRecord, TranscriptInspection> | undefined;
-		do {
-			const records = [...this.#agents.values()];
-			const inspections = new Map<AgentRecord, TranscriptInspection>();
-			for (const record of records) inspections.set(record, await record.transcript.refresh());
-			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
-			let allComplete = true;
-			withAgentTranscriptObservations(records, () => {
-				if (!this.#refreshRelationshipSourcesSlice()) { allComplete = false; return; }
-				const sources = this.#relationshipSources!;
-				for (const agent of records) {
-					const graph = this.#relationshipGraph(agent);
-					this.#startRelationshipUpdate(agent, graph, sources);
-					const started = performance.now();
-					let consumed = 0;
-					while (consumed++ < REQUEST_STEPS_PER_TURN && performance.now() - started < REQUEST_CATCH_UP_SLICE_MS) {
-						if (!this.#advanceRelationshipUpdate(graph)) {
-							this.#startRelationshipUpdate(agent, graph, sources);
-							if (!graph.pending) break;
-						}
-					}
-					if (graph.pending) allComplete = false;
-				}
-				this.#startRelationshipSourceUpdate();
-				if (this.#pendingRelationshipSources) allComplete = false;
-			}, inspections);
-			if (allComplete) result = inspections;
-			else await yieldTurn();
-			} while (!result);
-		return result;
-	}
-
-	async refreshRelationshipsFor(agent: AgentRecord): Promise<RequestRelationshipSet> {
-		let result: RequestRelationshipSet | undefined;
-		do {
-			const records = [...this.#agents.values()];
-			const inspections = new Map<AgentRecord, TranscriptInspection>();
-			for (const record of records) inspections.set(record, await record.transcript.refresh());
-			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) { await yieldTurn(); continue; }
-			// Pin these already-refreshed views. A synchronous read here would drain
-			// a concurrent append outside both the physical and relationship budgets.
-			withAgentTranscriptObservations(records, () => {
-				if (!this.#refreshRelationshipSourcesSlice()) return;
-				const sources = this.#relationshipSources!;
-				const graph = this.#relationshipGraph(agent);
-				this.#startRelationshipUpdate(agent, graph, sources);
-				const updating = graph.pending !== undefined;
-				const started = performance.now();
-				let consumed = 0;
-				while (consumed++ < REQUEST_STEPS_PER_TURN && performance.now() - started < REQUEST_CATCH_UP_SLICE_MS) {
-					if (!this.#advanceRelationshipUpdate(graph)) {
-						this.#startRelationshipUpdate(agent, graph, sources);
-						if (!graph.pending) {
-							if (!updating) result = graph.result;
-							break;
-						}
-					}
-				}
-			}, inspections);
-			if (!result) await yieldTurn();
-		} while (!result);
-		return result;
-	}
-
-	#relationshipGraph(agent: AgentRecord): RelationshipGraph {
-		let graph = this.#relationshipGraphs.get(agent);
-		if (!graph) {
-			graph = {
-				count: 0,
-				initialized: false,
-				awaiting: new Set(),
-				owed: new Set(),
-				result: { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] },
-			};
-			this.#relationshipGraphs.set(agent, graph);
-		}
-		return graph;
-	}
-
-	#startRelationshipSourceUpdate(): void {
-		const cursors = new Map<AgentRecord, RelationshipCursor>();
-		for (const record of this.#agents.values()) {
-			const state = indexedState(record.transcript.inspect());
-			cursors.set(record, { state, scope: state.scopeVersion, count: state.requestChanges.length });
-		}
-		if (this.#pendingRelationshipSources) {
-			if (sameRelationshipSources(this.#pendingRelationshipSources.cursors, cursors)) return;
-			// A source/identity reset invalidates an in-flight batch, including any
-			// partially collected journal entries. No old-epoch graph can publish it.
-			this.#pendingRelationshipSources = undefined;
-			this.#relationshipSources = undefined;
-		}
-		const previous = this.#relationshipSources;
-		const reset = !previous || !sameRelationshipSources(previous.cursors, cursors);
-		if (!reset && [...cursors].every(([record, cursor]) => cursor.count === previous.cursors.get(record)!.count))
-			return;
-		const sources: RelationshipSources = reset
-			? { cursors: new Map(), changes: [], creationIds: new Map() }
-			: previous;
-		this.#pendingRelationshipSources = {
-			cursors,
-			pending: this.#collectRelationshipSources(sources, cursors, reset),
-		};
-	}
-
-	*#collectRelationshipSources(
-		sources: RelationshipSources,
-		cursors: Map<AgentRecord, RelationshipCursor>,
-		reset: boolean,
-	): Generator<void> {
-		for (const [record, cursor] of cursors) {
-			if (reset && "spawnSource" in record.identity) {
-				const spawner = record.identity.directSpawnerAgentId;
-				let ids = sources.creationIds.get(spawner);
-				if (!ids) sources.creationIds.set(spawner, (ids = []));
-				ids.push(deriveMessageIdentity(record.identity.spawnSource));
-			}
-			const start = sources.cursors.get(record)?.count ?? 0;
-			// The captured end must not grow while this generator yields. Later
-			// changes, including lazy Request bindings, belong to a successor batch.
-			for (let index = start; index < cursor.count; index++) {
-				sources.changes.push(cursor.state.requestChanges[index]!);
-				yield;
-			}
-			yield;
-		}
-		sources.cursors = cursors;
-		this.#relationshipSources = sources;
-	}
-
-	#advanceRelationshipSourceUpdate(): boolean {
-		const update = this.#pendingRelationshipSources;
-		if (!update) return false;
-		if (!update.pending.next().done) return true;
-		this.#pendingRelationshipSources = undefined;
-		return false;
-	}
-
-	#refreshRelationshipSourcesSlice(): boolean {
-		this.#startRelationshipSourceUpdate();
-		const started = performance.now();
-		let consumed = 0;
-		while (consumed++ < REQUEST_STEPS_PER_TURN && performance.now() - started < REQUEST_CATCH_UP_SLICE_MS) {
-			if (!this.#advanceRelationshipSourceUpdate()) {
-				this.#startRelationshipSourceUpdate();
-				return !this.#pendingRelationshipSources;
-			}
-		}
-		return !this.#pendingRelationshipSources;
-	}
-
-	#startRelationshipUpdate(agent: AgentRecord, graph: RelationshipGraph, sources: RelationshipSources): void {
-		if (graph.sources !== sources) {
-			graph.pending = undefined;
-			graph.sources = sources;
-			graph.count = 0;
-			graph.initialized = false;
-			graph.awaiting.clear();
-			graph.owed.clear();
-		}
-		if (graph.pending || (graph.initialized && graph.count === sources.changes.length)) return;
-		const creationIds = graph.initialized ? [] : sources.creationIds.get(agent.identity.agentId) ?? [];
-		graph.pending = this.#updateRelationships(agent, graph, sources, creationIds, sources.changes.length);
-	}
-
-	*#updateRelationships(
-		agent: AgentRecord,
-		graph: RelationshipGraph,
-		sources: RelationshipSources,
-		creationIds: readonly string[],
-		end: number,
-	): Generator<void> {
-		this.#validateAnswerResultReferences(agent);
-		const changed = new Set(creationIds);
-		for (let index = graph.count; index < end; index++) {
-			changed.add(sources.changes[index]!);
-			yield;
-		}
-		for (const requestId of changed) {
-			const contribution = this.#relationshipForRequest(agent, requestId);
-			if (contribution.awaiting) graph.awaiting.add(requestId);
-			else graph.awaiting.delete(requestId);
-			if (contribution.owed) graph.owed.add(requestId);
-			else graph.owed.delete(requestId);
-			yield;
-		}
-		graph.result = {
-			awaitingAnswerRequestIds: [...graph.awaiting],
-			answerOwedRequestIds: [...graph.owed],
-		};
-		graph.count = end;
-		graph.initialized = true;
-	}
-
-	#advanceRelationshipUpdate(graph: RelationshipGraph): boolean {
-		if (!graph.pending) return false;
-		try {
-			if (!graph.pending.next().done) return true;
-		} catch (error) {
-			// Shared source progress is reusable, but this graph must reconstruct
-			// from the journal after an error rather than accept partial membership.
-			graph.sources = undefined;
-			graph.pending = undefined;
-			throw error;
-		}
-		graph.pending = undefined;
-		return false;
-	}
-
-	#relationshipForRequest(
+	/**
+	 * One Agent's stake in one Request: whether it awaits the Answer as requester
+	 * and whether it owes the Answer as responder. Durable evidence only.
+	 */
+	stakeIn(
 		agent: AgentRecord,
 		requestId: string,
 	): { awaiting: boolean; owed: boolean } {
@@ -704,7 +379,7 @@ export class RequestEvidence {
 		});
 		let awaiting = false;
 		let owed = false;
-		const request = this.#findBoundAuthoredRequest(agent, requestId);
+		const request = this.findAuthoredRequest(agent, requestId);
 		if (request?.kind === "request") {
 			const responder = this.#agents.get(request.targetAgentId);
 			const delivery = responder
@@ -777,14 +452,15 @@ export class RequestEvidence {
 		return { awaiting, owed };
 	}
 
-	#findBoundAuthoredRequest(agent: AgentRecord, requestId: string): Request | undefined {
+	/** A Request the Agent authored, including its children's Creation Requests. */
+	findAuthoredRequest(agent: AgentRecord, requestId: string): Request | undefined {
 		const transcript = agent.transcript.inspect();
 		const source = findAuthoredAgentMessageSource({
 			authorAgentId: agent.identity.agentId,
 			transcript,
 			messageId: requestId,
 		});
-		const creation = this.#findCreationRequest(requestId);
+		const creation = this.findCreationRequest(requestId);
 		let request: Request | undefined =
 			creation?.fromAgentId === agent.identity.agentId ? creation : undefined;
 		if (source?.input.operation === "request") {
@@ -827,14 +503,14 @@ export class RequestEvidence {
 			const requestId = authored.input.operation === "answer" ? authored.input.requestId : authored.input.requestMessageId;
 			if (!this.findRequest(requestId)) return undefined;
 		}
-		if (!authored) return this.#findCreationRequest(messageId);
+		if (!authored) return this.findCreationRequest(messageId);
 		return this.requireCallerAuthoredMessage(author, messageId);
 	}
 
 	requireCallerAuthoredMessage(caller: AgentRecord, messageId: string): Message {
 		const ownMessage = this.#resolveAuthoredMessage(caller, messageId);
 		if (ownMessage) return ownMessage;
-		const creationRequest = this.#findCreationRequest(messageId);
+		const creationRequest = this.findCreationRequest(messageId);
 		if (creationRequest) {
 			if (creationRequest.fromAgentId === caller.identity.agentId) {
 				return creationRequest;
@@ -898,7 +574,7 @@ export class RequestEvidence {
 			});
 	}
 
-	#findCreationRequest(requestId: string): Request | undefined {
+	findCreationRequest(requestId: string): Request | undefined {
 		for (const child of this.#agents.values()) {
 			if (!("spawnSource" in child.identity)) continue;
 			if (child.identity.spawnSource.toolCallId.length === 0) continue;
@@ -1055,7 +731,7 @@ export class RequestEvidence {
 	 * obligation (docs/request-lifetime-decision-matrix.md, alternative B); the
 	 * recipient-side Delivery is the evidence, so that Answer stays answerable.
 	 */
-	#validateAnswerResultReferences(responder: AgentRecord): void {
+	validateAnswerResultReferences(responder: AgentRecord): void {
 		const transcript = responder.transcript.inspect();
 		// A record without a bootstrap Identity in this transcript has no authored
 		// coordination facts to validate (test-only records, unadopted histories).
@@ -1141,39 +817,4 @@ export class RequestEvidence {
 			`wrong_participant: Agent ${caller.identity.agentId} did not author Message ${messageId}`,
 		);
 	}
-}
-
-type RelationshipCursor = {
-	state: RetainedTranscript;
-	scope: number;
-	count: number;
-};
-/** One shared, disposable journal per roster/source epoch, not one cursor map per graph. */
-type RelationshipSources = {
-	cursors: Map<AgentRecord, RelationshipCursor>;
-	changes: string[];
-	creationIds: Map<string, string[]>;
-};
-type RelationshipGraph = {
-	sources?: RelationshipSources;
-	count: number;
-	initialized: boolean;
-	awaiting: Set<string>;
-	owed: Set<string>;
-	result: RequestRelationshipSet;
-	pending?: Generator<void>;
-};
-
-function sameRelationshipSources(
-	previous: ReadonlyMap<AgentRecord, RelationshipCursor>,
-	current: ReadonlyMap<AgentRecord, RelationshipCursor>,
-): boolean {
-	if (previous.size !== current.size) return false;
-	const order = previous.keys();
-	for (const [record, cursor] of current) {
-		const before = previous.get(record);
-		if (order.next().value !== record || before?.state !== cursor.state || before.scope !== cursor.scope)
-			return false;
-	}
-	return true;
 }

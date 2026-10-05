@@ -421,7 +421,10 @@ export class WorkflowCoordinator {
 			this.#quarantinedAgentIds,
 			this.#quarantinedWorkflowAgentIds,
 		);
-		this.#requestRelationships = new RequestRelationships({ requestEvidence: this.#requestEvidence });
+		this.#requestRelationships = new RequestRelationships({
+			agents: this.#agents,
+			requestEvidence: this.#requestEvidence,
+		});
 		this.#messages = new MessageCoordinator({
 			agents: this.#agents,
 			requestEvidence: this.#requestEvidence,
@@ -436,6 +439,8 @@ export class WorkflowCoordinator {
 		this.#agentWaits = new AgentWaitCoordinator({
 			agents: this.#agents,
 			messages: this.#messages,
+			requestEvidence: this.#requestEvidence,
+			requestRelationships: this.#requestRelationships,
 			answerArbitration: this.#messages.answerArbitration,
 			boundaryHooks: options.agentWaitBoundaryHooks,
 			clock: options.agentWaitClock,
@@ -467,6 +472,8 @@ export class WorkflowCoordinator {
 			ownerIdentity: identity,
 			sessionFactory,
 			messages: this.#messages,
+			requestEvidence: this.#requestEvidence,
+			requestRelationships: this.#requestRelationships,
 			humanRequests: this.#humanRequests,
 			workflowPolicy: this.#workflowPolicy,
 			integrateAgent: (record) => this.#integrateAgent(record),
@@ -515,7 +522,7 @@ export class WorkflowCoordinator {
 
 	async initialize(): Promise<void> {
 		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
-		await this.#messages.refreshTranscriptFacts();
+		await this.#requestRelationships.refresh();
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
 	}
 
@@ -687,8 +694,8 @@ export class WorkflowCoordinator {
 			},
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			search: (input) => this.#searchFor(agentId, input),
-			openIncomingRequests: () => this.#messages.openIncomingRequests(agentId),
-			inspectRequest: (requestId) => this.#messages.inspectRequest(agentId, requestId),
+			openIncomingRequests: () => this.#requestRelationships.openIncomingRequests(this.#requireAgent(agentId)),
+			inspectRequest: (requestId) => this.#requestEvidence.inspectRequest(this.#requireAgent(agentId), requestId),
 			message: (toolCallId, input) => {
 				this.#assertAdmissionOpen();
 				return this.#messages.execute(agentId, toolCallId, input);
@@ -765,7 +772,7 @@ export class WorkflowCoordinator {
 				);
 			},
 			reconcileCommittedToolResults,
-			obligationFrames: () => this.#messages.obligationFrames(agentId),
+			obligationFrames: () => this.#requestRelationships.obligationFrames(this.#requireAgent(agentId)),
 		};
 	}
 

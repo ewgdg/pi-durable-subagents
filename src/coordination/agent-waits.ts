@@ -4,6 +4,8 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentRecord } from "./agent-record.ts";
 import { awaitsCanonicalAnswer, type AnswerArbitration } from "./answer-arbitration.ts";
 import type { MessageCoordinator } from "./messages.ts";
+import type { RequestEvidence } from "./request-evidence.ts";
+import type { RequestRelationships } from "./request-relationships.ts";
 import {
 	inspectCommittedAgentWaitResult,
 	resolveCommittedAgentWaitCall,
@@ -66,6 +68,8 @@ type PendingAgentWait = {
 export class AgentWaitCoordinator {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #messages: MessageCoordinator;
+	readonly #requestEvidence: RequestEvidence;
+	readonly #requestRelationships: RequestRelationships;
 	readonly #answerArbitration: AnswerArbitration;
 	readonly #boundaryHooks: AgentWaitBoundaryHooks;
 	readonly #clock: AgentWaitClock;
@@ -77,6 +81,8 @@ export class AgentWaitCoordinator {
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		messages: MessageCoordinator;
+		requestEvidence: RequestEvidence;
+		requestRelationships: RequestRelationships;
 		answerArbitration: AnswerArbitration;
 		boundaryHooks?: AgentWaitBoundaryHooks;
 		clock?: AgentWaitClock;
@@ -86,6 +92,8 @@ export class AgentWaitCoordinator {
 	}) {
 		this.#agents = options.agents;
 		this.#messages = options.messages;
+		this.#requestEvidence = options.requestEvidence;
+		this.#requestRelationships = options.requestRelationships;
 		this.#answerArbitration = options.answerArbitration;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#clock = options.clock ?? SYSTEM_AGENT_WAIT_CLOCK;
@@ -101,7 +109,7 @@ export class AgentWaitCoordinator {
 		signal: AbortSignal | undefined,
 		onProgress?: (progress: AgentWaitProgress) => void,
 	): Promise<AgentWaitResult> {
-		await this.#messages.refreshTranscriptFacts();
+		await this.#requestRelationships.refresh();
 		if (!signal) {
 			throw new Error("invariant_violation: Agent Wait has no active Run signal");
 		}
@@ -116,18 +124,21 @@ export class AgentWaitCoordinator {
 			toolCallId,
 			providedInput,
 		});
-		const requestMessageIds = this.#messages.outstandingRequestIds(
-			callerAgentId,
+		const requestMessageIds = this.#requestRelationships.outstandingRequestIdsAt(
+			caller,
 			call.source,
 			call.input.requestMessageIds,
 		);
-		const requestRelationships = this.#messages.requestRelationships(requestMessageIds);
+		if (requestMessageIds.length === 0) {
+			throw new Error(
+				"invalid_input: Agent Wait requires at least one outstanding outbound Agent Request",
+			);
+		}
 		onProgress?.({
-			waitingFor: requestRelationships.map(({ requestId, requestTitle, targetAgentId }) => ({
-				requestMessageId: requestId,
-				requestTitle,
-				responderAgentId: targetAgentId,
-			})),
+			waitingFor: requestMessageIds.map((requestMessageId) => {
+				const request = this.#requestEvidence.requestMetadata(requestMessageId);
+				return { requestMessageId, requestTitle: request.title, responderAgentId: request.targetAgentId };
+			}),
 		});
 		const completed = this.#completedAggregate(caller, requestMessageIds);
 		if (!completed) this.#assertNoSuspendedResponder(caller, requestMessageIds);
@@ -201,9 +212,9 @@ export class AgentWaitCoordinator {
 	#assertNoSuspendedResponder(caller: AgentRecord, requestMessageIds: readonly string[]): void {
 		if (!this.#rejectsSuspendedResponders) return;
 		const states = this.#answerArbitration.inspect(caller, requestMessageIds);
-		const suspended = this.#messages.requestRelationships(requestMessageIds)
+		const suspended = requestMessageIds
 			.filter((_, index) => awaitsCanonicalAnswer(states[index]!))
-			.map(({ targetAgentId }) => targetAgentId)
+			.map((requestId) => this.#requestEvidence.requestMetadata(requestId).targetAgentId)
 			.filter((agentId) => this.#agents.get(agentId)?.host.currentRunSuspension() !== undefined);
 		if (suspended.length === 0) return;
 		throw new Error(

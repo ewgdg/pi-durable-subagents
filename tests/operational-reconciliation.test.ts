@@ -140,6 +140,8 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 		ownerIdentity: identity,
 		sessionFactory,
 		messages,
+		requestEvidence,
+		requestRelationships,
 		humanRequests: new HumanRequestCoordinator({
 			agents,
 			ownerIdentity: identity,

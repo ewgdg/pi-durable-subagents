@@ -117,14 +117,14 @@ test("nested recovery preserves attention and Agent-owned outbound dependencies"
 	const receipt = await h.resume();
 	assert.deepEqual(receipt.outstandingRequests.map(item => item.requestMessageId), [first.requestMessageId, nested.requestMessageId]);
 	assert.deepEqual(
-		h.messages.obligationFrames("responder").map(frame => frame.requestId),
+		h.relationships.obligationFrames(h.responder.record).map(frame => frame.requestId),
 		[first.requestMessageId, nested.requestMessageId],
 	);
-	assert.equal(h.messages.foregroundRequestId(h.responder.record), nested.requestMessageId);
-	assert.equal(h.messages.foregroundRequestId(h.requester.record), reverse.requestMessageId);
+	assert.equal(h.relationships.foregroundRequestId(h.responder.record), nested.requestMessageId);
+	assert.equal(h.relationships.foregroundRequestId(h.requester.record), reverse.requestMessageId);
 	// Attention foreground does not hide dependencies authored under an earlier obligation.
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.responder.record), [reverse.requestMessageId]);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), [first.requestMessageId, nested.requestMessageId]);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.responder.record), [reverse.requestMessageId]);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.requester.record), [first.requestMessageId, nested.requestMessageId]);
 	assert.deepEqual(
 		h.deliveries(h.responder).map(delivery => delivery.source.toolCallId),
 		["first", "nested"],
@@ -321,18 +321,21 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 	const participants = [requester, responder, worker];
 	const agents = new Map(participants.map(p => [p.record.identity.agentId, p.record]));
 	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
-	let messages = new MessageCoordinator({ ...options, ...requestCoordination(agents) });
+	let coordination = requestCoordination(agents);
+	let messages = new MessageCoordinator({ ...options, ...coordination });
 	for (const p of participants) messages.integrate(p.record);
 	t.after(() => messages.shutdownDeliveryProgress());
 	return {
 		requester, responder, worker, agents, policy: options.workflowPolicy,
 		get messages() { return messages; },
+		get relationships() { return coordination.requestRelationships; },
 		async recover() {
 			for (const p of participants) messages.discardSchedulingInLane(p.record);
 			messages.shutdownDeliveryProgress();
-			messages = new MessageCoordinator({ ...options, ...requestCoordination(agents) });
+			coordination = requestCoordination(agents);
+			messages = new MessageCoordinator({ ...options, ...coordination });
 			for (const p of participants) messages.integrate(p.record);
-			await messages.refreshTranscriptFacts();
+			await coordination.requestRelationships.refresh();
 		},
 		async message(p: ReturnType<typeof runtimeParticipant>, id: string, input: AgentMessageInput) {
 			call(p, id, "agent_message", input);

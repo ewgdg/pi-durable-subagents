@@ -9,6 +9,6 @@ export function requestCoordination(
 	quarantinedWorkflowAgentIds: ReadonlySet<string> = quarantinedAgentIds,
 ) {
 	const requestEvidence = new RequestEvidence(agents, quarantinedAgentIds, quarantinedWorkflowAgentIds);
-	const requestRelationships = new RequestRelationships({ requestEvidence });
+	const requestRelationships = new RequestRelationships({ agents, requestEvidence });
 	return { requestEvidence, requestRelationships };
 }

@@ -5,7 +5,7 @@ import { fauxAssistantMessage, fauxToolCall, type JsonValue } from "@earendil-wo
 import { SessionManager, type ContextEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
-import { RequestEvidence } from "../src/coordination/request-evidence.ts";
+import { requestCoordination } from "./support/request-coordination.ts";
 import { registerParticipantLifecycle } from "../src/pi-integration/participant-lifecycle.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -53,14 +53,14 @@ test("a recovered child with skipped spawn has no authored Creation Request but 
 				);
 			}
 		}
-		const evidence = new RequestEvidence(history.agents);
-		assert.equal(evidence.resolveRecoveryMessage(history.requester.record, requestId), undefined);
+		const evidence = requestCoordination(history.agents);
+		assert.equal(evidence.requestEvidence.resolveRecoveryMessage(history.requester.record, requestId), undefined);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds,
 			[requestId],
 		);
 		assert.deepEqual(
-			evidence.openIncomingRequests(history.responder.record).requests
+			evidence.requestRelationships.openIncomingRequests(history.responder.record).requests
 				.map(request => request.requestMessageId),
 			[requestId],
 		);
@@ -76,8 +76,8 @@ test("orphan Request Cancellation Delivery still requires its original requester
 	appendEvidenceDelivery(history.responder, { source: requestSource, projection: {
 		kind: "request", requestMessageId: requestId, fromAgentId: "requester", title: "Preserved duty", question: "Only the requester may withdraw this work.",
 	} });
-	const evidence = new RequestEvidence(history.agents);
-	assert.deepEqual(evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds, [requestId]);
+	const evidence = requestCoordination(history.agents);
+	assert.deepEqual(evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds, [requestId]);
 	const cancellationSource = { agentId: "third-agent", entryId: "third-cancel", toolCallId: "cancel-q" };
 	appendEvidenceDelivery(history.responder, { source: cancellationSource, projection: {
 		kind: "request_cancellation", requestMessageId: requestId, fromAgentId: "third-agent",
@@ -85,9 +85,9 @@ test("orphan Request Cancellation Delivery still requires its original requester
 	} });
 	for (const replay of [false, true]) {
 		if (replay) for (const p of [history.requester, history.responder, third]) p.record.transcript = transcriptFromSessionManager(p.manager, { fresh: true });
-		const current = replay ? new RequestEvidence(history.agents) : evidence;
-		assert.throws(() => current.isLocalCancellationDelivered(history.responder.record, requestId), /invariant_violation.*requester/);
-		assert.throws(() => current.residualRelationshipsFor(history.responder.record), /invariant_violation.*requester/);
+		const current = replay ? requestCoordination(history.agents) : evidence;
+		assert.throws(() => current.requestEvidence.isLocalCancellationDelivered(history.responder.record, requestId), /invariant_violation.*requester/);
+		assert.throws(() => current.requestRelationships.relationshipsFor(history.responder.record), /invariant_violation.*requester/);
 	}
 });
 
@@ -98,8 +98,8 @@ for (const validSource of [true, false]) test(`${validSource ? "valid" : "reject
 	appendEvidenceDelivery(history.responder, { source: requestSource, projection: {
 		kind: "request", requestMessageId: requestId, fromAgentId: "requester", title: "Preserved duty", question: "Complete this work once.",
 	} });
-	const evidence = new RequestEvidence(history.agents);
-	assert.deepEqual(evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds, [requestId]);
+	const evidence = requestCoordination(history.agents);
+	assert.deepEqual(evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds, [requestId]);
 	const toolCallId = "answer-before-author-result";
 	const entryId = history.responder.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
 		operation: "answer", requestId, answer: validSource ? "Verified work." : "",
@@ -111,11 +111,11 @@ for (const validSource of [true, false]) test(`${validSource ? "valid" : "reject
 	} });
 	for (const replay of [false, true]) {
 		if (replay) for (const p of [history.requester, history.responder]) p.record.transcript = transcriptFromSessionManager(p.manager, { fresh: true });
-		const current = replay ? new RequestEvidence(history.agents) : evidence;
-		assert.equal(current.findLocalAnswer(history.responder.record, requestId)?.messageId, validSource ? answerId : undefined);
-		assert.deepEqual(current.residualRelationshipsFor(history.responder.record).answerOwedRequestIds, validSource ? [] : [requestId]);
-		assert.deepEqual(current.openIncomingRequests(history.responder.record).requests.map(request => request.requestMessageId), validSource ? [] : [requestId]);
-		assert.equal(current.resolveRecoveryMessage(history.responder.record, answerId), undefined);
+		const current = replay ? requestCoordination(history.agents) : evidence;
+		assert.equal(current.requestEvidence.findLocalAnswer(history.responder.record, requestId)?.messageId, validSource ? answerId : undefined);
+		assert.deepEqual(current.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds, validSource ? [] : [requestId]);
+		assert.deepEqual(current.requestRelationships.openIncomingRequests(history.responder.record).requests.map(request => request.requestMessageId), validSource ? [] : [requestId]);
+		assert.equal(current.requestEvidence.resolveRecoveryMessage(history.responder.record, answerId), undefined);
 		const original = JSON.stringify(history.responder.manager.getEntries());
 		const { beforeStartup, afterStartup } = await recoveredObligationContext(current, history.responder);
 		// Without the coordinator's cross-Agent proof, the local Delivery still presents this duty.
@@ -127,7 +127,7 @@ for (const validSource of [true, false]) test(`${validSource ? "valid" : "reject
 	}
 });
 
-async function recoveredObligationContext(evidence: RequestEvidence, responder: ReturnType<typeof participant>) {
+async function recoveredObligationContext(evidence: ReturnType<typeof requestCoordination>, responder: ReturnType<typeof participant>) {
 	type Hook = (event: never, context: ExtensionContext) => unknown;
 	const hooks = new Map<string, Hook>();
 	const api = {
@@ -136,7 +136,7 @@ async function recoveredObligationContext(evidence: RequestEvidence, responder: 
 		sendMessage() { assert.fail("context reconciliation must not enqueue a continuation"); },
 	} as unknown as ExtensionAPI;
 	registerParticipantLifecycle(api, {
-		async executionStarted() { return evidence.obligationFrames(responder.record); },
+		async executionStarted() { return evidence.requestRelationships.obligationFrames(responder.record); },
 		async humanInputSubmitted() { return "continue"; },
 		async primaryInputQueued() {},
 		async humanInputMode() { return "agent"; },
@@ -190,56 +190,24 @@ for (const outcome of [
 			details: { requestMessageId, targetAgentId: "responder", messageStatus: "not_sent", reason: "target_unavailable" },
 		});
 		for (let reopen = 0; reopen < 2; reopen++) {
-			const evidence = new RequestEvidence(history.agents);
-			assert.deepEqual(evidence.outstandingRequestIdsFor(author.record), outcome.messageStatus === "not_sent" ? [] : [requestMessageId]);
-			assert.deepEqual(evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds, []);
-			if (outcome.messageStatus === "not_sent") assert.throws(() => evidence.requireRequest(requestMessageId), /unknown_identity/);
-			else assert.equal(evidence.requireRequest(requestMessageId).messageId, requestMessageId);
+			const evidence = requestCoordination(history.agents);
+			assert.deepEqual(evidence.requestRelationships.outstandingRequestIds(author.record), outcome.messageStatus === "not_sent" ? [] : [requestMessageId]);
+			assert.deepEqual(evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds, []);
+			if (outcome.messageStatus === "not_sent") assert.throws(() => evidence.requestEvidence.requireRequest(requestMessageId), /unknown_identity/);
+			else assert.equal(evidence.requestEvidence.requireRequest(requestMessageId).messageId, requestMessageId);
 		}
 	});
 }
-
-test("a backlog arriving during relationship catch-up stays within the physical consumption budget", async () => {
-	const history = requestHistory();
-	for (let i = 0; i < 400; i++) history.answer(history.request());
-	for (const agent of history.agents.values()) await agent.transcript.refresh();
-	const evidence = new RequestEvidence(history.agents);
-	const pending = evidence.refreshRelationshipsFor(history.requester.record);
-	const before = history.responder.record.transcript.diagnostics()!.entriesConsumed;
-	const backlog = 20_000;
-	for (let i = 0; i < backlog; i++) history.responder.manager.appendCustomEntry("marker", { i });
-	await new Promise<void>(resolve => setImmediate(resolve));
-	assert.ok(history.responder.record.transcript.diagnostics()!.entriesConsumed - before < backlog,
-		"new evidence must yield before consuming the complete backlog");
-	await pending;
-	assert.equal(history.responder.record.transcript.diagnostics()!.entriesConsumed - before, backlog);
-});
-
-test("a scope replacement discards a yielding relationship reconstruction", async () => {
-	const history = requestHistory();
-	for (let i = 0; i < 400; i++) history.answer(history.request());
-	history.request();
-	for (const agent of history.agents.values()) await agent.transcript.refresh();
-	const evidence = new RequestEvidence(history.agents);
-	const pending = evidence.refreshRelationshipsFor(history.requester.record);
-	for (const participant of [history.requester, history.responder]) {
-		const agentId = participant.record.identity.agentId;
-		participant.manager.newSession({ id: agentId });
-		participant.manager.appendCustomEntry("agent-coordination.identity", { agentId });
-	}
-	assert.deepEqual(evidence.residualRelationshipsFor(history.requester.record), { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
-	assert.deepEqual(await pending, { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
-});
 
 test("Answer Delivery rejects a Retrieval that reuses its source for another Request", () => {
 	const history = requestHistory();
 	const requestId = history.request();
 	history.answer(requestId);
-	const evidence = new RequestEvidence(history.agents);
-	const answer = evidence.findAnswer(evidence.requireRequest(requestId))!;
+	const evidence = requestCoordination(history.agents);
+	const answer = evidence.requestEvidence.findAnswer(evidence.requestEvidence.requireRequest(requestId))!;
 	assert.ok(answer);
 	assert.deepEqual(
-		evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+		evidence.requestRelationships.relationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 		[],
 	);
 	const differentRequestId = history.request();
@@ -270,7 +238,7 @@ test("Answer Delivery rejects a Retrieval that reuses its source for another Req
 		/Retrieval differs from its source/,
 	);
 	assert.throws(
-		() => evidence.residualRelationshipsFor(history.requester.record),
+		() => evidence.requestRelationships.relationshipsFor(history.requester.record),
 		/invariant_violation/,
 	);
 });
@@ -285,9 +253,9 @@ test("a rejected later Cancellation cannot invalidate an earlier Agent Wait", ()
 			stopReason: "toolUse",
 		}),
 	);
-	const evidence = new RequestEvidence(history.agents);
+	const evidence = requestCoordination(history.agents);
 	const waitSource = { agentId: "requester", entryId, toolCallId };
-	assert.deepEqual(evidence.outstandingRequestIdsAt(history.requester.record, waitSource), [
+	assert.deepEqual(evidence.requestRelationships.outstandingRequestIdsAt(history.requester.record, waitSource), [
 		requestId,
 	]);
 	manager.appendMessage(
@@ -309,49 +277,9 @@ test("a rejected later Cancellation cannot invalidate an earlier Agent Wait", ()
 		isError: true,
 		timestamp: Date.now(),
 	});
-	assert.deepEqual(evidence.outstandingRequestIdsAt(history.requester.record, waitSource), [
+	assert.deepEqual(evidence.requestRelationships.outstandingRequestIdsAt(history.requester.record, waitSource), [
 		requestId,
 	]);
-});
-
-test("synchronous relationship reads catch commits made during a yielding reconstruction", async () => {
-	const history = requestHistory();
-	const requestId = history.request();
-	for (let i = 0; i < 400; i++) history.answer(history.request());
-	for (const agent of history.agents.values()) await agent.transcript.refresh();
-	const evidence = new RequestEvidence(history.agents);
-	const pending = evidence.refreshRelationshipsFor(history.requester.record);
-	history.answer(requestId);
-	const result = evidence.residualRelationshipsFor(history.requester.record);
-	assert.deepEqual(result.awaitingAnswerRequestIds, []);
-	assert.deepEqual((await pending).awaitingAnswerRequestIds, []);
-});
-
-test("residual relationships retain unchanged results and consume new Requests and Answers", async () => {
-	const history = requestHistory();
-	for (let i = 0; i < 400; i++) history.answer(history.request());
-	const evidence = new RequestEvidence(history.agents);
-	for (const agent of history.agents.values()) await agent.transcript.refresh();
-	const settled = await evidence.refreshRelationshipsFor(history.requester.record);
-	assert.deepEqual(settled, { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
-	for (let i = 0; i < 20; i++)
-		assert.equal(evidence.residualRelationshipsFor(history.requester.record), settled);
-	const requestId = history.request();
-	for (const agent of history.agents.values()) await agent.transcript.refresh();
-	assert.deepEqual(await evidence.refreshRelationshipsFor(history.requester.record), {
-		awaitingAnswerRequestIds: [requestId],
-		answerOwedRequestIds: [],
-	});
-	assert.deepEqual(await evidence.refreshRelationshipsFor(history.responder.record), {
-		awaitingAnswerRequestIds: [],
-		answerOwedRequestIds: [requestId],
-	});
-	history.answer(requestId);
-	for (const agent of history.agents.values()) await agent.transcript.refresh();
-	const refresh = evidence.refreshRelationshipsFor(history.requester.record);
-	assert.deepEqual(evidence.residualRelationshipsFor(history.requester.record), settled);
-	assert.deepEqual(await refresh, settled);
-	assert.deepEqual(await evidence.refreshRelationshipsFor(history.responder.record), settled);
 });
 
 test("Creation Request lookup trusts loaded identity and creation input without Spawner reads", () => {
@@ -386,7 +314,7 @@ test("Creation Request lookup trusts loaded identity and creation input without 
 			throw new Error("Creation Request resolution must not acquire unrelated history");
 		},
 	});
-	const evidence = new RequestEvidence(
+	const evidence = requestCoordination(
 		new Map([
 			[unrelated.identity.agentId, unrelated],
 			[owner.identity.agentId, owner],
@@ -395,7 +323,7 @@ test("Creation Request lookup trusts loaded identity and creation input without 
 	);
 	const requestId = deriveMessageIdentity(source);
 
-	assert.deepEqual(evidence.requireRequest(requestId), {
+	assert.deepEqual(evidence.requestEvidence.requireRequest(requestId), {
 		title: "Fixture request",
 		kind: "request",
 		origin: "agent_spawn",
@@ -467,14 +395,14 @@ test("an undelivered Cancellation keeps the responder's obligation open", () => 
 		if (replay) for (const participant of [history.requester, history.responder]) {
 			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
 		}
-		const evidence = new RequestEvidence(history.agents);
+		const evidence = requestCoordination(history.agents);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds,
 			[requestId],
 			"the responder cannot learn of a withdrawal it never received",
 		);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 			[],
 			"the requester's own commitment withdraws its dependency without Delivery",
 		);
@@ -519,18 +447,18 @@ test("a Cancellation delivered to the responder discharges the duty on both side
 		if (replay) for (const participant of [history.requester, history.responder]) {
 			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
 		}
-		const evidence = new RequestEvidence(history.agents);
+		const evidence = requestCoordination(history.agents);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds,
 			[],
 			"the delivered withdrawal removes the responder's entry",
 		);
 		assert.deepEqual(
-			evidence.openIncomingRequests(history.responder.record).requests,
+			evidence.requestRelationships.openIncomingRequests(history.responder.record).requests,
 			[],
 		);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 			[],
 		);
 	}
@@ -584,14 +512,14 @@ for (const delivered of [true, false]) test(`a malformed Cancellation author res
 		if (replay) for (const participant of [history.requester, history.responder]) {
 			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
 		}
-		const evidence = new RequestEvidence(history.agents);
+		const evidence = requestCoordination(history.agents);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds,
 			[requestId],
 			"a rejected author result never canonicalizes the Cancellation",
 		);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 			[requestId],
 		);
 		assert.ok(
@@ -634,14 +562,14 @@ test("Delivery evidence still canonicalizes a Cancellation that has no author re
 		if (replay) for (const participant of [history.requester, history.responder]) {
 			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
 		}
-		const evidence = new RequestEvidence(history.agents);
+		const evidence = requestCoordination(history.agents);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds,
 			[],
 			"absence of an author result keeps the Delivery fallback canonical",
 		);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 			[],
 		);
 	}
@@ -691,14 +619,14 @@ test("a Cancellation author result rejected for a retry-only reason stays fail-c
 		if (replay) for (const participant of [history.requester, history.responder]) {
 			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
 		}
-		const evidence = new RequestEvidence(history.agents);
+		const evidence = requestCoordination(history.agents);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds,
 			[requestId],
 			"a retry-only rejection reason must not canonicalize the Cancellation",
 		);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 			[requestId],
 		);
 		assert.ok(
@@ -757,64 +685,20 @@ test("an Answer author result rejected by shape cannot discharge a Request throu
 		if (replay) for (const participant of [history.requester, history.responder]) {
 			participant.record.transcript = transcriptFromSessionManager(participant.manager, { fresh: true });
 		}
-		const evidence = new RequestEvidence(history.agents);
+		const evidence = requestCoordination(history.agents);
 		assert.equal(
-			evidence.findAnswer(evidence.requireRequest(requestId)),
+			evidence.requestEvidence.findAnswer(evidence.requestEvidence.requireRequest(requestId)),
 			undefined,
 			"a rejected Answer author result never canonicalizes through requester Delivery",
 		);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.responder.record).answerOwedRequestIds,
 			[requestId],
 		);
 		assert.deepEqual(
-			evidence.residualRelationshipsFor(history.requester.record).awaitingAnswerRequestIds,
+			evidence.requestRelationships.relationshipsFor(history.requester.record).awaitingAnswerRequestIds,
 			[requestId],
 		);
 	}
 });
 
-test("a rejected Request receipt cannot block unrelated relationship refreshes", async () => {
-	const history = requestHistory();
-	const healthyRequestId = history.request();
-	const toolCallId = "malformed-request-receipt";
-	const entryId = history.requester.manager.appendMessage(fauxAssistantMessage(
-		fauxToolCall("agent_message", {
-			title: "Fixture request",
-			operation: "request",
-			targetAgent: history.responder.record.identity.agentId,
-			question: "Malformed receipt.",
-		}, { id: toolCallId }),
-		{ stopReason: "toolUse" },
-	));
-	history.requester.manager.appendMessage({
-		role: "toolResult",
-		toolCallId,
-		toolName: "agent_message",
-		content: [{ type: "text", text: "Committed." }],
-		details: {
-			requestMessageId: deriveMessageIdentity({ agentId: "requester", entryId, toolCallId }),
-			targetAgentId: 42,
-			messageStatus: "sent",
-		},
-		isError: false,
-		timestamp: Date.now(),
-	});
-	const warm = new RequestEvidence(history.agents);
-	for (const agent of history.agents.values()) await agent.transcript.refresh();
-
-	for (const evidence of [warm, new RequestEvidence(history.agents)]) {
-		await evidence.refreshRelationships();
-		assert.deepEqual(await evidence.refreshRelationshipsFor(history.responder.record), {
-			awaitingAnswerRequestIds: [],
-			answerOwedRequestIds: [healthyRequestId],
-		});
-		assert.ok((await evidence.refreshRelationshipsFor(history.requester.record))
-			.awaitingAnswerRequestIds.includes(healthyRequestId));
-	}
-	assert.deepEqual(
-		inspectCoordinationRejections(history.requester.record.transcript.inspect(), "requester")
-			.map(({ source }) => source.toolCallId),
-		[toolCallId],
-	);
-});

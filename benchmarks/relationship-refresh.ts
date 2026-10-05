@@ -1,6 +1,6 @@
 /** Run: node --expose-gc benchmarks/relationship-refresh.ts. No model calls or Agent Runs. */
 import { setImmediate as yieldTurn } from "node:timers/promises";
-import { RequestEvidence } from "../src/coordination/request-evidence.ts";
+import { requestCoordination } from "../tests/support/request-coordination.ts";
 import { participant } from "../tests/support/request-history.ts";
 
 const WARMUPS = 5;
@@ -12,7 +12,7 @@ for (const size of [10, 50, 100, 200, 400]) {
 	global.gc?.();
 	const heapBefore = process.memoryUsage().heapUsed;
 	const participants = Array.from({ length: size }, (_, index) => participant(`agent-${index}`));
-	const evidence = new RequestEvidence(new Map(participants.map(({ record }) => [record.identity.agentId, record])));
+	const { requestRelationships } = requestCoordination(new Map(participants.map(({ record }) => [record.identity.agentId, record])));
 	let inspections = 0;
 	let sourceRefreshes = 0;
 	for (const { record } of participants) {
@@ -21,7 +21,7 @@ for (const size of [10, 50, 100, 200, 400]) {
 		record.transcript.inspect = () => { inspections++; return inspect(); };
 		record.transcript.refresh = async () => { sourceRefreshes++; return refresh(); };
 	}
-	for (let index = 0; index < WARMUPS; index++) await evidence.refreshRelationships();
+	for (let index = 0; index < WARMUPS; index++) await requestRelationships.refresh();
 	global.gc?.();
 	const warmedHeapDeltaBytes = process.memoryUsage().heapUsed - heapBefore;
 	inspections = 0;
@@ -33,7 +33,7 @@ for (const size of [10, 50, 100, 200, 400]) {
 		await yieldTurn();
 		const started = performance.now();
 		const turn = yieldTurn().then(() => turnDelays.push(performance.now() - started));
-		await evidence.refreshRelationships();
+		await requestRelationships.refresh();
 		times.push(performance.now() - started);
 		await turn;
 	}

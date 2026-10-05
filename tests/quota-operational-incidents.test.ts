@@ -44,7 +44,8 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 			} as unknown as AgentRuntimeHost;
 		}
 		const policy = new WorkflowPolicyStore();
-		const messages = new MessageCoordinator({ agents: history.agents, ...requestCoordination(history.agents), workflowPolicy: policy, isShuttingDown: () => false });
+		const coordination = requestCoordination(history.agents);
+		const messages = new MessageCoordinator({ agents: history.agents, ...coordination, workflowPolicy: policy, isShuttingDown: () => false });
 		// Exercise incident filtering even if a previously expired delivery watcher
 		// still reports the recipient when its quota suspension arrives.
 		messages.blockedDeliveries = () => suspended ? [{
@@ -56,7 +57,7 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 		const errors: unknown[] = [];
 		const incidents = new OperationalIncidentCoordinator({
 			agents: history.agents, ownerIdentity: history.requester.record.identity as OwnerIdentity,
-			messages, workflowPolicy: policy,
+			messages, ...coordination, workflowPolicy: policy,
 			humanRequests: new HumanRequestCoordinator({ agents: history.agents, ownerIdentity: history.requester.record.identity as OwnerIdentity,
 				interruptRun() { assert.fail("No human interruption expected"); } }),
 			sessionFactory: {} as ProcessChildSessionFactory,

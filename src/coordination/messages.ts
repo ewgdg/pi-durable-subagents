@@ -1,4 +1,3 @@
-import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { scheduleDeliveryFailureNotice } from "./delivery-failure-notifications.ts";
 import { findAuthoredSupervisoryResumeMessages } from "../protocol/run-control.ts";
 import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
@@ -37,7 +36,6 @@ import type {
 import type { RequestEvidence } from "./request-evidence.ts";
 import type { RequestRelationships } from "./request-relationships.ts";
 import { AnswerArbitration } from "./answer-arbitration.ts";
-import type { OpenIncomingRequestList, RequestInspection } from "../protocol/request-inspection.ts";
 import {
 	createMessageDeliveryItem,
 	inspectAnswerDelivery,
@@ -66,12 +64,6 @@ import type {
 } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import { resolveCommittedAgentMessageTargetId } from "./agent-message-target.ts";
-
-export type UnresolvedAgentRequest = Readonly<{
-	requestId: string;
-	fromAgentId: string;
-	targetAgentId: string;
-}>;
 
 export type { AgentMessageInput } from "../protocol/message.ts";
 export type {
@@ -216,7 +208,7 @@ export class MessageCoordinator {
 	}
 
 	recoveryRequestIds(record: AgentRecord): readonly string[] {
-		return this.#requestEvidence.obligationFrames(record).flatMap(frame => {
+		return this.#requestRelationships.obligationFrames(record).flatMap(frame => {
 			const request = this.#requestEvidence.findRequest(frame.requestId);
 			// Recovery may continue a retained duty; this is not Request redelivery.
 			if (!request) return [frame.requestId];
@@ -284,20 +276,6 @@ export class MessageCoordinator {
 
 	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
 
-	obligationFrames(agentId: string) { return this.#requestEvidence.obligationFrames(this.#requireAgent(agentId)); }
-
-	openIncomingRequests(agentId: string): OpenIncomingRequestList {
-		return this.#requestEvidence.openIncomingRequests(this.#requireAgent(agentId));
-	}
-
-	inspectRequest(agentId: string, requestId: string): RequestInspection {
-		return this.#requestEvidence.inspectRequest(this.#requireAgent(agentId), requestId);
-	}
-
-	foregroundRequestId(record: AgentRecord): string | undefined {
-		return this.#requestEvidence.obligationFrames(record).at(-1)?.requestId;
-	}
-
 	shutdownDeliveryProgress(): void { this.#deliveryScheduler.shutdownProgress(); }
 
 	integrate(record: AgentRecord): void {
@@ -307,20 +285,6 @@ export class MessageCoordinator {
 			}
 		});
 		this.#deliveryScheduler.integrate(record);
-	}
-
-	async refreshTranscriptFacts(): Promise<ReadonlyMap<AgentRecord, TranscriptInspection>> {
-		return this.#requestEvidence.refreshRelationships();
-	}
-
-	requestSources(requestIds: readonly string[]): readonly ToolCallPointer[] {
-		return requestIds.map(
-			(requestId) => this.#requestEvidence.requestMetadata(requestId).source,
-		);
-	}
-
-	requestTitle(requestId: string): string {
-		return this.#requestEvidence.requestMetadata(requestId).title;
 	}
 
 	// Re-arbitrate retrieval at the native commit edge so a direct Delivery that
@@ -365,37 +329,6 @@ export class MessageCoordinator {
 				details: result,
 			},
 		};
-	}
-
-	outstandingRequestIds(
-		callerAgentId: string,
-		waitSource: ToolCallPointer,
-		selectors?: readonly string[],
-	): readonly string[] {
-		const caller = this.#requireAgent(callerAgentId);
-		const requestMessageIds = this.#requestEvidence.outstandingRequestIdsAt(
-			caller,
-			waitSource,
-			selectors,
-		);
-		if (requestMessageIds.length === 0) {
-			throw new Error(
-				"invalid_input: Agent Wait requires at least one outstanding outbound Agent Request",
-			);
-		}
-		return requestMessageIds;
-	}
-
-	requestRelationships(requestIds: readonly string[]): readonly (UnresolvedAgentRequest & { requestTitle: string })[] {
-		return requestIds.map((requestId) => {
-			const request = this.#requestEvidence.requestMetadata(requestId);
-			return {
-				requestId,
-				requestTitle: request.title,
-				fromAgentId: request.fromAgentId,
-				targetAgentId: request.targetAgentId,
-			};
-		});
 	}
 
 	/**
@@ -466,23 +399,6 @@ export class MessageCoordinator {
 		};
 	}
 
-	answerObligationRequestIds(responder: AgentRecord): readonly string[] {
-		return this.#requestEvidence.residualRelationshipsFor(responder)
-			.answerOwedRequestIds;
-	}
-
-	outstandingRequestIdsFor(requester: AgentRecord): readonly string[] {
-		return this.#requestEvidence.outstandingRequestIdsFor(requester);
-	}
-
-	hasUnsettledAnswerObligation(
-		responder: AgentRecord,
-		requestIds: readonly string[],
-	): boolean {
-		const remaining = new Set(this.answerObligationRequestIds(responder));
-		return requestIds.some((requestId) => remaining.has(requestId));
-	}
-
 	async send(
 		callerAgentId: string,
 		toolCallId: string,
@@ -512,7 +428,7 @@ export class MessageCoordinator {
 		}
 		if (message.kind === "message") {
 			const frames = await sender.host.lane.run(
-				() => this.#requestEvidence.obligationFrames(sender),
+				() => this.#requestRelationships.obligationFrames(sender),
 			);
 			for (const frame of frames) {
 				if (frame.requesterAgentId === message.targetAgentId) {
@@ -628,7 +544,7 @@ export class MessageCoordinator {
 			isIncomingRequest: true,
 			isDeliveryBlocked: () =>
 				this.#deliveryScheduler.isDeliveryBlocked(recipient, "deferred") ||
-				this.#requestEvidence.isIncomingRequestBlocked(recipient, requestId),
+				this.#requestRelationships.isIncomingRequestBlocked(recipient, requestId),
 			afterCommit: () => this.#requestRelationships.sync(recipient),
 		};
 	}
@@ -670,7 +586,7 @@ export class MessageCoordinator {
 	}
 
 	async reachSafeBoundary(agentId: string): Promise<void> {
-		await this.refreshTranscriptFacts();
+		await this.#requestRelationships.refresh();
 		if (this.#isShuttingDown()) return Promise.resolve();
 		const record = this.#requireAgent(agentId);
 		// Confirmed Run disposal already owns this Agent lane and fences its volatile
@@ -719,7 +635,7 @@ export class MessageCoordinator {
 		toolCallId: string,
 		providedInput: AgentMessageInput,
 	): Promise<AgentMessageReceipt> {
-		await this.refreshTranscriptFacts();
+		await this.#requestRelationships.refresh();
 		const caller = this.#requireAgent(callerAgentId);
 		let committedInput = resolveCommittedAgentMessageInput({
 			agentId: callerAgentId,
@@ -1290,8 +1206,8 @@ export class MessageCoordinator {
 				: undefined,
 			isDeliveryBlocked: message.kind === "request" || message.deliveryMode === "background"
 				? () => this.#deliveryScheduler.isDeliveryBlocked(recipient, message.deliveryMode) ||
-					(message.kind === "request" && this.#requestEvidence.isIncomingRequestBlocked(recipient, message.messageId)) ||
-					(message.deliveryMode === "background" && this.answerObligationRequestIds(recipient).length > 0)
+					(message.kind === "request" && this.#requestRelationships.isIncomingRequestBlocked(recipient, message.messageId)) ||
+					(message.deliveryMode === "background" && this.#requestRelationships.answerOwedRequestIds(recipient).length > 0)
 				: undefined,
 			suppressesAfterCommitMessageId: message.kind === "request_cancellation"
 				? message.requestId

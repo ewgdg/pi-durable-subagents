@@ -4,6 +4,8 @@ import { OperationalIncidentCoordinator } from "../src/coordination/operational-
 import { HumanRequestCoordinator } from "../src/coordination/human-requests.ts";
 import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import type { MessageCoordinator } from "../src/coordination/messages.ts";
+import type { RequestEvidence } from "../src/coordination/request-evidence.ts";
+import type { RequestRelationships } from "../src/coordination/request-relationships.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import type { OwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
@@ -33,17 +35,21 @@ test("a successor after obligation clearance appends to the retained failed Run 
 	let deliveryProgressChanged = (): void => assert.fail("Operational Incident detection must subscribe to Delivery progress");
 	const messages = {
 		subscribeDeliveryProgress(handler: () => void) { deliveryProgressChanged = handler; },
-		refreshTranscriptFacts: async () => undefined,
-		answerObligationRequestIds: () => ["request"], outstandingRequestIdsFor: () => [],
-		hasUnsettledAnswerObligation: () => obligationRemains,
-		requestSources: () => [{ agentId: "requester", entryId: "request-entry", toolCallId: "request-call" }],
-		blockedDeliveries: () => [], answerArbitration: { inspect: () => [] }, requestRelationships: () => [], hasDeliveryProgress: () => false,
+		blockedDeliveries: () => [], answerArbitration: { inspect: () => [] }, hasDeliveryProgress: () => false,
 		shutdownDeliveryProgress() {},
 	} as unknown as MessageCoordinator;
+	const requestRelationships = {
+		refresh: async () => undefined,
+		answerOwedRequestIds: () => ["request"], outstandingRequestIds: () => [],
+		hasUnsettledAnswerObligation: () => obligationRemains,
+	} as unknown as RequestRelationships;
+	const requestEvidence = {
+		requestMetadata: () => ({ source: { agentId: "requester", entryId: "request-entry", toolCallId: "request-call" } }),
+	} as unknown as RequestEvidence;
 	const incidents = new OperationalIncidentCoordinator({
 		agents: new Map([["requester", owner.record], ["child", child.record]]),
 		ownerIdentity: owner.record.identity as OwnerIdentity,
-		messages, workflowPolicy: new WorkflowPolicyStore(),
+		messages, requestEvidence, requestRelationships, workflowPolicy: new WorkflowPolicyStore(),
 		humanRequests: new HumanRequestCoordinator({ agents: new Map([["requester", owner.record]]), ownerIdentity: owner.record.identity as OwnerIdentity,
 			interruptRun() { throw new Error("Unexpected human interruption"); } }),
 		sessionFactory: { admitProcessRuntimePlatform() { throw new Error("Moderator unavailable in fixture"); } } as unknown as ProcessChildSessionFactory,

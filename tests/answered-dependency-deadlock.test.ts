@@ -54,11 +54,12 @@ for (const ownerAnswered of [false, true]) {
 			} as unknown as AgentRuntimeHost;
 		}
 		const workflowPolicy = new WorkflowPolicyStore();
-		const messages = new MessageCoordinator({ agents: history.agents, ...requestCoordination(history.agents), workflowPolicy, isShuttingDown: () => false });
+		const coordination = requestCoordination(history.agents);
+		const messages = new MessageCoordinator({ agents: history.agents, ...coordination, workflowPolicy, isShuttingDown: () => false });
 		let creationAttempts = 0;
 		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
-			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, workflowPolicy,
+			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, ...coordination, workflowPolicy,
 			humanRequests: new HumanRequestCoordinator({ agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity,
 				interruptRun() { throw new Error("Unexpected human interruption"); } }),
 			sessionFactory: {
@@ -86,9 +87,10 @@ for (const ownerAnswered of [false, true]) {
 		assert.ok(reports[0]?.evidence.includes(`Original trigger: ${JSON.stringify({
 			kind: "dependency_deadlock",
 			agentIds: ["publication", "responder"],
-			requests: { total: 2, sources: messages.requestSources([coreToPublication, publicationToCore].sort()) },
+			requests: { total: 2, sources: [coreToPublication, publicationToCore].sort()
+				.map(requestId => coordination.requestEvidence.requestMetadata(requestId).source) },
 		})}`));
-		assert.ok(messages.outstandingRequestIdsFor(core.record).includes(coreToOwner),
+		assert.ok(coordination.requestRelationships.outstandingRequestIds(core.record).includes(coreToOwner),
 			"the undelivered Owner Answer remains outstanding for all-answer Wait");
 	});
 }

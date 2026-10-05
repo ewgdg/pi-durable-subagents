@@ -65,9 +65,10 @@ for (const delivered of [false, true]) {
 			} as unknown as AgentRuntimeHost;
 		}
 		const workflowPolicy = new WorkflowPolicyStore();
-		const messages = new MessageCoordinator({ agents: history.agents, ...requestCoordination(history.agents), workflowPolicy, isShuttingDown: () => false });
+		const coordination = requestCoordination(history.agents);
+		const messages = new MessageCoordinator({ agents: history.agents, ...coordination, workflowPolicy, isShuttingDown: () => false });
 		for (const p of [owner, worker, peer]) messages.integrate(p.record);
-		const waits = new AgentWaitCoordinator({ agents: history.agents, messages, answerArbitration: messages.answerArbitration,
+		const waits = new AgentWaitCoordinator({ agents: history.agents, messages, ...coordination, answerArbitration: messages.answerArbitration,
 			clock: { schedule: () => () => {} }, assertNotShutDownOrSuspended() {},
 		});
 		const abort = new AbortController();
@@ -75,7 +76,7 @@ for (const delivered of [false, true]) {
 		let creationAttempts = 0;
 		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
-			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, workflowPolicy,
+			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, ...coordination, workflowPolicy,
 			humanRequests: new HumanRequestCoordinator({ agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity,
 				interruptRun() { throw new Error("Unexpected human interruption"); } }),
 			sessionFactory: { admitProcessRuntimePlatform() { creationAttempts++; throw new Error("Test platform unavailable"); } } as unknown as ProcessChildSessionFactory,
@@ -123,7 +124,8 @@ for (const delivered of [false, true]) {
 		if (!delivered) assert.deepEqual(incidents.attentionItems("requester"), []);
 		if (delivered) assert.ok(reports[0]?.evidence.includes(`Original trigger: ${JSON.stringify({
 			kind: "dependency_deadlock", agentIds: ["peer", "responder"],
-			requests: { total: 2, sources: messages.requestSources([workerToPeer, peerToWorker].sort()) },
+			requests: { total: 2, sources: [workerToPeer, peerToWorker].sort()
+				.map(requestId => coordination.requestEvidence.requestMetadata(requestId).source) },
 		})}`));
 		assert.equal(messages.hasDeliveryProgress(worker.record), !delivered);
 		assert.equal(dispatchCount, 1, "Delivery is not repeated while its prompt remains unresolved");

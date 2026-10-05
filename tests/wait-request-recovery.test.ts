@@ -18,10 +18,10 @@ for (const sourcePresent of [false, true]) test(`a delivered Request with ${sour
 	const h = harness(t);
 	const requestId = appendOrphanRequest(h, sourcePresent);
 	await h.recover(true);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [requestId]);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), []);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), [requestId]);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.requester.record), []);
 	assert.deepEqual(h.messages.recoveryRequestIds(h.responder.record), [requestId]);
-	assert.deepEqual(h.messages.inspectRequest("responder", requestId), {
+	assert.deepEqual(h.evidence.inspectRequest(h.responder.record, requestId), {
 		requestMessageId: requestId, requesterAgentId: "requester", responderAgentId: "responder",
 		title: "Preserved work", question: "Use the delivered instructions.",
 	});
@@ -32,11 +32,11 @@ for (const sourcePresent of [false, true]) test(`a delivered Request with ${sour
 	assert.ok("disposition" in receipt && receipt.disposition === "committed");
 	assert.equal("delivery" in receipt && receipt.delivery, "omitted");
 	assert.equal("reason" in receipt && receipt.reason, "request_source_unavailable");
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), []);
 	assert.deepEqual(h.deliveries(h.requester), []);
 	assert.deepEqual(h.requester.dispatches, []);
 	await h.recover(true);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), []);
 	assert.deepEqual(h.messages.recoveryRequestIds(h.responder.record), []);
 	assert.equal(h.messages.recoveryMessage("responder", "messageId" in receipt ? receipt.messageId : ""), undefined);
 	const recovery = await resumeWorkflow({ workflowId: "requester", ownerAgentId: "requester",
@@ -66,7 +66,7 @@ test("missing-source retry cancellation and Wait stay local while independent wo
 	await assert.rejects(h.wait("orphan-selected-wait", { requestMessageIds: [requestId] }), /unknown_identity/);
 	await assert.rejects(h.wait("orphan-unselected-wait"), /requires at least one outstanding/);
 	await h.recover(true);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [requestId]);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), [requestId]);
 	assert.deepEqual(h.deliveries(h.requester), []);
 	const continued: string[] = [];
 	const recovery = await resumeWorkflow({ workflowId: "requester", ownerAgentId: "requester",
@@ -82,7 +82,7 @@ test("missing-source retry cancellation and Wait stay local while independent wo
 	assert.equal(h.deliveries(h.responder).length, 1);
 	const valid = await h.message(h.requester, "independent-request", { operation: "request", title: "Independent", targetAgent: "responder", question: "Still usable", deliveryMode: "steer" });
 	assert.ok("requestMessageId" in valid);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), [valid.requestMessageId]);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.requester.record), [valid.requestMessageId]);
 	const waiting = h.wait("independent-only-wait");
 	await flush();
 	await h.message(h.responder, "independent-answer", { operation: "answer", requestId: valid.requestMessageId, answer: "Independent work completed." });
@@ -106,12 +106,12 @@ for (const rejectedPart of ["call", "result"] as const) test(`a rejected Answer 
 		messageStatus: rejectedPart === "result" ? "invalid-status" : "sent",
 	});
 	await h.recover(true);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [requestId]);
-	assert.deepEqual(h.messages.openIncomingRequests("responder").requests.map(request => request.requestMessageId), [requestId]);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), [requestId]);
+	assert.deepEqual(h.relationships.openIncomingRequests(h.responder.record).requests.map(request => request.requestMessageId), [requestId]);
 	const receipt = await h.message(h.responder, "valid-answer-after-rejection", { operation: "answer", requestId, answer: "Reused the historical work and verified it." });
 	assert.equal("disposition" in receipt && receipt.disposition, "committed");
 	await h.recover(true);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), []);
 	assert.deepEqual(h.deliveries(h.requester), []);
 });
 
@@ -125,7 +125,7 @@ test("independent Cancellation Delivery closes an obligation whose Request sourc
 	} }]);
 	h.responder.manager.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
 	await h.recover(true);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), []);
 	await assert.rejects(h.message(h.responder, "answer-after-orphan-cancel", { operation: "answer", requestId, answer: "Too late" }), /was cancelled/);
 });
 
@@ -174,7 +174,7 @@ test("fresh Wait restores a lost original Request after passive coordinator reco
 	assert.equal(result.answers.length, 1);
 	assert.equal(result.answers[0]?.requestMessageId, requestId);
 	h.commitWait("after-recovery", result);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), []);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.requester.record), []);
 	assert.equal(h.deliveries(h.responder).length, 1);
 });
 
@@ -264,7 +264,7 @@ test("delivered Requests are never replayed and committed Answers remain retriev
 	h.commitWait("retrieve-answer", result);
 	assert.equal(h.responder.record.host.observe().phase, "dormant");
 	assert.equal(h.deliveries(h.responder).length, 1);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), []);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.requester.record), []);
 });
 
 test("a delivered Request does not consume fresh Wait admission for its undelivered sibling on a Dormant responder", async (t) => {
@@ -303,7 +303,7 @@ test("a delivered Request does not consume fresh Wait admission for its undelive
 	});
 	await h.tick();
 	h.commitWait("renew-mixed-delivery-snapshot", await waiting);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), []);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.requester.record), []);
 });
 
 test("a delivered unanswered Request stays awaited without starting a Dormant responder", async (t) => {
@@ -488,7 +488,7 @@ test("fresh Wait restores a canonical Creation Request under its Spawn identity"
 	await h.message(h.responder, "creation-answer", { operation: "answer", requestId, answer: "Creation work done." });
 	await h.tick();
 	h.commitWait("creation-wait", await waiting);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), []);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.requester.record), []);
 });
 
 test("a queued reconciliation cannot admit delivery after its caller Run is fenced", async (t) => {
@@ -665,12 +665,12 @@ for (const answerLatestFirst of [false, true]) test(`delivered Requests can be a
 	const input = { operation: "answer" as const, requestId: answered, answer: "First done" };
 	const receipt = await h.message(h.responder, "answer-first", input);
 	assert.ok("messageStatus" in receipt);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [remaining]);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), [remaining]);
 	const replay = await h.messages.execute("responder", "answer-first", input);
 	assert.ok("disposition" in replay && replay.disposition === "already_answered");
 	await assert.rejects(h.message(h.responder, "fresh-stale-answer", input), /already answered/);
 	await h.message(h.responder, "answer-second", { operation: "answer", requestId: remaining, answer: "Second done" });
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), []);
 });
 
 test("explicit Wait selects suffixes, deduplicates in source order and leaves unselected Requests outstanding", { timeout: 5_000 }, async (t) => {
@@ -687,7 +687,7 @@ test("explicit Wait selects suffixes, deduplicates in source order and leaves un
 	assert.ok("answers" in result);
 	assert.deepEqual(result.answers.map(a => a.requestMessageId), [ids[0], ids[2]]);
 	h.commitWait("selected", result);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), [ids[1]]);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.requester.record), [ids[1]]);
 	await assert.rejects(h.wait("consumed", { requestMessageIds: [ids[0]!] }), /not outstanding/);
 });
 
@@ -856,7 +856,7 @@ for (const deliveryMode of ["steer", "deferred", "background"] as const) test(
 	assert.deepEqual(await waiting, { disposition: "preempted" });
 	h.commitWait("wait-for-message", { disposition: "preempted" });
 	assert.deepEqual(h.deliveries(h.requester).map(delivery => delivery.projection.kind), ["message"]);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.requester.record), [], "ordinary input creates no Answer obligation");
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.requester.record), [], "ordinary input creates no Answer obligation");
 	let rewaitSettled = false;
 	void h.wait("wait-again").then(() => { rewaitSettled = true; }, () => { rewaitSettled = true; });
 	await h.tick();
@@ -881,7 +881,7 @@ test("ordinary Steer Messages queued before Wait admission preempt in one FIFO b
 	assert.equal(h.requester.dispatches.length, 1);
 	assert.deepEqual(h.deliveries(h.requester).map(delivery =>
 		delivery.projection.kind === "message" && delivery.projection.content), ["First correction", "Second correction"]);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.requester.record), []);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.requester.record), []);
 });
 
 test("a Cancellation whose Request never reached the responder is not announced", { timeout: 5_000 }, async (t) => {
@@ -901,7 +901,7 @@ test("a Cancellation whose Request never reached the responder is not announced"
 	h.commitWait("cancel-batch", { disposition: "preempted" });
 	await h.tick();
 	assert.deepEqual(h.deliveries(h.requester).map(delivery => delivery.projection.kind), ["message"]);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.requester.record), []);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.requester.record), []);
 	h.requester.settle(); await flush();
 	assert.equal(h.deliveries(h.requester).length, 1, "the withdrawn Request and its pointless Cancellation are both suppressed");
 });
@@ -957,7 +957,7 @@ test("a Request delivered after its Cancellation commits stays owed until that C
 		true,
 		"the delivered Request is owed until its Cancellation reaches the responder",
 	);
-	assert.deepEqual(h.messages.openIncomingRequests("responder").requests.map(item => item.requestMessageId), [request.requestMessageId]);
+	assert.deepEqual(h.relationships.openIncomingRequests(h.responder.record).requests.map(item => item.requestMessageId), [request.requestMessageId]);
 	h.responder.blocked = false;
 	// Only the withdrawn Request proof was deferred; the Cancellation commits normally.
 	h.responder.deferProof = false;
@@ -1062,7 +1062,7 @@ for (const resolution of ["answer", "cancel"] as const) test(`Background Message
 		if (resolution === "answer") await h.message(h.responder, `resolve-${index}`, { operation: "answer", requestId, answer: "Done" });
 		else await h.message(h.requester, `resolve-${index}`, { operation: "cancel", requestMessageId: requestId, reason: "Withdrawn" });
 		h.responder.settle();
-		await h.messages.refreshTranscriptFacts();
+		await h.relationships.refresh();
 		await flush();
 		const projections = h.deliveries(h.responder).map(item => item.projection);
 		if (index === 0) assert.ok(!projections.some(item => item.kind === "message" && item.messageId === note.messageId));
@@ -1070,7 +1070,7 @@ for (const resolution of ["answer", "cancel"] as const) test(`Background Message
 	h.responder.settle(); await flush();
 	const background = h.deliveries(h.responder).map(item => item.projection).filter(item => item.kind === "message" || item.kind === "request" && item.requestMessageId === work.requestMessageId);
 	assert.deepEqual(background.map(item => item.kind), ["message", "request"]);
-	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [work.requestMessageId]);
+	assert.deepEqual(h.relationships.answerOwedRequestIds(h.responder.record), [work.requestMessageId]);
 	h.responder.settle(); await flush();
 	assert.equal(h.deliveries(h.responder).filter(item => item.projection.kind === "request" && item.projection.requestMessageId === work.requestMessageId).length, 1);
 });
@@ -1096,7 +1096,7 @@ test("Background never preempts Agent Wait; higher modes bypass its FIFO queue",
 	await flush();
 	assert.deepEqual(h.deliveries(h.requester).map(item => item.projection.kind === "request" && item.projection.requestMessageId), [normal.requestMessageId]);
 	await h.message(h.requester, "normal-answer", { operation: "answer", requestId: normal.requestMessageId, answer: "Confirmed" });
-	h.requester.settle(); await h.messages.refreshTranscriptFacts(); await flush();
+	h.requester.settle(); await h.relationships.refresh(); await flush();
 	assert.ok(h.deliveries(h.requester).some(item => item.projection.kind === "request" && item.projection.requestMessageId === low.requestMessageId));
 	assert.ok(!h.deliveries(h.requester).some(item => item.projection.kind === "message"), "Background Request creates an obligation before the next Background Message");
 });
@@ -1135,7 +1135,7 @@ test("Background Request recovery retains obligation gating and queued cancellat
 	assert.equal(h.deliveries(h.responder).length, 1, "reconstruction retains the earlier Answer obligation");
 	await h.message(h.requester, "withdraw", { operation: "cancel", requestMessageId: cancelled.requestMessageId, reason: "Unneeded" });
 	await h.message(h.responder, "finish-duty", { operation: "answer", requestId: duty.requestMessageId, answer: "Done" });
-	h.responder.settle(); await h.messages.refreshTranscriptFacts(); await flush();
+	h.responder.settle(); await h.relationships.refresh(); await flush();
 	const requests = h.deliveries(h.responder).filter(item => item.projection.kind === "request").map(item => item.projection.kind === "request" && item.projection.requestMessageId);
 	assert.deepEqual(requests, [duty.requestMessageId, kept.requestMessageId]);
 });
@@ -1146,7 +1146,8 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 	const participants = [requester, responder];
 	const agents = new Map(participants.map(p => [p.record.identity.agentId, p.record]));
 	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
-	let messages = new MessageCoordinator({ ...options, ...requestCoordination(agents) });
+	let coordination = requestCoordination(agents);
+	let messages = new MessageCoordinator({ ...options, ...coordination });
 	let timer: (() => void) | undefined;
 	let waits: AgentWaitCoordinator;
 	const abort = new AbortController();
@@ -1154,7 +1155,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 	function install() {
 		for (const p of participants) messages.integrate(p.record);
 		waits = new AgentWaitCoordinator({
-			agents, messages, answerArbitration: messages.answerArbitration, boundaryHooks: waitBoundaryHooks,
+			agents, messages, ...coordination, answerArbitration: messages.answerArbitration, boundaryHooks: waitBoundaryHooks,
 			clock: { schedule: (_delay, callback) => { timer = callback; return () => { timer = undefined; }; } },
 			assertNotShutDownOrSuspended: () => undefined,
 		});
@@ -1176,14 +1177,17 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 			return p;
 		},
 		get messages() { return messages; },
+		get evidence() { return coordination.requestEvidence; },
+		get relationships() { return coordination.requestRelationships; },
 		async recover(freshTranscripts = false) {
 			if (freshTranscripts) for (const p of participants) p.record.transcript = transcriptFromSessionManager(p.manager, { fresh: true });
 			waits.shutdown();
 			for (const p of participants) messages.discardSchedulingInLane(p.record);
 			messages.shutdownDeliveryProgress();
-			messages = new MessageCoordinator({ ...options, ...requestCoordination(agents) });
+			coordination = requestCoordination(agents);
+			messages = new MessageCoordinator({ ...options, ...coordination });
 			install();
-			await messages.refreshTranscriptFacts();
+			await coordination.requestRelationships.refresh();
 		},
 		async message(p: ReturnType<typeof runtimeParticipant>, id: string, input: AgentMessageInput) {
 			call(p, id, "agent_message", input);

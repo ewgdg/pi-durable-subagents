@@ -1,6 +1,5 @@
 import { requestHistory } from "../tests/support/request-history.ts";
-import { MessageCoordinator } from "../src/coordination/messages.ts";
-import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
+import { requestCoordination } from "../tests/support/request-coordination.ts";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 /** Run with node --expose-gc benchmarks/transcript-consumption.ts. Uses /tmp copies only. */
 import { appendFile, mkdtemp, writeFile } from "node:fs/promises";
@@ -108,22 +107,18 @@ const relationships = [];
 for (const settledRequests of [200, 2_000]) {
 	const history = requestHistory();
 	for (let i = 0; i < settledRequests; i++) history.answer(history.request());
-	const messages = new MessageCoordinator({
-		agents: history.agents,
-		workflowPolicy: new WorkflowPolicyStore(),
-		isShuttingDown: () => false,
-	});
-	retainedInputs.push({ history, messages });
+	const { requestRelationships } = requestCoordination(history.agents);
+	retainedInputs.push({ history, requestRelationships });
 	global.gc?.();
 	const initialHeap = process.memoryUsage().heapUsed;
-	const reconstruction = await measure(() => messages.refreshTranscriptFacts());
+	const reconstruction = await measure(() => requestRelationships.refresh());
 	global.gc?.();
 	const retainedHeapBytes = process.memoryUsage().heapUsed - initialHeap;
 	const before = [...history.agents.values()].map((a) => a.transcript.diagnostics()!);
 	const unchanged = await measure(async () => {
 		for (let i = 0; i < UNCHANGED_READS; i++) {
-			await messages.refreshTranscriptFacts();
-			if (messages.outstandingRequestIdsFor(history.requester.record).length)
+			await requestRelationships.refresh();
+			if (requestRelationships.outstandingRequestIds(history.requester.record).length)
 				throw new Error("Unexpected outstanding Request");
 		}
 	});
@@ -132,12 +127,12 @@ for (const settledRequests of [200, 2_000]) {
 	);
 	history.request();
 	const appendRequest = await measure(async () => {
-		await messages.refreshTranscriptFacts();
-		if (messages.outstandingRequestIdsFor(history.requester.record).length !== 1)
+		await requestRelationships.refresh();
+		if (requestRelationships.outstandingRequestIds(history.requester.record).length !== 1)
 			throw new Error("Missing outstanding Request");
 	});
 	for (let i = 0; i < 2_000; i++) history.answer(history.request());
-	const backlog = await measure(() => messages.refreshTranscriptFacts());
+	const backlog = await measure(() => requestRelationships.refresh());
 	relationships.push({
 		settledRequests,
 		reconstruction,

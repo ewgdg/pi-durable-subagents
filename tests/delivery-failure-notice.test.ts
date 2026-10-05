@@ -32,7 +32,7 @@ for (const operation of ["send", "request"] as const) test(`${operation}: admitt
 	assert.equal(notice.delivery.inspectedThrough.agentId, "recipient");
 	assert.match(notice.guidance, /poll.*retry.*cancel.*escalate/);
 	assert.equal(h.recipient.dispatches.length, 1, "notification does not retry");
-	assert.equal(h.messages.outstandingRequestIdsFor(h.author.record).length, operation === "request" ? 1 : 0);
+	assert.equal(h.relationships.outstandingRequestIds(h.author.record).length, operation === "request" ? 1 : 0);
 	h.recipient.end("failure");
 	await flush();
 	assert.equal(h.notices().length, 1, "completion and Run failure are one attempt");
@@ -144,7 +144,7 @@ for (const failure of ["startup", "boundary", "capacity"] as const) test(
 	assert.ok("requestMessageId" in receipt);
 	assert.ok("messageStatus" in receipt && receipt.messageStatus === "not_sent");
 	assert.equal(receipt.reason, failure === "capacity" ? "capacity_exhausted" : "target_unavailable");
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.author.record), []);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.author.record), []);
 	assert.ok(!h.messages.blockedDeliveries().some(item => item.messageId === receipt.requestMessageId));
 	assert.doesNotThrow(() => h.messages.hasAutonomousDeliveryProgress());
 	await assert.rejects(h.message("poll-rejected", { operation: "poll", messageId: receipt.requestMessageId }), /unknown_identity/);
@@ -161,7 +161,7 @@ for (const status of ["sent", "unknown"] as const) test(
 	h.recipient.record.host.startInLane = async () => { throw new Error("recipient unavailable"); };
 	const retry = await h.message("retry-unavailable", { operation: "retry", messageId: receipt.requestMessageId });
 	assert.equal("messageStatus" in retry && retry.messageStatus, "not_sent");
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.author.record), [receipt.requestMessageId]);
+	assert.deepEqual(h.relationships.outstandingRequestIds(h.author.record), [receipt.requestMessageId]);
 	assert.ok(h.messages.blockedDeliveries().some(item => item.messageId === receipt.requestMessageId));
 });
 
@@ -286,10 +286,11 @@ function harness(t: { after(fn: () => void): void }, boundaryHooks?: MessageBoun
 	const recipient = runtimeParticipant("recipient", false);
 	const agents = new Map([author, recipient].map(p => [p.record.identity.agentId, p.record]));
 	const state = { shutdown: false };
-	const messages = new MessageCoordinator({ agents, ...requestCoordination(agents), workflowPolicy: new WorkflowPolicyStore(), boundaryHooks,
+	const coordination = requestCoordination(agents);
+	const messages = new MessageCoordinator({ agents, ...coordination, workflowPolicy: new WorkflowPolicyStore(), boundaryHooks,
 		isShuttingDown: () => state.shutdown,
 	});
-	const waits = new AgentWaitCoordinator({ agents, messages, answerArbitration: messages.answerArbitration, assertNotShutDownOrSuspended: () => undefined });
+	const waits = new AgentWaitCoordinator({ agents, messages, ...coordination, answerArbitration: messages.answerArbitration, assertNotShutDownOrSuspended: () => undefined });
 	for (const p of [author, recipient]) messages.integrate(p.record);
 	const originalEnd = recipient.end;
 	recipient.end = cause => { messages.discardSchedulingInLane(recipient.record); originalEnd(cause); };
@@ -300,7 +301,7 @@ function harness(t: { after(fn: () => void): void }, boundaryHooks?: MessageBoun
 		author.manager.appendMessage({ role: "toolResult", toolCallId: id, toolName: "agent_message", content: [{ type: "text", text: JSON.stringify(result) }], details: result, isError: false, timestamp: Date.now() });
 		return result;
 	};
-	return { author, recipient, messages, waits, message,
+	return { author, recipient, messages, relationships: coordination.requestRelationships, waits, message,
 		get shutdown() { return state.shutdown; }, set shutdown(value: boolean) { state.shutdown = value; },
 		send: (operation: "send" | "request") => message("original", operation === "send"
 			? { operation, targetAgent: "recipient", content: "Work" }
