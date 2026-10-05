@@ -168,6 +168,12 @@ The single module that drives one Pi session binding generation for both the Own
 **Turn Compaction Gateway**:
 The child-local, Runtime-generation-bound admission boundary that serializes only turn preparation and commitment. It cancels unused post-Run threshold compaction, recomputes threshold preparation before later idle work, preserves Pi-native manual and overflow compaction, and releases before the model cycle. Deferral is not durable state and does not retain a Run or Agent Runtime.
 
+**Control Direction**:
+One half of the Control protocol, child→Owner or Owner→child, each declaring its own methods and events once. A channel is built for one side, so it may send only its outbound direction and serves its inbound direction through one complete serve map. A request or event from the wrong direction is rejected like an unknown one and closes the channel.
+
+**Wire Conformance Binding**:
+The compile-time check tying a Control wire schema to the domain or Pi type it carries. Domain-owned results must match both ways; tool inputs may be stricter than the domain input; Pi-owned messages must accept every Pi value. A mismatch fails typecheck, not a live child.
+
 **Child Control Connection**:
 The child's end of Child Control, one per child process. It survives reload and holds the channel, the reported Run identity, queue-intention ordering, and native input identity. It routes each Owner request to the current Child Runtime Binding; a request that arrives between generations is rejected, never served by a disposed binding. Control close reaches the host shell's shutdown port.
 
