@@ -40,3 +40,14 @@ test("an Owner Delivery confirms only when the driver proof and the caller's ins
 	assert.equal(await refused.transcriptCommit, false);
 	await refused.completion;
 });
+
+test("the Owner Runtime rejects Moderator reminder delivery because Moderators run as child processes", { timeout: 5000 }, async t => {
+	const { host, runtime } = await ownerRuntime(t);
+	let commitAttempts = 0;
+	await assert.rejects(
+		runtime.deliverModeratorReminder(async commit => { commitAttempts++; return commit(); }),
+		/owner_runtime_hosts_no_moderator/,
+	);
+	assert.equal(commitAttempts, 0);
+	assert.equal(host.session.sessionManager.getEntries().some(entry => entry.type === "custom_message"), false);
+});

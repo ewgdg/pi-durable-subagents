@@ -2,7 +2,6 @@ import type { AgentSession, AgentSessionServices } from "@earendil-works/pi-codi
 
 import { bindSessionStartup } from "../pi-integration/session-startup.ts";
 import { NativeSessionDriver } from "../pi-integration/native-session-driver.ts";
-import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import type {
 	AgentRuntimeDelivery,
 	AgentRuntimeDeliveryDispatch,
@@ -90,10 +89,9 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		};
 	}
 
-	async deliverModeratorReminder(commitIfCurrent: CommitModeratorReminderIfCurrent): Promise<ModeratorReminderOutcome> {
-		if (!this.#driver.canStartIdleTurn()) return "busy";
-		// The driver rechecks idleness after the reconciliation-lane admission.
-		return commitIfCurrent(() => this.#driver.commitIdleCustom(createModelVisibleModeratorObligationReminder()));
+	deliverModeratorReminder(_commitIfCurrent: CommitModeratorReminderIfCurrent): Promise<ModeratorReminderOutcome> {
+		// Moderators always run as child processes, whose binding owns the reminder.
+		return Promise.reject(new Error("owner_runtime_hosts_no_moderator: the Owner Runtime hosts no Moderator"));
 	}
 
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void {
