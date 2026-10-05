@@ -418,12 +418,24 @@ function matchesDeliveryMessage(delivery: AgentRuntimeDelivery, message: Session
 	if (delivery.kind === "custom") return message.role === "custom" && matchesCustomFields(delivery, message);
 	if (message.role !== "user") return false;
 	// Pi normalizes prompt images (resizing, re-encoding, or omitting them) and
-	// appends its image hints after the text, so only the leading text is stable.
+	// appends their hints as "\n\n<hints>" after the text, so only the text is
+	// compared. A bare prefix would let "ok" or an image-only Delivery's empty
+	// text match an unrelated later user message.
 	const committed = message.content;
 	const committedText = typeof committed === "string"
 		? committed
 		: committed[0]?.type === "text" ? committed[0].text : undefined;
-	return committedText?.startsWith(submittedUserText(delivery.content)) === true;
+	if (committedText === undefined) return false;
+	const submittedText = submittedUserText(delivery.content);
+	return committedText === submittedText ||
+		(hasImages(delivery.content) && committedText.startsWith(`${submittedText}${PI_IMAGE_HINT_SEPARATOR}`));
+}
+
+/** Pi's prompt joins its image hints to the submitted text with this separator. */
+const PI_IMAGE_HINT_SEPARATOR = "\n\n";
+
+function hasImages(content: Extract<AgentRuntimeDelivery, { kind: "user" }>["content"]): boolean {
+	return typeof content !== "string" && content.some(part => part.type === "image");
 }
 
 function matchesCustomFields(

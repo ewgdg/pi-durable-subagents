@@ -229,6 +229,27 @@ test("an unrelated append of the same role does not confirm and settles false wi
 	assert.ok(host.session.messages.some(message => message.role === "user"), "Pi appended a different user message");
 });
 
+const prefixOnlyRows: ReadonlyArray<Readonly<{
+	name: string;
+	content: Extract<Parameters<NativeSessionDriver["deliver"]>[0], { kind: "user" }>["content"];
+	committedText: string;
+}>> = [
+	{ name: "a longer message sharing the submitted text", content: "ok", committedText: "ok, continue with the plan" },
+	{ name: "any message after an image-only Delivery", content: [oversizedPngImage()], committedText: "Unrelated input." },
+];
+
+for (const row of prefixOnlyRows) {
+	test(`commit proof rejects ${row.name}`, { timeout: 5000 }, async t => {
+		const host = await fixture(t, pi => {
+			pi.on("input", () => ({ action: "transform", text: row.committedText }));
+		});
+		host.model.setResponses([fauxAssistantMessage("Different input handled.")]);
+		const dispatch = host.driver.deliver({ kind: "user", content: row.content }, { proveCommit: true });
+		assert.equal(await dispatch.transcriptCommit, false);
+		await dispatch.completion;
+	});
+}
+
 test("commit proof settles false at its own message end when nothing persisted, before the Run settles", { timeout: 5000 }, async t => {
 	// A lane-holding caller awaits this proof while the Run's own agent_end hook
 	// waits on that lane (a forwarded human resume), so settlement never comes first.
