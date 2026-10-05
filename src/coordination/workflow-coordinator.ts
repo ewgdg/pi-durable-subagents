@@ -76,7 +76,6 @@ import type {
 	RunControlInput,
 	RunControlReceipt,
 } from "../protocol/run-control.ts";
-import { SerialLane } from "../runtime/serial-lane.ts";
 import type {
 	AgentTemplateCatalogueEntry,
 	AgentTemplateCatalogueSnapshot,
@@ -114,12 +113,13 @@ import type {
 	DurableAgentView,
 	PhysicalAgentViewSurface,
 } from "../presentation/agent-view-surface.ts";
-import type {
-	PostMortemAgentPresenter,
-	PostMortemAgentView,
-} from "../presentation/post-mortem-agent-view-surface.ts";
-import type { TerminalProjection } from "../presentation/terminal-projection.ts";
-import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
+import type { PostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";
+import {
+	InteractiveSelection,
+	type AgentPresentationSelection,
+	type HumanInputDisposition,
+} from "./interactive-selection.ts";
+import { collectCleanupFailure, collectSettledCleanupFailures } from "./cleanup-failures.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type AgentRosterStatus = AgentStatus & Readonly<{
@@ -141,8 +141,6 @@ export type {
 	AgentMessageReceipt,
 	MessageBoundaryHooks,
 } from "./messages.ts";
-
-export type HumanInputDisposition = "continue" | "submitted" | "discarded";
 
 type GuardedCoordinationToolResult =
 	| GuardedHumanToolResult
@@ -179,21 +177,6 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	operationalAttention(): readonly OperationalIncidentAttention[];
 	reportHistory(): readonly ReportHistoryItem[];
 	setReportRead(reportId: string, read: boolean): void;
-}>;
-
-export type AgentPresentationSelection =
-	| Readonly<{ kind: "selected"; view?: DurableAgentView }>
-	| PostMortemAgentView;
-
-type ActiveDurableAgentView = {
-	record: AgentRecord;
-	attachment: DurableAgentViewAttachment;
-	failed: boolean;
-};
-
-type AgentViewTarget = Readonly<{
-	projection: TerminalProjection;
-	retryIfChanged: boolean;
 }>;
 
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
@@ -264,9 +247,8 @@ export class WorkflowCoordinator {
 		authorityOrderBuilds: 0,
 	};
 	#cachedAuthorityOrder: readonly AgentRecord[] | undefined;
-	readonly #agentViewLane = new SerialLane();
 	readonly #postMortemAgentPresenter: PostMortemAgentPresenter | undefined;
-	#activeAgentView: ActiveDurableAgentView | undefined;
+	readonly #selection: InteractiveSelection;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
@@ -367,18 +349,6 @@ export class WorkflowCoordinator {
 					evidence: [`Runtime diagnostic: ${JSON.stringify(diagnostic)}`],
 				}, diagnostic);
 				this.#notifyAgentActivityChanged();
-			},
-			onRuntimeQuit: (agentId, projection) => {
-				const selected = this.#activeAgentView;
-				if (
-					selected?.record.identity.agentId !== agentId ||
-					selected.attachment.projection() !== projection
-				) return false;
-				// Native Owner shutdown follows terminal restoration after child exit.
-				// Fence admissions and release Wait now, before dead Control can start
-				// moderation or leave the Owner waiting for an Answer that cannot arrive.
-				this.#beginShutdown();
-				return true;
 			},
 			ownerIdentity: identity,
 			entryModulePath: options.entryModulePath,
@@ -504,6 +474,18 @@ export class WorkflowCoordinator {
 			operationReviewClock: options.operationReviewClock,
 			deliveryProgressClock: options.deliveryProgressClock,
 			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
+		});
+		this.#selection = new InteractiveSelection({
+			agents: this.#agents,
+			quarantinedAgentIds: this.#quarantinedAgentIds,
+			ownerIdentity: identity,
+			messages: this.#messages,
+			runSupervisor: this.#runSupervisor,
+			humanRequests: this.#humanRequests,
+			sessionFactory,
+			beginShutdown: () => this.#beginShutdown(),
+			diagnostics: this.#ownerDiagnostics,
+			onActivityChanged: () => this.#notifyAgentActivityChanged(),
 		});
 		this.#messages.subscribeDeliveryProgress(() => this.#notifyAgentActivityChanged());
 		for (const record of this.#agents.values()) this.#integrateAgent(record);
@@ -718,17 +700,17 @@ export class WorkflowCoordinator {
 			selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
 				this.#assertAdmissionOpen();
-				return this.#openAgentPresentation(targetAgentId);
+				return this.#selection.openPresentation(targetAgentId);
 			},
 			openAgentView: (targetAgentId) => {
 				this.#assertAdmissionOpen();
-				return this.#openAgentView(targetAgentId);
+				return this.#selection.openView(targetAgentId);
 			},
 			bindPhysicalAgentSurface: (surface) =>
 				this.#postMortemAgentPresenter?.bindPhysicalSurface(surface) ?? (() => undefined),
 			focusHumanAnswer: (targetAgentId, requestId) => {
 				this.#assertAdmissionOpen();
-				return this.#focusHumanAnswer(targetAgentId, requestId);
+				return this.#selection.focusHumanAnswer(targetAgentId, requestId);
 			},
 			askHuman: (toolCallId, input, signal) => {
 				this.#assertAdmissionOpen();
@@ -1107,12 +1089,9 @@ export class WorkflowCoordinator {
 	}
 
 	#agentActivityStatus(record: AgentRecord): AgentActivityStatus {
-		const activeView = this.#activeAgentView;
 		return {
 			...this.#rosterStatus(record),
-			failed: record.host.currentRunFailed() || (
-				activeView?.record === record && activeView.failed
-			),
+			failed: record.host.currentRunFailed() || this.#selection.selectedViewFailed(record),
 		};
 	}
 
@@ -1196,308 +1175,10 @@ export class WorkflowCoordinator {
 				this.#reportAgentRuntimeReleaseError(error)
 			);
 		});
-		record.host.setRunStartedHandler(async (handle) => {
-			await this.#bindViewedRunInLane(record, handle);
-		});
-		record.host.setRunEndingHandler(async (handle, cause) => {
-			await this.#handleViewedRunEndingInLane(record, handle, cause);
-		});
+		this.#selection.integrate(record);
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
 		this.#notifyAgentActivityChanged(record.identity.agentId);
-	}
-
-	#openAgentPresentation(agentId: string): Promise<AgentPresentationSelection> {
-		return this.#agentViewLane.run(async () => {
-			if (agentId === this.#ownerIdentity.agentId) {
-				const active = this.#activeAgentView;
-				if (active) await this.#closeActiveAgentViewInLane(active);
-				return { kind: "selected" };
-			}
-			const active = this.#activeAgentView;
-			if (active?.record.identity.agentId === agentId) return { kind: "selected" };
-			const record = this.#requireAgent(agentId);
-			let target: AgentViewTarget;
-			try {
-				target = await this.#acquireAgentViewTarget(record);
-			} catch (error) {
-				if (
-					record.host.observe().phase !== "dormant" ||
-					record.host.currentProjection()
-				) throw error;
-				const transcript = record.transcript.inspect();
-				if (!transcript.transcriptPath) throw error;
-				return {
-					kind: "post_mortem",
-					agentId,
-					label: record.identity.metadata.label,
-					transcript,
-					preparationError: boundedPreparationError(error),
-				};
-			}
-			if (active) {
-				await this.#switchActiveAgentViewToTargetInLane(active, record, target);
-				return { kind: "selected" };
-			}
-			let attachment!: DurableAgentViewAttachment;
-			attachment = new DurableAgentViewAttachment({
-				agentId,
-				label: record.identity.metadata.label,
-				projection: target.projection,
-				requestClose: () => this.#closeAgentView(attachment),
-				reportFailure: (error) => this.#reportAgentViewError(error),
-			});
-			this.#activeAgentView = {
-				record,
-				attachment,
-				failed: false,
-			};
-			this.#notifyAgentActivityChanged();
-			return { kind: "selected", view: attachment };
-		});
-	}
-
-	async #openAgentView(agentId: string): Promise<DurableAgentView | undefined> {
-		const selection = await this.#openAgentPresentation(agentId);
-		if (selection.kind === "post_mortem") {
-			throw new Error(selection.preparationError);
-		}
-		return selection.view;
-	}
-
-	async #acquireAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
-		const phase = record.host.observe().phase;
-		if (phase === "starting") {
-			const initializingProjection = await waitForInitializingProjection(record);
-			if (initializingProjection) {
-				// Run startup deliberately waits for session_start UI. Entering its lane
-				// here would deadlock the only human surface that can settle a startup
-				// modal. The exact bound Run cannot change during these synchronous steps.
-				record.host.addRetentionReason("interactive_selection");
-				return { projection: initializingProjection, retryIfChanged: false };
-			}
-		}
-		if ((phase === "dormant" || record.host.currentRunSuspension()) && !record.host.currentProjection()) {
-			return this.#prepareAgentViewTarget(record);
-		}
-		const liveTarget = await record.host.lane.run(() => {
-			// Release may have won the lane after selection observed an ending Runtime.
-			// Re-check at the serialized boundary instead of applying a stale live path
-			// to the now-dormant Agent.
-			if (
-				record.host.observe().phase === "dormant" &&
-				!record.host.currentProjection()
-			) return undefined;
-			return this.#acquireAgentViewTargetInLane(record);
-		});
-		return liveTarget ?? this.#prepareAgentViewTarget(record);
-	}
-
-	async #prepareAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
-		const preparation = record.host.lane.run(async () => {
-			if (record.host.currentProjection()) {
-				record.host.addRetentionReason("interactive_selection");
-				return;
-			}
-			return record.host.prepareInLane(["interactive_selection"]);
-		});
-		// Preparation can pause in session_start UI. Attach the published projection
-		// without waiting behind the modal that this view must let the human settle.
-		const projection = await waitForStartupProjection(record, preparation);
-		// Readiness continues after publication because session_start UI may need the
-		// attached view. If it later fails, close only that exact unusable attachment.
-		void preparation.catch((error) => {
-			void this.#agentViewLane.run(async () => {
-				const active = this.#activeAgentView;
-				if (
-					!active ||
-					active.record !== record ||
-					active.attachment.projection() !== projection
-				) return;
-				this.#reportAgentViewError(error);
-				await this.#closeActiveAgentViewInLane(active);
-			}).catch((cleanupError) => this.#reportAgentViewError(cleanupError));
-		});
-		record.host.addRetentionReason("interactive_selection");
-		return { projection, retryIfChanged: false };
-	}
-
-	async #acquireAgentViewTargetInLane(record: AgentRecord): Promise<AgentViewTarget> {
-		record.host.addRetentionReason("interactive_selection");
-		const projection = record.host.currentProjection();
-		if (projection) return { projection, retryIfChanged: true };
-		record.host.removeRetentionReason("interactive_selection");
-		throw new Error(
-			`invariant_violation: live Agent ${record.identity.agentId} has no presentation projection`,
-		);
-	}
-
-	async #switchActiveAgentViewToTargetInLane(
-		active: ActiveDurableAgentView,
-		record: AgentRecord,
-		initialTarget: AgentViewTarget,
-	): Promise<void> {
-		let target = initialTarget;
-		while (true) {
-			const previousRecord = active.record;
-			const previousProjection = active.attachment.projection();
-			let presentationReady: Promise<void> | undefined;
-			let requestPreviousRunRelease = false;
-			let targetChanged = false;
-			await previousRecord.host.lane.run(() => {
-				targetChanged = record.host.currentProjection() !== target.projection;
-				if (targetChanged) return;
-				active.record = record;
-				active.failed = false;
-				presentationReady = active.attachment.retarget({
-					agentId: record.identity.agentId,
-					label: record.identity.metadata.label,
-					projection: target.projection,
-				});
-			});
-			if (targetChanged) {
-				await this.#releaseUnpublishedAgentViewTarget(record, target);
-				if (!target.retryIfChanged) {
-					throw new Error(
-						`stale_run: selected Agent ${record.identity.agentId} changed during view preparation`,
-					);
-				}
-				target = await this.#acquireAgentViewTarget(record);
-				continue;
-			}
-			// The previous Runtime still renders its loading selector until the
-			// physical handoff completes. Releasing it earlier can freeze that view.
-			try {
-				await presentationReady;
-			} finally {
-				await previousRecord.host.lane.run(() => {
-					if (previousRecord.host.currentProjection() !== previousProjection) return;
-					previousRecord.host.removeRetentionReason("interactive_selection");
-					requestPreviousRunRelease = true;
-				});
-				if (requestPreviousRunRelease) {
-					try {
-						await this.#messages.requestRelease(previousRecord);
-					} catch (error) {
-						this.#reportAgentViewError(error);
-					}
-				}
-				this.#notifyAgentActivityChanged();
-			}
-			return;
-		}
-	}
-
-	async #releaseUnpublishedAgentViewTarget(
-		record: AgentRecord,
-		_target: AgentViewTarget,
-	): Promise<void> {
-		await record.host.lane.run(() => {
-			record.host.removeRetentionReason("interactive_selection");
-		});
-		await this.#messages.requestRelease(record);
-	}
-
-	#closeAgentView(attachment: DurableAgentViewAttachment): Promise<void> {
-		return this.#agentViewLane.run(async () => {
-			const active = this.#activeAgentView;
-			if (!active || active.attachment !== attachment) {
-				attachment.settleClosed();
-				return;
-			}
-			await this.#closeActiveAgentViewInLane(active);
-		});
-	}
-
-	async #closeActiveAgentViewInLane(active: ActiveDurableAgentView): Promise<void> {
-		const cleanupErrors: unknown[] = [];
-		let requestRunRelease = false;
-		await collectCleanupFailure(
-			cleanupErrors,
-			() => active.record.host.cancelRuntimeInitialization(
-				active.attachment.projection(),
-				new Error("Agent view closed during Runtime initialization"),
-			),
-		);
-		await active.record.host.lane.run(async () => {
-			if (this.#activeAgentView !== active) return;
-			this.#activeAgentView = undefined;
-			// A closed selection cannot hold interactive retention for any projection:
-			// there is only one active view, and it is this one. Gating the removal on
-			// the attached projection used to leak the retention whenever that
-			// projection had already been replaced (Run fence, resumption, disposal),
-			// which then made the record permanently ineligible for Deadlock and other
-			// incident inspection that treats a live selection as external progress.
-			active.record.host.removeRetentionReason("interactive_selection");
-			if (
-				active.record.host.currentProjection() === active.attachment.projection()
-			) requestRunRelease = true;
-			active.attachment.settleClosed();
-		});
-		if (requestRunRelease) {
-			try {
-				await this.#messages.requestRelease(active.record);
-			} catch (error) {
-				cleanupErrors.push(error);
-			}
-		}
-		if (cleanupErrors.length > 0) {
-			throw new AggregateError(cleanupErrors, "Agent view cleanup failed");
-		}
-	}
-
-	async #bindViewedRunInLane(
-		record: AgentRecord,
-		handle: Readonly<{ sequence: number }>,
-	): Promise<void> {
-		const active = this.#activeAgentView;
-		if (!active || active.record !== record || !record.host.isCurrent(handle)) return;
-		const projection = record.host.currentProjection();
-		if (!projection) {
-			throw new Error(
-				`invariant_violation: viewed Agent ${record.identity.agentId} started without a projection`,
-			);
-		}
-		if (active.attachment.projection() !== projection) {
-			throw new Error(
-				`invariant_violation: viewed Agent ${record.identity.agentId} changed Runtime projection during Run admission`,
-			);
-		}
-		record.host.addRetentionReason("interactive_selection");
-		active.failed = false;
-		this.#notifyAgentActivityChanged();
-	}
-
-	async #handleViewedRunEndingInLane(
-		record: AgentRecord,
-		handle: Readonly<{ sequence: number }>,
-		cause: "failure" | "termination" | "shutdown",
-	): Promise<void> {
-		const active = this.#activeAgentView;
-		if (
-			!active ||
-			active.record !== record ||
-			!record.host.isCurrent(handle) ||
-			record.host.currentProjection() !== active.attachment.projection()
-		) return;
-		if (record.host.observe().phase === "starting") {
-			// Initialization cancellation disposes this not-yet-usable projection;
-			// unlike an admitted Run, it cannot remain as a Dormant attached view.
-			this.#activeAgentView = undefined;
-			active.attachment.settleClosed();
-			this.#notifyAgentActivityChanged();
-			return;
-		}
-		if (cause !== "failure") return;
-		active.failed = true;
-		this.#notifyAgentActivityChanged();
-	}
-
-	#reportAgentViewError(error: unknown): void {
-		this.#ownerDiagnostics.push({
-			type: "error",
-			message: `Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
-		});
 	}
 
 	/**
@@ -1545,21 +1226,6 @@ export class WorkflowCoordinator {
 		this.#ownerDiagnostics.push({
 			type: "error",
 			message: `Agent runtime release failed: ${error instanceof Error ? error.message : String(error)}`,
-		});
-	}
-
-	#focusHumanAnswer(agentId: string, requestId: string): Promise<void> {
-		return this.#agentViewLane.run(() => {
-			if (!this.#humanRequests.hasPendingRequest(agentId, requestId)) {
-				throw new Error("stale_request: Human Request is no longer pending");
-			}
-			const active = this.#activeAgentView;
-			if (!active || active.record.identity.agentId !== agentId) {
-				throw new Error(
-					`invariant_violation: Human Request Agent ${agentId} is not selected`,
-				);
-			}
-			active.attachment.projection().focusEditor();
 		});
 	}
 
@@ -1636,43 +1302,7 @@ export class WorkflowCoordinator {
 		// Mark before submission: the settlement this input causes must observe the mark
 		// so a Stall after deselection can clear it.
 		this.#operationalIncidents.noteHumanInterruption(agentId);
-		return this.#agentViewLane.run(async () => {
-			const active = this.#activeAgentView;
-			if (!active || active.record.identity.agentId !== agentId) {
-				return await this.#runSupervisor.resumeFromHuman(agentId, text, images, submissionSequence)
-					? "submitted"
-					: "continue";
-			}
-			return active.record.host.lane.run(async () => {
-				if (this.#activeAgentView !== active) return "discarded";
-				if (
-					inputSubmission !== undefined &&
-					active.record.host.projectionInputSubmissionIsFenced(inputSubmission)
-				) return "discarded";
-				const currentHandle = active.record.host.currentHandle();
-				if (
-					currentHandle &&
-					active.attachment.projection() === active.record.host.currentProjection()
-				) {
-					if (active.record.host.currentResumptionHold()) {
-						return await this.#runSupervisor.resumeFromHumanInLane(
-							active.record,
-							text,
-							images,
-							submissionSequence,
-						)
-							? "submitted"
-							: "continue";
-					}
-					return "continue";
-				}
-				if (!currentHandle) {
-					await active.record.host.startInLane(["interactive_selection"]);
-				}
-				await this.#runSupervisor.submitFromHumanInLane(active.record, text, images, submissionSequence);
-				return "submitted";
-			});
-		});
+		return this.#selection.routeHumanInput(agentId, text, images, submissionSequence, inputSubmission);
 	}
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
@@ -1692,7 +1322,7 @@ export class WorkflowCoordinator {
 		await collectCleanupFailure(cleanupErrors, () => this.#operationalIncidents.reachSafeBoundary());
 		await collectCleanupFailure(
 			cleanupErrors,
-			() => this.#activeAgentView?.attachment.close(),
+			() => this.#selection.closeAtShutdown(),
 		);
 		await collectCleanupFailure(
 			cleanupErrors,
@@ -1747,106 +1377,4 @@ function searchRelevance(
 	if (label.startsWith(query)) return 1;
 	if (label.includes(query)) return 2;
 	return 3;
-}
-
-function waitForInitializingProjection(
-	record: AgentRecord,
-): Promise<TerminalProjection | undefined> {
-	const current = record.host.currentProjection();
-	if (current || record.host.observe().phase !== "starting") {
-		return Promise.resolve(current);
-	}
-	return new Promise((resolve) => {
-		const removeHandler = record.host.addStateChangeHandler(() => {
-			const projection = record.host.currentProjection();
-			if (!projection && record.host.observe().phase === "starting") return;
-			removeHandler();
-			resolve(projection);
-		});
-	});
-}
-
-function waitForStartupProjection(
-	record: AgentRecord,
-	startup: Promise<unknown>,
-): Promise<TerminalProjection> {
-	const current = record.host.currentProjection();
-	if (current) return Promise.resolve(current);
-	return new Promise((resolve, reject) => {
-		let settled = false;
-		let removeHandler: () => void = () => undefined;
-		const settle = (
-			result: { projection: TerminalProjection } | { error: unknown },
-		) => {
-			if (settled) return;
-			settled = true;
-			removeHandler();
-			if ("projection" in result) resolve(result.projection);
-			else reject(result.error);
-		};
-		const inspectProjection = () => {
-			const projection = record.host.currentProjection();
-			if (projection) settle({ projection });
-		};
-		removeHandler = record.host.addStateChangeHandler(inspectProjection);
-		inspectProjection();
-		void startup.then(
-			() => {
-				const projection = record.host.currentProjection();
-				if (projection) settle({ projection });
-				else {
-					settle({
-						error: new Error(
-							`invariant_violation: selected Agent ${record.identity.agentId} prepared without a presentation projection`,
-						),
-					});
-				}
-			},
-			(error) => settle({ error }),
-		);
-	});
-}
-
-const MAX_PREPARATION_ERROR_BYTES = 2_000;
-
-function boundedPreparationError(error: unknown): string {
-	const message = error instanceof Error ? error.message : String(error);
-	const nonEmpty = message.length > 0 ? message : "Runtime preparation failed";
-	if (Buffer.byteLength(nonEmpty, "utf8") <= MAX_PREPARATION_ERROR_BYTES) return nonEmpty;
-	const ellipsis = "…";
-	const maximumContentBytes = MAX_PREPARATION_ERROR_BYTES - Buffer.byteLength(ellipsis, "utf8");
-	let bounded = "";
-	for (const character of nonEmpty) {
-		if (Buffer.byteLength(bounded + character, "utf8") > maximumContentBytes) break;
-		bounded += character;
-	}
-	return `${bounded}${ellipsis}`;
-}
-
-async function collectCleanupFailure(
-	errors: unknown[],
-	cleanup: () => unknown | Promise<unknown>,
-): Promise<void> {
-	try {
-		await cleanup();
-	} catch (error) {
-		appendCleanupFailure(errors, error);
-	}
-}
-
-function collectSettledCleanupFailures(
-	errors: unknown[],
-	results: readonly PromiseSettledResult<unknown>[],
-): void {
-	for (const result of results) {
-		if (result.status === "rejected") appendCleanupFailure(errors, result.reason);
-	}
-}
-
-function appendCleanupFailure(errors: unknown[], error: unknown): void {
-	if (error instanceof AggregateError) {
-		for (const nested of error.errors) appendCleanupFailure(errors, nested);
-		return;
-	}
-	errors.push(error);
 }
