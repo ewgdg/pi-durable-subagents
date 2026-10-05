@@ -10,7 +10,6 @@ The file is a strict UTF-8 JSON object. Its complete optional surface is:
 
 ```json
 {
-  "maxConcurrentAgentRuns": 8,
   "maxPendingDeliveriesPerAgent": 256,
   "operationReviewIntervalMs": 600000,
   "deliveryProgressIntervalMs": 60000,
@@ -18,17 +17,11 @@ The file is a strict UTF-8 JSON object. Its complete optional surface is:
 }
 ```
 
-An omitted file or field uses the shown default. Unknown fields, duplicate keys, comments, trailing commas, wrong types, and invalid integers reject the complete file. Execution and delivery limits must be positive safe integers. `operationReviewIntervalMs` and `deliveryProgressIntervalMs` must each be an integer from `1000` through `2147483647` milliseconds. `excludedModels` defaults to an empty list.
+An omitted file or field uses the shown default. Unknown fields, duplicate keys, comments, trailing commas, wrong types, and invalid integers reject the complete file. `maxPendingDeliveriesPerAgent` must be a positive safe integer. `operationReviewIntervalMs` and `deliveryProgressIntervalMs` must each be an integer from `1000` through `2147483647` milliseconds. `excludedModels` defaults to an empty list.
 
 Invalid initial policy does not block admission: the Owner starts with the default policy, and a warning names the problem. Owner resource reload reads the file again: a valid file atomically publishes one frozen complete snapshot, while an invalid file warns and preserves the previous snapshot. Model-exclusion toggles still refuse to rewrite an invalid file. Reloading child resources does not reload Workflow Policy. Policy is volatile Owner-scoped configuration; it is not written to any Agent transcript.
 
-## Child execution
-
-`maxConcurrentAgentRuns` is the maximum number of child Agent Runs that may execute concurrently across the Workflow. A child Run consumes one slot only while Pi is generating or executing its tools. A ready child Run that cannot enter waits in Workflow-wide FIFO order before generation starts.
-
-The single Workflow Owner Run always enters immediately and consumes no child slot. Moderator Runs are also immediate and consume no child slot. Total concurrent work may therefore include the configured number of child Agent Runs, the Owner Run, and exempt Moderator work.
-
-Queued, settled, held, input-required, Agent-Answer-waiting, ending, and dormant child Runs consume no execution slot. A pending child `agent_wait` reacquires capacity before its aggregate tool result can commit. A reduced limit does not preempt active child work: each ready child execution keeps the complete policy snapshot captured at its admission and enters when current child usage falls below that captured limit.
+The Workflow has no execution limit: every ready Agent Run executes as soon as Pi admits it, and Pi's native retry and Run Suspension handle provider rate limits and quota. See [ADR 0005](adr/0005-no-workflow-wide-execution-queue.md). A file that still sets the removed `maxConcurrentAgentRuns` field is rejected as an unknown field.
 
 ## Pending Message delivery
 
@@ -46,7 +39,7 @@ Every reviewed call starts its interval at execution admission. A Moderator may 
 
 `deliveryProgressIntervalMs` bounds a continuous interval during which Delivery machinery is responsible for advancing an eligible Message toward transcript commitment. The default is one minute; ordinary model generation and parked Agent Wait are not part of this interval.
 
-Each observed scheduling admission captures its interval. An eligible delivery starts timing at its first live eligibility observation; reservation and dispatch restart the captured interval. Transcript proof or suppression ends observation. Execution-capacity waiting, an active recipient, Request admission behind an existing Answer Obligation, Human attention, selection, and Holds suspend applicable delivery timing. Regained eligibility starts a fresh captured interval. Polls, heartbeats, logs, and policy reload do not extend it. A known lost scheduling continuation qualifies immediately instead of waiting for expiry.
+Each observed scheduling admission captures its interval. An eligible delivery starts timing at its first live eligibility observation; reservation and dispatch restart the captured interval. Transcript proof or suppression ends observation. An active recipient, Request admission behind an existing Answer Obligation, Human attention, selection, and Holds suspend applicable delivery timing. Regained eligibility starts a fresh captured interval. Polls, heartbeats, logs, and policy reload do not extend it. A known lost scheduling continuation qualifies immediately instead of waiting for expiry.
 
 The same current policy value bounds one moderation inspection/bootstrap pass, including replacement creation after terminal Moderator failure, before reporting passive Owner attention if that pass does not complete. This watchdog does not abort the pass or retry any effects. See [Operational Incident moderation](operational-incident-moderation.md) for dependency qualification and exclusions.
 

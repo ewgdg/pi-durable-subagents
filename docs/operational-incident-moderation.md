@@ -43,7 +43,7 @@ Delivery progress uses the admission-time `deliveryProgressIntervalMs` from [Wor
 | First observation of eligible pending scheduling | Start the captured interval |
 | Frozen scheduling reservation, then dispatch to Pi | Reset at each meaningful transition |
 | Transcript Delivery proof or Request suppression | Clear observation and handling |
-| Execution-capacity wait, active recipient work before dispatch, or admission behind an existing Answer Obligation | Suspend; follow outstanding Request dependencies rather than timing the wait |
+| Active recipient work before dispatch, or admission behind an existing Answer Obligation | Suspend; follow outstanding Request dependencies rather than timing the wait |
 | Human attention, interactive selection, or intentional Hold on the recipient | Suspend; regain eligibility with a fresh interval |
 | Poll, heartbeat, repeated state observation, or policy reload | No extension |
 | Scheduling/dispatch exception with no continuing delivery path, including startup/admission exits before dispatch | Immediately request investigation once a qualifying obligation path exists |
