@@ -219,7 +219,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	guardToolResult(
 		message: MessageEndEvent["message"],
 	): GuardedCoordinationToolResult | undefined;
-	reconcileHumanToolResults(): void;
+	/** Starts with reconcileCommittedToolResults; callers refresh transcript facts first. */
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(submissionSequence?: number): Promise<void>;
 	obligationFrames(): readonly ObligationFrame[];
@@ -665,6 +665,15 @@ export class WorkflowCoordinator {
 	}
 
 	#agentView(agentId: string): AgentCoordinatorView {
+		// Human Requests, Agent Wait and Operation Review reconcile independently, in
+		// this fixed order; then parked Waits across the Workflow re-check Answers.
+		// Operation Review also schedules the incident evaluation the safe boundary awaits.
+		const reconcileCommittedToolResults = () => {
+			this.#humanRequests.reconcileCommittedResults(agentId);
+			this.#agentWaits.reconcileCommittedResults(agentId);
+			this.#operationalIncidents.reconcileCommittedToolResults(agentId);
+			this.#agentWaits.reconcileCommittedAnswers();
+		};
 		return {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
 			modelPolicy: () => this.modelPolicy(),
@@ -737,8 +746,6 @@ export class WorkflowCoordinator {
 				this.#humanRequests.guardResultCommit(agentId, message) ??
 				this.#messages.guardResultCommit(agentId, message) ??
 				this.#agentWaits.guardResultCommit(agentId, message),
-			reconcileHumanToolResults: () =>
-				this.#humanRequests.reconcileCommittedResults(agentId),
 			// These surfaces belong to the human Workflow Owner even while a child
 			// Runtime supplies the selected interactive mode.
 			hasPendingHumanQuestions: () => this.#humanRequests.hasPendingQuestions(),
@@ -752,9 +759,10 @@ export class WorkflowCoordinator {
 			},
 			operationalAttention: () =>
 				this.#operationalIncidents.attentionItems(this.#ownerIdentity.agentId),
+			// Committed tool results, then Answer relationship sync and the scheduler's
+			// safe boundary, then Operational Incident evaluation last.
 			reachSafeBoundary: async () => {
-				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
-				this.#agentWaits.reconcileCommittedAnswers();
+				reconcileCommittedToolResults();
 				await this.#messages.reachSafeBoundary(agentId);
 				await this.#operationalIncidents.reachSafeBoundary();
 			},
@@ -769,11 +777,7 @@ export class WorkflowCoordinator {
 					toolName,
 				);
 			},
-			reconcileCommittedToolResults: () => {
-				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
-				this.#agentWaits.reconcileCommittedResults(agentId);
-				this.#agentWaits.reconcileCommittedAnswers();
-			},
+			reconcileCommittedToolResults,
 			obligationFrames: () => this.#messages.obligationFrames(agentId),
 		};
 	}

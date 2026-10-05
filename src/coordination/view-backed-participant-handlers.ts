@@ -98,6 +98,12 @@ function coordinationHandlers(
 }
 
 function lifecycleHandlers(resolveView: () => ParticipantView): ParticipantLifecycleHandlers {
+	// Tool start and execution end reconcile committed tool results after the
+	// transcript refresh; the safe boundary includes that same step first.
+	const reconcileCommittedFacts = async () => {
+		await resolveView().refreshTranscriptFacts();
+		resolveView().reconcileCommittedToolResults();
+	};
 	return {
 		executionStarted: async (submissionSequence) => {
 			await resolveView().beginExecution(submissionSequence);
@@ -120,24 +126,18 @@ function lifecycleHandlers(resolveView: () => ParticipantView): ParticipantLifec
 		// A previous sequential tool result is committed before Pi admits the next
 		// sibling. Reconcile here so input-required attention cannot cross that barrier.
 		async rootToolExecutionStarted(input) {
-			await resolveView().refreshTranscriptFacts();
-			resolveView().reconcileHumanToolResults();
-			resolveView().reconcileCommittedToolResults();
+			await reconcileCommittedFacts();
 			resolveView().assertNotShutDownOrSuspended();
 			resolveView().beginToolExecution(input.toolCallId, input.toolName);
 		},
 		async safeBoundaryReached() {
 			await resolveView().refreshTranscriptFacts();
-			resolveView().reconcileHumanToolResults();
-			resolveView().reconcileCommittedToolResults();
 			await resolveView().reachSafeBoundary();
 		},
 		// Aborted and failed turns may not reach turn_end. agent_end follows all native
 		// message commits, so it safely reconciles their final Human result as well.
 		async executionEnded() {
-			await resolveView().refreshTranscriptFacts();
-			resolveView().reconcileCommittedToolResults();
-			resolveView().reconcileHumanToolResults();
+			await reconcileCommittedFacts();
 		},
 	};
 }

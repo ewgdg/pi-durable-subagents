@@ -654,10 +654,7 @@ export class MessageCoordinator {
 		record: AgentRecord,
 		handle: AgentRunHandle,
 	): Promise<boolean> {
-		this.#reconcileAnswerDeliveries(record);
-		if (this.#reconcileCommittedAnswerAuthorship(record)) {
-			await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
-		}
+		await this.#syncAnswerRelationshipsInLane(record);
 		// Workflow activity, not Request retention, owns parking eligibility. A
 		// different child can still be working after the last Answer is reconciled.
 		return this.#deliveryScheduler.beginParkingInLane(record, handle);
@@ -677,13 +674,21 @@ export class MessageCoordinator {
 		if (record.host.observe().phase === "ending" || record.host.isInterrupting()) {
 			return Promise.resolve();
 		}
-		await record.host.lane.run(async () => {
-			this.#reconcileAnswerDeliveries(record);
-			if (this.#reconcileCommittedAnswerAuthorship(record)) {
-				await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
-			}
-		});
+		await record.host.lane.run(() => this.#syncAnswerRelationshipsInLane(record));
 		return this.#deliveryScheduler.reachSafeBoundary(record);
+	}
+
+	/**
+	 * Requester-side Answer proof first, then responder-side Answer authorship;
+	 * the queue advances once if either retention changed. Shared by the safe
+	 * boundary and Owner parking.
+	 */
+	async #syncAnswerRelationshipsInLane(record: AgentRecord): Promise<void> {
+		const proofChanged = this.#reconcileAnswerDeliveries(record);
+		const authorshipChanged = this.#reconcileCommittedAnswerAuthorship(record);
+		if (proofChanged || authorshipChanged) {
+			await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
+		}
 	}
 
 	discardSchedulingInLane(record: AgentRecord): void {
@@ -1344,11 +1349,13 @@ export class MessageCoordinator {
 		return changed;
 	}
 
-	#reconcileAnswerDeliveries(requester: AgentRecord): void {
+	#reconcileAnswerDeliveries(requester: AgentRecord): boolean {
+		let changed = false;
 		for (const requestId of requester.host.requestRelationshipIds("awaiting_answer")) {
 			const request = this.#requestEvidence.findRequest(requestId);
 			if (!request) {
 				requester.host.removeRetentionReason("awaiting_answer", requestId);
+				changed = true;
 				continue;
 			}
 			const answer = this.#requestEvidence.findAnswer(request);
@@ -1364,8 +1371,10 @@ export class MessageCoordinator {
 					"awaiting_answer",
 					answer.requestId,
 				);
+				changed = true;
 			}
 		}
+		return changed;
 	}
 
 	/**

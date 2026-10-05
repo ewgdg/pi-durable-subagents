@@ -536,16 +536,10 @@ test("view-backed lifecycle handlers preserve each role's local operation order"
 				["resume-human", "resume locally", undefined],
 				"begin-execution",
 				["guard-human-result", toolResultMessage],
-				"reconcile-human-results",
 				"reconcile-committed-results",
 				"assert-not-shut-down-or-suspended",
 				["begin-tool", "tool-call-2", "bash"],
-				"reconcile-human-results",
-				"reconcile-committed-results",
 				"reach-safe-boundary",
-				"reconcile-committed-results",
-				"reconcile-human-results",
-				"reconcile-human-results",
 				"reconcile-committed-results",
 				"reach-safe-boundary",
 			]);
@@ -776,9 +770,6 @@ function localLifecycleView(calls: unknown[]) {
 		},
 		guardToolResult(message: MessageEndEvent["message"]) {
 			calls.push(["guard-human-result", message]);
-		},
-		reconcileHumanToolResults() {
-			calls.push("reconcile-human-results");
 		},
 		reconcileCommittedToolResults() {
 			calls.push("reconcile-committed-results");
