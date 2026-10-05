@@ -75,7 +75,7 @@ async function attachRuntime(host: Awaited<ReturnType<typeof createTestOwnerHost
 		inputSubmissionAcknowledger.bind(), () => {}, () => {},
 	);
 	state.currentBinding = binding;
-	const parent = new PiChildHostedRuntime({
+	const parent = new PiChildHostedRuntime({ link: {
 		exited: new Promise(() => {}),
 		addChangeHandler: () => () => {},
 		addFailureHandler: () => () => {},
@@ -101,7 +101,7 @@ async function attachRuntime(host: Awaited<ReturnType<typeof createTestOwnerHost
 			return () => { eventHandlers.delete(handler); };
 		},
 		dispose: async () => {},
-	} as unknown as PiChildProcessLaunch);
+	} as unknown as PiChildProcessLaunch });
 	await parent.ready;
 
 

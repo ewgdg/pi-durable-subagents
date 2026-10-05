@@ -152,7 +152,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 			inputSubmissionAcknowledger.bind(), () => {}, () => {},
 		);
 		state.currentBinding = binding;
-		const parent = new PiChildHostedRuntime({
+		const parent = new PiChildHostedRuntime({ link: {
 			exited: new Promise(() => {}),
 			addChangeHandler: () => () => {},
 			addFailureHandler: () => () => {},
@@ -175,7 +175,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 				return () => { eventHandlers.delete(handler); };
 			},
 			dispose: async () => {},
-		} as unknown as PiChildProcessLaunch);
+		} as unknown as PiChildProcessLaunch });
 		await parent.ready;
 		const failures: string[] = [];
 		let dispatched!: ReturnType<typeof parent.deliver>;

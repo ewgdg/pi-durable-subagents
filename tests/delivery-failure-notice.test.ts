@@ -8,6 +8,7 @@ import { AgentWaitCoordinator } from "../src/coordination/agent-waits.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import type { AgentRuntimeHost, AgentRunHandle, AgentRunEndCause, AgentRuntimeDelivery } from "../src/runtime/agent-runtime-host.ts";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
+import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import type { PiChildProcessLaunch, PiChildProcessRuntime, PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { participant } from "./support/request-history.ts";
@@ -373,7 +374,7 @@ for (const outcome of ["dispatch_rejected", "channel_loss", "process_exit", "com
 		onEvent: (handler: (event: PiChildRuntimeEvent) => void) => { eventHandlers.add(handler); return () => eventHandlers.delete(handler); },
 		dispose: async () => {},
 	} as unknown as PiChildProcessLaunch;
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
 	await runtime.ready;
 	t.after(() => { void runtime.dispose(); });
 	h.recipient.dispatchOverride = input => runtime.deliver(input);

@@ -8,6 +8,7 @@ import test from "node:test";
 import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
+import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import { PiChildProcessRuntime, type PiChildProcessLaunch } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import { MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
@@ -46,7 +47,7 @@ test("real child reminder admission defers active work and serializes clear vers
 		runtimeDirectory: root, columns: 100, rows: 30,
 		ownerRequestHandlers: ordinaryOwnerHandlers(expectedSessionId),
 	});
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
 	const reminders = () => SessionManager.open(sessionPath).getEntries().filter(
 		(entry) => entry.type === "custom_message" && entry.customType === MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE,
 	);

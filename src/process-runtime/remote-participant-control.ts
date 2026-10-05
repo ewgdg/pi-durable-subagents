@@ -1,7 +1,11 @@
 import type { Static } from "typebox";
 import { Check } from "typebox/value";
 
-import type { ControlRequest } from "../control/agent-control-channel.ts";
+import type {
+	ControlEvent,
+	ControlRequest,
+	FramedAgentControlChannel,
+} from "../control/agent-control-channel.ts";
 import {
 	agentControlMethods,
 	agentControlProtocol,
@@ -186,6 +190,42 @@ export function createControlBackedChildParticipantHandlers(
 			request("coordination.moderatorControl", { toolCallId, input }),
 	};
 	return { lifecycle, coordination };
+}
+
+/**
+ * Attach the Owner's participant serving to one admitted child channel: child
+ * requests reach the Owner's handlers, Wait progress and selector changes return as
+ * events, and every child event fans out to the current subscribers.
+ */
+export function serveOwnerParticipant(
+	channel: FramedAgentControlChannel<typeof agentControlProtocol>,
+	handlers:
+		| OwnerParticipantRequestHandlers<"ordinary">
+		| OwnerParticipantRequestHandlers<"moderator">
+		| undefined,
+	subscribers: ReadonlySet<(event: ControlEvent<typeof agentControlProtocol>) => void>,
+): void {
+	channel.onRequest((request) =>
+		dispatchParticipantRequestToOwner(handlers, request, {
+			waitProgress: (toolCallId, progress) => {
+				void channel.sendEvent("coordination.wait.progress", { toolCallId, progress })
+					.catch(() => undefined);
+			},
+		})
+	);
+	const removePresentationChangeHandler = handlers?.presentation.addChangeHandler?.((snapshot) => {
+		void channel.sendEvent("presentation.agents.changed", {
+			...snapshot,
+			live: [...snapshot.live],
+			dormant: [...snapshot.dormant],
+			humanAttention: [...snapshot.humanAttention],
+			operationalAttention: [...snapshot.operationalAttention],
+		}).catch(() => undefined);
+	}) ?? (() => undefined);
+	channel.onEvent((event) => {
+		for (const subscriber of subscribers) subscriber(event);
+	});
+	channel.onClose(() => removePresentationChangeHandler());
 }
 
 /** Dispatch one authenticated child intention into its scoped Owner handlers. */

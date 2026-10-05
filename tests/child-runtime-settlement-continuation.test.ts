@@ -13,6 +13,7 @@ import { selectedAgentWorkStatus } from "../src/presentation/selected-agent-stat
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
+import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import { writeChildSession } from "./support/child-session.ts";
@@ -48,7 +49,7 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 		skillPaths: [], projectTrusted: true, runtimeDirectory: root,
 		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1", CONTINUATION_RELEASE_PATH: releasePath },
 	});
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId, startSession: async () => ({ runtime, ready: runtime.ready }),
 	});

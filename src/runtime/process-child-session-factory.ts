@@ -19,9 +19,8 @@ import {
 } from "../protocol/moderator-input.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { RuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
-import {
-	PiChildHostedRuntime,
-} from "../process-runtime/pi-child-hosted-runtime.ts";
+import { PiChildHostedRuntime } from "../process-runtime/pi-child-hosted-runtime.ts";
+import { createPiChildProcessProjection } from "../process-runtime/pi-child-process-projection.ts";
 import {
 	DEFAULT_CHILD_STARTUP_TIMEOUT_MILLISECONDS,
 	PiChildProcessRuntime,
@@ -100,7 +99,7 @@ type ParticipantHandlers =
 export class ProcessChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
 	readonly #launchContract: ChildLaunchContractGuard;
-	readonly #onRuntimeQuit: ((agentId: string, projection: HostedAgentProjection) => boolean) | undefined;
+	readonly #onRuntimeQuit: ((agentId: string, projection: HostedAgentProjection | undefined) => boolean) | undefined;
 	readonly #templateLoads = new Map<string, Promise<Readonly<{
 		discovery: AgentTemplateDiscovery;
 		snapshot: AgentTemplateCatalogueSnapshot;
@@ -122,7 +121,7 @@ export class ProcessChildSessionFactory {
 	constructor(options: {
 		ownerRuntime: AgentSessionRuntime;
 		onLaunchBlocked?(error: Error): void;
-		onRuntimeQuit?(agentId: string, projection: HostedAgentProjection): boolean;
+		onRuntimeQuit?(agentId: string, projection: HostedAgentProjection | undefined): boolean;
 		ownerIdentity: OwnerIdentity;
 		entryModulePath: string;
 		packageRoot?: string;
@@ -514,10 +513,11 @@ export class ProcessChildSessionFactory {
 			) as StartPiChildProcessRuntimeOptions["ownerRequestHandlers"],
 			...(this.#interaction === undefined ? {} : { interaction: this.#interaction }),
 		});
-		const runtime = new PiChildHostedRuntime(
-			launch,
-			(projection) => this.#onRuntimeQuit?.(identity.agentId, projection) === true,
-		);
+		const runtime = new PiChildHostedRuntime({
+			link: launch,
+			createProjection: () => createPiChildProcessProjection(launch),
+			onQuit: (projection) => this.#onRuntimeQuit?.(identity.agentId, projection) === true,
+		});
 		return { runtime, ready: runtime.ready };
 	}
 
