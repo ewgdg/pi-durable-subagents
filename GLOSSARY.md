@@ -187,6 +187,10 @@ The transient human choice to attach the physical terminal to one durable non-Ow
 **Post-mortem View**:
 An Owner-hosted read-only presentation of one coherent active-branch snapshot from a durable Agent transcript, used only when Dormant Runtime Preparation cannot produce a usable projection. It shows the Runtime preparation error separately, admits no Run, creates no Runtime or retention, appends no evidence, and does not mark the durable Agent failed. Closing it restores the exact previously mounted Owner or Agent presentation.
 
+**Agents Navigation**:
+The one `/agents` navigation loop every participant runs: open the selector, prepare a selection while the selector shows its loading row, present it once the selector or Report closes, and reopen the selector only when a Post-mortem View is left with `a`. `/agents owner` selects the roster Agent whose Agent ID equals its Workflow ID, live or Dormant, and fails when the roster has none. The Owner session and child processes differ only in their navigation adapter: the Owner's works over its own view, a child's over Control.
+_Avoid_: remote selector, local selector (one loop, two adapters)
+
 **Selected Agent Status**:
 The human-facing lifecycle and work disposition of an Agent under Interactive Selection. It is Dormant when no exact Run exists. A healthy current Run is Active while work is executing, Waiting with a concise reason when progress requires a named external condition or human action, and Idle when settled without such a wait. Starting, Ending, Failed, and Suspended communicate lifecycle transitions, failure, and a retained Run stop separately.
 

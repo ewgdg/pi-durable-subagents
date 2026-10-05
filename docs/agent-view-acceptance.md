@@ -8,7 +8,10 @@ This matrix records the production process-backed Agent-view contract and its re
 - `src/process-runtime/pty-terminal-projection.ts` — startup ANSI diagnostics, hidden-output drainage, raw output subscription, terminal-reply ownership, input, resize, and exact exit.
 - `src/process-runtime/pi-child-hosted-runtime.ts` — process-neutral Run intentions and lifecycle settlement.
 - `src/process-runtime/child-runtime-bridge.ts` — truthful child TUI binding, lifecycle reporting, coordination tools, activity dock, and `/agents` registration.
-- `src/process-runtime/remote-agent-selector.ts` — scoped selector snapshots and awaited Owner selection actions.
+- `src/process-runtime/remote-agent-selector.ts` — scoped selector snapshots, the selection transaction, and awaited Owner selection actions.
+- `src/presentation/agents-navigation.ts` — the one `/agents` navigation loop: selector, Report, View reporter, Post-mortem reopen, and Owner return.
+- `src/presentation/agents-navigation-adapters.ts` — the Owner session's local adapter and a child's Control adapter.
+- `src/tools/agents-command.ts` — the one `/agents` registrar for every participant: parsing, completions, usage, and mode gating.
 - `src/presentation/physical-terminal-attachment.ts` — Owner TUI suspension, atomic handoff buffering, physical-output backpressure, direct raw child PTY routing, retargeting, terminal reset, and Owner restoration.
 - `src/presentation/agent-view-surface.ts` — attachment lifecycle, failure handling, and host-close integration.
 - `src/coordination/durable-agent-view.ts` — one retargetable Workflow attachment.
@@ -46,7 +49,8 @@ This matrix records the production process-backed Agent-view contract and its re
 | Selecting another child retargets one physical attachment without restoring Owner between children | physical attachment tests, independent process-child switch tests, and fullscreen PTY switch |
 | Raw output, native mouse input, ordinary input, and resize continue after retarget | physical attachment, mouse-scroll, complete-frame/input, and 100×30 PTY cases |
 | Selecting the same child is safe; cancellation preserves selection | remote selector domain tests |
-| Stale Human Attention or focus failure restores the previous Agent | `tests/remote-agent-selector.test.ts` |
+| Stale Human Attention or focus failure restores the previous Agent and keeps the selector open | `tests/remote-agent-selector.test.ts`, `tests/agents-navigation.test.ts` |
+| Owner session and child navigation agree on Reports, View reporter, and read state | adapter contract tests in `tests/agents-navigation.test.ts` |
 | Escape remains native child input | custom editor and overlay tests |
 | Activity and Attention update while the selector is open | Control snapshot/change events and activity dock tests |
 
@@ -98,7 +102,7 @@ suites retain keyboard and already-mounted-participant contracts.
 Run only the relevant presentation suites:
 
 ```sh
-node --test tests/agent-selector-surface.test.ts tests/agent-selector-pointer-fullscreen.test.ts tests/remote-agent-selector.test.ts tests/agent-view-surface.test.ts
+node --test tests/agent-selector-surface.test.ts tests/agent-selector-pointer-fullscreen.test.ts tests/remote-agent-selector.test.ts tests/agents-navigation.test.ts tests/agents-command.test.ts tests/agent-view-surface.test.ts
 npm run typecheck
 ```
 

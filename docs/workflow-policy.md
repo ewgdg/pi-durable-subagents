@@ -70,4 +70,4 @@ The menu lists every model the Owner may currently use, plus every stored entry,
 
 Every toggle rewrites this file immediately through a temporary file and rename, then republishes one frozen policy snapshot and refreshes cached Agent Template catalogues. A failed write leaves the previous list in effect and reports the failure inside the menu. Stored identities are never pruned automatically: an entry whose model is absent from the current catalogue stays listed and remains reversible.
 
-`/agents models` exists only in the Workflow Owner session. A child Agent's `/agents` command offers only `owner`.
+`/agents models` exists only in the admitted Workflow Owner session. A child Agent's `/agents` command offers only `owner`.
