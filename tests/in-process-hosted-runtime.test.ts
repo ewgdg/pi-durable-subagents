@@ -45,17 +45,14 @@ test("an Owner Delivery confirms only when the driver proof and the caller's ins
 	await refused.completion;
 });
 
-test("an Owner user Delivery proves commit by the caller's text rule", { timeout: 5000 }, async t => {
+test("an Owner user Delivery proves commit after an Owner input extension appends to it", { timeout: 5000 }, async t => {
 	const { host, runtime } = await ownerRuntime(t, pi => {
-		pi.on("input", event => ({ action: "transform", text: `${event.text}\n\nAppended by an Owner input extension.` }));
+		pi.on("input", event => ({ action: "transform", text: `Prefixed by an Owner input extension.\n\n${event.text}` }));
 	});
-	host.model.setResponses([fauxAssistantMessage("Leading handled."), fauxAssistantMessage("Exact handled.")]);
-	const leading = runtime.deliver({ kind: "user", content: "Human input." }, { userCommitText: "leading" });
-	assert.equal(await leading.transcriptCommit, true);
-	await leading.completion;
-	const exact = runtime.deliver({ kind: "user", content: "Human input." }, { userCommitText: "exact" });
-	assert.equal(await exact.transcriptCommit, false);
-	await exact.completion;
+	host.model.setResponses([fauxAssistantMessage("Transformed input handled.")]);
+	const delivery = runtime.deliver({ kind: "user", content: "Human input." }, {});
+	assert.equal(await delivery.transcriptCommit, true);
+	await delivery.completion;
 });
 
 test("the Owner Runtime rejects Moderator reminder delivery because Moderators run as child processes", { timeout: 5000 }, async t => {

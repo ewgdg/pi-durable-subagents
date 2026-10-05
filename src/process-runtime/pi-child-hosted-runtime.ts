@@ -172,6 +172,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			runtime.channel.request("message.deliver", {
 				deliveryId,
 				delivery: serializeDelivery(delivery),
+				proveCommit: confirmation !== undefined,
 			})
 		).then((result) => {
 			this.#updateQueuedInputCount(result.queuedInputCount);
@@ -187,9 +188,12 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			this.#dispatchCompletions.get(deliveryId)?.reject(error);
 		}).finally(() => this.#dispatchCompletions.delete(deliveryId));
 		if (!confirmation) return { completion };
-		const transcriptCommit = response.then((result) =>
-			result.transcriptCommitted && (confirmation.inspectCommit?.() ?? true)
-		);
+		const transcriptCommit = response.then((result) => {
+			if (result.transcriptCommitted === undefined) {
+				throw new Error("invariant_violation: child answered a proven Delivery without its commit proof");
+			}
+			return result.transcriptCommitted && (confirmation.inspectCommit?.() ?? true);
+		});
 		return { completion, transcriptCommit };
 	}
 

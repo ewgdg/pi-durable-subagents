@@ -901,10 +901,12 @@ export const agentControlProtocol = {
 				request: closed({
 					deliveryId: NonEmptyStringSchema,
 					delivery: AgentRuntimeDeliverySchema,
+					proveCommit: Type.Boolean(),
 				}),
 				response: closed({
 					accepted: Type.Boolean(),
-					transcriptCommitted: Type.Boolean(),
+					/** Present exactly when the request asked to prove the commit. */
+					transcriptCommitted: Type.Optional(Type.Boolean()),
 					modelCycleStarted: Type.Boolean(),
 					queuedInputCount: QueuedInputCountSchema,
 				}),

@@ -239,6 +239,7 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 	}), true);
 	const preparedRequestDelivery = {
 		deliveryId: "prepared-delivery",
+		proveCommit: true,
 		delivery: {
 			kind: "custom",
 			message: {
@@ -537,6 +538,7 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 	}), false);
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
 		deliveryId: "delivery-1",
+		proveCommit: true,
 		delivery: {
 			kind: "user",
 			content: [
@@ -548,6 +550,7 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 	}), true);
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
 		deliveryId: "delivery-1",
+		proveCommit: true,
 		delivery: {
 			kind: "custom",
 			message: {
@@ -564,6 +567,7 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 	}), true);
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
 		deliveryId: "delivery-1",
+		proveCommit: true,
 		delivery: {
 			kind: "custom",
 			message: {
@@ -579,6 +583,7 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 	}), true);
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
 		deliveryId: "delivery-1",
+		proveCommit: true,
 		delivery: {
 			kind: "custom",
 			message: {
@@ -592,6 +597,7 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 	}), true);
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
 		deliveryId: "delivery-1",
+		proveCommit: true,
 		delivery: {
 			kind: "custom",
 			message: {
@@ -605,6 +611,7 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 	}), true);
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
 		deliveryId: "delivery-1",
+		proveCommit: true,
 		delivery: {
 			kind: "custom",
 			message: {
@@ -618,6 +625,7 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 	}), true);
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
 		deliveryId: "delivery-1",
+		proveCommit: true,
 		delivery: { kind: "user", content: "Direction", retry: true },
 	}), false);
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].response, {
@@ -625,6 +633,16 @@ test("each direction declares its own methods and events with TypeBox schemas", 
 		transcriptCommitted: true,
 		modelCycleStarted: true,
 		queuedInputCount: 0,
+	}), true);
+	// The Owner states whether it needs the commit proof; an unproven receipt carries none.
+	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
+		deliveryId: "delivery-1",
+		delivery: { kind: "user", content: "Direction" },
+	}), false);
+	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].response, {
+		accepted: true,
+		modelCycleStarted: true,
+		queuedInputCount: 1,
 	}), true);
 	assert.equal(Check(agentControlProtocol.childToOwner.events["message.dispatch.completed"].payload, {
 		deliveryId: "delivery-1",

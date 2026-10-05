@@ -271,6 +271,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 
 		assert.equal((await runtime.channel.request("message.deliver", {
 			deliveryId: "process-runtime-test-run",
+			proveCommit: true,
 			delivery: { kind: "user", content: "Complete the offline process Runtime Bridge test." },
 		})).accepted, true);
 		await waitUntil(() => lifecycle.includes("agent.settled"));
@@ -299,6 +300,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		const previousCycleId = latestCycleId(runtimeEvents);
 		const activeDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-1",
+			proveCommit: true,
 			delivery: {
 				kind: "user",
 				content: "Commit before the delayed model turn settles.",
@@ -314,6 +316,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		), false);
 		const queuedDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-2",
+			proveCommit: false,
 			delivery: {
 				kind: "user",
 				content: "Clear this queued direction before it commits.",
@@ -340,12 +343,11 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			queuedInputCount: 0,
 		});
 		assert.deepEqual(await interruptedDelivery, { accepted: true });
-		assert.deepEqual(await queuedDelivery, {
-			accepted: true,
-			transcriptCommitted: false,
-			modelCycleStarted: true,
-			queuedInputCount: 0,
-		});
+		// Queued user input is never proven, so its receipt is Pi's queue acceptance.
+		const queuedReceipt = await queuedDelivery;
+		assert.equal(queuedReceipt.accepted, true);
+		assert.equal(queuedReceipt.modelCycleStarted, true);
+		assert.equal("transcriptCommitted" in queuedReceipt, false);
 		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 2);
 		assert.equal(runtimeEvents.some((event) =>
 			event.event === "agent.end" &&
@@ -356,6 +358,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-3",
+			proveCommit: true,
 			delivery: {
 				kind: "user",
 				content: "Start work before the queued Control request is cancelled.",
@@ -366,20 +369,17 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			modelCycleStarted: true,
 			queuedInputCount: 0,
 		});
-		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-4",
+			proveCommit: false,
 			delivery: {
 				kind: "user",
 				content: "This cancelled queued direction must never commit.",
 				deliverAs: "steer",
 			},
-		}, cancellation.signal);
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		cancellation.abort();
-		await assert.rejects(cancelledDelivery, (error: unknown) =>
-			error instanceof Error && error.name === "AbortError"
-		);
+		});
+		assert.equal((await cancelledDelivery).accepted, true);
+		assert.deepEqual(await runtime.channel.request("message.cancel", { deliveryId: "test-delivery-4" }), { accepted: true });
 		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 3);
 		assert.doesNotMatch(
 			JSON.stringify(SessionManager.open(sessionPath).getEntries()),
@@ -388,6 +388,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-5",
+			proveCommit: true,
 			delivery: {
 				kind: "user",
 				content: "PROCESS_RUNTIME_DROP_MESSAGE_COMMIT",
@@ -523,6 +524,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		const omittedMessage = createMessageDelivery([omittedItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-6",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -557,6 +559,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		const activeSteerMessage = createMessageDelivery([activeSteerItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-7",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -606,6 +609,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		const declinedCompactionMessage = createMessageDelivery([declinedCompactionItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-8",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -658,6 +662,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-9",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -705,6 +710,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		).length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-10",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -816,6 +822,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 
 		assert.equal((await runtime.channel.request("message.deliver", {
 			deliveryId: "process-compaction-gateway-run",
+			proveCommit: true,
 			delivery: { kind: "user", content: "Create enough history to make threshold compaction eligible." },
 		})).accepted, true);
 		await waitUntil(() => runtimeEvents.some((event) =>
@@ -831,6 +838,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		const nextPrompt = "Admit this prompt only after preparing the existing context.";
 		assert.equal((await runtime.channel.request("message.deliver", {
 			deliveryId: "process-compaction-next-prompt-run",
+			proveCommit: true,
 			delivery: { kind: "user", content: nextPrompt },
 		})).accepted, true);
 		await waitUntil(() => runtimeEvents.some((event) =>
@@ -864,6 +872,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		}]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-11",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -922,6 +931,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		}`;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-12",
+			proveCommit: true,
 			delivery: { kind: "user", content: activeInput },
 		}), {
 			accepted: true,
@@ -950,6 +960,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 
 		await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-13",
+			proveCommit: true,
 			delivery: {
 				kind: "user",
 				content: `Leave a large deferred context.${" padding context".repeat(400)}`,
@@ -981,6 +992,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-14",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -1024,6 +1036,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		).length;
 		const interruptedDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-15",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -1067,6 +1080,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		).length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-16",
+			proveCommit: true,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -1091,6 +1105,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			.filter((entry) => entry.type === "compaction").length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-17",
+			proveCommit: true,
 			delivery: { kind: "user", content: userDeliveryInput },
 		}), {
 			accepted: true,
@@ -1121,6 +1136,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		const startsBeforePreflight = runtimeEvents.filter(event => event.event === "agent.start").length;
 		const delayedDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-18",
+			proveCommit: true,
 			delivery: { kind: "user", content: "PROCESS_RUNTIME_DELAYED_INPUT" },
 		});
 		const delayedDeliveryOutcome = delayedDelivery.then(
@@ -1268,6 +1284,7 @@ for (const scenario of STARTUP_TOOL_FILTER_SCENARIOS) {
 			assert.deepEqual(activatedSnapshot.tools, ["runtime_sequential_probe"]);
 			await runtime.channel.request("message.deliver", {
 				deliveryId: "activate-new-tool",
+				proveCommit: true,
 				delivery: { kind: "user", content: "Call the newly activated probe." },
 			});
 			await waitUntil(() => SessionManager.open(sessionPath).getEntries().some(entry =>
@@ -1569,6 +1586,7 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 		runtime.onEvent((event) => events.push(event.event));
 		assert.equal((await runtime.channel.request("message.deliver", {
 			deliveryId: "process-coordination-run",
+			proveCommit: true,
 			delivery: { kind: "user", content: "Invoke the scripted coordination tools." },
 		})).accepted, true);
 		await waitUntil(() => events.includes("agent.settled"));
@@ -1916,7 +1934,7 @@ test("hidden real child persists work without rendering and repeated attachment 
 		const renderCount = (await events()).filter(line => line === "render").length;
 		output.length = 0;
 		hiddenFrame = runtime.frame();
-		await runtime.channel.request("message.deliver", { deliveryId: "visibility-" + turn, delivery: { kind: "user", content: "HIDDEN_WORK_" + turn } });
+		await runtime.channel.request("message.deliver", { deliveryId: "visibility-" + turn, proveCommit: true, delivery: { kind: "user", content: "HIDDEN_WORK_" + turn } });
 		await waitUntil(() => settled === turn);
 		const transcript = JSON.stringify(SessionManager.open(sessionPath).getEntries());
 		assert.match(transcript, new RegExp("HIDDEN_WORK_" + turn));

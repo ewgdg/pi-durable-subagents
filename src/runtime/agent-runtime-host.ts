@@ -126,20 +126,12 @@ export type CommitModeratorReminderIfCurrent = (
 ) => Promise<ModeratorReminderOutcome>;
 
 /**
- * How a committed user message's text proves a user Delivery. Both rules admit
- * the image hints Pi appends to a started prompt. "exact" admits nothing else;
- * "leading" admits any text after the submitted text.
+ * Asks the Runtime to prove the Delivery reached the transcript. A user Delivery
+ * is provable only when it sets no queue mode, so it starts its own Run.
  */
-export type UserCommitTextRule = "exact" | "leading";
-
 export type TranscriptCommitConfirmation = Readonly<{
 	/** Caller evidence required beyond the Runtime's own transcript proof. */
 	inspectCommit?(): boolean;
-	/**
-	 * The Owner Runtime's text rule for a user Delivery; "exact" when omitted. A
-	 * child Runtime always proves its user Deliveries by exact text.
-	 */
-	userCommitText?: UserCommitTextRule;
 }>;
 export type AgentRuntimeDeliveryDispatch = Readonly<{
 	completion: Promise<void>;

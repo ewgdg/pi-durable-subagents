@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentSession, AgentSessionEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent, PromptOptions } from "@earendil-works/pi-coding-agent";
 
-import type { AgentRunFailure, AgentRuntimeDelivery, UserCommitTextRule } from "../runtime/agent-runtime-host.ts";
+import type { AgentRunFailure, AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { classifyQuotaEvidence, type QuotaEvidence } from "../runtime/quota-evidence.ts";
 import { RetainedRuntimeQueue, type RuntimeQueue } from "../runtime/retained-runtime-queue.ts";
 import {
@@ -45,9 +45,8 @@ export type TurnAdmission = Readonly<{
 }>;
 
 export type NativeDeliveryOptions = Readonly<{
+	/** A user Delivery is provable only when it sets no queue mode; see `deliver`. */
 	proveCommit?: boolean;
-	/** The text rule of a proven user Delivery; "exact" unless the caller tolerates appends. */
-	userCommitText?: UserCommitTextRule;
 	admission?: TurnAdmission;
 	/** Cancels the Delivery until Pi accepts its submission. */
 	signal?: AbortSignal;
@@ -63,6 +62,7 @@ export type NativeDeliveryDispatch = Readonly<{
 
 type CustomDelivery = Extract<AgentRuntimeDelivery, { kind: "custom" }>;
 type SessionMessage = Extract<AgentSessionEvent, { type: "message_end" }>["message"];
+type PromptDisposition = Parameters<NonNullable<PromptOptions["preflightResult"]>>[0];
 type NativeSubmission = Readonly<{ completion: Promise<void>; preflight: Promise<void> }>;
 type AcceptedAttempt = Readonly<{ completion: Promise<void>; runActive: boolean }>;
 type BusyAttempt = Readonly<{ busy: StartupPreparationBusyError; startupCancellation: AbortSignal }>;
@@ -90,7 +90,12 @@ export class NativeSessionDriver {
 	}
 
 	deliver(delivery: AgentRuntimeDelivery, options: NativeDeliveryOptions = {}): NativeDeliveryDispatch {
-		const proof = options.proveCommit ? this.#createProof(delivery, options.userCommitText ?? "exact") : undefined;
+		// A queued user message carries nothing that identifies it once Pi drains it,
+		// so only the Run a user Delivery starts can prove it, by position.
+		if (options.proveCommit && delivery.kind === "user" && delivery.deliverAs !== undefined) {
+			throw new Error("queued_user_commit_unprovable: prove a user Delivery only when it starts its own Run");
+		}
+		const proof = options.proveCommit ? this.#createProof(delivery) : undefined;
 		const accepted = this.#dispatch(delivery, options.admission ?? IMMEDIATE_ADMISSION, options, proof);
 		const completion = accepted.then(attempt => attempt.completion);
 		void completion.then(() => proof?.dispatchCompleted(), error => proof?.reject(error));
@@ -219,7 +224,7 @@ export class NativeSessionDriver {
 		const submission = (): NativeSubmission => {
 			fence();
 			proof?.begin();
-			return this.#submit(delivery, preflightFence);
+			return this.#submit(delivery, preflightFence, proof);
 		};
 		const submitted = await (admission.submit ? admission.submit(submission, fence) : submission());
 		try {
@@ -239,7 +244,11 @@ export class NativeSessionDriver {
 		return { completion: submitted.completion, runActive: !this.#session.isIdle };
 	}
 
-	#submit(delivery: AgentRuntimeDelivery, preflightFence: () => void): NativeSubmission {
+	#submit(
+		delivery: AgentRuntimeDelivery,
+		preflightFence: () => void,
+		proof: TranscriptCommitProof | undefined,
+	): NativeSubmission {
 		if (delivery.kind === "custom") {
 			return this.#startup().dispatchCustom(delivery.message, {
 				triggerTurn: delivery.triggerTurn,
@@ -258,16 +267,17 @@ export class NativeSessionDriver {
 			source: "extension",
 			...(images.length === 0 ? {} : { images }),
 			...(delivery.deliverAs === undefined ? {} : { streamingBehavior: delivery.deliverAs }),
-			preflightResult() {
+			preflightResult(disposition) {
 				preflightFence();
+				proof?.userSubmissionAccepted(disposition);
 				resolvePreflight();
 			},
 		});
 		return { completion, preflight };
 	}
 
-	#createProof(delivery: AgentRuntimeDelivery, userCommitText: UserCommitTextRule): TranscriptCommitProof {
-		const proof = new TranscriptCommitProof(this.#session, delivery, userCommitText, () => this.#proofs.delete(proof));
+	#createProof(delivery: AgentRuntimeDelivery): TranscriptCommitProof {
+		const proof = new TranscriptCommitProof(this.#session, delivery, () => this.#proofs.delete(proof));
 		this.#proofs.add(proof);
 		return proof;
 	}
@@ -327,30 +337,30 @@ export class NativeSessionDriver {
  * Proves that one Delivery reached the transcript. Turn-level entry IDs are not
  * visible on the session event surface, so `message_end` is only a wake-up: Pi
  * notifies listeners immediately before its synchronous append, and the entry is
- * read in the microtask after persistence. Only entries new since dispatch count.
- * The Delivery's own message ending without a new entry settles false at once.
+ * read in the microtask after persistence. The Delivery's own message ending
+ * without its entry settles false at once.
+ *
+ * A custom Delivery is its exact fields among entries new since dispatch. A user
+ * Delivery carries no identity, and Pi's `input` handlers may rewrite its text,
+ * so it is identified by position: once Pi reports that it started a Run, that
+ * Run's first user message is this Delivery, and Pi persists that same object.
  */
 class TranscriptCommitProof {
 	readonly result: Promise<boolean>;
 	readonly #session: AgentSession;
 	readonly #delivery: AgentRuntimeDelivery;
-	readonly #userCommitText: UserCommitTextRule;
 	#existingEntryIds: ReadonlySet<string> = new Set();
+	#userRunStarted = false;
+	#ownUserMessage: SessionMessage | undefined;
 	#unsubscribe: (() => void) | undefined;
 	readonly #onFinished: () => void;
 	#resolve!: (committed: boolean) => void;
 	#reject!: (error: unknown) => void;
 	#finished = false;
 
-	constructor(
-		session: AgentSession,
-		delivery: AgentRuntimeDelivery,
-		userCommitText: UserCommitTextRule,
-		onFinished: () => void,
-	) {
+	constructor(session: AgentSession, delivery: AgentRuntimeDelivery, onFinished: () => void) {
 		this.#session = session;
 		this.#delivery = delivery;
-		this.#userCommitText = userCommitText;
 		this.#onFinished = onFinished;
 		this.result = new Promise<boolean>((resolve, reject) => {
 			this.#resolve = resolve;
@@ -363,21 +373,19 @@ class TranscriptCommitProof {
 	begin(): void {
 		this.#existingEntryIds = new Set(this.#session.sessionManager.getEntries().map(entry => entry.id));
 		if (this.#unsubscribe) return;
-		const role = this.#delivery.kind === "custom" ? "custom" : "user";
 		this.#unsubscribe = this.#session.subscribe(event => {
-			if (event.type === "message_end" && event.message.role === role) {
-				const ownMessage = matchesDeliveryMessage(this.#delivery, this.#userCommitText, event.message);
-				queueMicrotask(() => {
-					if (this.#committed()) this.#finish(() => this.#resolve(true));
-					// Pi's append already ran, so this exact message will never commit. Do
-					// not wait for settlement: a forwarded human resume awaits this proof
-					// while holding its Agent lane, and the Run's own agent_end hook waits
-					// on that lane, so settlement would never arrive.
-					else if (ownMessage) this.#finish(() => this.#resolve(false));
-				});
-			}
-			if (event.type === "agent_settled") this.#settle();
+			if (event.type === "message_end") this.#messageEnded(event.message);
+			// A user Delivery's own message ends before its Run settles, and another
+			// Run's settlement says nothing about it.
+			if (event.type === "agent_settled" && this.#delivery.kind === "custom") this.#settle();
 		});
+	}
+
+	/** Pi decided a user Delivery's dispatch after its `input` handlers ran. */
+	userSubmissionAccepted(disposition: PromptDisposition): void {
+		if (disposition === "started") this.#userRunStarted = true;
+		else if (disposition === "handled") this.#finish(() => this.#resolve(false));
+		else throw new Error("invariant_violation: Pi queued a proven user Delivery that set no queue mode");
 	}
 
 	pause(): void {
@@ -397,6 +405,26 @@ class TranscriptCommitProof {
 		this.#finish(() => this.#reject(error));
 	}
 
+	#messageEnded(message: SessionMessage): void {
+		if (message.role !== (this.#delivery.kind === "custom" ? "custom" : "user")) return;
+		const ownMessage = this.#isOwnMessage(message);
+		queueMicrotask(() => {
+			if (this.#committed()) this.#finish(() => this.#resolve(true));
+			// Pi's append already ran, so this exact message will never commit. Do
+			// not wait for settlement: a forwarded human resume awaits this proof
+			// while holding its Agent lane, and the Run's own agent_end hook waits
+			// on that lane, so settlement would never arrive.
+			else if (ownMessage) this.#finish(() => this.#resolve(false));
+		});
+	}
+
+	#isOwnMessage(message: SessionMessage): boolean {
+		if (this.#delivery.kind === "custom") return message.role === "custom" && matchesCustomFields(this.#delivery, message);
+		if (!this.#userRunStarted || this.#ownUserMessage || message.role !== "user") return false;
+		this.#ownUserMessage = message;
+		return true;
+	}
+
 	#settle(): void {
 		const committed = this.#committed();
 		this.#finish(() => this.#resolve(committed));
@@ -404,8 +432,15 @@ class TranscriptCommitProof {
 
 	#committed(): boolean {
 		if (this.#finished) return false;
-		return this.#session.sessionManager.getEntries().some(entry =>
-			!this.#existingEntryIds.has(entry.id) && matchesDeliveryEntry(this.#delivery, this.#userCommitText, entry));
+		const entries = this.#session.sessionManager.getEntries();
+		const delivery = this.#delivery;
+		if (delivery.kind === "custom") {
+			return entries.some(entry => !this.#existingEntryIds.has(entry.id) &&
+				entry.type === "custom_message" && matchesCustomFields(delivery, entry));
+		}
+		const ownUserMessage = this.#ownUserMessage;
+		return ownUserMessage !== undefined &&
+			entries.some(entry => entry.type === "message" && entry.message === ownUserMessage);
 	}
 
 	#finish(settlement: () => void): void {
@@ -415,45 +450,6 @@ class TranscriptCommitProof {
 		this.#onFinished();
 		settlement();
 	}
-}
-
-function matchesDeliveryEntry(
-	delivery: AgentRuntimeDelivery,
-	userCommitText: UserCommitTextRule,
-	entry: SessionEntry,
-): boolean {
-	if (delivery.kind === "custom") return entry.type === "custom_message" && matchesCustomFields(delivery, entry);
-	return entry.type === "message" && matchesDeliveryMessage(delivery, userCommitText, entry.message);
-}
-
-/** Whether a session message is this Delivery in the form Pi persists it. */
-function matchesDeliveryMessage(
-	delivery: AgentRuntimeDelivery,
-	userCommitText: UserCommitTextRule,
-	message: SessionMessage,
-): boolean {
-	if (delivery.kind === "custom") return message.role === "custom" && matchesCustomFields(delivery, message);
-	if (message.role !== "user") return false;
-	// Pi normalizes prompt images (resizing, re-encoding, or omitting them) and
-	// appends their hints as "\n\n<hints>" after the text, so only the text is
-	// compared. Under "exact", a bare prefix would let "ok" or an image-only
-	// Delivery's empty text match an unrelated later user message.
-	const committed = message.content;
-	const committedText = typeof committed === "string"
-		? committed
-		: committed[0]?.type === "text" ? committed[0].text : undefined;
-	if (committedText === undefined) return false;
-	const submittedText = submittedUserText(delivery.content);
-	if (userCommitText === "leading") return committedText.startsWith(submittedText);
-	return committedText === submittedText ||
-		(hasImages(delivery.content) && committedText.startsWith(`${submittedText}${PI_IMAGE_HINT_SEPARATOR}`));
-}
-
-/** Pi's prompt joins its image hints to the submitted text with this separator. */
-const PI_IMAGE_HINT_SEPARATOR = "\n\n";
-
-function hasImages(content: Extract<AgentRuntimeDelivery, { kind: "user" }>["content"]): boolean {
-	return typeof content !== "string" && content.some(part => part.type === "image");
 }
 
 function matchesCustomFields(

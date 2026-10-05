@@ -394,7 +394,7 @@ test("cancelled startup attachment stays hidden and retained child reattaches wi
 				if (event.event === "agent.settled") { removeHandler(); resolve(); }
 			});
 		});
-		await runtime.channel.request("message.deliver", { deliveryId: "retained-work", delivery: { kind: "user", content: "CANCELLED_RETAINED_WORK" } });
+		await runtime.channel.request("message.deliver", { deliveryId: "retained-work", proveCommit: true, delivery: { kind: "user", content: "CANCELLED_RETAINED_WORK" } });
 		await settled;
 		assert.doesNotMatch(
 			await readFile(join(dirname(options.sessionPath), "visibility-events"), "utf8"),
