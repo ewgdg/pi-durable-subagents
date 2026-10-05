@@ -3,7 +3,7 @@ import type {
 	RemoteAgentSelectorSnapshot,
 } from "../control/agent-control-protocol.ts";
 import type { HumanPresentationCoordinatorView } from "../coordination/workflow-coordinator.ts";
-import type { AgentSelectorAction } from "../presentation/agent-selector-surface.ts";
+import type { AgentSelectorAction } from "../presentation/agent-selector-projection.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
 import type { PostMortemAgentView } from "../presentation/post-mortem-agent-view-surface.ts";
 import type { PostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";

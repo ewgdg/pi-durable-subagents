@@ -6,6 +6,7 @@ import {
 	Key,
 	SelectList,
 	compositeTuiLine,
+	getKeybindings,
 	matchesKey,
 	truncateToWidth,
 	visibleWidth,
@@ -20,16 +21,26 @@ import {
 import type { ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
-import type { HumanAttentionItem } from "../coordination/human-requests.ts";
-import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
 import type { AgentRunSuspension } from "../runtime/agent-runtime-supervisor.ts";
 import {
 	formatAttentionLiveStatus,
 	formatOperationalIncidentHeadline,
 	operationalIncidentRequestEvidence,
 } from "./operational-incident-surface.ts";
-import { attentionInbox } from "./attention-inbox.ts";
-import { findWorkflowOwner, requireWorkflowOwner } from "./agent-selector-projection.ts";
+import {
+	agentSelectorView,
+	applyAgentSelectorIntent,
+	openAgentSelector,
+	type AgentSelectorAction,
+	type AgentSelectorEmptyState,
+	type AgentSelectorIntent,
+	type AgentSelectorRosterUpdate,
+	type AgentSelectorRow,
+	type AgentSelectorSnapshot,
+	type AgentSelectorState,
+	type AgentSelectorTab,
+	type AgentSelectorView,
+} from "./agent-selector-projection.ts";
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
 import {
 	formatAgentWorkStatus,
@@ -54,8 +65,6 @@ const FIXED_OVERLAY_ROWS =
 	FRAME_ROWS + TAB_ROWS + CONTENT_GAP_ROWS + HELP_ROWS + OWNER_FOOTER_ROWS +
 	MAX_LIVE_SECTION_HEADER_ROWS + EMPTY_LIVE_AGENT_ROWS + FOCUSED_DETAIL_ROWS;
 const SCROLL_INDICATOR_ROWS = 1;
-const SELECT_LIST_UP_INPUT = "\x1b[A";
-const SELECT_LIST_DOWN_INPUT = "\x1b[B";
 const SELECTION_SPINNER_FRAMES = [
 	"⠋",
 	"⠙",
@@ -69,35 +78,23 @@ const SELECTION_SPINNER_FRAMES = [
 	"⠏",
 ] as const;
 const SELECTION_SPINNER_INTERVAL_MILLISECONDS = 80;
+const QUARANTINED_DESCRIPTION = "Quarantined · transcript excluded from recovery";
+const TAB_LABELS = { live: "Live", dormant: "Dormant", reports: "Reports", quarantined: "Quarantined" } as const;
+const EMPTY_STATE_TEXT: Readonly<Record<AgentSelectorEmptyState, string>> = {
+	no_live_agents: "  No live Agents",
+	no_dormant_agents: "  No dormant Agents",
+	no_reports: "  No reports",
+	no_quarantined_agents: "  No quarantined Agents",
+};
 
 // One physical wheel tick can arrive as several same-direction wheel events
 // (high-rate terminals, multiplexer re-emission). Repeats inside this window
 // collapse into a single step so one tick always moves exactly one entry.
 const WHEEL_TICK_WINDOW_MS = 30;
 
-export type AgentSelectorAction =
-	| Readonly<{ kind: "open_report"; reportId: string }>
-	| Readonly<{
-		kind: "select_agent";
-		agentId: string;
-	}>
-	| Readonly<{
-		kind: "decide";
-		requestId: string;
-		agentId: string;
-	}>;
-
-export type AgentSelectorOptions = Readonly<{
-	live: readonly AgentRosterStatus[];
-	dormant: readonly AgentRosterStatus[];
-	quarantined?: readonly string[];
-	quarantinedCandidateCount?: number;
-	selectedAgentId: string;
-	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "quarantined" | "quarantinedCandidateCount" | "humanAttention" | "operationalAttention" | "reports">) => void): () => void;
-	reports?: readonly ReportHistoryItem[];
+export type AgentSelectorOptions = AgentSelectorSnapshot & Readonly<{
+	addChangeHandler?(handler: (update: AgentSelectorRosterUpdate) => void): () => void;
 	setReportRead?(reportId: string, read: boolean): Promise<readonly ReportHistoryItem[]> | readonly ReportHistoryItem[];
-	humanAttention?: readonly HumanAttentionItem[];
-	operationalAttention?: readonly OperationalIncidentAttention[];
 	prepareSelection?(
 		action: AgentSelectorAction,
 		tui: TUI,
@@ -107,12 +104,10 @@ export type AgentSelectorOptions = Readonly<{
 	now?: () => number;
 }>;
 
+/** A projection row prepared for painting through Pi's list row renderer. */
 type AgentSelectorItem = SelectItem & Readonly<{
-	status?: AgentRosterStatus;
-	kind: "decide" | "attention" | "owner" | "agent";
+	row: AgentSelectorRow;
 	childControl?: string;
-	action?: AgentSelectorAction;
-	detailLines?: readonly string[];
 }>;
 
 export function openAgentSelectorSurface(
@@ -136,7 +131,7 @@ export function openAgentSelectorSurface(
 
 type PointerAction =
 	| { kind: "root" }
-	| { kind: "tab"; tab: "live" | "dormant" | "reports" | "quarantined" }
+	| { kind: "tab"; tab: AgentSelectorTab }
 	| { kind: "open"; value: string }
 	| { kind: "children"; value: string }
 	| { kind: "ancestor"; agentId: string; childId: string };
@@ -145,25 +140,28 @@ type LineRegion = Readonly<{ start: number; end: number; text: string; action: P
 type SelectorLine = Readonly<{ text: string; regions?: readonly LineRegion[]; roster?: boolean }>;
 type HitRegion = LineRegion & Readonly<{ row: number }>;
 
+/**
+ * How an intent moves the roster viewport: a new list centres on its focus,
+ * while focus moves and refreshes keep the current scroll position.
+ */
+type ScrollMode = "center" | "keep";
+
+/**
+ * Paints the Agent Selector projection and turns keys and pointer events into
+ * its intents. Roster, tab, scope and focus rules live in the projection.
+ */
 class AgentSelectorSurface implements Component {
 	readonly #tui: TUI;
 	readonly #theme: Theme;
 	readonly #done: (result: AgentSelectorAction | undefined) => void;
-	#options: AgentSelectorOptions;
-	#liveTree: readonly AgentRosterStatus[] = [];
-	#dormantRoster: readonly AgentRosterStatus[] = [];
+	readonly #options: AgentSelectorOptions;
+	#state: AgentSelectorState;
+	#view: AgentSelectorView;
 	#removeChangeHandler: (() => void) | undefined;
-	#activeTab: "live" | "dormant" | "reports" | "quarantined" = "live";
-	#scopeAgentId: string;
-	#selectedValueByTab: { live?: string; dormant?: string; reports?: string; quarantined?: string };
-	#items: AgentSelectorItem[] = [];
-	#selectedIndex = 0;
-	#focusedAgentRow: { agentId: string; index: number } | undefined;
 	#visibleRows = 1;
 	#rosterScrollOffset = 0;
 	#lastWheelTime = Number.NEGATIVE_INFINITY;
 	#lastWheelDirection = 0;
-	#list: SelectList;
 	#selectionPending = false;
 	#hitRegions: HitRegion[] = [];
 	#rosterRows = new Set<number>();
@@ -172,8 +170,6 @@ class AgentSelectorSurface implements Component {
 	#hoveredAction: PointerAction | undefined;
 	#pressedAction: PointerAction | undefined;
 	#selectionSpinnerFrame = 0;
-	#selectionSpinnerItem: AgentSelectorItem | undefined;
-	#selectionSpinnerDescription: string | undefined;
 	#selectionSpinnerTimer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(
@@ -186,33 +182,11 @@ class AgentSelectorSurface implements Component {
 		this.#theme = theme;
 		this.#done = done;
 		this.#options = options;
-		this.#partitionRoster();
-		const owner = this.#ownerStatus();
-		const selectedLive = this.#liveTree.find(
-			({ agentId }) => agentId === options.selectedAgentId,
-		);
-		const selectedDormant = this.#dormantRoster.find(
-			({ agentId }) => agentId === options.selectedAgentId,
-		);
-		this.#activeTab = selectedDormant ? "dormant" : "live";
-		this.#scopeAgentId = selectedLive?.agentId === owner.agentId
-			? owner.agentId
-			: selectedLive?.directSpawnerAgentId ?? owner.agentId;
-		this.#selectedValueByTab = {
-			live: this.#attentionItems()[0]?.value ?? (
-				selectedLive?.agentId !== owner.agentId ? selectedLive?.agentId : undefined
-			),
-			dormant: selectedDormant?.agentId ?? this.#dormantRoster[0]?.agentId,
-		};
-		this.#list = this.#createList();
-		this.#removeChangeHandler = options.addChangeHandler?.((snapshot) => {
-			const focused = this.#items[this.#selectedIndex];
-			this.#focusedAgentRow = focused?.kind === "agent"
-				? { agentId: focused.value, index: this.#selectedIndex } : undefined;
-			this.#options = { ...this.#options, ...snapshot };
-			this.#partitionRoster();
-			// Wheel now moves selection, so live refresh keeps the selected row visible.
-			this.#list = this.#createList(true, true);
+		this.#state = openAgentSelector(options);
+		this.#view = agentSelectorView(this.#state);
+		this.#syncScroll("center");
+		this.#removeChangeHandler = options.addChangeHandler?.((update) => {
+			this.#apply({ kind: "roster_changed", update }, "keep");
 			this.#tui.requestRender();
 		});
 	}
@@ -220,57 +194,31 @@ class AgentSelectorSurface implements Component {
 	handleInput(data: string): void {
 		if (this.#selectionPending) return;
 		this.#hoveredAction = undefined;
+		const keybindings = getKeybindings();
+		const liveTab = this.#view.activeTab === "live";
 		if (matchesKey(data, Key.escape)) {
 			this.#done(undefined);
-			return;
+		} else if (matchesKey(data, "m")) {
+			void this.#toggleFocusedReportRead();
+		} else if (matchesKey(data, "o")) {
+			void this.#completeSelection(this.#ownerRow().action, false);
+		} else if (matchesKey(data, Key.tab)) {
+			this.#apply({ kind: "next_tab" }, "center");
+		} else if (matchesKey(data, Key.shift("tab"))) {
+			this.#apply({ kind: "previous_tab" }, "center");
+		} else if (liveTab && (matchesKey(data, Key.right) || matchesKey(data, "l"))) {
+			this.#apply({ kind: "open_children" }, "center");
+		} else if (liveTab && (matchesKey(data, Key.left) || matchesKey(data, "h"))) {
+			this.#apply({ kind: "go_to_parent" }, "center");
+		} else if (matchesKey(data, "j") || keybindings.matches(data, "tui.select.down")) {
+			this.#apply({ kind: "focus_next" }, "keep");
+		} else if (matchesKey(data, "k") || keybindings.matches(data, "tui.select.up")) {
+			this.#apply({ kind: "focus_previous" }, "keep");
+		} else if (keybindings.matches(data, "tui.select.confirm")) {
+			this.#selectRow(this.#focusedRow().key);
+		} else if (keybindings.matches(data, "tui.select.cancel")) {
+			this.#done(undefined);
 		}
-		if (matchesKey(data, "m")) {
-			void this.#toggleSelectedReportRead();
-			return;
-		}
-		if (matchesKey(data, "o")) {
-			void this.#completeSelection({
-				kind: "select_agent",
-				agentId: this.#ownerStatus().agentId,
-			}, false);
-			return;
-		}
-		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
-			// The reports and quarantined tabs are optional: cycling skips them while hidden.
-			const tabs = this.#visibleTabs();
-			const direction = matchesKey(data, Key.shift("tab")) ? -1 : 1;
-			this.#activeTab = tabs[(tabs.indexOf(this.#activeTab) + direction + tabs.length) % tabs.length] ?? "live";
-			this.#list = this.#createList();
-			this.#tui.requestRender();
-			return;
-		}
-		if (this.#activeTab === "live" && (matchesKey(data, Key.right) || matchesKey(data, "l"))) {
-			this.#zoomIn();
-			this.#tui.requestRender();
-			return;
-		}
-		if (this.#activeTab === "live" && (matchesKey(data, Key.left) || matchesKey(data, "h"))) {
-			this.#zoomOut();
-			this.#tui.requestRender();
-			return;
-		}
-		const listInput = matchesKey(data, "j")
-			? SELECT_LIST_DOWN_INPUT
-			: matchesKey(data, "k")
-				? SELECT_LIST_UP_INPUT
-				: data;
-		// SelectList wraps by default; the footer ends this linear focus order.
-		if (
-			(matchesKey(listInput, Key.up) && this.#selectedIndex === 0) ||
-			(matchesKey(listInput, Key.down) && this.#selectedIndex === this.#items.length - 1)
-		) {
-			// Boundary keys stay put without wrapping.
-			this.#ensureSelectedVisible();
-			this.#tui.requestRender();
-			return;
-		}
-		this.#list.handleInput(listInput);
-		this.#ensureSelectedVisible();
 		this.#tui.requestRender();
 	}
 
@@ -302,13 +250,12 @@ class AgentSelectorSurface implements Component {
 				}
 				this.#lastWheelDirection = direction;
 				this.#lastWheelTime = now;
-				// SelectList's public wheel behavior scrolls by moving selection one row.
-				const beforeIndex = this.#selectedIndex;
+				// Wheel scrolls by moving focus one row, without wrapping.
+				const beforeIndex = this.#view.focusedIndex;
 				const beforeOffset = this.#rosterScrollOffset;
-				this.#list.handleMouse(event);
-				this.#ensureSelectedVisible();
+				this.#apply({ kind: direction < 0 ? "focus_previous" : "focus_next" }, "keep");
 				this.#hoveredAction = undefined;
-				const changed = this.#selectedIndex !== beforeIndex ||
+				const changed = this.#view.focusedIndex !== beforeIndex ||
 					this.#rosterScrollOffset !== beforeOffset;
 				return { handled: true, render: changed };
 			}
@@ -332,33 +279,23 @@ class AgentSelectorSurface implements Component {
 	#activatePointerAction(action: PointerAction): void {
 		this.#hoveredAction = undefined;
 		if (action.kind === "root") {
-			this.#browseRoot();
+			this.#apply({ kind: "go_to_root" }, "center");
 		} else if (action.kind === "tab") {
-			this.#activeTab = action.tab;
-			this.#list = this.#createList();
+			this.#apply({ kind: "choose_tab", tab: action.tab }, "center");
 		} else if (action.kind === "ancestor") {
-			this.#scopeAgentId = action.agentId;
-			this.#selectedValueByTab.live = action.childId;
-			this.#list = this.#createList();
+			this.#apply({ kind: "go_to_ancestor", agentId: action.agentId, childId: action.childId }, "center");
 		} else {
-			const index = this.#items.findIndex(({ value }) => value === action.value);
-			if (index < 0) return;
-			this.#selectedIndex = index;
-			this.#selectedValueByTab[this.#activeTab] = action.value;
-			this.#list.setSelectedIndex(index);
-			this.#releaseUnfocusedRow();
-			if (action.kind === "children") this.#zoomIn();
-			else this.#selectItem(action.value);
+			if (!this.#view.rows.some(({ key }) => key === action.value)) return;
+			this.#apply({ kind: "focus_row", key: action.value }, "keep");
+			if (action.kind === "children") this.#apply({ kind: "open_children" }, "center");
+			else this.#selectRow(action.value);
 		}
 		this.#tui.requestRender();
 	}
 
-	invalidate(): void {
-		this.#list.invalidate();
-	}
+	invalidate(): void {}
 
 	dispose(): void {
-		this.#focusedAgentRow = undefined;
 		this.#removeChangeHandler?.();
 		this.#removeChangeHandler = undefined;
 		this.#stopSelectionSpinner();
@@ -371,18 +308,15 @@ class AgentSelectorSurface implements Component {
 		const contentWidth = Math.max(0, innerWidth - 2);
 		const border = (text: string) => this.#theme.fg("border", text);
 		// Resize changes the list's visible window as well as its hit regions.
-		const visibleRows = this.#maximumVisibleRows();
-		if (visibleRows !== this.#visibleRows) {
-			// Wheel now moves selection, so resize keeps the selected row visible.
-			this.#list = this.#createList(true, true);
-		}
-		const liveStatus = this.#attentionInbox().liveStatus;
+		if (this.#maximumVisibleRows() !== this.#visibleRows) this.#syncScroll("keep");
+		const items = this.#items();
+		const { liveStatus } = this.#view;
 		const contentLines: SelectorLine[] = [
 			this.#renderTabs(),
 			{ text: liveStatus === "none" ? "" : this.#theme.fg("warning", formatAttentionLiveStatus(liveStatus)) },
-			...this.#renderPinnedList(contentWidth),
+			...this.#renderPinnedList(items, contentWidth),
 			{ text: "" },
-			this.#renderOwnerFooter(),
+			this.#renderOwnerFooter(items),
 			{ text: this.#theme.fg(
 				"dim",
 				"Tab views · ↑/k ↓/j · →/l children · ←/h parent · Enter · Esc",
@@ -398,6 +332,7 @@ class AgentSelectorSurface implements Component {
 		this.#contentWidth = contentWidth;
 		this.#hitRegions = [];
 		this.#rosterRows.clear();
+		const focusedKey = this.#focusedRow().key;
 		const panel = [
 			border(`┌${"─".repeat(innerWidth)}┐`),
 			...visibleContentLines.map((line, index) => {
@@ -416,8 +351,8 @@ class AgentSelectorSurface implements Component {
 				for (const region of line.regions ?? []) {
 					if (region.end > contentWidth || region.start >= region.end) continue;
 					const selected = region.action.kind === "tab"
-						? region.action.tab === this.#activeTab
-						: region.action.kind === "open" && region.action.value === this.#items[this.#selectedIndex]?.value;
+						? region.action.tab === this.#view.activeTab
+						: region.action.kind === "open" && region.action.value === focusedKey;
 					const hovered = samePointerAction(region.action, this.#hoveredAction);
 					if (!selected && !hovered) continue;
 					// userMessageBg is the neutral, subtler surface in both bundled themes.
@@ -443,6 +378,34 @@ class AgentSelectorSurface implements Component {
 		return panel;
 	}
 
+	#apply(intent: AgentSelectorIntent, scroll: ScrollMode): void {
+		const next = applyAgentSelectorIntent(this.#state, intent);
+		// A no-op intent leaves the viewport exactly where it was.
+		if (next === this.#state) return;
+		this.#state = next;
+		this.#view = agentSelectorView(next);
+		this.#syncScroll(scroll);
+	}
+
+	#syncScroll(scroll: ScrollMode): void {
+		this.#visibleRows = this.#maximumVisibleRows();
+		const maximumOffset = this.#maximumRosterScrollOffset();
+		this.#rosterScrollOffset = scroll === "center"
+			? Math.max(0, Math.min(this.#view.focusedIndex - Math.floor(this.#visibleRows / 2), maximumOffset))
+			: Math.min(this.#rosterScrollOffset, maximumOffset);
+		this.#ensureFocusedVisible();
+	}
+
+	#focusedRow(): AgentSelectorRow {
+		return this.#view.rows[this.#view.focusedIndex]!;
+	}
+
+	#ownerRow(): Extract<AgentSelectorRow, { kind: "owner" }> {
+		const owner = this.#view.rows.at(-1);
+		if (owner?.kind !== "owner") throw new Error("Agent selector focus order must end at the Owner");
+		return owner;
+	}
+
 	#maximumVisibleRows(): number {
 		return Math.max(1, Math.min(
 			MAX_VISIBLE_ROSTER_ROWS,
@@ -450,110 +413,23 @@ class AgentSelectorSurface implements Component {
 		));
 	}
 
-	#createList(preserveScroll = false, ensureSelection = false): SelectList {
-		const preferredValue = this.#selectedValueByTab[this.#activeTab];
-		if (!preserveScroll || this.#focusedAgentRow?.agentId !== preferredValue) {
-			this.#focusedAgentRow = undefined;
-		}
-		// Owner ends the shared keyboard order but is painted only in the fixed footer.
-		this.#items = this.#activeTab === "live"
-			? this.#liveItems()
-			: this.#activeTab === "reports"
-				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), this.#ownerItem()]
-				: this.#activeTab === "quarantined"
-					? [...this.#quarantinedItems(), this.#ownerItem()]
-					: [...this.#dormantRoster.map((status) => this.#agentItem(status)), this.#ownerItem()];
-		const focused = this.#focusedAgentRow;
-		if (focused && !this.#items.some(({ value }) => value === focused.agentId)) {
-			const status = [...this.#options.live, ...this.#options.dormant].find(
-				({ agentId }) => agentId === focused.agentId,
-			);
-			// A roster migration must not turn an imminent Enter into another Agent's
-			// action. Retain only the focused row, with current status, until navigation.
-			if (status) this.#items.splice(Math.min(focused.index, this.#items.length - 1), 0, this.#agentItem(status));
-			else this.#focusedAgentRow = undefined;
-		}
-		this.#hitRegions = [];
-		this.#rosterRows.clear();
-		this.#visibleRows = this.#maximumVisibleRows();
-		const list = new SelectList(
-			this.#items,
-			this.#visibleRows,
-			this.#selectListTheme(),
-		);
-		const preferredIndex = this.#items.findIndex(({ value }) => value === preferredValue);
-		this.#selectedIndex = preferredIndex >= 0 ? preferredIndex : Math.max(
-			0, this.#items.findIndex(({ kind }) => kind !== "owner"),
-		);
-		// Rebuilds must remember the resolved fallback, not an absent preferred item.
-		this.#selectedValueByTab[this.#activeTab] = this.#items[this.#selectedIndex]?.value;
-		list.setSelectedIndex(this.#selectedIndex);
-		if (preserveScroll) {
-			this.#rosterScrollOffset = Math.min(
-				this.#rosterScrollOffset, this.#maximumRosterScrollOffset(),
-			);
-		} else {
-			this.#rosterScrollOffset = Math.max(0, Math.min(
-				this.#selectedIndex - Math.floor(this.#visibleRows / 2),
-				this.#maximumRosterScrollOffset(),
-			));
-		}
-		list.onSelectionChange = (selected) => {
-			const index = this.#items.indexOf(selected as AgentSelectorItem);
-			if (index < 0) return;
-			this.#selectedIndex = index;
-			this.#selectedValueByTab[this.#activeTab] = selected.value;
-			this.#releaseUnfocusedRow();
-		};
-		if (!preserveScroll || ensureSelection) this.#ensureSelectedVisible();
-		list.onSelect = ({ value }) => this.#selectItem(value);
-		list.onCancel = () => this.#done(undefined);
-		// Both live refresh and resize rebuild items while preparation can be pending.
-		if (this.#selectionSpinnerTimer) {
-			this.#selectionSpinnerItem = this.#items[this.#selectedIndex];
-			this.#selectionSpinnerDescription = this.#selectionSpinnerItem?.description;
-			this.#updateSelectionSpinner();
-		}
-		return list;
-	}
-
-	#releaseUnfocusedRow(): void {
-		if (this.#focusedAgentRow &&
-			this.#focusedAgentRow.agentId !== this.#selectedValueByTab[this.#activeTab]) {
-			// Resolve the arrow/click destination in the displayed list before removing
-			// the migrated row, then rebuild by identity rather than its shifted index.
-			this.#list = this.#createList(true, true);
-		}
-	}
-
-	#selectItem(value: string): void {
-		const selected = this.#items.find((item) => item.value === value);
-		if (!selected) return;
-		const action = selected.action ?? (selected.status
-			? { kind: "select_agent" as const, agentId: value }
-			: undefined);
+	#selectRow(key: string): void {
 		// Keyboard confirmation and pointer activation share actions, not keybindings.
 		// Informational rows remain focusable without dismissing the selector.
+		const action = this.#view.rows.find((row) => row.key === key)?.action;
 		if (action) void this.#completeSelection(action);
 	}
 
-	async #toggleSelectedReportRead(): Promise<void> {
-		const action = this.#items[this.#selectedIndex]?.action;
+	async #toggleFocusedReportRead(): Promise<void> {
+		const focused = this.#focusedRow();
 		const setRead = this.#options.setReportRead;
-		if (action?.kind !== "open_report" || !setRead) return;
-		const item = this.#options.reports?.find(({ report }) => report.reportId === action.reportId);
-		if (!item) return;
-		// Live removes the acknowledged row; continue triage at its next neighbor.
-		const nextValue = this.#activeTab === "live"
-			? this.#items[this.#selectedIndex + 1]?.value
-			: this.#items[this.#selectedIndex]?.value;
+		if (focused.kind !== "report" || !setRead) return;
+		const { reportId } = focused.item.report;
 		this.#selectionPending = true;
 		this.#startSelectionSpinner();
 		try {
-			const reports = await setRead(action.reportId, item.readAt === undefined);
-			this.#options = { ...this.#options, reports };
-			this.#selectedValueByTab[this.#activeTab] = nextValue;
-			this.#list = this.#createList(true, true);
+			const reports = await setRead(reportId, focused.item.readAt === undefined);
+			this.#apply({ kind: "report_read_changed", reportId, reports }, "keep");
 		} catch (error) {
 			this.#options.onSelectionError?.(error);
 		} finally {
@@ -585,36 +461,24 @@ class AgentSelectorSurface implements Component {
 
 	#startSelectionSpinner(): void {
 		this.#selectionSpinnerFrame = 0;
-		this.#selectionSpinnerItem = this.#items[this.#selectedIndex];
-		this.#selectionSpinnerDescription = this.#selectionSpinnerItem?.description;
-		this.#updateSelectionSpinner();
 		this.#selectionSpinnerTimer = setInterval(() => {
 			this.#selectionSpinnerFrame =
 				(this.#selectionSpinnerFrame + 1) % SELECTION_SPINNER_FRAMES.length;
-			this.#updateSelectionSpinner();
+			this.#tui.requestRender();
 		}, SELECTION_SPINNER_INTERVAL_MILLISECONDS);
-	}
-
-	#updateSelectionSpinner(): void {
-		if (this.#selectionSpinnerItem) {
-			this.#selectionSpinnerItem.description =
-				`${SELECTION_SPINNER_FRAMES[this.#selectionSpinnerFrame]} loading`;
-		}
 		this.#tui.requestRender();
 	}
 
 	#stopSelectionSpinner(): void {
 		if (this.#selectionSpinnerTimer) clearInterval(this.#selectionSpinnerTimer);
 		this.#selectionSpinnerTimer = undefined;
-		if (this.#selectionSpinnerItem) {
-			if (this.#selectionSpinnerDescription === undefined) {
-				delete this.#selectionSpinnerItem.description;
-			} else {
-				this.#selectionSpinnerItem.description = this.#selectionSpinnerDescription;
-			}
-		}
-		this.#selectionSpinnerItem = undefined;
-		this.#selectionSpinnerDescription = undefined;
+	}
+
+	/** The loading row replaces the focused row's description while a selection prepares. */
+	#loadingDescription(): string | undefined {
+		return this.#selectionSpinnerTimer
+			? `${SELECTION_SPINNER_FRAMES[this.#selectionSpinnerFrame]} loading`
+			: undefined;
 	}
 
 	#maximumOverlayRows(): number {
@@ -626,222 +490,146 @@ class AgentSelectorSurface implements Component {
 		return Math.max(2, Math.min(percentBound, marginBound));
 	}
 
-	#partitionRoster(): void {
-		const allStatuses = [...this.#options.live, ...this.#options.dormant];
-		const byId = new Map(allStatuses.map((status) => [status.agentId, status]));
-		const liveTreeIds = new Set<string>();
-		// Keep every ancestor as a browsing path; its Run status remains unchanged.
-		for (const status of this.#options.live) {
-			let current: AgentRosterStatus | undefined = status;
-			while (current && !liveTreeIds.has(current.agentId)) {
-				liveTreeIds.add(current.agentId);
-				current = current.directSpawnerAgentId === null
-					? undefined : byId.get(current.directSpawnerAgentId);
-			}
-		}
-		this.#liveTree = allStatuses.filter(({ agentId }) => liveTreeIds.has(agentId));
-		const ownerId = this.#ownerIdentityId();
-		// The Owner is a global destination rendered in the fixed footer, never a
-		// roster row: a Dormant Owner belongs to that footer, not to the Dormant list.
-		this.#dormantRoster = this.#options.dormant.filter(({ agentId }) =>
-			agentId !== ownerId && !liveTreeIds.has(agentId));
-	}
-
-	#liveChildren(agentId: string): AgentRosterStatus[] {
-		const ownerId = this.#ownerStatus().agentId;
-		// Root browsing also includes live Moderators without a direct Spawner.
-		return this.#liveTree.filter((status) =>
-			status.agentId !== ownerId &&
-			(status.directSpawnerAgentId === agentId ||
-				(agentId === ownerId && status.directSpawnerAgentId === null))
-		);
-	}
-
-	#visibleTabs(): ("live" | "dormant" | "reports" | "quarantined")[] {
-		const tabs: ("live" | "dormant" | "reports" | "quarantined")[] = ["live", "dormant"];
-		if ((this.#options.reports ?? []).length > 0) tabs.push("reports");
-		if (this.#quarantinedItems().length > 0) tabs.push("quarantined");
-		return tabs;
-	}
-
-	#quarantinedIds(): readonly string[] {
-		return this.#options.quarantined ?? [];
-	}
-
-	#liveItems(): AgentSelectorItem[] {
-		return [
-			...this.#attentionItems(),
-			...this.#liveChildren(this.#scopeAgentId).map((status) => this.#agentItem(status)),
-			this.#ownerItem(),
-		];
-	}
-
-	#attentionInbox() {
-		return attentionInbox({
-			humanAttention: this.#options.humanAttention ?? [],
-			operationalAttention: this.#options.operationalAttention ?? [],
-			reports: this.#options.reports ?? [],
+	#items(): AgentSelectorItem[] {
+		const loading = this.#loadingDescription();
+		return this.#view.rows.map((row, index) => {
+			const item = this.#item(row);
+			return loading !== undefined && index === this.#view.focusedIndex
+				? { ...item, description: loading }
+				: item;
 		});
 	}
 
-	#attentionItems(): AgentSelectorItem[] {
-		const items = this.#attentionInbox().items;
-		const human = items.flatMap((item) => item.kind === "human_request" ? [item] : []).map(({ attention, action }, index) => ({
-			value: `human:${attention.requestId}`,
-			label: `DECIDE ${index + 1} · ${attention.agentLabel}`,
-			description: boundedToolPreview(attention.question),
-			kind: "decide" as const,
-			action,
-			detailLines: [
-				"",
-				`Agent ${attention.agentId}`,
-				boundedToolPreview(attention.question),
-				`Human Request ${attention.requestId}`,
-			],
-		}));
-		const operational = items.flatMap((item) => item.kind === "operational_incident" ? [item] : []).map(
-			({ attention, action }, index) => {
-				const requests = operationalIncidentRequestEvidence(attention);
+	#item(row: AgentSelectorRow): AgentSelectorItem {
+		switch (row.kind) {
+			case "decide":
 				return {
-					value: `operational:${index}`,
-					label: `ATTENTION ${index + 1} · ${formatOperationalIncidentHeadline(attention)}`,
-					kind: "attention" as const,
-					action,
-					detailLines: [
-						"",
-						...(attention.summary ? [attention.summary] : []),
-						`Affected ${attention.affectedAgents.map(({ label }) => label).join(", ")}`,
-						requests.sources.length === 0
-							? `Requests ${requests.total}`
-							: requests.sources.map(
-								(pointer) =>
-									`Request ${pointer.agentId}/${pointer.entryId}/${pointer.toolCallId}`,
-							).join(" · "),
-						attention.diagnostics.length === 0
-							? ""
-							: attention.diagnostics.map(
-								(pointer) => `Diagnostic ${pointer.agentId}/${pointer.entryId}`,
-							).join(" · "),
-					],
+					row, value: row.key,
+					label: `DECIDE ${row.number} · ${row.attention.agentLabel}`,
+					description: boundedToolPreview(row.attention.question),
 				};
-			},
-		);
-		const reports = items.flatMap((item) => item.kind === "report" ? [this.#reportItem(item.item)] : []);
-		return [...human, ...operational, ...reports];
+			case "incident":
+				return {
+					row, value: row.key,
+					label: `ATTENTION ${row.number} · ${formatOperationalIncidentHeadline(row.attention)}`,
+				};
+			case "report": {
+				const { report, readAt } = row.item;
+				return {
+					row, value: row.key,
+					label: `REPORT · ${safeReportLine(report.reporter?.label ?? "Runtime")}`,
+					description: `${readAt === undefined ? "Unread" : "Read"} · ${boundedToolPreview(safeReportLine(report.symptom))}`,
+				};
+			}
+			case "agent":
+				return {
+					row, value: row.key,
+					label: this.#participantLabel(row.status.label, row.mounted),
+					description: [
+						formatRun(row.status, this.#theme),
+						row.moderator ? row.status.description : undefined,
+					].filter(Boolean).join(" · "),
+					childControl: row.childCount === 0
+						? undefined
+						: `${row.childCount} ${row.childCount === 1 ? "child" : "children"} ›`,
+				};
+			case "quarantined":
+				return { row, value: row.key, label: row.agentId, description: QUARANTINED_DESCRIPTION };
+			case "unreadable_candidates":
+				return {
+					row, value: row.key,
+					label: `+ ${row.count} unreadable candidate${plural(row.count)} without recoverable ID`,
+					description: QUARANTINED_DESCRIPTION,
+				};
+			case "owner":
+				return { row, value: row.key, label: "Owner" };
+		}
 	}
 
-	#reportItem({ report, readAt }: ReportHistoryItem): AgentSelectorItem {
-		const safeLine = (text: string) => sanitizeReportTerminalText(text).replace(/\s+/g, " ").trim();
-		return {
-			value: `report:${report.reportId}`,
-			label: `REPORT · ${safeLine(report.reporter?.label ?? "Runtime")}`,
-			description: `${readAt === undefined ? "Unread" : "Read"} · ${boundedToolPreview(safeLine(report.symptom))}`,
-			kind: "attention",
-			action: { kind: "open_report", reportId: report.reportId },
-			detailLines: [
-				safeLine(report.symptom),
-				`Report ${safeLine(report.reportId)}`,
-				`Created ${safeLine(report.createdAt)}`,
-				`${readAt === undefined ? "Unread" : `Read ${safeLine(readAt)}`} · ${this.#options.setReportRead ? "m Toggle read · " : ""}Enter opens report`,
-			],
-		};
-	}
-
-	#quarantinedItems(): AgentSelectorItem[] {
-		const ids = this.#quarantinedIds();
-		const total = this.#options.quarantinedCandidateCount ?? ids.length;
-		const rows: AgentSelectorItem[] = ids.map((agentId) => ({
-			value: "quarantined:" + agentId,
-			label: agentId,
-			description: "Quarantined · transcript excluded from recovery",
-			kind: "attention" as const,
-			// No action and no status: confirming the row is a no-op, never an admission.
-			detailLines: [
-				"Quarantined · transcript excluded from recovery",
-				"Agent " + agentId,
-				"Excluded from cold-start recovery as untrusted proof",
-				"Inspect the transcript directly · not selectable here",
-			],
-		}));
-		const overflow = Math.max(0, total - ids.length);
-		if (overflow > 0) {
-			const plural = overflow === 1 ? "" : "s";
-			rows.push({
-				value: "quarantined:unreadable",
-				label: "+ " + overflow + " unreadable candidate" + plural + " without recoverable ID",
-				description: "Quarantined · transcript excluded from recovery",
-				kind: "attention" as const,
-				detailLines: [
-					"Quarantined · transcript excluded from recovery",
-					overflow + " candidate" + plural + " without recoverable ID",
+	#detailLines(row: AgentSelectorRow): readonly string[] {
+		switch (row.kind) {
+			case "decide":
+				return [
+					"",
+					`Agent ${row.attention.agentId}`,
+					boundedToolPreview(row.attention.question),
+					`Human Request ${row.attention.requestId}`,
+				];
+			case "incident": {
+				const { attention } = row;
+				const requests = operationalIncidentRequestEvidence(attention);
+				return [
+					"",
+					...(attention.summary ? [attention.summary] : []),
+					`Affected ${attention.affectedAgents.map(({ label }) => label).join(", ")}`,
+					requests.sources.length === 0
+						? `Requests ${requests.total}`
+						: requests.sources.map(
+							(pointer) =>
+								`Request ${pointer.agentId}/${pointer.entryId}/${pointer.toolCallId}`,
+						).join(" · "),
+					attention.diagnostics.length === 0
+						? ""
+						: attention.diagnostics.map(
+							(pointer) => `Diagnostic ${pointer.agentId}/${pointer.entryId}`,
+						).join(" · "),
+				];
+			}
+			case "report": {
+				const { report, readAt } = row.item;
+				return [
+					safeReportLine(report.symptom),
+					`Report ${safeReportLine(report.reportId)}`,
+					`Created ${safeReportLine(report.createdAt)}`,
+					`${readAt === undefined ? "Unread" : `Read ${safeReportLine(readAt)}`} · ${this.#options.setReportRead ? "m Toggle read · " : ""}Enter opens report`,
+				];
+			}
+			case "quarantined":
+				return [
+					QUARANTINED_DESCRIPTION,
+					"Agent " + row.agentId,
+					"Excluded from cold-start recovery as untrusted proof",
+					"Inspect the transcript directly · not selectable here",
+				];
+			case "unreadable_candidates":
+				return [
+					QUARANTINED_DESCRIPTION,
+					`${row.count} candidate${plural(row.count)} without recoverable ID`,
 					"Excluded from cold-start recovery as untrusted proof",
 					"Inspect the session directory directly · not selectable here",
-				],
-			});
+				];
+			case "agent":
+			case "owner":
+				return [];
 		}
-		return rows;
-	}
-
-	#agentItem(status: AgentRosterStatus): AgentSelectorItem {
-		const childCount = this.#liveChildren(status.agentId).length;
-		const children = childCount === 0
-			? undefined
-			: `${childCount} ${childCount === 1 ? "child" : "children"} ›`;
-		const moderator = status.agentId !== status.workflowId &&
-			status.directSpawnerAgentId === null;
-		return {
-			value: status.agentId,
-			label: this.#participantLabel(status.agentId, status.label),
-			description: [
-				formatRun(status, this.#theme),
-				moderator ? status.description : undefined,
-			].filter(Boolean).join(" · "),
-			status,
-			kind: "agent",
-			childControl: this.#activeTab === "live" ? children : undefined,
-		};
-	}
-
-	#ownerIdentityId(): string | undefined {
-		return this.#ownerCandidate()?.agentId;
-	}
-
-	#ownerCandidate(): AgentRosterStatus | undefined {
-		return findWorkflowOwner(this.#options);
-	}
-
-	#ownerStatus(): AgentRosterStatus {
-		return requireWorkflowOwner(this.#options);
-	}
-
-	#ownerItem(): AgentSelectorItem {
-		return {
-			value: this.#ownerStatus().agentId,
-			label: "Owner",
-			kind: "owner",
-			action: { kind: "select_agent", agentId: this.#ownerStatus().agentId },
-		};
 	}
 
 	#maximumRosterScrollOffset(): number {
-		return Math.max(0, this.#items.length - 1 - this.#visibleRows);
+		return Math.max(0, this.#view.rows.length - 1 - this.#visibleRows);
 	}
 
-	#ensureSelectedVisible(): void {
-		if (this.#items[this.#selectedIndex]?.kind === "owner") return;
+	#ensureFocusedVisible(): void {
+		if (this.#focusedRow().kind === "owner") return;
+		const focusedIndex = this.#view.focusedIndex;
 		const maximumOffset = this.#maximumRosterScrollOffset();
-		if (this.#selectedIndex < this.#rosterScrollOffset) {
-			this.#rosterScrollOffset = this.#selectedIndex;
-		} else if (this.#selectedIndex >= this.#rosterScrollOffset + this.#visibleRows) {
-			this.#rosterScrollOffset = this.#selectedIndex - this.#visibleRows + 1;
+		if (focusedIndex < this.#rosterScrollOffset) {
+			this.#rosterScrollOffset = focusedIndex;
+		} else if (focusedIndex >= this.#rosterScrollOffset + this.#visibleRows) {
+			this.#rosterScrollOffset = focusedIndex - this.#visibleRows + 1;
 		}
 		this.#rosterScrollOffset = Math.max(0, Math.min(this.#rosterScrollOffset, maximumOffset));
 	}
 
-	#renderRosterViewport(width: number, startIndex: number, visibleItems: AgentSelectorItem[]): string[] {
-		const selectedOffset = this.#selectedIndex - startIndex;
-		const selectedVisible = selectedOffset >= 0 && selectedOffset < visibleItems.length;
-		const theme = selectedVisible
+	#renderRosterViewport(
+		width: number,
+		items: readonly AgentSelectorItem[],
+		startIndex: number,
+		visibleItems: AgentSelectorItem[],
+	): string[] {
+		const focusedIndex = this.#view.focusedIndex;
+		const focusedOffset = focusedIndex - startIndex;
+		const focusedVisible = focusedOffset >= 0 && focusedOffset < visibleItems.length;
+		const theme = focusedVisible
 			? this.#selectListTheme()
 			: {
 				selectedPrefix: (text: string) => text,
@@ -850,44 +638,39 @@ class AgentSelectorSurface implements Component {
 				scrollInfo: (text: string) => this.#theme.fg("muted", text),
 				noMatch: (text: string) => this.#theme.fg("muted", text),
 			};
+		// Pi's list renders rows only; focus belongs to the projection.
 		const viewport = new SelectList(visibleItems, Math.max(1, visibleItems.length), theme);
-		viewport.setSelectedIndex(selectedVisible ? selectedOffset : 0);
+		viewport.setSelectedIndex(focusedVisible ? focusedOffset : 0);
 		const lines = viewport.render(width).slice(0, visibleItems.length);
-		if (startIndex > 0 || startIndex + visibleItems.length < this.#items.length - 1) {
-			const range = `  (${Math.min(this.#selectedIndex + 1, this.#items.length - 1)}/${this.#items.length - 1})`;
+		if (startIndex > 0 || startIndex + visibleItems.length < items.length - 1) {
+			const range = `  (${Math.min(focusedIndex + 1, items.length - 1)}/${items.length - 1})`;
 			lines.push(this.#theme.fg("muted", truncateToWidth(range, Math.max(0, width - 2), "")));
 		}
 		return lines;
 	}
 
-	#renderPinnedList(width: number): SelectorLine[] {
+	#renderPinnedList(items: readonly AgentSelectorItem[], width: number): SelectorLine[] {
 		const startIndex = Math.max(0, Math.min(
 			this.#rosterScrollOffset, this.#maximumRosterScrollOffset(),
 		));
-		const visibleItems = this.#items.slice(startIndex, Math.min(startIndex + this.#visibleRows, this.#items.length - 1));
-		const listLines = this.#renderRosterViewport(width, startIndex, visibleItems);
-		const hasAgents = this.#items.some(({ kind }) => kind === "agent");
-		const reportHistory = this.#activeTab === "reports";
-		const quarantinedHistory = this.#activeTab === "quarantined";
-		const showEmptyMessage = reportHistory || quarantinedHistory
-			// The reports and quarantined tabs hide while empty; this only covers a live refresh
-			// that drains the list while it stays focused.
-			? this.#items.every(({ kind }) => kind === "owner")
-			: !hasAgents;
-		const visibleAttention = visibleItems.some(({ kind }) => kind === "decide" || kind === "attention");
+		const visibleItems = items.slice(startIndex, Math.min(startIndex + this.#visibleRows, items.length - 1));
+		const listLines = this.#renderRosterViewport(width, items, startIndex, visibleItems);
+		const { activeTab, emptyState } = this.#view;
+		const reportHistory = activeTab === "reports";
+		// Quarantine rows count here too: the budget reserves a heading row for them.
+		const visibleAttention = visibleItems.some(({ row }) => row.kind !== "agent" && row.kind !== "owner");
 		const visibleBodyRows = visibleItems.length;
 		// Short terminals trade detail rows for navigation and the fixed footer.
 		const detailRows = Math.max(0, Math.min(FOCUSED_DETAIL_ROWS,
 			this.#maximumOverlayRows() - FRAME_ROWS - TAB_ROWS - HELP_ROWS - OWNER_FOOTER_ROWS - 1 -
-			(visibleAttention || reportHistory ? 1 : 0) - visibleBodyRows - (showEmptyMessage ? 1 : 0) -
+			(visibleAttention || reportHistory ? 1 : 0) - visibleBodyRows - (emptyState ? 1 : 0) -
 			(listLines.length > visibleItems.length ? SCROLL_INDICATOR_ROWS : 0),
 		));
 		const attention: SelectorLine[] = [];
 		const agents: SelectorLine[] = [];
 		for (const [offset, item] of visibleItems.entries()) {
-			// Quarantined rows are attention-kind but belong under the Agents
-			// heading, not the Attention Inbox.
-			const lines = item.kind === "agent" || quarantinedHistory ? agents : attention;
+			const { row } = item;
+			const lines = isAttentionRow(row) ? attention : agents;
 			let line = listLines[offset] ?? "";
 			let bodyText = line;
 			const regions: LineRegion[] = [];
@@ -914,26 +697,25 @@ class AgentSelectorSurface implements Component {
 				bodyText = line;
 				line += this.#theme.fg("dim", item.childControl);
 			}
-			// Quarantined rows carry no action: the region only moves keyboard/mouse
+			// Quarantine rows carry no action: the region only moves keyboard/mouse
 			// focus, while confirmation stays a no-op.
-			if (item.action || item.status || quarantinedHistory) {
+			if (row.action || row.kind === "quarantined" || row.kind === "unreadable_candidates") {
 				regions.push({ start: 0, end: bodyEnd, text: bodyText, action: { kind: "open", value: item.value } });
 			}
 			lines.push({ text: line, regions, roster: true });
-			if (startIndex + offset === this.#selectedIndex) {
+			if (startIndex + offset === this.#view.focusedIndex) {
 				// Details are informational for clicks; wheel over them scrolls selection.
-				lines.push(...this.#focusedDetailLines(item, width)
+				lines.push(...this.#focusedDetailLines(row, width)
 					.slice(0, detailRows).map((text) => ({ text, roster: true })));
 			}
 		}
 		const rendered: SelectorLine[] = [
 			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "History" : "Attention Inbox")), roster: true }, ...attention] : []),
-			...(reportHistory ? [] : [this.#activeTab === "live"
+			...(reportHistory ? [] : [activeTab === "live"
 				? { ...this.#scopeTitle(width), roster: true }
 				: { text: this.#theme.fg("toolTitle", "Agents"), roster: true }]),
 			...agents,
-			...(showEmptyMessage ? [{ text: this.#theme.fg("dim", reportHistory
-				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : quarantinedHistory ? "  No quarantined Agents" : "  No dormant Agents"), roster: true }] : []),
+			...(emptyState ? [{ text: this.#theme.fg("dim", EMPTY_STATE_TEXT[emptyState]), roster: true }] : []),
 		];
 		// Share one terminal-bounded budget across tabs, including optional headers,
 		// empty messages and scrolling, so content changes never move the frame.
@@ -944,16 +726,17 @@ class AgentSelectorSurface implements Component {
 		return rendered;
 	}
 
-	#focusedDetailLines(item: AgentSelectorItem, width: number): string[] {
-		const { status } = item;
-		if (!status) {
+	#focusedDetailLines(row: AgentSelectorRow, width: number): string[] {
+		if (row.kind !== "agent") {
+			const detailLines = this.#detailLines(row);
 			return Array.from({ length: FOCUSED_DETAIL_ROWS }, (_, index) =>
 				this.#theme.fg(
 					index < 2 ? "muted" : "dim",
-					truncateToWidth(`  ${item.detailLines?.[index] ?? ""}`, width, ""),
+					truncateToWidth(`  ${detailLines[index] ?? ""}`, width, ""),
 				)
 			);
 		}
+		const { status } = row;
 		const description = `  ${status.description ?? "No description."}`;
 		return [
 			this.#theme.fg("muted", truncateToWidth(description, width, "")),
@@ -970,65 +753,14 @@ class AgentSelectorSurface implements Component {
 		];
 	}
 
-	#browseRoot(): void {
-		if (this.#scopeAgentId === this.#ownerStatus().agentId) return;
-		const owner = this.#ownerStatus();
-		let ancestor = [...this.#options.live, ...this.#options.dormant].find(
-			({ agentId }) => agentId === this.#scopeAgentId,
-		);
-		while (ancestor?.directSpawnerAgentId && ancestor.directSpawnerAgentId !== owner.agentId) {
-			const parentId = ancestor.directSpawnerAgentId;
-			ancestor = [...this.#options.live, ...this.#options.dormant].find(
-				({ agentId }) => agentId === parentId,
-			);
-		}
-		this.#scopeAgentId = owner.agentId;
-		const rootAgents = this.#liveItems().filter(({ kind }) => kind === "agent");
-		// Root browsing targets an Agent, not the higher-priority Attention Inbox.
-		this.#selectedValueByTab.live = rootAgents.find(({ value }) => value === ancestor?.agentId)?.value
-			?? rootAgents[0]?.value ?? owner.agentId;
-		this.#list = this.#createList();
-	}
-
-	#zoomIn(): void {
-		const selected = this.#items[this.#selectedIndex];
-		if (!selected?.status) return;
-		const firstChild = this.#liveChildren(selected.value)[0];
-		if (!firstChild) return;
-		this.#scopeAgentId = selected.value;
-		this.#selectedValueByTab.live = firstChild.agentId;
-		this.#list = this.#createList();
-	}
-
-	#zoomOut(): void {
-		const owner = this.#ownerStatus();
-		if (this.#scopeAgentId === owner.agentId) return;
-		const previousScope = this.#scopeAgentId;
-		const scope = [...this.#options.live, ...this.#options.dormant].find(
-			({ agentId }) => agentId === previousScope,
-		);
-		this.#scopeAgentId = scope?.directSpawnerAgentId ?? owner.agentId;
-		this.#selectedValueByTab.live = previousScope;
-		this.#list = this.#createList();
-	}
-
 	#scopeTitle(width: number): SelectorLine {
-		const allStatuses = [...this.#options.live, ...this.#options.dormant];
-		const owner = this.#ownerStatus();
-		const ancestors: AgentRosterStatus[] = [];
-		const scope = allStatuses.find(({ agentId }) => agentId === this.#scopeAgentId);
-		let current = scope;
-		while (current && current.agentId !== owner.agentId) {
-			ancestors.unshift(current);
-			current = allStatuses.find(
-				({ agentId }) => agentId === current?.directSpawnerAgentId,
-			);
-		}
+		const ancestors = this.#view.scopePath;
+		const scope = ancestors.at(-1);
 		const regions: LineRegion[] = [{
 			start: 0, end: visibleWidth("Agents"), text: this.#theme.fg("toolTitle", "Agents"),
 			action: { kind: "root" },
 		}];
-		if (ancestors.length === 0) return { text: this.#theme.fg("toolTitle", "Agents"), regions };
+		if (!scope) return { text: this.#theme.fg("toolTitle", "Agents"), regions };
 		const visibleAncestors = ancestors.slice(-MAX_BREADCRUMB_AGENT_SEGMENTS);
 		const rootPrefix = "Agents › ";
 		const prefix = () => rootPrefix + (ancestors.length > visibleAncestors.length ? "… › " : "");
@@ -1040,16 +772,15 @@ class AgentSelectorSurface implements Component {
 			let column = visibleWidth(prefix());
 			for (const [index, ancestor] of visibleAncestors.entries()) {
 				const child = visibleAncestors[index + 1];
+				// The current scope segment browses up one level, like Left/h.
 				const action = child
 					? { kind: "ancestor" as const, agentId: ancestor.agentId, childId: child.agentId }
-					: scope
-						? {
-							kind: "ancestor" as const,
-							agentId: scope.directSpawnerAgentId ?? owner.agentId,
-							childId: scope.agentId,
-						}
-						: undefined;
-				if (action) regions.push({
+					: {
+						kind: "ancestor" as const,
+						agentId: scope.directSpawnerAgentId ?? this.#ownerRow().agentId,
+						childId: scope.agentId,
+					};
+				regions.push({
 					start: column, end: column + visibleWidth(ancestor.label),
 					text: this.#theme.fg("toolTitle", ancestor.label),
 					action,
@@ -1065,35 +796,33 @@ class AgentSelectorSurface implements Component {
 		)), regions };
 	}
 
-	#participantLabel(agentId: string, label: string): string {
+	#participantLabel(label: string, mounted: boolean): string {
 		// Mounted identity is independent of keyboard focus and hierarchy browsing.
-		return agentId === this.#options.selectedAgentId
-			? this.#theme.bold(`${label}*`)
-			: label;
+		return mounted ? this.#theme.bold(`${label}*`) : label;
 	}
 
-	#renderOwnerFooter(): SelectorLine {
-		const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(this.#ownerStatus().agentId, "Owner")}`) + this.#theme.fg("dim", " [o]");
-		const pending = this.#items[this.#selectedIndex]?.kind === "owner"
-			? this.#selectionSpinnerItem?.description : undefined;
+	#renderOwnerFooter(items: readonly AgentSelectorItem[]): SelectorLine {
+		const owner = this.#ownerRow();
+		const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel("Owner", owner.mounted)}`) + this.#theme.fg("dim", " [o]");
+		const pending = this.#focusedRow().kind === "owner"
+			? items[this.#view.focusedIndex]?.description : undefined;
 		return {
 			text: text + (pending ? this.#theme.fg("dim", ` ${pending}`) : ""),
 			regions: [{ start: 0, end: visibleWidth(text), text,
-				action: { kind: "open", value: this.#ownerStatus().agentId } }],
+				action: { kind: "open", value: owner.key } }],
 		};
 	}
 
 	#renderTabs(): SelectorLine {
-		const tab = (name: "Live" | "Dormant" | "Reports" | "Quarantined", active: boolean) =>
+		const tab = (name: string, active: boolean) =>
 			active
 				? this.#theme.bg("selectedBg", this.#theme.fg("text", " " + name + " "))
 				: this.#theme.fg("muted", " " + name + " ");
-		const labels = { live: "Live", dormant: "Dormant", reports: "Reports", quarantined: "Quarantined" } as const;
 		let text = "";
 		const regions: LineRegion[] = [];
 		let column = 0;
-		for (const [index, name] of this.#visibleTabs().entries()) {
-			const rendered = tab(labels[name], this.#activeTab === name);
+		for (const [index, name] of this.#view.tabs.entries()) {
+			const rendered = tab(TAB_LABELS[name], this.#view.activeTab === name);
 			const width = visibleWidth(rendered);
 			// One unowned cell between independent controls, matching Owner rows.
 			if (index > 0) text += " ";
@@ -1113,6 +842,19 @@ class AgentSelectorSurface implements Component {
 			noMatch: (text) => this.#theme.fg("muted", text),
 		};
 	}
+}
+
+/** Inbox and Report history rows sit under their own heading; the rest under Agents. */
+function isAttentionRow(row: AgentSelectorRow): boolean {
+	return row.kind === "decide" || row.kind === "incident" || row.kind === "report";
+}
+
+function safeReportLine(text: string): string {
+	return sanitizeReportTerminalText(text).replace(/\s+/g, " ").trim();
+}
+
+function plural(count: number): string {
+	return count === 1 ? "" : "s";
 }
 
 function fitOverlayContent(lines: SelectorLine[], maximumRows: number): SelectorLine[] {

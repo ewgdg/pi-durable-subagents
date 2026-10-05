@@ -10,7 +10,7 @@ import type {
 	Component,
 	TUI,
 } from "@earendil-works/pi-tui";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import type {
 	AgentRosterStatus,
@@ -993,6 +993,25 @@ test("Owner footer is the final non-wrapping focus destination", async () => {
 	component.handleInput?.("j");
 	component.handleInput?.("j");
 	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
+	component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
+});
+
+test("rebound list navigation keys stop at both ends like the arrow keys", async (t) => {
+	const keybindings = getKeybindings();
+	const previousBindings = keybindings.getUserBindings();
+	t.after(() => keybindings.setUserBindings(previousBindings));
+	keybindings.setUserBindings({ ...previousBindings, "tui.select.up": "ctrl+p", "tui.select.down": "ctrl+n" });
+	const harness = surfaceHarness(24);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null), agentStatus("child", "Child", "owner")],
+		dormant: [], selectedAgentId: "child",
+	});
+	const component = harness.component!;
+	component.handleInput?.("\x10");
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
+	component.handleInput?.("\x0e");
+	component.handleInput?.("\x0e");
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
 });
