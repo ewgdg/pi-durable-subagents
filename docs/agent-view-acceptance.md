@@ -102,7 +102,7 @@ suites retain keyboard and already-mounted-participant contracts.
 Run only the relevant presentation suites:
 
 ```sh
-node --test tests/agent-selector-surface.test.ts tests/agent-selector-pointer-fullscreen.test.ts tests/remote-agent-selector.test.ts tests/agents-navigation.test.ts tests/agents-command.test.ts tests/agent-view-surface.test.ts
+node --test tests/agent-selector-projection.test.ts tests/attention-inbox.test.ts tests/agent-selector-surface.test.ts tests/agent-selector-pointer-fullscreen.test.ts tests/remote-agent-selector.test.ts tests/agents-navigation.test.ts tests/agents-command.test.ts tests/agent-view-surface.test.ts
 npm run typecheck
 ```
 
