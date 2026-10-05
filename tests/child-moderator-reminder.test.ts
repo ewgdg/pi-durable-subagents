@@ -133,6 +133,22 @@ test("a busy reminder reservation is released and does not block its successor",
 	assert.equal(callbackCalls, 1, "a busy reservation must not block its successor");
 });
 
+test("a reminder is busy while another input prepares its startup and never joins the native queue", { timeout: 5_000 }, async t => {
+	const preparing = signal();
+	const release = signal();
+	t.after(() => release.resolve());
+	const loopback = await createChildControlLoopback(t, {
+		configure: pi => pi.on("input", async () => { preparing.resolve(); await release.promise; }),
+	});
+	loopback.host.model.setResponses([fauxAssistantMessage("Unrelated run.")]);
+	const human = loopback.submitNativeInput("Unrelated work.");
+	await preparing.promise;
+	assert.equal(await loopback.proxy.deliverModeratorReminder(commit => commit()), "busy");
+	release.resolve();
+	await human;
+	assert.equal(reminders(loopback), 0);
+});
+
 test("a busy reminder creates no speculative Run identity", { timeout: 5_000 }, async t => {
 	const { loopback, held, release } = await createHeldRunLoopback(t);
 	const runtime = loopback.proxy;

@@ -5,14 +5,16 @@ import { MessageDeliveryScheduler } from "../src/coordination/message-delivery-s
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import { createModelVisibleModeratorObligationReminder } from "../src/protocol/moderator-obligation-reminder.ts";
-import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime.ts";
+import type { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
-import { createTestOwnerHost } from "./support/pi-host.ts";
+import { createChildControlLoopback } from "./support/child-control-loopback.ts";
 
 test("an active native Run cannot queue a reminder that clears before commitment", { timeout: 5000 }, async t => {
 	const modelStarted = deferred();
 	const finishModel = deferred();
-	const host = await createTestOwnerHost(t, () => {}, { persistent: true, implicitModeratorResponses: false });
+	// The Owner hosts no Moderator; the stand-in is a loopback child.
+	const loopback = await createChildControlLoopback(t, { host: { implicitModeratorResponses: false } });
+	const { host, proxy: runtime } = loopback;
 	const contexts: string[] = [];
 	host.model.setResponses([
 		async context => {
@@ -23,9 +25,8 @@ test("an active native Run cannot queue a reminder that clears before commitment
 		},
 		context => { contexts.push(JSON.stringify(context)); return fauxAssistantMessage("Unrelated follow-up received."); },
 	]);
-	const initial = host.session.prompt("Investigate original incident");
+	const initial = loopback.submitNativeInput("Investigate original incident");
 	await modelStarted.promise;
-	const runtime = InProcessHostedRuntime.fromSession({ session: host.session, services: host.services, projection: undefined });
 	const lane = new SerialLane();
 	const handle = { sequence: 1 };
 	let cleared = false;
@@ -39,7 +40,7 @@ test("an active native Run cannot queue a reminder that clears before commitment
 			currentWorkState: () => "settled",
 			observe: () => ({ phase: "live", work: "settled", attention: "none", retentionReasons: [] }),
 			deliverInLane: runtime.deliver.bind(runtime),
-			deliverModeratorReminderInLane: (...args: Parameters<InProcessHostedRuntime["deliverModeratorReminder"]>) =>
+			deliverModeratorReminderInLane: (...args: Parameters<PiChildHostedRuntime["deliverModeratorReminder"]>) =>
 				runtime.deliverModeratorReminder(...args),
 		},
 	} as unknown as AgentRecord;
