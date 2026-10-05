@@ -58,6 +58,8 @@ export class RequestRelationships {
 	/** Each new Run rebuilds its relationships from evidence before it proceeds. */
 	integrate(agent: AgentRecord): void {
 		agent.host.setRunStartInitializer(async () => {
+			// catchUp warms the cached graph in yielding slices. sync is the synchronous
+			// barrier: it consumes anything committed since, adds admitted authorship, and writes.
 			await this.catchUp(agent);
 			this.sync(agent);
 		});
