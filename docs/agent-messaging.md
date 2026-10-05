@@ -108,7 +108,7 @@ Writers still deliver the requested content; receipt inspection does not re-prov
 
 ### Idle custom startup
 
-First and later idle custom deliveries run Pi's normal `input` and `before_agent_start` preparation in both Owner and process-child runtimes. This covers Messages, Requests and runtime reminders, including the Moderator's separate reminder path. The runtime submits an empty extension-origin prompt and one registered hook returns the custom delivery for that exact prompt invocation. Pi applies the prepared system prompt and preserves it across tool continuations.
+First and later idle custom deliveries run Pi's normal `input` and `before_agent_start` preparation in both Owner and process-child runtimes. This covers Messages, Requests and runtime reminders, including the Moderator's separate reminder path. Moderators always run as child processes, so the Owner Runtime rejects Moderator reminder delivery with `owner_runtime_hosts_no_moderator`. The runtime submits an empty extension-origin prompt and one registered hook returns the custom delivery for that exact prompt invocation. Pi applies the prepared system prompt and preserves it across tool continuations.
 
 The empty user entry precedes the custom delivery in the transcript; it creates no Human Request and no visible Pi chat component. Other hooks may append their own messages afterward. The canonical custom type, content, display flag, structured details, Message identity and renderer remain intact.
 

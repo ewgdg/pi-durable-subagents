@@ -18,6 +18,22 @@ npm run test:fast -- --file=host-shape.test.ts
 npm run test:conformance -- --file=host-shape.test.ts --list
 ```
 
+## Where child Runtime tests live
+
+Test the Owner–child Control seam in one process through the Child Control Loopback (`tests/support/child-control-loopback.ts`): the real Owner-side proxy and Owner serving, a real child connection and binding, the in-memory transport, and a faux Pi session. Delivery, cancellation, interrupt, queue clearing, Moderator reminders, compaction, settlement, idle custom startup, faults, and reload continuity belong there, in the fast suite.
+
+Keep a test in the process suite only when its subject is something the loopback lacks:
+
+- the PTY and terminal bytes;
+- the launch contract and extension shell: CLI arguments, bootstrap, the startup tool filter, extension load order, inherited input preflights, and file-backed snapshot inputs;
+- hello and admission over an OS transport;
+- a real reload;
+- process exit, kill, and shutdown grace.
+
+Keep one end-to-end process smoke per role (ordinary and Moderator).
+
+Cases that inject an event ordering a real child cannot produce on demand (for example a compaction edge without a Run, or dispatch completion racing settlement) use the scripted link in `tests/support/scripted-child-control-link.ts`.
+
 ## Deadlines and containment
 
 Node's file timeout is 5 seconds for fast tests and 120 seconds for process/conformance tests. Independently, the supervisor starts a wall-clock timer when it launches the Node runner: `ceil(selected files / suite concurrency) × file timeout + 5 seconds`. A focused process file therefore gets 125 seconds; a name filter does not reduce that budget. Expiry reports the deadline, sends SIGTERM, then uses existing descendant force-kill cleanup after at most 100 ms of termination grace, and exits with code 124. Startup before launch and cleanup add time beyond that budget. This timer remains responsive when a test worker spins synchronously.

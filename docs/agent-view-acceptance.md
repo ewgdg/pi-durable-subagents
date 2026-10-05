@@ -6,8 +6,9 @@ This matrix records the production process-backed Agent-view contract and its re
 
 - `src/process-runtime/pi-child-process-runtime.ts` — exact Pi CLI process, PTY, Control admission, transcript handoff, and process-group cleanup.
 - `src/process-runtime/pty-terminal-projection.ts` — startup ANSI diagnostics, hidden-output drainage, raw output subscription, terminal-reply ownership, input, resize, and exact exit.
-- `src/process-runtime/pi-child-hosted-runtime.ts` — process-neutral Run intentions and lifecycle settlement.
-- `src/process-runtime/child-runtime-bridge.ts` — truthful child TUI binding, lifecycle reporting, coordination tools, activity dock, and `/agents` registration.
+- `src/process-runtime/pi-child-hosted-runtime.ts` — process-neutral Run intentions and lifecycle settlement over the Child Control Link port.
+- `src/process-runtime/child-runtime-bridge.ts` — the child extension shell: truthful child TUI binding, bootstrap, launch facts, coordination tools, activity dock, and `/agents` registration.
+- `src/process-runtime/child-control-connection.ts` — the Child Control Connection and per-generation Child Runtime Binding: lifecycle reporting, run identity, and Owner request serving.
 - `src/process-runtime/remote-agent-selector.ts` — scoped selector snapshots, the selection transaction, and awaited Owner selection actions.
 - `src/presentation/agents-navigation.ts` — the one `/agents` navigation loop: selector, Report, View reporter, Post-mortem reopen, and Owner return.
 - `src/presentation/agents-navigation-adapters.ts` — the Owner session's local adapter and a child's Control adapter.

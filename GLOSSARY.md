@@ -168,6 +168,18 @@ The single module that drives one Pi session binding generation for both the Own
 **Turn Compaction Gateway**:
 The child-local, Runtime-generation-bound admission boundary that serializes only turn preparation and commitment. It cancels unused post-Run threshold compaction, recomputes threshold preparation before later idle work, preserves Pi-native manual and overflow compaction, and releases before the model cycle. Deferral is not durable state and does not retain a Run or Agent Runtime.
 
+**Child Control Connection**:
+The child's end of Child Control, one per child process. It survives reload and holds the channel, the reported Run identity, queue-intention ordering, and native input identity. It routes each Owner request to the current Child Runtime Binding; a request that arrives between generations is rejected, never served by a disposed binding. Control close reaches the host shell's shutdown port.
+
+**Child Runtime Binding**:
+One Pi session binding generation inside a child, bound to its Child Control Connection. It receives the Pi session Runtime, the launch facts as a plain value, the participant lifecycle handlers, and three host-shell ports (notify, presentation visibility, shutdown). It never reads process globals; the bridge extension shell owns Pi registration, the terminal, bootstrap, and the environment.
+
+**Child Control Link**:
+The narrow port the Owner-side child proxy depends on instead of the process launch: readiness with the first Runtime snapshot and the Control channel, child events, exit, and disposal. Presentation is supplied separately.
+
+**Child Control Loopback**:
+Test support that connects the real Owner-side child proxy and Owner participant serving to a real Child Control Connection and Child Runtime Binding over the in-memory transport and a faux Pi session. It has no PTY, launch, or hello admission.
+
 **Owner Settlement Parking**:
 The volatile wait at a normally completed low-level Workflow Owner boundary while canonical outbound Agent Requests remain outstanding. One awaited Agent-core listener runs after Pi and extension `agent_end` handling, delays native settlement and threshold compaction, and wakes only after turn-triggering input enters an active Agent queue or the exact Run is fenced. Parking is settled-equivalent for serialized Message Delivery but keeps Pi's Owner session active, uses its existing continuation, and creates no transcript evidence. Child and Moderator settlement is unchanged.
 
