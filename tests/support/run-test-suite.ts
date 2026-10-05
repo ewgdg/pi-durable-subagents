@@ -46,7 +46,6 @@ const PROCESS_TEST_FILES = new Set([
 	"owner-workflow.test.ts",
 	"participant-lifecycle-native.test.ts",
 	"pi-child-hosted-runtime.test.ts",
-	"pi-child-moderator-reminder.test.ts",
 	"pi-child-process-launch.test.ts",
 	"pi-child-process-runtime.test.ts",
 	"process-child-session-factory.test.ts",
