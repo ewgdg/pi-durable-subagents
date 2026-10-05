@@ -33,7 +33,6 @@ import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
 import { OwnerRecoveryError } from "./owner-recovery-error.ts";
-import type { SpawnGuidanceRefresh } from "../tools/coordination-tools.ts";
 
 export type ConstructWorkflowCoordinator = (
 	...args: ConstructorParameters<typeof WorkflowCoordinator>
@@ -59,8 +58,6 @@ export async function initializeOwnerWorkflow(options: {
 	interaction: WorkflowInteraction;
 	entryModulePath: string;
 	constructWorkflowCoordinator: ConstructWorkflowCoordinator;
-	/** The Owner coordination tools registered at extension load. */
-	ownerTools: SpawnGuidanceRefresh;
 	event: SessionStartEvent;
 	onOwnerIdentified(): void;
 }): Promise<(() => OrdinaryAgentCoordinatorView) | undefined> {
@@ -142,7 +139,6 @@ export async function initializeOwnerWorkflow(options: {
 		pi,
 		runtime,
 		resolveView,
-		ownerTools: options.ownerTools,
 		prepareOwnerReplacement,
 	});
 	parkingBinding = installOwnerSettlementParker({

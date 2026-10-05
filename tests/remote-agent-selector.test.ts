@@ -137,7 +137,7 @@ test("local registered /agents owner returns through the authoritative selection
 			return { kind: "selected" };
 		},
 	});
-	const command = captureCommand((pi) => registerAgentsCommand(pi, () => view));
+	const command = captureCommand((pi) => registerAgentsCommand(pi, { kind: "participant", view: () => view }));
 	const ui = {
 		custom: () => {
 			throw new Error("selector must not open for /agents owner");
@@ -156,7 +156,7 @@ test("local registered /agents owner returns through the authoritative selection
 			return { kind: "selected" };
 		},
 	});
-	const ownerCommand = captureCommand((pi) => registerAgentsCommand(pi, () => ownerView));
+	const ownerCommand = captureCommand((pi) => registerAgentsCommand(pi, { kind: "participant", view: () => ownerView }));
 	await ownerCommand.handler("owner", { ui, mode: "tui" } as unknown as ExtensionCommandContext);
 
 	assert.deepEqual(opened, ["owner"]);
@@ -252,7 +252,7 @@ test("registered /agents rejects unsupported arguments before opening or selecti
 			return { kind: "selected" };
 		},
 	});
-	const localCommand = captureCommand((pi) => registerAgentsCommand(pi, () => localView));
+	const localCommand = captureCommand((pi) => registerAgentsCommand(pi, { kind: "participant", view: () => localView }));
 	await assert.rejects(
 		localCommand.handler(" teammate ", { mode: "tui" } as ExtensionCommandContext),
 		(error: unknown) => error instanceof Error && error.message === "Usage: /agents [owner]",
@@ -600,7 +600,7 @@ test("local and child /agents open immutable reports before explicitly selecting
 			humanAttention: [], operationalAttention: [], reports: [{ report }],
 		};
 		const command = mode === "local"
-			? captureCommand((pi) => registerAgentsCommand(pi, () => ({
+			? captureCommand((pi) => registerAgentsCommand(pi, { kind: "participant", view: () => ({
 				...presentationView(),
 				refreshTranscriptFacts: async () => { throw new Error("transcript refresh unavailable"); },
 				reportHistory: () => [{ report }],
@@ -610,7 +610,7 @@ test("local and child /agents open immutable reports before explicitly selecting
 					selected.push({ kind: "select_agent", agentId });
 					return { kind: "selected" };
 				},
-			})))
+			}) }))
 			: captureCommand((pi) => registerRemoteAgentsCommand(pi, {
 				snapshot: async () => snapshot,
 				setReportRead: async () => { acknowledged = true; },
@@ -671,13 +671,13 @@ test("local and child View reporter retain focused report UI through delayed pre
 				return { kind: "selected" as const };
 			};
 			const command = mode === "local"
-				? captureCommand((pi) => registerAgentsCommand(pi, () => ({
+				? captureCommand((pi) => registerAgentsCommand(pi, { kind: "participant", view: () => ({
 					...presentationView(),
 					reportHistory: () => [{ report }],
 					setReportRead: () => { reads++; },
 					addAgentActivityChangeHandler: () => () => {},
 					openAgentPresentation: prepare,
-				})))
+				}) }))
 				: captureCommand((pi) => registerRemoteAgentsCommand(pi, {
 					snapshot: async () => ({
 						live: [ownerStatus, childStatus], dormant: [], selectedAgentId: "child",
@@ -760,7 +760,7 @@ test("local and child /agents toggle reports in place across inbox, history, and
 			humanAttention: [], operationalAttention: [], reports: [{ report }],
 		};
 		const command = mode === "local"
-			? captureCommand((pi) => registerAgentsCommand(pi, () => ({
+			? captureCommand((pi) => registerAgentsCommand(pi, { kind: "participant", view: () => ({
 				...presentationView(),
 				reportHistory,
 				setReportRead: (_id, read) => { acknowledged = read; },
@@ -769,7 +769,7 @@ test("local and child /agents toggle reports in place across inbox, history, and
 					selected.push({ kind: "select_agent", agentId });
 					return { kind: "selected" };
 				},
-			})))
+			}) }))
 			: captureCommand((pi) => registerRemoteAgentsCommand(pi, {
 				snapshot: async () => ({ ...snapshot, reports: reportHistory() }),
 				setReportRead: async (_id, read) => { acknowledged = read; },

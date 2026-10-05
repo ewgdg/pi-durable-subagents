@@ -29,7 +29,7 @@ export type AgentSelectionSession = Readonly<{
 const AGENTS_OWNER_ARGUMENT = "owner";
 export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner]";
 
-type AgentsCommandMode = "selector" | "owner";
+export type AgentsCommandMode = "selector" | "owner";
 
 export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
 	const argument = args.trim();
