@@ -67,8 +67,7 @@ export class AgentWaitCoordinator {
 	readonly #messages: MessageCoordinator;
 	readonly #boundaryHooks: AgentWaitBoundaryHooks;
 	readonly #clock: AgentWaitClock;
-	readonly #suspendExecution: (record: AgentRecord) => void;
-	readonly #resumeExecution: (record: AgentRecord) => Promise<void>;
+	readonly #assertNotShutDownOrSuspended: (record: AgentRecord) => void;
 	readonly #rejectsSuspendedResponders: boolean;
 	readonly #pendingByKey = new Map<string, PendingAgentWait>();
 	#shuttingDown = false;
@@ -78,8 +77,7 @@ export class AgentWaitCoordinator {
 		messages: MessageCoordinator;
 		boundaryHooks?: AgentWaitBoundaryHooks;
 		clock?: AgentWaitClock;
-		suspendExecution(record: AgentRecord): void;
-		resumeExecution(record: AgentRecord): Promise<void>;
+		assertNotShutDownOrSuspended(record: AgentRecord): void;
 		/** A headless Workflow has no human to resume a suspended responder. */
 		rejectsSuspendedResponders?: boolean;
 	}) {
@@ -87,8 +85,7 @@ export class AgentWaitCoordinator {
 		this.#messages = options.messages;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#clock = options.clock ?? SYSTEM_AGENT_WAIT_CLOCK;
-		this.#suspendExecution = options.suspendExecution;
-		this.#resumeExecution = options.resumeExecution;
+		this.#assertNotShutDownOrSuspended = options.assertNotShutDownOrSuspended;
 		this.#rejectsSuspendedResponders = options.rejectsSuspendedResponders ?? false;
 	}
 
@@ -178,7 +175,6 @@ export class AgentWaitCoordinator {
 		} else {
 			try {
 				caller.host.beginAgentWait(handle, toolCallId);
-				this.#suspendExecution(caller);
 				void this.#messages.deliveryEligibilityChanged(caller).catch((error: unknown) => {
 					this.#fence(
 						callerAgentId,
@@ -401,7 +397,7 @@ export class AgentWaitCoordinator {
 		this.#clearTimer(pending);
 		try {
 			pending.record.host.endAgentWait(pending.handle, pending.toolCallId);
-			await this.#resumeExecution(pending.record);
+			this.#assertNotShutDownOrSuspended(pending.record);
 			if (
 				pending.signal.aborted ||
 				!pending.record.host.isCurrent(pending.handle)

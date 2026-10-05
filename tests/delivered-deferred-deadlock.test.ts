@@ -64,7 +64,7 @@ for (const delivered of [false, true]) {
 		const messages = new MessageCoordinator({ agents: history.agents, workflowPolicy, isShuttingDown: () => false });
 		for (const p of [owner, worker, peer]) messages.integrate(p.record);
 		const waits = new AgentWaitCoordinator({ agents: history.agents, messages,
-			clock: { schedule: () => () => {} }, suspendExecution() {}, async resumeExecution() {},
+			clock: { schedule: () => () => {} }, assertNotShutDownOrSuspended() {},
 		});
 		const abort = new AbortController();
 		const pendingWaits: Promise<unknown>[] = [];

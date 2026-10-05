@@ -157,7 +157,6 @@ export class MessageDeliveryScheduler {
 	readonly #progressClock: OperationReviewClock;
 	readonly #progressChanged: () => void;
 	readonly #onDeliveryFailure: ((failure: MessageDeliveryFailure) => void | Promise<void>) | undefined;
-	readonly #isWaitingForCapacity: (agentId: string) => boolean;
 	readonly #pendingByAgent = new Map<string, Map<string, ScheduledDelivery>>();
 	readonly #activeModeratorReminderByAgent = new Map<string, { settled: boolean }>();
 	readonly #activeDeferredByAgent = new Map<string, ActivePromptDelivery>();
@@ -185,12 +184,10 @@ export class MessageDeliveryScheduler {
 		deliveryProgressClock?: OperationReviewClock;
 		onDeliveryProgressChanged?(): void;
 		onDeliveryFailure?(failure: MessageDeliveryFailure): void | Promise<void>;
-		isWaitingForCapacity?(agentId: string): boolean;
 	}) {
 		this.#onDeliveryFailure = options.onDeliveryFailure;
 		this.#progressClock = options.deliveryProgressClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#progressChanged = options.onDeliveryProgressChanged ?? (() => undefined);
-		this.#isWaitingForCapacity = options.isWaitingForCapacity ?? (() => false);
 		this.#scheduleReleaseEvaluationHook = options.scheduleReleaseEvaluation;
 		this.#scheduleDeliveryDispatchHook = options.scheduleDeliveryDispatch;
 		this.#afterSteerFreeze = options.afterSteerFreeze;
@@ -230,8 +227,7 @@ export class MessageDeliveryScheduler {
 		for (const item of this.#progress.values()) {
 			const { record, delivery, watcher } = item;
 			if (delivery.inspectProof() || delivery.isSuppressed?.() || item.failed ||
-				delivery.isReady?.() === false || record.host.blocksOrdinaryDelivery() ||
-				this.#isWaitingForCapacity(record.identity.agentId)) continue;
+				delivery.isReady?.() === false || record.host.blocksOrdinaryDelivery()) continue;
 			const run = record.host.observe();
 			if (run.phase === "dormant" || (run.phase === "live" && run.attention === "input_required")) continue;
 			if (watcher.observe(this.#deliveryWaitIsLegitimate(item))) continue;
@@ -252,8 +248,7 @@ export class MessageDeliveryScheduler {
 		if (
 			record.host.hasRetentionReason("interactive_selection") ||
 			record.host.blocksOrdinaryDelivery() ||
-			(run.phase !== "dormant" && run.attention === "input_required") ||
-			this.#isWaitingForCapacity(record.identity.agentId)
+			(run.phase !== "dormant" && run.attention === "input_required")
 		) return true;
 		// Dispatched work belongs to delivery machinery until proof commits; its
 		// prompt Promise must not turn subsequent model duration into a deadline.

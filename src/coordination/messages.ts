@@ -130,7 +130,6 @@ export class MessageCoordinator {
 		workflowPolicy: WorkflowPolicyStore;
 		deliveryProgressClock?: import("./operation-review.ts").OperationReviewClock;
 		onDeliveryProgressChanged?(): void;
-		isWaitingForCapacity?(agentId: string): boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
@@ -152,7 +151,6 @@ export class MessageCoordinator {
 			workflowPolicy: options.workflowPolicy,
 			deliveryProgressClock: options.deliveryProgressClock,
 			onDeliveryProgressChanged: options.onDeliveryProgressChanged,
-			isWaitingForCapacity: options.isWaitingForCapacity,
 			onDeliveryFailure: failure => scheduleDeliveryFailureNotice({
 				failure, author: this.#requireAgent(failure.delivery.deliveryItem.source.agentId),
 				scheduler: this.#deliveryScheduler, isShuttingDown: this.#isShuttingDown,

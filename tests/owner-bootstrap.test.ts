@@ -446,7 +446,7 @@ test("Owner prompts retain their prepared Template snapshot until resource reloa
 	assert.doesNotMatch(promptAfterReload, /first-delegate/);
 });
 
-test("an invalid initial Workflow Policy admits the Owner with the default policy and a warning", async (t) => {
+test("an initial Workflow Policy setting the removed execution limit admits the Owner with the default policy and a warning", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const policyPath = join(
 		host.services.agentDir,
@@ -454,11 +454,11 @@ test("an invalid initial Workflow Policy admits the Owner with the default polic
 		"pi-durable-subagents.json",
 	);
 	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
-	await writeFile(policyPath, '{"maxConcurrentAgentRuns": 0}', "utf8");
+	await writeFile(policyPath, '{"maxConcurrentAgentRuns": 8}', "utf8");
 
 	await bindTestOwnerHost(host, "tui");
 
-	const reason = "Workflow Policy maxConcurrentAgentRuns must be a positive safe integer";
+	const reason = 'Workflow Policy contains unknown field "maxConcurrentAgentRuns"';
 	assert.ok(host.session.getActiveToolNames().includes("agent_spawn"));
 	assert.equal(host.ui.widgets.has("agent-coordination.blockage"), false);
 	assert.deepEqual(host.services.diagnostics, [{ type: "error", message: reason }]);

@@ -29,7 +29,6 @@ const PROCESS_TEST_FILES = new Set([
 	"coordinated-workflow-pty.test.ts",
 	"deferred-request-after-answer.test.ts",
 	"detached-child-ui-pty.test.ts",
-	"execution-scheduler.test.ts",
 	"human-request-pty.test.ts",
 	"headless-workflow.test.ts",
 	"headless-owner-process.test.ts",

@@ -47,7 +47,6 @@ import {
 } from "../protocol/runtime-configuration.ts";
 import { AgentRuntimeSupervisor } from "../runtime/agent-runtime-supervisor.ts";
 import type {
-	AgentRunHandle,
 	AgentRunSuspension,
 	ProjectionInputSubmission,
 } from "../runtime/agent-runtime-host.ts";
@@ -86,11 +85,6 @@ import type {
 } from "../templates/agent-templates.ts";
 import { WorkflowPolicyStore, writeExcludedModels } from "../policy/workflow-policy.ts";
 import { parseExcludedModels, type ModelPolicySnapshot } from "../policy/model-exclusion.ts";
-import {
-	WorkflowExecutionScheduler,
-	type AgentExecutionRole,
-	type WorkflowExecutionPermit,
-} from "./workflow-execution-scheduler.ts";
 import type { ColdWorkflowRecovery } from "../bootstrap/cold-host-discovery.ts";
 import { piSessionRecency } from "../pi-integration/session-recency.ts";
 import {
@@ -231,10 +225,10 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(submissionSequence?: number): Promise<void>;
 	obligationFrames(): readonly ObligationFrame[];
-	ensureExecution(): Promise<void>;
+	/** Checks the Workflow shutdown fence and Run Suspension; never waits. */
+	assertNotShutDownOrSuspended(): void;
 	beginToolExecution(toolCallId: string, toolName: string): void;
 	reconcileCommittedToolResults(): void;
-	endExecution(): void;
 }>;
 
 export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
@@ -276,12 +270,6 @@ export class WorkflowCoordinator {
 	readonly #postMortemAgentPresenter: PostMortemAgentPresenter | undefined;
 	#activeAgentView: ActiveDurableAgentView | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
-	readonly #executionScheduler: WorkflowExecutionScheduler;
-	readonly #waitingForExecution = new Set<string>();
-	readonly #executionPermits = new Map<
-		string,
-		Readonly<{ handle: AgentRunHandle; permit: WorkflowExecutionPermit }>
-	>();
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	readonly #quarantinedCandidateCount: number;
@@ -332,7 +320,6 @@ export class WorkflowCoordinator {
 			options.recoveredWorkflow?.agentIdBySpawnSource ?? [],
 		);
 		this.#workflowPolicy = options.workflowPolicy ?? new WorkflowPolicyStore();
-		this.#executionScheduler = new WorkflowExecutionScheduler(this.#workflowPolicy);
 		this.#ownerIdentity = identity;
 		this.#agents.set(identity.agentId, {
 			identity,
@@ -470,7 +457,6 @@ export class WorkflowCoordinator {
 				this.#operationalIncidents?.deliveryProgressChanged();
 				this.#notifyAgentActivityChanged();
 			},
-			isWaitingForCapacity: (agentId) => this.#waitingForExecution.has(agentId),
 			preemptAgentWait: (record, reserveDelivery) =>
 				this.#agentWaits.preemptForInboundRequest(record, reserveDelivery),
 			workflowPolicy: this.#workflowPolicy,
@@ -480,11 +466,8 @@ export class WorkflowCoordinator {
 			messages: this.#messages,
 			boundaryHooks: options.agentWaitBoundaryHooks,
 			clock: options.agentWaitClock,
-			suspendExecution: (record) => {
-				this.#releaseExecution(record.identity.agentId);
-			},
-			resumeExecution: (record) =>
-				this.#ensureExecution(record.identity.agentId),
+			assertNotShutDownOrSuspended: (record) =>
+				this.#assertNotShutDownOrSuspended(record.identity.agentId),
 			rejectsSuspendedResponders: this.#interaction === "headless",
 		});
 		this.#humanRequests = new HumanRequestCoordinator({
@@ -497,9 +480,6 @@ export class WorkflowCoordinator {
 					this.#messages.prepareInterruptionInLane(record);
 					await record.host.interruptCurrentRunInLane();
 				});
-			},
-			suspendExecution: (record) => {
-				this.#releaseExecution(record.identity.agentId);
 			},
 			beginHumanWaiting: (source) => {
 				this.#operationalIncidents.beginHumanWaiting(source);
@@ -785,7 +765,7 @@ export class WorkflowCoordinator {
 			},
 			beginExecution: (submissionSequence) =>
 				this.#beginExecution(agentId, submissionSequence),
-			ensureExecution: () => this.#ensureExecution(agentId),
+			assertNotShutDownOrSuspended: () => this.#assertNotShutDownOrSuspended(agentId),
 			beginToolExecution: (toolCallId, toolName) => {
 				this.#assertAdmissionOpen();
 				this.#operationalIncidents.admitToolExecution(
@@ -800,7 +780,6 @@ export class WorkflowCoordinator {
 				this.#agentWaits.reconcileCommittedAnswers();
 			},
 			obligationFrames: () => this.#messages.obligationFrames(agentId),
-			endExecution: () => this.#releaseExecution(agentId),
 		};
 	}
 
@@ -811,7 +790,6 @@ export class WorkflowCoordinator {
 		for (const record of this.#agents.values()) {
 			// Isolated resumption blocks ordinary Delivery, not the resumed execution.
 			if (record.identity.agentId === this.#ownerIdentity.agentId ||
-				this.#waitingForExecution.has(record.identity.agentId) ||
 				record.host.currentInterruptionHold() || record.host.currentRunSuspension()) continue;
 			const run = record.host.observe();
 			// Moderator startup belongs to the bounded recovery inspection below.
@@ -1216,29 +1194,18 @@ export class WorkflowCoordinator {
 		return identity !== undefined && isModeratorIdentity(identity);
 	}
 
-	#executionRole(agentId: string): AgentExecutionRole {
-		if (agentId === this.#ownerIdentity.agentId) return "owner";
-		return this.#isModerator(agentId) ? "moderator" : "child";
-	}
-
 	#integrateAgent(record: AgentRecord): void {
 		// Recovery, ordinary spawning, and Moderator admission all integrate after
 		// adding the record and its parent relationship. Run changes do not alter ancestry.
 		this.#cachedAuthorityOrder = undefined;
-		record.host.setRunSuspensionHandler((suspension, handle) => {
-			// Quota suspension is process-local: it stops this exact Run and releases its
-			// execution permit. Nothing durable has to be recorded or restored.
-			if (!suspension) return;
-			this.#releaseExecution(record.identity.agentId, handle);
-			if (this.#interaction === "headless") this.#noticeSupervisorOfSuspension(record, suspension);
+		record.host.setRunSuspensionHandler((suspension) => {
+			// Run Suspension is process-local: nothing durable has to be recorded or restored.
+			if (suspension && this.#interaction === "headless") {
+				this.#noticeSupervisorOfSuspension(record, suspension);
+			}
 		});
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged(record.identity.agentId));
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged(record.identity.agentId));
-		record.host.addEndedHandler((handle) => {
-			// A terminal Runtime fault can bypass participant executionEnd. Tie the
-			// fallback release to the exact ended Run so it cannot affect a successor.
-			this.#releaseExecution(record.identity.agentId, handle);
-		});
 		record.host.setProjectionInputSettledHandler(() => {
 			void this.#messages.requestRelease(record).catch((error) =>
 				this.#reportAgentRuntimeReleaseError(error)
@@ -1624,19 +1591,13 @@ export class WorkflowCoordinator {
 			this.#assertInputSubmissionAdmissible(record, inputSubmission);
 			return record.host.currentHandle() ?? await record.host.startInLane();
 		});
-		if (this.#executionPermits.has(agentId)) {
-			throw new Error(
-				`invariant_violation: Agent ${agentId} execution already holds Workflow capacity`,
-			);
-		}
-		await this.#ensureExecution(agentId);
 		// No await may separate these final checks from the successful lifecycle
 		// response: termination can fence the submission and replace the exact Run.
+		this.#assertNotShutDownOrSuspended(agentId);
 		this.#assertInputSubmissionAdmissible(record, inputSubmission);
 		if (!record.host.isCurrent(handle)) {
 			throw new Error("stale_run: execution admission lost its exact Agent Run");
 		}
-		this.#assertAdmissionOpen();
 	}
 
 	#captureInputSubmission(
@@ -1663,44 +1624,11 @@ export class WorkflowCoordinator {
 		}
 	}
 
-	async #ensureExecution(agentId: string): Promise<void> {
+	#assertNotShutDownOrSuspended(agentId: string): void {
 		this.#assertAdmissionOpen();
-		const record = this.#requireAgent(agentId);
-		if (record.host.runSuspensionBlocksExecution()) throw new Error("run_suspended: explicit resume is required");
-		if (this.#executionPermits.has(agentId)) return;
-		const run = record.host.observe();
-		if (run.phase !== "live" || run.attention === "input_required") return;
-		const handle = record.host.currentHandle();
-		if (!handle) return;
-		const role = this.#executionRole(agentId);
-		this.#waitingForExecution.add(agentId);
-		this.#operationalIncidents.deliveryProgressChanged();
-		const permit = await this.#executionScheduler.admit(
-			role,
-			role === "child"
-				? record.host.exactRunCancellationSignal(handle)
-				: undefined,
-		).finally(() => {
-			this.#waitingForExecution.delete(agentId);
-			this.#operationalIncidents.deliveryProgressChanged();
-		});
-		if (!permit) return;
-		if (record.host.runSuspensionBlocksExecution()) {
-			permit.release();
-			throw new Error("run_suspended: execution admission was suspended");
+		if (this.#requireAgent(agentId).host.runSuspensionBlocksExecution()) {
+			throw new Error("run_suspended: explicit resume is required");
 		}
-		if (this.#shuttingDown) {
-			permit.release();
-			this.#assertAdmissionOpen();
-		}
-		this.#executionPermits.set(agentId, { handle, permit });
-	}
-
-	#releaseExecution(agentId: string, handle?: AgentRunHandle): void {
-		const execution = this.#executionPermits.get(agentId);
-		if (!execution || (handle !== undefined && execution.handle !== handle)) return;
-		this.#executionPermits.delete(agentId);
-		execution.permit.release();
 	}
 
 	#handleHumanInput(

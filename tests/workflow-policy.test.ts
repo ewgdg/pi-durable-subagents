@@ -15,7 +15,6 @@ import { createUnboundTestOwnerHost } from "./support/pi-host.ts";
 test("strict Workflow Policy parsing fills defaults and freezes one complete snapshot", () => {
 	const defaults = parseWorkflowPolicy("{}");
 	assert.deepEqual(defaults, {
-		maxConcurrentAgentRuns: 8,
 		maxPendingDeliveriesPerAgent: 256,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 600_000,
@@ -24,14 +23,12 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 	assert.equal(Object.isFrozen(defaults), true);
 
 	const configured = parseWorkflowPolicy(JSON.stringify({
-		maxConcurrentAgentRuns: 3,
 		maxPendingDeliveriesPerAgent: 17,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
 		excludedModels: ["openai-codex/*", "openrouter/anthropic/claude-sonnet-4"],
 	}));
 	assert.deepEqual(configured, {
-		maxConcurrentAgentRuns: 3,
 		maxPendingDeliveriesPerAgent: 17,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
@@ -45,16 +42,15 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 test("strict Workflow Policy parsing rejects the complete invalid document", () => {
 	const invalidPolicies = [
 		["non-object", "[]"],
-		["unknown field", '{"maxConcurrentAgentRuns": 8, "extra": true}'],
-		["duplicate key", '{"maxConcurrentAgentRuns": 8, "maxConcurrentAgentRuns": 4}'],
-		["comment", '{"maxConcurrentAgentRuns": 8 /* no comments */}'],
-		["trailing comma", '{"maxConcurrentAgentRuns": 8,}'],
-		["wrong type", '{"maxConcurrentAgentRuns": "8"}'],
-		["null concurrency", '{"maxConcurrentAgentRuns": null}'],
+		["unknown field", '{"maxPendingDeliveriesPerAgent": 8, "extra": true}'],
+		["duplicate key", '{"maxPendingDeliveriesPerAgent": 8, "maxPendingDeliveriesPerAgent": 4}'],
+		["comment", '{"maxPendingDeliveriesPerAgent": 8 /* no comments */}'],
+		["trailing comma", '{"maxPendingDeliveriesPerAgent": 8,}'],
+		["wrong type", '{"maxPendingDeliveriesPerAgent": "8"}'],
 		["null delivery limit", '{"maxPendingDeliveriesPerAgent": null}'],
 		["null review interval", '{"operationReviewIntervalMs": null}'],
-		["zero concurrency", '{"maxConcurrentAgentRuns": 0}'],
-		["fractional concurrency", '{"maxConcurrentAgentRuns": 1.5}'],
+		["zero delivery limit", '{"maxPendingDeliveriesPerAgent": 0}'],
+		["fractional delivery limit", '{"maxPendingDeliveriesPerAgent": 1.5}'],
 		["unsafe delivery limit", `{"maxPendingDeliveriesPerAgent": ${Number.MAX_SAFE_INTEGER + 1}}`],
 		["null delivery interval", '{"deliveryProgressIntervalMs": null}'],
 		["short delivery interval", '{"deliveryProgressIntervalMs": 999}'],
@@ -82,6 +78,14 @@ test("strict Workflow Policy parsing rejects the complete invalid document", () 
 	}
 });
 
+test("Workflow Policy rejects the removed execution limit as an unknown field", () => {
+	// ADR 0005 removed the Workflow-wide execution queue; strict parsing names the stale line.
+	assert.throws(
+		() => parseWorkflowPolicy('{"maxConcurrentAgentRuns": 8}'),
+		{ message: 'Workflow Policy contains unknown field "maxConcurrentAgentRuns"' },
+	);
+});
+
 test("Workflow Policy loads only the exact optional user file", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		processVisibleModel: false,
@@ -99,15 +103,14 @@ test("Workflow Policy loads only the exact optional user file", async (t) => {
 	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
 	await writeFile(
 		expectedPolicyPath,
-		'{"maxConcurrentAgentRuns": 2, "operationReviewIntervalMs": 1200}',
+		'{"maxPendingDeliveriesPerAgent": 2, "operationReviewIntervalMs": 1200}',
 		"utf8",
 	);
 	const loaded = await readWorkflowPolicy(host.services.agentDir);
 	assert.equal(loaded.ok, true);
 	if (!loaded.ok) throw new Error("Expected the configured policy to load");
 	assert.deepEqual(loaded.snapshot, {
-		maxConcurrentAgentRuns: 2,
-		maxPendingDeliveriesPerAgent: 256,
+		maxPendingDeliveriesPerAgent: 2,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_200,
 		excludedModels: [],
@@ -115,7 +118,7 @@ test("Workflow Policy loads only the exact optional user file", async (t) => {
 });
 
 test("Workflow Policy reload publication replaces or preserves one whole snapshot", () => {
-	const initial = parseWorkflowPolicy('{"maxConcurrentAgentRuns": 2}');
+	const initial = parseWorkflowPolicy('{"maxPendingDeliveriesPerAgent": 2}');
 	const store = new WorkflowPolicyStore(initial);
 	assert.equal(store.current(), initial);
 
@@ -125,7 +128,6 @@ test("Workflow Policy reload publication replaces or preserves one whole snapsho
 	store.publish(replacement);
 	assert.equal(store.current(), replacement);
 	assert.deepEqual(store.current(), {
-		maxConcurrentAgentRuns: 8,
 		maxPendingDeliveriesPerAgent: 4,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
@@ -146,7 +148,7 @@ test("excluded models are written atomically and preserve unrelated policy field
 
 	await writeFile(
 		policyPath,
-		'{\n  "maxConcurrentAgentRuns": 4,\n  "excludedModels": ["openai-codex/*"]\n}\n',
+		'{\n  "maxPendingDeliveriesPerAgent": 4,\n  "excludedModels": ["openai-codex/*"]\n}\n',
 		"utf8",
 	);
 	await writeExcludedModels(host.services.agentDir, [
@@ -154,14 +156,14 @@ test("excluded models are written atomically and preserve unrelated policy field
 		"deepseek/deepseek-v4-flash",
 	]);
 	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), {
-		maxConcurrentAgentRuns: 4,
+		maxPendingDeliveriesPerAgent: 4,
 		excludedModels: ["openai-codex/*", "deepseek/deepseek-v4-flash"],
 	});
 
 	// An empty list removes the field so the file keeps only explicit values.
 	await writeExcludedModels(host.services.agentDir, []);
 	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), {
-		maxConcurrentAgentRuns: 4,
+		maxPendingDeliveriesPerAgent: 4,
 	});
 
 	const loaded = await readWorkflowPolicy(host.services.agentDir);
@@ -177,13 +179,13 @@ test("an invalid exclusion entry or unreadable policy refuses the write", async 
 	const policyDirectory = join(host.services.agentDir, "config");
 	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
 	await mkdir(policyDirectory, { recursive: true });
-	await writeFile(policyPath, '{"maxConcurrentAgentRuns": 4}', "utf8");
+	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 4}', "utf8");
 
 	await assert.rejects(
 		() => writeExcludedModels(host.services.agentDir, ["openai-codex"]),
 		/Workflow Policy excludedModels entries must be/,
 	);
-	assert.equal(await readFile(policyPath, "utf8"), '{"maxConcurrentAgentRuns": 4}');
+	assert.equal(await readFile(policyPath, "utf8"), '{"maxPendingDeliveriesPerAgent": 4}');
 
 	await writeFile(policyPath, "{not json", "utf8");
 	await assert.rejects(

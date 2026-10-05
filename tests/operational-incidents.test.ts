@@ -628,176 +628,6 @@ test("human input earns no free reminder when the Agent stalls after deselection
 	}
 });
 
-test("an overdue root call starts a Moderator outside full child capacity", async (t) => {
-	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-"));
-	const toolStartedPath = join(cwd, "execution-gate.started");
-	const toolReleasePath = join(cwd, "execution-gate.released");
-	const executionGateExtensionPath = join(cwd, "execution-gate-tool.mjs");
-	await writeFile(
-		executionGateExtensionPath,
-		renderProcessExecutionGateExtension(toolStartedPath, toolReleasePath),
-		"utf8",
-	);
-	const releaseTool = () => writeFile(toolReleasePath, "released", "utf8");
-	t.after(releaseTool);
-	let releaseModerator!: () => void;
-	const moderatorGate = new Promise<void>((resolve) => {
-		releaseModerator = resolve;
-	});
-	t.after(() => releaseModerator());
-	const clock = new ControllableOperationReviewClock();
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
-		persistent: true,
-		processVisibleModel: true,
-		implicitModeratorResponses: false,
-		cwd,
-		additionalExtensionPaths: [
-			executionGateExtensionPath,
-		],
-	});
-	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	let coordinator!: WorkflowCoordinator;
-	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-durable-subagents>",
-		workflowPolicy: new WorkflowPolicyStore(
-			parseWorkflowPolicy(
-				'{"maxConcurrentAgentRuns":1,"operationReviewIntervalMs":1000}',
-			),
-		),
-		operationReviewClock: clock,
-	});
-	const owner = coordinator.forAgent(identity.agentId);
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("execution_gate", {}, { id: "overdue-root-call" }),
-			{ stopReason: "toolUse" },
-		),
-		async (context) => {
-			const content = context.messages.flatMap((message) => {
-				if (message.role !== "user") return [];
-				if (typeof message.content === "string") return [message.content];
-				return message.content.flatMap((part) =>
-					part.type === "text" ? [part.text] : []
-				);
-			}).find((candidate) => candidate.includes('"kind":"operation_review"'));
-			assert.ok(content);
-			const trigger = (JSON.parse(content) as {
-				trigger: {
-					toolCall: { agentId: string; entryId: string; toolCallId: string };
-				};
-			}).trigger;
-			await moderatorGate;
-			return fauxAssistantMessage(
-				fauxToolCall(
-					"moderator_control",
-					{
-						operation: "renew_review_deadline",
-						toolCall: trigger.toolCall,
-						nextReviewInMs: 500,
-						rationale: "The exact call remains safe to observe for another short interval.",
-					},
-					{ id: "renew-overdue-root-call" },
-				),
-				{ stopReason: "toolUse" },
-			);
-		},
-		fauxAssistantMessage("The exact review interval was renewed."),
-		fauxAssistantMessage("The renewed interval expired and requires fresh review."),
-	]);
-
-	const child = await spawnFromView(
-		host.session,
-		owner,
-		"spawn-operation-review-agent",
-		"Keep the Creation Request open while one root call remains unresolved.",
-	);
-	await waitForCondition(async () => fileExists(toolStartedPath));
-	clock.advanceBy(1_000);
-	await coordinator.forAgent(child.agentId).reachSafeBoundary();
-
-	const moderator = await waitForModeratorKind(host, "operation_review");
-	assert.equal(await fileExists(toolReleasePath), false);
-	const agentView = await owner.openAgentView(child.agentId);
-	assert.ok(agentView);
-	const childTranscriptPathBeforeReview = owner.status(child.agentId)
-		.primaryEvidence.transcriptPath;
-	assert.ok(childTranscriptPathBeforeReview);
-	assert.match(
-		JSON.stringify(SessionManager.open(childTranscriptPathBeforeReview).getEntries()),
-		/Keep the Creation Request open/,
-	);
-	assert.equal(await owner.openAgentView(moderator.id), undefined);
-	// A hidden child bypasses background parsing (docs/child-ui-context.md), and
-	// parsing follows screen consumers since 9acb31e: a test that reads this
-	// projection must hold the same observation the mounted view surface takes.
-	await agentView.projection().screenView.begin();
-	assert.match(
-		stripTerminalSequences(
-			agentView.projection().presentation.render(240).join("\n"),
-		),
-		/operation_review/,
-	);
-	releaseModerator();
-	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === "agent-coordination.moderator-input",
-	);
-	assert.ok(inputEntry?.type === "custom_message" && typeof inputEntry.content === "string");
-	const input = JSON.parse(inputEntry.content) as {
-		trigger: {
-			kind: string;
-			toolCall: { agentId: string; entryId: string; toolCallId: string };
-			reviewIntervalMs: number;
-		};
-	};
-	assert.deepEqual(input.trigger, {
-		kind: "operation_review",
-		toolCall: {
-			agentId: child.agentId,
-			entryId: input.trigger.toolCall.entryId,
-			toolCallId: "overdue-root-call",
-		},
-		reviewIntervalMs: 1_000,
-	});
-	const childTranscriptPath = owner.status(child.agentId).primaryEvidence.transcriptPath;
-	assert.ok(childTranscriptPath);
-	assert.equal(
-		SessionManager.open(childTranscriptPath).getEntries().some(
-			(entry) =>
-				entry.id === input.trigger.toolCall.entryId &&
-				entry.type === "message" &&
-				entry.message.role === "assistant",
-		),
-		true,
-	);
-	const renewal = await waitForTranscriptEntry(
-		moderator.path,
-		(entry) =>
-			entry.type === "message" &&
-			entry.message.role === "toolResult" &&
-			entry.message.toolCallId === "renew-overdue-root-call",
-	);
-	assert.ok(renewal.type === "message" && renewal.message.role === "toolResult");
-	assert.deepEqual(renewal.message.details, {
-		disposition: "renewed",
-		toolCall: input.trigger.toolCall,
-		nextReviewInMs: 500,
-	});
-
-	clock.advanceBy(499);
-	await coordinator.forAgent(child.agentId).reachSafeBoundary();
-	assert.equal((await findModerators(host)).length, 1);
-	clock.advanceBy(1);
-	await coordinator.forAgent(child.agentId).reachSafeBoundary();
-	assert.equal((await findModerators(host)).length, 2);
-
-	await releaseTool();
-	await agentView.close();
-	await coordinator.shutdown(async () => host.runtime.dispose());
-});
-
 test("an unregistered tool name beside a parked parallel root call keeps that batch under review", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-unknown-name-"));
 	const toolStartedPath = join(cwd, "execution-gate.started");
@@ -825,7 +655,7 @@ test("an unregistered tool name beside a parked parallel root call keeps that ba
 		entryModulePath: "<inline:pi-durable-subagents>",
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy(
-				'{"maxConcurrentAgentRuns":1,"operationReviewIntervalMs":1000}',
+				'{"operationReviewIntervalMs":1000}',
 			),
 		),
 		operationReviewClock: clock,
@@ -861,7 +691,7 @@ test("an unregistered tool name beside a parked parallel root call keeps that ba
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("one failed provider request suspends an answer-obligated Run without regenerating it or withholding capacity", async (t) => {
+test("one failed provider request suspends an answer-obligated Run without regenerating it", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-run-suspension-"));
 	const agentDir = join(cwd, ".pi-agent");
 	await mkdir(agentDir, { recursive: true });
@@ -882,9 +712,6 @@ test("one failed provider request suspends an answer-obligated Run without regen
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-durable-subagents>",
-		workflowPolicy: new WorkflowPolicyStore(
-			parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}'),
-		),
 	});
 	const owner = coordinator.forAgent(identity.agentId);
 	let failedChildProviderRequests = 0;
@@ -905,7 +732,7 @@ test("one failed provider request suspends an answer-obligated Run without regen
 						"400 invalid_request_error: deterministic answer-obligated generation failure",
 				});
 			}
-			return fauxAssistantMessage("The unrelated Run made progress.");
+			return fauxAssistantMessage("Another Run made progress.");
 		},
 	);
 	host.model.setResponses(routedResponses);
@@ -946,37 +773,6 @@ test("one failed provider request suspends an answer-obligated Run without regen
 		await assert.rejects(
 			coordinator.forAgent(affected.agentId).beginExecution(),
 			/run_suspended/,
-		);
-
-		// The stop releases the execution permit, so an unrelated Run is admitted
-		// while the exact suspended Run stays retained.
-		const unrelated = await spawnFromView(
-			host.session,
-			owner,
-			"spawn-unrelated-run",
-			"Make progress while another Run is suspended.",
-		);
-		await waitForCondition(async () => {
-			const path = await sessionPathFor(host, unrelated.agentId).catch(
-				() => undefined,
-			);
-			if (!path) return false;
-			return JSON.stringify(SessionManager.open(path).getEntries()).includes(
-				"The unrelated Run made progress.",
-			);
-		});
-		assert.equal(
-			runSuspension(owner.status(affected.agentId).run)?.reason,
-			"runtime_error",
-		);
-		// Remove the unrelated Run before the cleanup queue so it cannot consume
-		// another response.
-		await controlFromView(host.session, owner, "terminate-unrelated-run", {
-			operation: "terminate",
-			agentId: unrelated.agentId,
-		});
-		await waitForCondition(() =>
-			owner.status(unrelated.agentId).run.phase === "dormant"
 		);
 
 		// Cancelling the Request is the requester's own withdrawal, but a responder
@@ -3810,7 +3606,7 @@ test("blocked Delivery final upstream obligation clearance releases handling wit
 	assert.equal((await findModerators(host)).length, 1);
 });
 
-test("blocked Delivery follows existing obligations and does not time active recipient or capacity waiting", async (t) => {
+test("blocked Delivery follows existing obligations and does not time an active recipient", async (t) => {
 	const clock = new ControllableOperationReviewClock();
 	let releaseOwner!: () => void;
 	const ownerGate = new Promise<void>((resolve) => { releaseOwner = resolve; });
@@ -3818,7 +3614,7 @@ test("blocked Delivery follows existing obligations and does not time active rec
 	let ownerStarted = false;
 	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
 		deliveryProgressClock: clock,
-		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"maxConcurrentAgentRuns":1,"deliveryProgressIntervalMs":1000}')),
+		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}')),
 	});
 	const route = async (context: Context) => {
 		const messages = JSON.stringify(context.messages);
@@ -3873,54 +3669,6 @@ test("blocked Delivery upstream Human waiting excludes moderation without timing
 	await owner.reachSafeBoundary();
 	clock.advanceBy(100_000);
 	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
-});
-
-test("blocked Delivery execution capacity wait leaves an obligated parked parent unmoderated", async (t) => {
-	const clock = new ControllableOperationReviewClock();
-	let releaseParent!: () => void;
-	let releaseCapacity!: () => void;
-	const parentGate = new Promise<void>((resolve) => { releaseParent = resolve; });
-	const capacityGate = new Promise<void>((resolve) => { releaseCapacity = resolve; });
-	t.after(() => { releaseParent(); releaseCapacity(); });
-	let parentStarted = false;
-	let capacityStarted = false;
-	let leafStarted = false;
-	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
-		deliveryProgressClock: clock,
-		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"maxConcurrentAgentRuns":1,"deliveryProgressIntervalMs":1000}')),
-	});
-	const route = async (context: Context) => {
-		const messages = JSON.stringify(context.messages);
-		if (messages.includes("unrelated-capacity-work")) {
-			capacityStarted = true;
-			await capacityGate;
-			return fauxAssistantMessage("Capacity work finished.");
-		}
-		if (messages.includes("capacity-parent-work")) {
-			if (!messages.includes('"id":"capacity-leaf-spawn"')) {
-				parentStarted = true;
-				await parentGate;
-				return fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request",request: "capacity-leaf-work"}, {id: "capacity-leaf-spawn"}), {stopReason: "toolUse"});
-			}
-			return fauxAssistantMessage(fauxToolCall("agent_wait", {}, {id: "capacity-parent-wait"}), {stopReason: "toolUse"});
-		}
-		leafStarted = true;
-		return fauxAssistantMessage("Leaf work began.");
-	};
-	host.model.setResponses(Array.from({length: 12}, () => route));
-	const parent = await spawnFromView(host.session, owner, "capacity-parent", "capacity-parent-work");
-	await waitForCondition(() => parentStarted);
-	await spawnFromView(host.session, owner, "capacity-holder", "unrelated-capacity-work");
-	releaseParent();
-	await waitForCondition(() => {
-		const run = owner.status(parent.agentId).run;
-		return capacityStarted && run.phase === "live" && run.attention === "agent_wait";
-	});
-	await owner.reachSafeBoundary();
-	clock.advanceBy(100_000);
-	await owner.reachSafeBoundary();
-	assert.equal(leafStarted, false, "leaf is still legitimately waiting behind the active capacity holder");
-	assert.equal((await findModerators(host)).length, 0);
 });
 
 test("moderation inspection deadline reports Owner attention while the inspection Promise remains blocked", async (t) => {

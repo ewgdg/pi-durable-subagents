@@ -544,13 +544,12 @@ test("ordinary and Moderator extensions preserve local lifecycle operation order
 				["guard-human-result", toolResultMessage],
 				"reconcile-human-results",
 				"reconcile-committed-results",
-				"ensure-execution",
+				"assert-not-shut-down-or-suspended",
 				["begin-tool", "tool-call-2", "bash"],
 				"reconcile-human-results",
 				"reconcile-committed-results",
 				"reach-safe-boundary",
 				"reconcile-committed-results",
-				"end-execution",
 				"reconcile-human-results",
 				"reconcile-human-results",
 				"reconcile-committed-results",
@@ -790,17 +789,14 @@ function localLifecycleView(calls: unknown[]) {
 		reconcileCommittedToolResults() {
 			calls.push("reconcile-committed-results");
 		},
-		async ensureExecution() {
-			calls.push("ensure-execution");
+		assertNotShutDownOrSuspended() {
+			calls.push("assert-not-shut-down-or-suspended");
 		},
 		beginToolExecution(toolCallId: string, toolName: string) {
 			calls.push(["begin-tool", toolCallId, toolName]);
 		},
 		async reachSafeBoundary() {
 			calls.push("reach-safe-boundary");
-		},
-		endExecution() {
-			calls.push("end-execution");
 		},
 	};
 }

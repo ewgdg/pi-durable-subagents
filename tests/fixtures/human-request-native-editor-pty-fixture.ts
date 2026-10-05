@@ -101,10 +101,9 @@ const view = {
 	refreshTranscriptFacts() {},
 	async reachSafeBoundary() {},
 	async beginExecution() {},
-	async ensureExecution() {},
+	assertNotShutDownOrSuspended() {},
 	beginToolExecution() {},
 	reconcileCommittedToolResults() {},
-	endExecution() {},
 	async spawn() { throw new Error("unused"); },
 } as unknown as OrdinaryAgentCoordinatorView;
 

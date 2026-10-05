@@ -23,10 +23,6 @@ import type { AgentWaitAnswer } from "../src/protocol/agent-wait.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { answerSourceDeliveryRequestId } from "../src/protocol/request-resolution.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import {
-	WorkflowPolicyStore,
-	parseWorkflowPolicy,
-} from "../src/policy/workflow-policy.ts";
 import type { AgentRunState } from "../src/runtime/agent-runtime-supervisor.ts";
 import { registerOwnerAgentTools } from "../src/tools/owner-surfaces.ts";
 import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
@@ -2499,7 +2495,7 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "answer" ? "confirmed_failure" : undefined,
-	}, undefined, {
+	}, {
 		beforeResultCommit: ({ failExactRun }) => {
 			resultCommitBoundaryReached = true;
 			failExactRun();
@@ -2620,7 +2616,6 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 	const harness = await createDormantChildHarness(
 		t,
 		{},
-		undefined,
 		{
 			beforeResultCommit: ({ toolCallId, failExactRun }) => {
 				if (toolCallId !== waitToolCallId) return;
@@ -2759,9 +2754,6 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 });
 
 test("Agent Wait parks the Owner Run until the pending Answer commits", async (t) => {
-	const policy = new WorkflowPolicyStore(
-		parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}'),
-	);
 	const scheduledReconciliations: number[] = [];
 	let cancelledReconciliations = 0;
 	const clock: AgentWaitClock = {
@@ -2777,9 +2769,9 @@ test("Agent Wait parks the Owner Run until the pending Answer commits", async (t
 			operation === "answer"
 				? "confirmed_failure"
 				: undefined,
-	}, policy, undefined, clock);
-	await cancelHarnessCreationRequest(harness, "cancel-creation-before-capacity-wait");
-	const requestToolCallId = "request-before-capacity-wait";
+	}, undefined, clock);
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-agent-wait");
+	const requestToolCallId = "request-before-agent-wait";
 	const requestInput = {
 		title: "Fixture request",
 		operation: "request" as const,
@@ -3007,9 +2999,6 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 	const harness = await createDormantChildHarness(
 		t,
 		{},
-		new WorkflowPolicyStore(
-			parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}'),
-		),
 		undefined,
 		undefined,
 		() => {
@@ -3422,7 +3411,6 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 				}
 			},
 		},
-		undefined,
 		{
 			beforePreemptionDecision: () => {
 				raceBoundaryChecks += 1;
@@ -3647,7 +3635,6 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 	const harness = await createDormantChildHarness(
 		t,
 		{},
-		undefined,
 		undefined,
 		clock,
 	);
@@ -4890,7 +4877,6 @@ function unconfirmedRequestReceipt(
 async function createDormantChildHarness(
 	t: TestCleanupRegistrar,
 	messageBoundaryHooks: MessageBoundaryHooks = {},
-	workflowPolicy?: WorkflowPolicyStore,
 	agentWaitBoundaryHooks?: AgentWaitBoundaryHooks,
 	agentWaitClock?: AgentWaitClock,
 	onModeratorRunStart?: () => void,
@@ -4920,7 +4906,6 @@ async function createDormantChildHarness(
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
 		messageBoundaryHooks,
-		workflowPolicy,
 		agentWaitBoundaryHooks,
 		agentWaitClock,
 	});

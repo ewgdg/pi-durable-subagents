@@ -1133,7 +1133,7 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 		waits = new AgentWaitCoordinator({
 			agents, messages, boundaryHooks: waitBoundaryHooks,
 			clock: { schedule: (_delay, callback) => { timer = callback; return () => { timer = undefined; }; } },
-			suspendExecution: () => undefined, resumeExecution: async () => undefined,
+			assertNotShutDownOrSuspended: () => undefined,
 		});
 	}
 	install();

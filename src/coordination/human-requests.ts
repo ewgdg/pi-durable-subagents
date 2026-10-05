@@ -68,7 +68,6 @@ export class HumanRequestCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #boundaryHooks: HumanRequestBoundaryHooks;
 	readonly #interruptRun: (record: AgentRecord) => void;
-	readonly #suspendExecution: (record: AgentRecord) => void;
 	readonly #beginHumanWaiting: (source: ToolCallPointer) => void;
 	readonly #beginHumanResultCommit: (source: ToolCallPointer) => void;
 	readonly #onAttentionChanged: () => void;
@@ -79,7 +78,6 @@ export class HumanRequestCoordinator {
 		ownerIdentity: OwnerIdentity;
 		boundaryHooks?: HumanRequestBoundaryHooks;
 		interruptRun(record: AgentRecord): void;
-		suspendExecution(record: AgentRecord): void;
 		beginHumanWaiting(source: ToolCallPointer): void;
 		beginHumanResultCommit(source: ToolCallPointer): void;
 		onAttentionChanged?(): void;
@@ -88,7 +86,6 @@ export class HumanRequestCoordinator {
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#interruptRun = options.interruptRun;
-		this.#suspendExecution = options.suspendExecution;
 		this.#beginHumanWaiting = options.beginHumanWaiting;
 		this.#beginHumanResultCommit = options.beginHumanResultCommit;
 		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
@@ -152,7 +149,6 @@ export class HumanRequestCoordinator {
 		);
 		try {
 			record.host.beginInputRequired(handle, request.requestId);
-			this.#suspendExecution(record);
 			this.#pendingByRequestId.set(request.requestId, pending);
 			this.#beginHumanWaiting(request.source);
 			this.#onAttentionChanged();

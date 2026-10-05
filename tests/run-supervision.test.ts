@@ -1154,8 +1154,8 @@ test("shutdown fences Run, tool, control, and Human Request admission", async (t
 		() => harness.ownerView.beginExecution(),
 		/host_shutting_down/,
 	);
-	await assert.rejects(
-		() => harness.ownerView.ensureExecution(),
+	assert.throws(
+		() => harness.ownerView.assertNotShutDownOrSuspended(),
 		/host_shutting_down/,
 	);
 	assert.throws(

@@ -194,15 +194,9 @@ export function participantLifecycleHandlers(
 			await resolveView().refreshTranscriptFacts();
 			resolveView().reconcileHumanToolResults();
 			resolveView().reconcileCommittedToolResults();
-			await resolveView().ensureExecution();
+			resolveView().assertNotShutDownOrSuspended();
 			resolveView().beginToolExecution(input.toolCallId, input.toolName);
 		},
-		// Settlement reconciliation must not admit model-execution capacity. Pi runs
-		// agent_end before agent_before_settle, so executionEnded already released
-		// this execution permit; re-admitting here would hold quota while settled
-		// (starving maxConcurrentAgentRuns) and make the continuation agent_start
-		// beginExecution throw already-holds-capacity. Per-turn sibling admission
-		// stays in rootToolExecutionStarted above.
 		async safeBoundaryReached() {
 			await resolveView().refreshTranscriptFacts();
 			resolveView().reconcileHumanToolResults();
@@ -214,7 +208,6 @@ export function participantLifecycleHandlers(
 		async executionEnded() {
 			await resolveView().refreshTranscriptFacts();
 			resolveView().reconcileCommittedToolResults();
-			resolveView().endExecution();
 			resolveView().reconcileHumanToolResults();
 		},
 	};
