@@ -6,16 +6,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 
 import {
-	participantCoordinatorHandlers,
-	registerOrdinaryAgentSurfaces,
-} from "../src/tools/owner-surfaces.ts";
-import {
 	participantCoordinationToolSchemas,
 	registerParticipantCoordinationTools,
 	type ParticipantCoordinationRole,
 	type ParticipantCoordinationToolHandlers,
 } from "../src/tools/participant-coordination-tools.ts";
-import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
 import {
 	renderAgentTemplatePromptGuide,
 } from "../src/tools/agent-template-prompt-guide.ts";
@@ -694,58 +689,6 @@ test("participant registrar preserves handler errors and Moderator control routi
 		{ type: "text", text: JSON.stringify(moderatorReceipt) },
 	]);
 	await host.runtime.dispose();
-});
-
-test("ordinary participant snapshot requests refresh the retained Runtime snapshot", async () => {
-	const preparedSnapshot = { templates: [] };
-	const refreshedSnapshot = {
-		templates: [{
-			name: "reloaded-template",
-			systemPromptMode: "append" as const,
-			loadContextFiles: true,
-		}],
-	};
-	let refreshCount = 0;
-	const view = {
-		agentTemplateSnapshot: () => preparedSnapshot,
-		async refreshAgentTemplateSnapshot() {
-			refreshCount += 1;
-			return refreshedSnapshot;
-		},
-	} as unknown as OrdinaryAgentCoordinatorView;
-	const routed = participantCoordinatorHandlers("ordinary", () => view);
-
-	assert.equal(await routed.agentTemplateSnapshot(true), refreshedSnapshot);
-	assert.equal(refreshCount, 1);
-});
-
-test("ordinary surface composes its prepared Template snapshot and /agents with the participant registrar", async (t) => {
-	const direct = await createRegistrarHost(t, "ordinary", handlers);
-	const preparedView = () => ({
-		agentTemplateSnapshot: () => ({
-			templates: [],
-		}),
-	}) as unknown as OrdinaryAgentCoordinatorView;
-	const composed = await createTestOwnerHost(t, (pi) => {
-		registerOrdinaryAgentSurfaces(pi, preparedView);
-	});
-
-	assert.ok(composed.session.extensionRunner.getCommand("agents"));
-	assert.deepEqual(
-		composed.session.getActiveToolNames().sort(),
-		[...roleToolNames.ordinary].sort(),
-	);
-	for (const toolName of roleToolNames.ordinary) {
-		const directTool = direct.session.getToolDefinition(toolName);
-		const composedTool = composed.session.getToolDefinition(toolName);
-		assert.ok(directTool, toolName);
-		assert.ok(composedTool, toolName);
-		assert.equal(composedTool.parameters, directTool.parameters, toolName);
-		assert.equal(typeof composedTool.renderCall, typeof directTool.renderCall, toolName);
-		assert.equal(typeof composedTool.renderResult, typeof directTool.renderResult, toolName);
-	}
-
-	await Promise.all([direct.runtime.dispose(), composed.runtime.dispose()]);
 });
 
 async function createRegistrarHost<Role extends ParticipantCoordinationRole>(

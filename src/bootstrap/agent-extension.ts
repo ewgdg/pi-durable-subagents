@@ -2,94 +2,24 @@ import type {
 	AgentSessionRuntime,
 	Extension,
 	ExtensionAPI,
-	ExtensionFactory,
 	ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 
 import type {
 	HumanPresentationCoordinatorView,
-	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
-import {
-	registerAgentsCommand,
-	registerModeratorAgentSurfaces,
-	registerOrdinaryAgentSurfaces,
-} from "../tools/owner-surfaces.ts";
-import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
+import { createViewBackedParticipantHandlers } from "../coordination/view-backed-participant-handlers.ts";
+import { registerAgentsCommand } from "../tools/owner-surfaces.ts";
 import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import {
 	installAgentActivityDock,
 	type AgentActivityDockOptions,
 	type AgentActivitySource,
 } from "../presentation/agent-activity-surface.ts";
-import {
-	registerParticipantLifecycle,
-	type ParticipantLifecycleHandlers,
-} from "../pi-integration/participant-lifecycle.ts";
-import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
+import { registerParticipantLifecycle } from "../pi-integration/participant-lifecycle.ts";
 import { bindPrimarySteeringAdmission } from "../pi-integration/primary-steering-admission.ts";
-import { disposeSessionStartup, registerSessionStartup } from "../pi-integration/session-startup.ts";
-import { extensionCommandAction } from "../pi-integration/extension-command-action.ts";
-
-export function createAgentBoundExtension(
-	resolveView: () => OrdinaryAgentCoordinatorView,
-): ExtensionFactory {
-	return createParticipantBoundExtension(
-		resolveView,
-		registerOrdinaryAgentSurfaces,
-	);
-}
-
-export function createModeratorBoundExtension(
-	resolveView: () => ModeratorAgentCoordinatorView,
-): ExtensionFactory {
-	return createParticipantBoundExtension(
-		resolveView,
-		registerModeratorAgentSurfaces,
-	);
-}
-
-export function createAgentActivityExtension(
-	resolveView: () => HumanPresentationCoordinatorView,
-): ExtensionFactory {
-	return (pi) => registerAgentActivityDock(pi, resolveView);
-}
-
-function createParticipantBoundExtension<
-	View extends OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
->(
-	resolveView: () => View,
-	registerSurfaces: (pi: ExtensionAPI, resolveView: () => View) => void,
-): ExtensionFactory {
-	return (pi) => {
-		registerSessionStartup(pi);
-		registerMessageDeliveryRenderer(
-			pi,
-			(agentId) => resolveView().agentLabel(agentId),
-		);
-		registerParticipantNativeSessionPolicy(pi);
-		registerSurfaces(pi, resolveView);
-		registerParticipantLifecycle(
-			pi,
-			participantLifecycleHandlers(resolveView),
-		);
-	};
-}
-
-function registerAgentActivityDock(
-	pi: ExtensionAPI,
-	resolveView: () => HumanPresentationCoordinatorView,
-): void {
-	pi.on("session_start", (_event, ctx) => {
-		installResolvedAgentActivityDock(ctx.ui, resolveView, {
-			openAgentsMenu: extensionCommandAction(pi, "/agents"),
-		});
-	});
-	// AgentSession publishes model changes only through the extension event path;
-	// forward that native invalidation to every scoped activity subscriber.
-	pi.on("model_select", () => resolveView().refreshAgentActivity());
-}
+import { disposeSessionStartup } from "../pi-integration/session-startup.ts";
 
 export function installResolvedAgentActivityDock(
 	ui: ExtensionUIContext,
@@ -122,7 +52,7 @@ export function bindHiddenOwnerAgentExtension(options: {
 	// Owner, the same extension becomes its hidden identity-bound Owner surface.
 	ownerExtension.hidden = true;
 	registerAgentsCommand(pi, resolveView, "admitted", resolveView);
-	const lifecycleHandlers = participantLifecycleHandlers(resolveView);
+	const lifecycleHandlers = createViewBackedParticipantHandlers("owner", resolveView).lifecycle;
 	const unbindPrimarySteeringAdmission = bindPrimarySteeringAdmission(
 		runtime.session,
 		() => lifecycleHandlers.primaryInputQueued(),
@@ -167,51 +97,4 @@ function requireOwnerAgentExtension(runtime: AgentSessionRuntime): Extension {
 		throw new Error("Incompatible Pi host: cannot bind the Owner Agent extension");
 	}
 	return matchingExtensions[0]!;
-}
-
-export function participantLifecycleHandlers(
-	resolveView: () => OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
-): ParticipantLifecycleHandlers {
-	return {
-		executionStarted: async (submissionSequence) => {
-			await resolveView().beginExecution(submissionSequence);
-			return resolveView().obligationFrames();
-		},
-		humanInputSubmitted: (input) =>
-			resolveView().resumeFromHuman(
-				input.text,
-				input.images,
-				input.submissionSequence,
-			),
-		primaryInputQueued: () => resolveView().primaryInputQueued(),
-		async humanInputMode() {
-			return resolveView().humanInputMode();
-		},
-		async toolResultCommitting(input) {
-			await resolveView().refreshTranscriptFacts();
-			return resolveView().guardToolResult(input.message);
-		},
-		// A previous sequential tool result is committed before Pi admits the next
-		// sibling. Reconcile here so input-required attention cannot cross that barrier.
-		async rootToolExecutionStarted(input) {
-			await resolveView().refreshTranscriptFacts();
-			resolveView().reconcileHumanToolResults();
-			resolveView().reconcileCommittedToolResults();
-			resolveView().assertNotShutDownOrSuspended();
-			resolveView().beginToolExecution(input.toolCallId, input.toolName);
-		},
-		async safeBoundaryReached() {
-			await resolveView().refreshTranscriptFacts();
-			resolveView().reconcileHumanToolResults();
-			resolveView().reconcileCommittedToolResults();
-			await resolveView().reachSafeBoundary();
-		},
-		// Aborted and failed turns may not reach turn_end. agent_end follows all native
-		// message commits, so it safely reconciles their final Human result as well.
-		async executionEnded() {
-			await resolveView().refreshTranscriptFacts();
-			resolveView().reconcileCommittedToolResults();
-			resolveView().reconcileHumanToolResults();
-		},
-	};
 }

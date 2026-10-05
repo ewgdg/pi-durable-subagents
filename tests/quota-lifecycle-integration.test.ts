@@ -8,7 +8,7 @@ import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import type { AgentRunState } from "../src/runtime/agent-runtime-host.ts";
 import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
-import { participantLifecycleHandlers } from "../src/bootstrap/agent-extension.ts";
+import { createViewBackedParticipantHandlers } from "../src/coordination/view-backed-participant-handlers.ts";
 import { registerParticipantLifecycle } from "../src/pi-integration/participant-lifecycle.ts";
 
 function suspension(run: AgentRunState) { return run.phase === "dormant" ? undefined : run.suspension; }
@@ -28,7 +28,7 @@ async function until(predicate: () => boolean, description: string) {
 async function harness(t: TestContext, retry = false, nativeOwnerLifecycle = false) {
 	let view!: OrdinaryAgentCoordinatorView;
 	const host = await createUnboundTestOwnerHost(t, pi => {
-		if (nativeOwnerLifecycle) registerParticipantLifecycle(pi, participantLifecycleHandlers(() => view));
+		if (nativeOwnerLifecycle) registerParticipantLifecycle(pi, createViewBackedParticipantHandlers("owner", () => view).lifecycle);
 	}, {
 		persistent: true, processVisibleModel: true,
 		additionalExtensionPaths: [fileURLToPath(new URL("./fixtures/quota-evidence-extension.ts", import.meta.url))],

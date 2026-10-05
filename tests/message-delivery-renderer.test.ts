@@ -10,8 +10,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
-import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
 import {
 	MESSAGE_DELIVERY_CUSTOM_TYPE,
 	type ModelVisibleMessage,
@@ -283,20 +281,8 @@ test("a delivered body's own framing whitespace never renders", () => {
 	}
 });
 
-test("Owner and participant extensions register the Message Delivery renderer", async (t) => {
-	const unavailableView = () => {
-		throw new Error("Renderer registration does not execute coordination behavior");
-	};
+test("the Owner extension registers the Message Delivery renderer", async (t) => {
 	const ownerHost = await createTestOwnerHost(t, piAgentCoordination);
-	const hosts = [
-		ownerHost,
-		await createTestOwnerHost(
-			t,
-			createAgentBoundExtension(
-				unavailableView as () => OrdinaryAgentCoordinatorView,
-			),
-		),
-	];
 	const ownerRenderer = ownerHost.session.extensionRunner.getMessageRenderer(
 		MESSAGE_DELIVERY_CUSTOM_TYPE,
 	);
@@ -315,16 +301,7 @@ test("Owner and participant extensions register the Message Delivery renderer", 
 	if (!ownerComponent) throw new Error("Owner Message Delivery did not render");
 	const ownerDelivery = ownerComponent.render(80).join("\n");
 	assert.match(ownerDelivery, new RegExp(`from Owner · ${ownerAgentId.slice(-8)}`));
-
-	for (const host of hosts) {
-		assert.equal(
-			typeof host.session.extensionRunner.getMessageRenderer(
-				MESSAGE_DELIVERY_CUSTOM_TYPE,
-			),
-			"function",
-		);
-		await host.runtime.dispose();
-	}
+	await ownerHost.runtime.dispose();
 });
 
 function customDelivery(projections: readonly ModelVisibleMessage[]) {

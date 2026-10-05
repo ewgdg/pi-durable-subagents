@@ -7,14 +7,10 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
-	ExtensionFactory,
 	MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
+import { createViewBackedParticipantHandlers } from "../src/coordination/view-backed-participant-handlers.ts";
 import type {
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
@@ -487,20 +483,18 @@ test("the final Answer does not manufacture a summary continuation", async () =>
 	assert.deepEqual(pi.messages, []);
 });
 
-test("ordinary and Moderator extensions preserve local lifecycle operation order", async (t) => {
-	for (const role of ["ordinary", "moderator"] as const) {
+test("view-backed lifecycle handlers preserve each role's local operation order", async (t) => {
+	for (const role of ["owner", "ordinary", "moderator"] as const) {
 		await t.test(role, async () => {
 			const calls: unknown[] = [];
 			const view = localLifecycleView(calls);
-			const extension = role === "ordinary"
-				? createAgentBoundExtension(
-					() => view as unknown as OrdinaryAgentCoordinatorView,
-				)
-				: createModeratorBoundExtension(
-					() => view as unknown as ModeratorAgentCoordinatorView,
-				);
+			const { lifecycle } = role === "moderator"
+				? createViewBackedParticipantHandlers(role, () => view as unknown as ModeratorAgentCoordinatorView)
+				: role === "owner"
+					? createViewBackedParticipantHandlers(role, () => view as unknown as OrdinaryAgentCoordinatorView)
+					: createViewBackedParticipantHandlers(role, () => view as unknown as OrdinaryAgentCoordinatorView);
 			const pi = new CapturedExtensionApi();
-			await runExtension(extension, pi.api);
+			registerParticipantLifecycle(pi.api, lifecycle);
 			const context = createExtensionContext();
 
 			assert.deepEqual(
@@ -865,6 +859,3 @@ function createExtensionContext(initialEditorText = "") {
 	) as unknown as ExtensionContext & { sessionManager: SessionManager; notifications: typeof notifications };
 }
 
-async function runExtension(extension: ExtensionFactory, pi: ExtensionAPI): Promise<void> {
-await extension(pi);
-}

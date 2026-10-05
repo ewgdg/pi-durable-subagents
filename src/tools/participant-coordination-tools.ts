@@ -2,7 +2,7 @@ import { WORKFLOW_RECOVERY_GUIDANCE, type WorkflowResumeReceipt } from "../proto
 import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import { Text } from "@earendil-works/pi-tui";
-import type { ReportToUserInput } from "../protocol/moderator-report.ts";
+import type { ReportToUserInput, ReportToUserReceipt } from "../protocol/moderator-report.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type {
@@ -233,8 +233,6 @@ type HumanParticipantCoordinationToolHandler = Readonly<{
 	 */
 	holdNativeEditorWhileAsking?(): () => void;
 }>;
-
-export type ReportToUserReceipt = Readonly<{ reportId: string; createdAt: string }>;
 
 type ModeratorParticipantCoordinationToolHandler = Readonly<{
 	reportToUser(toolCallId: string, input: ReportToUserInput): Promise<ReportToUserReceipt>;

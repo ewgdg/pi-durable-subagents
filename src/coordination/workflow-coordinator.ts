@@ -4,9 +4,8 @@ import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import { ModeratorReportStore } from "./moderator-reports.ts";
-import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
+import { validateReportToUserInput, type ReportToUserInput, type ReportToUserReceipt, type ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
-import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
 import type { ObligationFrame } from "../protocol/obligation-focus.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { createRunSuspensionNotice, inspectRunSuspensionNotice } from "../protocol/run-suspension-notice.ts";
@@ -99,12 +98,11 @@ import type {
 } from "../protocol/moderator-control.ts";
 import { isModeratorIdentity, type EntryPointer } from "../protocol/moderator-input.ts";
 import type { OperationReviewClock } from "./operation-review.ts";
-import { participantLifecycleHandlers } from "../bootstrap/agent-extension.ts";
 import type {
 	AgentActivitySnapshot,
 	AgentActivityStatus,
 } from "../presentation/agent-activity-surface.ts";
-import { participantCoordinatorHandlers } from "../tools/owner-surfaces.ts";
+import { createViewBackedParticipantHandlers } from "./view-backed-participant-handlers.ts";
 import type {
 	AgentSearchInput,
 	AgentSearchResult,
@@ -392,8 +390,7 @@ export class WorkflowCoordinator {
 				if (role === "ordinary") {
 					const resolveView = () => this.forAgent(agentId);
 					return {
-						coordination: participantCoordinatorHandlers("ordinary", resolveView),
-						lifecycle: participantLifecycleHandlers(resolveView),
+						...createViewBackedParticipantHandlers("ordinary", resolveView),
 						presentation: createOwnerAgentPresentationHandlers(
 							resolveView,
 							agentId,
@@ -403,8 +400,7 @@ export class WorkflowCoordinator {
 				}
 				const resolveView = () => this.forModerator(agentId);
 				return {
-					coordination: participantCoordinatorHandlers("moderator", resolveView),
-					lifecycle: participantLifecycleHandlers(resolveView),
+					...createViewBackedParticipantHandlers("moderator", resolveView),
 					presentation: createOwnerAgentPresentationHandlers(
 						resolveView,
 						agentId,

@@ -1,6 +1,6 @@
 # Activity presentation
 
-The activity dock displays the latest published Agent status snapshot. Lifecycle, runtime configuration, queue, selection, and attention changes refresh that snapshot through the activity source's change notifications. Editor input, resizing, theme invalidation, and animation redraw the retained snapshot without inspecting transcripts.
+The activity dock displays the latest published Agent status snapshot. Lifecycle, runtime configuration, queue, selection, and attention changes refresh that snapshot through the activity source's change notifications. Pi publishes a native model selection only through its `model_select` extension event, so the Owner's admitted session and each child Agent's bridge forward that event as an activity refresh. Editor input, resizing, theme invalidation, and animation redraw the retained snapshot without inspecting transcripts.
 
 A new dock samples its source when installed, and disposal removes its subscription and animation timer. Active children animate between state changes; settlement stops the timer.
 

@@ -5,7 +5,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type {
 	HumanPresentationCoordinatorView,
-	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
 import { openAgentSelectorSurface, type AgentSelectorAction } from "../presentation/agent-selector-surface.ts";
@@ -21,21 +20,12 @@ import {
 	getAgentsArgumentCompletions,
 	parseAgentsCommandArgument,
 } from "../process-runtime/remote-agent-selector.ts";
-import {
-	registerParticipantCoordinationTools,
-	type AgentObserveInput,
-	type ParticipantCoordinationRole,
-	type ParticipantCoordinationToolHandlers,
-} from "./participant-coordination-tools.ts";
+import { registerParticipantCoordinationTools } from "./participant-coordination-tools.ts";
+import { createViewBackedParticipantHandlers } from "../coordination/view-backed-participant-handlers.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import type { OwnerRecoveryError } from "../bootstrap/owner-recovery-error.ts";
 import { headlessOwnerDiagnostics, openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
 import { openModelPolicySurface } from "../presentation/model-policy-surface.ts";
-
-type AgentCoordinatorView =
-	| OrdinaryAgentCoordinatorView
-	| ModeratorAgentCoordinatorView;
-type ViewResolver = () => AgentCoordinatorView;
 
 const OWNER_AGENT_TOOL_NAMES = new Set([
 	"workflow_resume",
@@ -216,31 +206,6 @@ export function registerAgentsCommand(
 	});
 }
 
-export function registerOrdinaryAgentSurfaces(
-	pi: ExtensionAPI,
-	resolveView: () => OrdinaryAgentCoordinatorView,
-): void {
-	const handlers = participantCoordinatorHandlers("ordinary", resolveView);
-	const resolveAgentLabel = (agentId: string) => resolveView().agentLabel(agentId);
-	registerParticipantCoordinationTools(
-		pi,
-		"ordinary",
-		handlers,
-		resolveAgentLabel,
-		undefined,
-		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
-	);
-	pi.on("session_start", () => registerParticipantCoordinationTools(
-		pi,
-		"ordinary",
-		handlers,
-		resolveAgentLabel,
-		resolveView().agentTemplateSnapshot(),
-		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
-	));
-	registerAgentsCommand(pi, resolveView);
-}
-
 export function registerOwnerAgentTools(
 	pi: ExtensionAPI,
 	resolveView: () => OrdinaryAgentCoordinatorView,
@@ -249,90 +214,9 @@ export function registerOwnerAgentTools(
 	registerParticipantCoordinationTools(
 		pi,
 		"owner",
-		participantCoordinatorHandlers("owner", resolveView),
+		createViewBackedParticipantHandlers("owner", resolveView).coordination,
 		(agentId) => resolveView().agentLabel(agentId),
 		agentTemplateSnapshot,
 		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
 	);
-}
-
-export function registerModeratorAgentSurfaces(
-	pi: ExtensionAPI,
-	resolveView: () => ModeratorAgentCoordinatorView,
-): void {
-	registerParticipantCoordinationTools(
-		pi,
-		"moderator",
-		participantCoordinatorHandlers("moderator", resolveView),
-		(agentId) => resolveView().agentLabel(agentId),
-		undefined,
-		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
-	);
-	registerAgentsCommand(pi, resolveView);
-}
-
-export function participantCoordinatorHandlers(
-	role: "ordinary",
-	resolveView: () => OrdinaryAgentCoordinatorView,
-): ParticipantCoordinationToolHandlers<"ordinary">;
-export function participantCoordinatorHandlers(
-	role: "owner",
-	resolveView: () => OrdinaryAgentCoordinatorView,
-): ParticipantCoordinationToolHandlers<"owner">;
-export function participantCoordinatorHandlers(
-	role: "moderator",
-	resolveView: () => ModeratorAgentCoordinatorView,
-): ParticipantCoordinationToolHandlers<"moderator">;
-export function participantCoordinatorHandlers(
-	role: ParticipantCoordinationRole,
-	resolveView: ViewResolver,
-): ParticipantCoordinationToolHandlers<ParticipantCoordinationRole> {
-	const common = {
-		message: (toolCallId: string, input: Parameters<AgentCoordinatorView["message"]>[1]) =>
-			resolveView().message(toolCallId, input),
-		wait: (
-			toolCallId: string,
-			input: Parameters<AgentCoordinatorView["wait"]>[1],
-			signal: AbortSignal | undefined,
-			onProgress: Parameters<AgentCoordinatorView["wait"]>[3],
-		) => resolveView().wait(toolCallId, input, signal, onProgress),
-		async observe(input: AgentObserveInput) {
-			const view = resolveView();
-			await view.refreshTranscriptFacts();
-			switch (input.operation) {
-				case "status": return view.status(input.agentId);
-				case "search": return view.search(input);
-				case "obligations": return view.openIncomingRequests();
-				case "request": return view.inspectRequest(input.requestId);
-			}
-		},
-		control: (toolCallId: string, input: Parameters<AgentCoordinatorView["control"]>[1]) =>
-			resolveView().control(toolCallId, input),
-	};
-	if (role === "moderator") {
-		const moderatorView = resolveView as () => ModeratorAgentCoordinatorView;
-		return {
-			...common,
-			askUser: (toolCallId, input, signal) =>
-				moderatorView().askHuman(toolCallId, input, signal),
-			reportToUser: (toolCallId, input) => moderatorView().reportToUser(toolCallId, input),
-			moderatorControl: (toolCallId, input) =>
-				moderatorView().moderatorControl(toolCallId, input),
-		};
-	}
-	const ordinaryView = resolveView as () => OrdinaryAgentCoordinatorView;
-	const spawn = (toolCallId: string, input: Parameters<OrdinaryAgentCoordinatorView["spawn"]>[1]) =>
-		ordinaryView().spawn(toolCallId, input);
-	const agentTemplateSnapshot = (refresh = false) => refresh
-		? ordinaryView().refreshAgentTemplateSnapshot()
-		: ordinaryView().agentTemplateSnapshot();
-	return role === "ordinary"
-		? {
-			...common,
-			spawn,
-			agentTemplateSnapshot,
-			askUser: (toolCallId, input, signal) =>
-				ordinaryView().askHuman(toolCallId, input, signal),
-		}
-		: { ...common, spawn, agentTemplateSnapshot, resumeWorkflow: (toolCallId) => ordinaryView().resumeWorkflow(toolCallId) };
 }
