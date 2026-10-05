@@ -83,7 +83,7 @@ Two reasons share this contract:
 
 The exception itself stays visible in the Agent transcript; the suspension adds the stop, not a second copy of the error. A Runtime that was already unavailable is not suspended; it ends as a terminal Run Failure instead.
 
-Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Agent Messages, heartbeat scheduling, and Workflow continuation cannot release it. A new human message in the selected Agent's editor is deliberate resumption, using that message as the resumption instructions. Suspended work and its genuinely blocked dependency path do not generate obligation reminders, stall/deadlock moderation, or Moderator replacements; unrelated incidents remain eligible.
+Suspension preserves Requests, Answer Obligations, and pending work without replaying tools or starting a successor. Ordinary Agent Messages, heartbeat scheduling, and Workflow continuation cannot release it. A new human message in the selected Agent's editor is deliberate resumption, using that message as the resumption instructions. Suspended work is Waiting, and so is any requester whose best dependency branch reaches it, so neither generates obligation reminders, stall/deadlock moderation, or Moderator replacements. A separately stalled leaf still gets its own Obligation Stall.
 
 Address the underlying stop (restore quota, select an available model/account, or correct the failing condition), then explicitly resume:
 
