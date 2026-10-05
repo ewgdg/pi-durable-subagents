@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
-async function ownerRuntime(t: Parameters<typeof createTestOwnerHost>[0]) {
-	const host = await createTestOwnerHost(t, registerSessionStartup, { fauxTokensPerSecond: 100_000 });
+async function ownerRuntime(t: Parameters<typeof createTestOwnerHost>[0], extension?: ExtensionFactory) {
+	const host = await createTestOwnerHost(t, pi => {
+		registerSessionStartup(pi);
+		return extension?.(pi);
+	}, { fauxTokensPerSecond: 100_000 });
 	const runtime = InProcessHostedRuntime.fromSession({ session: host.session, services: host.services, projection: undefined });
 	return { host, runtime };
 }
@@ -39,6 +43,19 @@ test("an Owner Delivery confirms only when the driver proof and the caller's ins
 	const refused = runtime.deliver({ kind: "user", content: "Refused by the caller." }, { inspectCommit: () => false });
 	assert.equal(await refused.transcriptCommit, false);
 	await refused.completion;
+});
+
+test("an Owner user Delivery proves commit by the caller's text rule", { timeout: 5000 }, async t => {
+	const { host, runtime } = await ownerRuntime(t, pi => {
+		pi.on("input", event => ({ action: "transform", text: `${event.text}\n\nAppended by an Owner input extension.` }));
+	});
+	host.model.setResponses([fauxAssistantMessage("Leading handled."), fauxAssistantMessage("Exact handled.")]);
+	const leading = runtime.deliver({ kind: "user", content: "Human input." }, { userCommitText: "leading" });
+	assert.equal(await leading.transcriptCommit, true);
+	await leading.completion;
+	const exact = runtime.deliver({ kind: "user", content: "Human input." }, { userCommitText: "exact" });
+	assert.equal(await exact.transcriptCommit, false);
+	await exact.completion;
 });
 
 test("the Owner Runtime rejects Moderator reminder delivery because Moderators run as child processes", { timeout: 5000 }, async t => {

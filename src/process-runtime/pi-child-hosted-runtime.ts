@@ -188,7 +188,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		}).finally(() => this.#dispatchCompletions.delete(deliveryId));
 		if (!confirmation) return { completion };
 		const transcriptCommit = response.then((result) =>
-			result.transcriptCommitted && confirmation.inspectCommit()
+			result.transcriptCommitted && (confirmation.inspectCommit?.() ?? true)
 		);
 		return { completion, transcriptCommit };
 	}

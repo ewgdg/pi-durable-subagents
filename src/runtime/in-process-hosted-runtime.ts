@@ -81,11 +81,15 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		if (delivery.kind === "user" && delivery.forwardedInput) {
 			bindSessionStartup(this.#session).captureInputHandoff()?.();
 		}
-		const dispatch = this.#driver.deliver(delivery, { proveCommit: confirmation !== undefined });
+		const dispatch = this.#driver.deliver(delivery, {
+			proveCommit: confirmation !== undefined,
+			...(confirmation?.userCommitText === undefined ? {} : { userCommitText: confirmation.userCommitText }),
+		});
 		if (!confirmation) return { completion: dispatch.completion };
 		return {
 			completion: dispatch.completion,
-			transcriptCommit: dispatch.transcriptCommit!.then(committed => committed && confirmation.inspectCommit()),
+			transcriptCommit: dispatch.transcriptCommit!.then(committed =>
+				committed && (confirmation.inspectCommit?.() ?? true)),
 		};
 	}
 

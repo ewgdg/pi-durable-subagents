@@ -246,19 +246,9 @@ export class RunSupervisor {
 		];
 		const delivery = record.host.deliverInLane(
 			{ kind: "user", content, forwardedInput: submissionSequence === undefined ? {} : { submissionSequence } },
-			{
-				inspectCommit: () => {
-					const tail = record.transcript.inspect().entries.at(-1);
-					if (tail?.type !== "message" || tail.message.role !== "user") return false;
-					// Pi normalizes prompt images (re-encoding or omitting them) and appends its
-					// image hints after the text, so only the leading submitted text is stable.
-					const committed = tail.message.content;
-					const committedText = typeof committed === "string"
-						? committed
-						: committed[0]?.type === "text" ? committed[0].text : undefined;
-					return committedText?.startsWith(text) === true;
-				},
-			},
+			// The Owner's own Pi `input` extensions may append to human input before Pi
+			// commits it, so only its leading text proves the commit.
+			{ userCommitText: "leading" },
 		);
 		const committed = await delivery.transcriptCommit;
 		if (!committed) throw new Error("Human input did not commit");
