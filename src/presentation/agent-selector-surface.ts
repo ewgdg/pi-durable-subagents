@@ -24,9 +24,12 @@ import type { HumanAttentionItem } from "../coordination/human-requests.ts";
 import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
 import type { AgentRunSuspension } from "../runtime/agent-runtime-supervisor.ts";
 import {
+	formatAttentionLiveStatus,
 	formatOperationalIncidentHeadline,
 	operationalIncidentRequestEvidence,
 } from "./operational-incident-surface.ts";
+import { attentionInbox } from "./attention-inbox.ts";
+import { findWorkflowOwner, requireWorkflowOwner } from "./agent-selector-projection.ts";
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
 import {
 	formatAgentWorkStatus,
@@ -111,29 +114,6 @@ type AgentSelectorItem = SelectItem & Readonly<{
 	action?: AgentSelectorAction;
 	detailLines?: readonly string[];
 }>;
-
-type AgentRoster = Readonly<{
-	live: readonly AgentRosterStatus[];
-	dormant: readonly AgentRosterStatus[];
-}>;
-
-/**
- * The canonical Owner lookup: the roster Agent whose Agent ID equals its
- * Workflow ID. The Owner exists whatever its Run phase: a stopped Owner Run is
- * Dormant, not absent.
- */
-export function findWorkflowOwner(roster: AgentRoster): AgentRosterStatus | undefined {
-	return [...roster.live, ...roster.dormant].find(
-		(status) => status.agentId === status.workflowId,
-	);
-}
-
-/** The canonical Owner lookup for callers that cannot proceed without an Owner. */
-export function requireWorkflowOwner(roster: AgentRoster): AgentRosterStatus {
-	const owner = findWorkflowOwner(roster);
-	if (!owner) throw new Error("Agent selector roster has no Owner");
-	return owner;
-}
 
 export function openAgentSelectorSurface(
 	ui: ExtensionUIContext,
@@ -396,12 +376,10 @@ class AgentSelectorSurface implements Component {
 			// Wheel now moves selection, so resize keeps the selected row visible.
 			this.#list = this.#createList(true, true);
 		}
+		const liveStatus = this.#attentionInbox().liveStatus;
 		const contentLines: SelectorLine[] = [
 			this.#renderTabs(),
-			{ text: (this.#options.operationalAttention ?? []).some(({ trigger }) => trigger.kind === "moderation_unavailable")
-				? this.#theme.fg("warning", "Moderation Unavailable · live status")
-				: (this.#options.operationalAttention ?? []).some(({ reportSource }) => reportSource !== undefined)
-					? this.#theme.fg("warning", "Operational incident unresolved · live status") : "" },
+			{ text: liveStatus === "none" ? "" : this.#theme.fg("warning", formatAttentionLiveStatus(liveStatus)) },
 			...this.#renderPinnedList(contentWidth),
 			{ text: "" },
 			this.#renderOwnerFooter(),
@@ -698,17 +676,22 @@ class AgentSelectorSurface implements Component {
 		];
 	}
 
+	#attentionInbox() {
+		return attentionInbox({
+			humanAttention: this.#options.humanAttention ?? [],
+			operationalAttention: this.#options.operationalAttention ?? [],
+			reports: this.#options.reports ?? [],
+		});
+	}
+
 	#attentionItems(): AgentSelectorItem[] {
-		const human = (this.#options.humanAttention ?? []).map((attention, index) => ({
+		const items = this.#attentionInbox().items;
+		const human = items.flatMap((item) => item.kind === "human_request" ? [item] : []).map(({ attention, action }, index) => ({
 			value: `human:${attention.requestId}`,
 			label: `DECIDE ${index + 1} · ${attention.agentLabel}`,
 			description: boundedToolPreview(attention.question),
 			kind: "decide" as const,
-			action: {
-				kind: "decide" as const,
-				requestId: attention.requestId,
-				agentId: attention.agentId,
-			},
+			action,
 			detailLines: [
 				"",
 				`Agent ${attention.agentId}`,
@@ -716,24 +699,14 @@ class AgentSelectorSurface implements Component {
 				`Human Request ${attention.requestId}`,
 			],
 		}));
-		const operational = (this.#options.operationalAttention ?? []).filter(({ trigger, reportSource }) => {
-			if (trigger.kind === "moderation_unavailable") return false;
-			// Acknowledging the report must not resurrect the same incident as a second inbox row.
-			return !reportSource || !(this.#options.reports ?? []).some(({ report }) =>
-				report.source.kind === "runtime_diagnostic" && report.source.agentId === reportSource.agentId && report.source.entryId === reportSource.entryId);
-		}).map(
-			(attention, index) => {
+		const operational = items.flatMap((item) => item.kind === "operational_incident" ? [item] : []).map(
+			({ attention, action }, index) => {
 				const requests = operationalIncidentRequestEvidence(attention);
-				const affectedAgentId = attention.affectedAgents.length === 1
-					? attention.affectedAgents[0]!.agentId
-					: undefined;
 				return {
 					value: `operational:${index}`,
 					label: `ATTENTION ${index + 1} · ${formatOperationalIncidentHeadline(attention)}`,
 					kind: "attention" as const,
-					action: affectedAgentId
-						? { kind: "select_agent" as const, agentId: affectedAgentId }
-						: undefined,
+					action,
 					detailLines: [
 						"",
 						...(attention.summary ? [attention.summary] : []),
@@ -753,9 +726,8 @@ class AgentSelectorSurface implements Component {
 				};
 			},
 		);
-		return [...human, ...operational, ...(this.#options.reports ?? [])
-			.filter(({ readAt }) => readAt === undefined)
-			.map((item) => this.#reportItem(item))];
+		const reports = items.flatMap((item) => item.kind === "report" ? [this.#reportItem(item.item)] : []);
+		return [...human, ...operational, ...reports];
 	}
 
 	#reportItem({ report, readAt }: ReportHistoryItem): AgentSelectorItem {

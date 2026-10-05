@@ -2,11 +2,8 @@ import { copyToClipboard, type ExtensionUIContext } from "@earendil-works/pi-cod
 import type { TUI } from "@earendil-works/pi-tui";
 
 import type { RemoteAgentSelectorSnapshot } from "../control/agent-control-protocol.ts";
-import {
-	openAgentSelectorSurface,
-	requireWorkflowOwner,
-	type AgentSelectorAction,
-} from "./agent-selector-surface.ts";
+import { openAgentSelectorSurface, type AgentSelectorAction } from "./agent-selector-surface.ts";
+import { requireWorkflowOwner } from "./agent-selector-projection.ts";
 import { openModeratorReportSurface } from "./moderator-report-surface.ts";
 
 export type AgentsNavigationTarget = "selector" | "owner";

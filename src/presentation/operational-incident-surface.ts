@@ -2,6 +2,7 @@ import {
 	type OperationalIncidentAttention,
 	type OperationalIncidentPresentation,
 } from "../coordination/operational-incidents.ts";
+import type { AttentionLiveStatus } from "./attention-inbox.ts";
 
 export class OperationalIncidentSurface implements OperationalIncidentPresentation {
 	readonly #attentionByConditionKey = new Map<string, OperationalIncidentAttention>();
@@ -46,4 +47,12 @@ export function formatOperationalIncidentKind(
 	return kind.split("_").map(
 		(word) => word[0]!.toUpperCase() + word.slice(1),
 	).join(" ");
+}
+
+export function formatAttentionLiveStatus(
+	status: Exclude<AttentionLiveStatus, "none">,
+): string {
+	return status === "moderation_unavailable"
+		? "Moderation Unavailable · live status"
+		: "Operational incident unresolved · live status";
 }
