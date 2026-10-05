@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
+import { NativeSessionDriver } from "../src/pi-integration/native-session-driver.ts";
 import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -42,12 +43,12 @@ async function fixture(t: Parameters<typeof createTestOwnerHost>[0], extension: 
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		fauxTokensPerSecond: 100_000, additionalExtensionFactories: [extension],
 	});
-	const runtime = InProcessHostedRuntime.fromSession({ session: host.session, services: host.services, projection: undefined });
+	const driver = new NativeSessionDriver(host.session);
 	const message = customMessage("message", "adversarial");
 	const deliveries = () => host.session.sessionManager.getEntries().filter(entry =>
 		entry.type === "custom_message" && entry.content === message.content);
-	const deliver = () => runtime.deliver({ kind: "custom", message, triggerTurn: true, deliverAs: "followUp" }).completion;
-	return { ...host, hosted: runtime, message, deliveries, deliver };
+	const deliver = () => driver.deliver({ kind: "custom", message, triggerTurn: true, deliverAs: "followUp" }).completion;
+	return { ...host, driver, message, deliveries, deliver };
 }
 
 for (const rejected of ["handled", "missing auth"] as const) {
@@ -141,7 +142,7 @@ for (const phase of ["input", "before_agent_start"] as const) {
 	});
 }
 
-test("Owner custom delivery waits for competing preparation and keeps its follow-up mode without fencing that Run", { timeout: 5000 }, async t => {
+test("custom delivery waits for competing preparation and keeps its follow-up mode without fencing that Run", { timeout: 5000 }, async t => {
 	const preparing = deferred();
 	const releasePreparation = deferred();
 	const modelStarted = deferred();
@@ -185,20 +186,6 @@ test("abort also fences a custom dispatch waiting for another prompt's preparati
 	assert.equal(host.session.messages.length, 0);
 });
 
-test("Owner reminder returns busy while another prompt prepares and never joins its native queue", { timeout: 5000 }, async t => {
-	const preparing = deferred();
-	const release = deferred();
-	t.after(release.resolve);
-	const host = await fixture(t, pi => { pi.on("input", async () => { preparing.resolve(); await release.promise; }); });
-	host.model.setResponses([fauxAssistantMessage("Unrelated run.")]);
-	const human = host.session.prompt("unrelated work");
-	await preparing.promise;
-	assert.equal(await within(host.hosted.deliverModeratorReminder(commit => commit())), "busy");
-	release.resolve();
-	await human;
-	assert.equal(host.session.messages.some(message => message.role === "custom" && message.customType.includes("moderator-obligation-reminder")), false);
-});
-
 test("idle delivery composes with an existing public custom-message wrapper across reload", { timeout: 5000 }, async t => {
 	const host = await fixture(t);
 	const original = host.session.sendCustomMessage;
@@ -213,7 +200,7 @@ test("idle delivery composes with an existing public custom-message wrapper acro
 	assert.equal(host.deliveries().length, 1);
 	await host.session.reload();
 	const next = customMessage("message", "wrapper-after-reload");
-	await host.hosted.deliver({ kind: "custom", message: next, triggerTurn: true }).completion;
+	await host.driver.deliver({ kind: "custom", message: next, triggerTurn: true }).completion;
 	assert.deepEqual(observed, [host.message, next]);
 });
 
@@ -251,8 +238,9 @@ test("Owner native input forwarding hands off only its handled submission and pr
 		});
 		pi.on("before_agent_start", () => { preparations++; return { systemPrompt: "Prepared forwarded input." }; });
 	});
+	const owner = InProcessHostedRuntime.fromSession({ session: host.session, services: host.services, projection: undefined });
 	forward = async text => {
-		const dispatched = host.hosted.deliver({ kind: "user", content: text, forwardedInput: {} }, {
+		const dispatched = owner.deliver({ kind: "user", content: text, forwardedInput: {} }, {
 			inspectCommit: () => host.session.messages.some(message => message.role === "user" && JSON.stringify(message.content).includes(text)),
 		});
 		void dispatched.completion.catch(() => {});

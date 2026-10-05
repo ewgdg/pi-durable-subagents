@@ -831,7 +831,11 @@ function createRunResource(options?: {
 		isIdle: true,
 		isStreaming: false,
 		pendingMessageCount: 0,
-		agent: { signal: cancellation.signal },
+		// The Native Session Driver binds Pi's startup admission over these entry points.
+		sessionManager: {},
+		prompt: async () => undefined,
+		sendCustomMessage: async () => undefined,
+		agent: { signal: cancellation.signal, prompt: async () => undefined },
 		getToolDefinition(name: string) {
 			if (name === "read") return { executionMode: "parallel" };
 			if (name === "sequential_tool") return { executionMode: "sequential" };

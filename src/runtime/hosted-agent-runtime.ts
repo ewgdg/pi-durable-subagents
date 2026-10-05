@@ -2,24 +2,17 @@ import type {
 	CommitModeratorReminderIfCurrent,
 	ModeratorReminderOutcome,
 	AgentRuntimeDelivery,
-	AgentRunFailure,
 	AgentRuntimeDeliveryDispatch,
 	AgentRuntimeWorkState,
 	EffectiveRuntimeSnapshot,
 	TranscriptCommitConfirmation,
 } from "./agent-runtime-host.ts";
 import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
-import type { QuotaEvidence } from "./quota-evidence.ts";
+import type { NativeRunEnd } from "../pi-integration/native-session-driver.ts";
 
 export type HostedRuntimeEvent =
 	| Readonly<{ type: "state_changed" }>
-	| Readonly<{
-		type: "agent_end";
-		outcome: "completed" | "aborted" | "error";
-		willRetry: boolean;
-		failure?: AgentRunFailure;
-		quota?: QuotaEvidence;
-	}>
+	| (Readonly<{ type: "agent_end" }> & NativeRunEnd)
 	| Readonly<{ type: "agent_settled" }>;
 
 /** Internal process-neutral adapter owned by one prepared/live host Runtime. */

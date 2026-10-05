@@ -389,3 +389,23 @@ test("idle custom commit fails when the transcript lacks the exact Delivery", { 
 	host.model.setResponses([fauxAssistantMessage("Enriched reminder handled.")]);
 	await assert.rejects(host.driver.commitIdleCustom(customMessage("enriched")), /idle_custom_commit_missing/);
 });
+
+test("compaction follows Pi's edges, not its controller flag that outlives threshold compaction", { timeout: 5000 }, async t => {
+	// A reserve near the faux model's whole context window puts every Run past Pi's threshold.
+	const host = await fixture(t, undefined, {
+		settings: { compaction: { enabled: true, reserveTokens: 16_000, keepRecentTokens: 1 } },
+	});
+	host.model.setResponses([fauxAssistantMessage("Turn fills the context."), fauxAssistantMessage("Compaction summary.")]);
+	const edges: Array<Readonly<{ compacting: boolean; driver: boolean; nativeFlag: boolean }>> = [];
+	host.driver.subscribe(event => {
+		if (event.type === "compaction_changed") {
+			edges.push({ compacting: event.compacting, driver: host.driver.isCompacting(), nativeFlag: host.session.isCompacting });
+		}
+	});
+	await host.session.prompt("Fill the context.");
+	await host.driver.waitForIdle();
+	assert.deepEqual(edges, [
+		{ compacting: true, driver: true, nativeFlag: true },
+		{ compacting: false, driver: false, nativeFlag: true },
+	]);
+});
