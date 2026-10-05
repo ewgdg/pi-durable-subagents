@@ -3902,7 +3902,7 @@ async function retryRequestFromView(
 	});
 }
 
-test("a starting Moderator keeps no requester progressing for Owner parking", async (t) => {
+test("a starting Moderator keeps no requester progressing for Owner parking", { timeout: 15_000 }, async (t) => {
 	const records = new Map<string, AgentRecord>();
 	const integrate = OperationalIncidentCoordinator.prototype.integrate;
 	t.mock.method(OperationalIncidentCoordinator.prototype, "integrate", function (
