@@ -6,6 +6,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
+import { HumanRequestCoordinator } from "../src/coordination/human-requests.ts";
 import { MessageCoordinator } from "../src/coordination/messages.ts";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
@@ -135,6 +136,11 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 		ownerIdentity: identity,
 		sessionFactory,
 		messages,
+		humanRequests: new HumanRequestCoordinator({
+			agents,
+			ownerIdentity: identity,
+			interruptRun() { throw new Error("Unexpected human interruption"); },
+		}),
 		workflowPolicy,
 		integrateAgent() { throw new Error("Unexpected Moderator"); },
 		isShuttingDown: () => shuttingDown,

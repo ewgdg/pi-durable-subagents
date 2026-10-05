@@ -59,6 +59,7 @@ import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import { statusOf, waitingFactsOf, withAgentTranscriptObservations, type AgentRecord } from "./agent-record.ts";
 import type { BlockedDelivery } from "./message-delivery-scheduler.ts";
 import type { MessageCoordinator } from "./messages.ts";
+import type { HumanRequestCoordinator } from "./human-requests.ts";
 import {
 	OperationReviewWatcher,
 	SYSTEM_OPERATION_REVIEW_CLOCK,
@@ -224,6 +225,7 @@ export class OperationalIncidentCoordinator {
 		ownerIdentity: OwnerIdentity;
 		sessionFactory: ProcessChildSessionFactory;
 		messages: MessageCoordinator;
+		humanRequests: HumanRequestCoordinator;
 		workflowPolicy: WorkflowPolicyStore;
 		integrateAgent(record: AgentRecord): void;
 		isShuttingDown(): boolean;
@@ -267,6 +269,11 @@ export class OperationalIncidentCoordinator {
 					this.#messages.answerObligationRequestIds(record).length > 0;
 			},
 			onReviewStateChanged: () => this.#scheduleReconciliation(),
+		});
+		this.#messages.subscribeDeliveryProgress(() => void this.#scheduleReconciliation());
+		options.humanRequests.subscribeHumanWaiting({
+			humanWaitingBegan: (toolCall) => this.#operationReviews.beginHumanWaiting(toolCall),
+			humanResultCommitBegan: (toolCall) => this.#operationReviews.beginHumanResultCommit(toolCall),
 		});
 		if (!options.agents.has(options.ownerIdentity.agentId)) {
 			throw new Error("invariant_violation: Workflow Owner is unavailable");
@@ -455,10 +462,6 @@ export class OperationalIncidentCoordinator {
 		this.#humanInterruptedAgentIds.add(agentId);
 	}
 
-	deliveryProgressChanged(): void {
-		void this.#scheduleReconciliation();
-	}
-
 	/**
 	 * Owner Settlement Parking input. The parked Owner keeps its native prompt
 	 * active, so it stays out of the snapshot: a child awaiting the Owner's Answer
@@ -497,14 +500,6 @@ export class OperationalIncidentCoordinator {
 			toolCall: source,
 			policyIntervalMs: this.#workflowPolicy.current().operationReviewIntervalMs,
 		});
-	}
-
-	beginHumanWaiting(toolCall: ToolCallPointer): void {
-		this.#operationReviews.beginHumanWaiting(toolCall);
-	}
-
-	beginHumanResultCommit(toolCall: ToolCallPointer): void {
-		this.#operationReviews.beginHumanResultCommit(toolCall);
 	}
 
 	reconcileCommittedToolResults(agentId: string): void {

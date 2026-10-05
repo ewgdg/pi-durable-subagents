@@ -2,6 +2,7 @@ import type { ReportToUserInput } from "../src/protocol/moderator-report.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { HumanRequestCoordinator } from "../src/coordination/human-requests.ts";
 import { MessageCoordinator } from "../src/coordination/messages.ts";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
@@ -57,6 +58,8 @@ for (const ownerAnswered of [false, true]) {
 		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
 			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, workflowPolicy,
+			humanRequests: new HumanRequestCoordinator({ agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity,
+				interruptRun() { throw new Error("Unexpected human interruption"); } }),
 			sessionFactory: {
 				admitProcessRuntimePlatform() { creationAttempts++; throw new Error("Test platform unavailable"); },
 			} as unknown as ProcessChildSessionFactory,
@@ -69,7 +72,7 @@ for (const ownerAnswered of [false, true]) {
 			retainDiagnostic: () => ({ agentId: "requester", entryId: owner.manager.appendCustomEntry("diagnostic", {}) }),
 		});
 		t.after(() => { incidents.shutdown(); messages.shutdownDeliveryProgress(); });
-		incidents.deliveryProgressChanged();
+		incidents.reconcileCommittedToolResults("requester");
 		await incidents.reachSafeBoundary();
 		assert.equal(creationAttempts, ownerAnswered ? 1 : 0);
 		const attention = incidents.attentionItems("requester");

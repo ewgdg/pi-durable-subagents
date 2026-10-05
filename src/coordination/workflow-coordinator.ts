@@ -449,10 +449,6 @@ export class WorkflowCoordinator {
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
 			deliveryProgressClock: options.deliveryProgressClock,
-			onDeliveryProgressChanged: () => {
-				this.#operationalIncidents?.deliveryProgressChanged();
-				this.#notifyAgentActivityChanged();
-			},
 			workflowPolicy: this.#workflowPolicy,
 		});
 		this.#agentWaits = new AgentWaitCoordinator({
@@ -476,12 +472,6 @@ export class WorkflowCoordinator {
 					await record.host.interruptCurrentRunInLane();
 				});
 			},
-			beginHumanWaiting: (source) => {
-				this.#operationalIncidents.beginHumanWaiting(source);
-			},
-			beginHumanResultCommit: (source) => {
-				this.#operationalIncidents.beginHumanResultCommit(source);
-			},
 			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
 		});
 		this.#runSupervisor = new RunSupervisor({
@@ -495,6 +485,7 @@ export class WorkflowCoordinator {
 			ownerIdentity: identity,
 			sessionFactory,
 			messages: this.#messages,
+			humanRequests: this.#humanRequests,
 			workflowPolicy: this.#workflowPolicy,
 			integrateAgent: (record) => this.#integrateAgent(record),
 			isShuttingDown: () => this.#shuttingDown,
@@ -514,6 +505,7 @@ export class WorkflowCoordinator {
 			deliveryProgressClock: options.deliveryProgressClock,
 			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
 		});
+		this.#messages.subscribeDeliveryProgress(() => this.#notifyAgentActivityChanged());
 		for (const record of this.#agents.values()) this.#integrateAgent(record);
 		this.#spawner = new DefaultChildSpawner({
 			agents: this.#agents,

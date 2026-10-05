@@ -4,6 +4,7 @@ import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentWaitCoordinator } from "../src/coordination/agent-waits.ts";
+import { HumanRequestCoordinator } from "../src/coordination/human-requests.ts";
 import { MessageCoordinator } from "../src/coordination/messages.ts";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
@@ -72,6 +73,8 @@ for (const delivered of [false, true]) {
 		const reports: ReportToUserInput[] = [];
 		const incidents = new OperationalIncidentCoordinator({
 			agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity, messages, workflowPolicy,
+			humanRequests: new HumanRequestCoordinator({ agents: history.agents, ownerIdentity: owner.record.identity as OwnerIdentity,
+				interruptRun() { throw new Error("Unexpected human interruption"); } }),
 			sessionFactory: { admitProcessRuntimePlatform() { creationAttempts++; throw new Error("Test platform unavailable"); } } as unknown as ProcessChildSessionFactory,
 			integrateAgent() { throw new Error("Unexpected runtime creation"); }, isShuttingDown: () => false,
 			reportError(error) { throw error; },
@@ -111,7 +114,7 @@ for (const delivered of [false, true]) {
 		// Repeated queue advancement must not redispatch the original task.
 		await messages.deliveryEligibilityChanged(worker.record);
 		await messages.deliveryEligibilityChanged(worker.record);
-		incidents.deliveryProgressChanged();
+		incidents.reconcileCommittedToolResults("requester");
 		await incidents.reachSafeBoundary();
 		assert.equal(creationAttempts, delivered ? 1 : 0);
 		if (!delivered) assert.deepEqual(incidents.attentionItems("requester"), []);

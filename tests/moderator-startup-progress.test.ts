@@ -26,11 +26,17 @@ test("initial Moderator startup counts as progress before native agent.start and
 	const finishFirstModel = deferred();
 	const reminderModelStarted = deferred();
 	let coordinator!: OperationalIncidentCoordinator;
+	let ownerAgentId: string | undefined;
 	let generatedReminders = 0;
 	const integrate = OperationalIncidentCoordinator.prototype.integrate;
 	t.mock.method(OperationalIncidentCoordinator.prototype, "integrate", function (
 		this: OperationalIncidentCoordinator, ...args: Parameters<typeof integrate>
-	) { coordinator = this; return integrate.apply(this, args); });
+	) {
+		coordinator = this;
+		// The Workflow integrates its Owner first.
+		ownerAgentId ??= args[0].identity.agentId;
+		return integrate.apply(this, args);
+	});
 	const admit = MessageDeliveryScheduler.prototype.admitCustom;
 	t.mock.method(MessageDeliveryScheduler.prototype, "admitCustom", function (
 		this: MessageDeliveryScheduler, ...args: Parameters<typeof admit>
@@ -63,13 +69,14 @@ test("initial Moderator startup counts as progress before native agent.start and
 	try {
 		const native = await waitForStart(join(gateDirectory, STARTED_FILE));
 		assert.equal(native.idle, false);
-		// Force a real eligibility inspection while the first native start hook is held.
-		coordinator.deliveryProgressChanged();
+		// Force a real eligibility inspection at an Owner safe boundary while the
+		// first native start hook is held.
+		coordinator.reconcileCommittedToolResults(ownerAgentId!);
 		await bounded(coordinator.reachSafeBoundary());
 		assert.equal(generatedReminders, 0, "pending first startup is progress, not abandoned handling");
 		await writeFile(join(gateDirectory, RELEASE_FILE), "");
 		await bounded(firstModelStarted.promise);
-		coordinator.deliveryProgressChanged();
+		coordinator.reconcileCommittedToolResults(ownerAgentId!);
 		await bounded(coordinator.reachSafeBoundary());
 		assert.equal(generatedReminders, 0, "the initial model call has not settled");
 		finishFirstModel.resolve();

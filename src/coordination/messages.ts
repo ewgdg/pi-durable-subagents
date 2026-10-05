@@ -123,6 +123,7 @@ export class MessageCoordinator {
 	readonly #requestEvidence: RequestEvidence;
 	readonly answerArbitration: AnswerArbitration;
 	#waitPreemptionSubscriber: IncomingRequestWaitPreemptor | undefined;
+	readonly #deliveryProgressSubscribers = new Set<() => void>();
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 
@@ -134,7 +135,6 @@ export class MessageCoordinator {
 		boundaryHooks?: MessageBoundaryHooks;
 		workflowPolicy: WorkflowPolicyStore;
 		deliveryProgressClock?: import("./operation-review.ts").OperationReviewClock;
-		onDeliveryProgressChanged?(): void;
 	}) {
 		this.#agents = options.agents;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
@@ -156,7 +156,9 @@ export class MessageCoordinator {
 				this.#waitPreemptionSubscriber?.(record, reserveDelivery) ?? Promise.resolve(),
 			workflowPolicy: options.workflowPolicy,
 			deliveryProgressClock: options.deliveryProgressClock,
-			onDeliveryProgressChanged: options.onDeliveryProgressChanged,
+			onDeliveryProgressChanged: () => {
+				for (const subscriber of this.#deliveryProgressSubscribers) subscriber();
+			},
 			onDeliveryFailure: failure => scheduleDeliveryFailureNotice({
 				failure, author: this.#requireAgent(failure.delivery.deliveryItem.source.agentId),
 				scheduler: this.#deliveryScheduler, isShuttingDown: this.#isShuttingDown,
@@ -178,6 +180,11 @@ export class MessageCoordinator {
 			throw new Error("invariant_violation: Wait preemption already has a subscriber");
 		}
 		this.#waitPreemptionSubscriber = subscriber;
+	}
+
+	/** Consumers subscribe in their own constructors, so hand-wired Workflows keep this glue. */
+	subscribeDeliveryProgress(subscriber: () => void): void {
+		this.#deliveryProgressSubscribers.add(subscriber);
 	}
 
 

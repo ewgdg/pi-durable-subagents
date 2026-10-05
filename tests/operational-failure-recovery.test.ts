@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
+import { HumanRequestCoordinator } from "../src/coordination/human-requests.ts";
 import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import type { MessageCoordinator } from "../src/coordination/messages.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
@@ -29,7 +30,9 @@ test("a successor after obligation clearance appends to the retained failed Run 
 		return { runtime };
 	} });
 	const reports = new ModeratorReportStore({ transcript: owner.record.transcript, appendCustomEntry: (type, data) => owner.manager.appendCustomEntry(type, data) });
+	let deliveryProgressChanged = (): void => assert.fail("Operational Incident detection must subscribe to Delivery progress");
 	const messages = {
+		subscribeDeliveryProgress(handler: () => void) { deliveryProgressChanged = handler; },
 		refreshTranscriptFacts: async () => undefined,
 		answerObligationRequestIds: () => ["request"], outstandingRequestIdsFor: () => [],
 		hasUnsettledAnswerObligation: () => obligationRemains,
@@ -41,6 +44,8 @@ test("a successor after obligation clearance appends to the retained failed Run 
 		agents: new Map([["requester", owner.record], ["child", child.record]]),
 		ownerIdentity: owner.record.identity as OwnerIdentity,
 		messages, workflowPolicy: new WorkflowPolicyStore(),
+		humanRequests: new HumanRequestCoordinator({ agents: new Map([["requester", owner.record]]), ownerIdentity: owner.record.identity as OwnerIdentity,
+			interruptRun() { throw new Error("Unexpected human interruption"); } }),
 		sessionFactory: { admitProcessRuntimePlatform() { throw new Error("Moderator unavailable in fixture"); } } as unknown as ProcessChildSessionFactory,
 		integrateAgent() { throw new Error("No Moderator should start"); },
 		isShuttingDown: () => shuttingDown,
@@ -60,7 +65,7 @@ test("a successor after obligation clearance appends to the retained failed Run 
 		// Control the durable-obligation observation independently of Delivery:
 		// cancellation must clear handling before any successor Run is admitted.
 		obligationRemains = false;
-		incidents.deliveryProgressChanged();
+		deliveryProgressChanged();
 		await incidents.reachSafeBoundary();
 		assert.ok(reports.history()[0]?.findings?.some(finding => finding.key === "condition-cleared"));
 		assert.equal(reports.history()[0]?.readAt, undefined);

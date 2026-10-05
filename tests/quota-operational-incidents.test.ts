@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
 import { MessageCoordinator } from "../src/coordination/messages.ts";
+import { HumanRequestCoordinator } from "../src/coordination/human-requests.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import type { OwnerIdentity } from "../src/protocol/owner-identity.ts";
 import type { AgentRuntimeHost } from "../src/runtime/agent-runtime-host.ts";
@@ -55,6 +56,8 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 		const incidents = new OperationalIncidentCoordinator({
 			agents: history.agents, ownerIdentity: history.requester.record.identity as OwnerIdentity,
 			messages, workflowPolicy: policy,
+			humanRequests: new HumanRequestCoordinator({ agents: history.agents, ownerIdentity: history.requester.record.identity as OwnerIdentity,
+				interruptRun() { assert.fail("No human interruption expected"); } }),
 			sessionFactory: {} as ProcessChildSessionFactory,
 			integrateAgent() { assert.fail("No Moderator expected"); },
 			isShuttingDown: () => false, reportError: error => errors.push(error),
@@ -62,7 +65,7 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 			publishRuntimeReport() {}, appendRuntimeReportFinding() {}, runtimeReportSourceForIncident() { return undefined; },
 		});
 		t.after(() => incidents.shutdown());
-		incidents.deliveryProgressChanged();
+		incidents.reconcileCommittedToolResults("requester");
 		await incidents.reachSafeBoundary();
 		assert.deepEqual(errors, []);
 		// Best branch wins: one Waiting (suspended) dependency keeps the requester and
@@ -73,7 +76,7 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 		// Explicit clearance restores ordinary incident observation; no timer retries it.
 		suspended = false;
 		reminded.length = 0;
-		incidents.deliveryProgressChanged();
+		incidents.reconcileCommittedToolResults("requester");
 		await incidents.reachSafeBoundary();
 		assert.ok(reminded.includes("quota-leaf"));
 		assert.deepEqual(errors, []);

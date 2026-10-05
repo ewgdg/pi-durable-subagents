@@ -63,13 +63,18 @@ export type HumanRequestBoundaryHooks = Readonly<{
 	}>): void;
 }>;
 
+/** Operation Review timing of the asking tool call; it stops while the human is the one waited on. */
+export type HumanWaitingSubscriber = Readonly<{
+	humanWaitingBegan(source: ToolCallPointer): void;
+	humanResultCommitBegan(source: ToolCallPointer): void;
+}>;
+
 export class HumanRequestCoordinator {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #boundaryHooks: HumanRequestBoundaryHooks;
 	readonly #interruptRun: (record: AgentRecord) => void;
-	readonly #beginHumanWaiting: (source: ToolCallPointer) => void;
-	readonly #beginHumanResultCommit: (source: ToolCallPointer) => void;
+	readonly #humanWaitingSubscribers = new Set<HumanWaitingSubscriber>();
 	readonly #onAttentionChanged: () => void;
 	readonly #pendingByRequestId = new Map<string, PendingHumanRequest>();
 
@@ -78,17 +83,26 @@ export class HumanRequestCoordinator {
 		ownerIdentity: OwnerIdentity;
 		boundaryHooks?: HumanRequestBoundaryHooks;
 		interruptRun(record: AgentRecord): void;
-		beginHumanWaiting(source: ToolCallPointer): void;
-		beginHumanResultCommit(source: ToolCallPointer): void;
 		onAttentionChanged?(): void;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#interruptRun = options.interruptRun;
-		this.#beginHumanWaiting = options.beginHumanWaiting;
-		this.#beginHumanResultCommit = options.beginHumanResultCommit;
 		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
+	}
+
+	/** Consumers subscribe in their own constructors, so hand-wired Workflows keep this glue. */
+	subscribeHumanWaiting(subscriber: HumanWaitingSubscriber): void {
+		this.#humanWaitingSubscribers.add(subscriber);
+	}
+
+	#humanWaitingBegan(source: ToolCallPointer): void {
+		for (const subscriber of this.#humanWaitingSubscribers) subscriber.humanWaitingBegan(source);
+	}
+
+	#humanResultCommitBegan(source: ToolCallPointer): void {
+		for (const subscriber of this.#humanWaitingSubscribers) subscriber.humanResultCommitBegan(source);
 	}
 
 	async ask(
@@ -150,7 +164,7 @@ export class HumanRequestCoordinator {
 		try {
 			record.host.beginInputRequired(handle, request.requestId);
 			this.#pendingByRequestId.set(request.requestId, pending);
-			this.#beginHumanWaiting(request.source);
+			this.#humanWaitingBegan(request.source);
 			this.#onAttentionChanged();
 			this.#boundaryHooks.afterAdmission?.({
 				agentId: callerAgentId,
@@ -198,7 +212,7 @@ export class HumanRequestCoordinator {
 		});
 		pending.phase = "submitted";
 		pending.answerCandidate = candidate;
-		this.#beginHumanResultCommit(pending.request.source);
+		this.#humanResultCommitBegan(pending.request.source);
 		pending.resolve(candidate);
 		return true;
 	}
@@ -338,7 +352,7 @@ export class HumanRequestCoordinator {
 		const pending = this.#pendingByRequestId.get(requestId);
 		if (!pending || pending.phase === "fenced") return;
 		pending.phase = "fenced";
-		this.#beginHumanResultCommit(pending.request.source);
+		this.#humanResultCommitBegan(pending.request.source);
 		// Submission and fencing are synchronous phase transitions. The last
 		// pre-append guard above rechecks this phase, so an asynchronous Run fence
 		// can still defeat a submitted candidate until native result commitment.
