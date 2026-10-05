@@ -493,7 +493,7 @@ function bindGeneration(
 			} finally { signal.removeEventListener("abort", cancel); }
 		},
 		"message.deliver": async (payload, signal) => {
-			const { deliveryId, delivery } = payload;
+			const { deliveryId, delivery, proveCommit } = payload;
 			const execution: DeliveryExecution = { admitted: false, finished: false, started: false };
 			const admissionCancellation = new AbortController();
 			const admissionSignal = AbortSignal.any([
@@ -524,7 +524,7 @@ function bindGeneration(
 			signal.addEventListener("abort", onAbort, { once: true });
 			try {
 				const dispatch = driver.deliver(delivery, {
-					proveCommit: true,
+					proveCommit,
 					signal: admissionSignal,
 					admission: childTurnAdmission(payload, execution, admissionSignal),
 				});
@@ -541,7 +541,9 @@ function bindGeneration(
 					accepted: true,
 					// Only this request's own cancellation abandons the proof: message.cancel
 					// after commit must not turn a committed Delivery into a failed request.
-					transcriptCommitted: await unlessRequestCancelled(dispatch.transcriptCommit!, signal),
+					...(dispatch.transcriptCommit === undefined ? {} : {
+						transcriptCommitted: await unlessRequestCancelled(dispatch.transcriptCommit, signal),
+					}),
 					modelCycleStarted: runActive,
 					queuedInputCount: driver.queuedInputCount(),
 				};

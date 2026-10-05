@@ -43,6 +43,7 @@ test("real process child prepares its first idle message through an inherited ex
 	const deliveryId = "startup-message";
 	const receipt = await bounded(child.runtime.channel.request("message.deliver", {
 		deliveryId,
+		proveCommit: true,
 		delivery: {
 			kind: "custom",
 			message: { ...message, details: { messages: [...message.details.messages] } },
