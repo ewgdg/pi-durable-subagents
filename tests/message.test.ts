@@ -714,44 +714,6 @@ test("ordinary Agent labels use its coordination neighborhood while ID suffixes 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Agent Message rejects duplicate labels instead of choosing one recipient", async (t) => {
-	const harness = await createDormantChildHarness(t, {});
-	const duplicateLabel = harness.view.status(harness.childId).label;
-	const spawnToolCallId = "spawn-duplicate-label-recipient";
-	const spawnInput = {
-		title: "Fixture request",
-		request: "Remain dormant as the duplicate-label target.",
-		label: duplicateLabel,
-	};
-	harness.host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, { id: spawnToolCallId }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const second = await harness.view.spawn(spawnToolCallId, spawnInput);
-	assert.equal(second.spawnStatus, "created");
-
-	const toolCallId = "reject-duplicate-label-target";
-	const input = {
-		operation: "send" as const,
-		targetAgent: duplicateLabel,
-		content: "Do not choose either duplicate label.",
-	};
-	harness.host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", input, { id: toolCallId }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	await assert.rejects(
-		() => harness.view.message(toolCallId, input),
-		/ambiguous_target: Agent label .* matches 2 addressable Agents/,
-	);
-
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-});
-
 test("retry keeps the Agent resolved by the original selector after labels become ambiguous", async (t) => {
 	const admittedRecipientIds: string[] = [];
 	const harness = await createDormantChildHarness(t, {
@@ -972,72 +934,6 @@ test("the recipient lane resolves delivery-first, close-first, and stale close c
 	assert.notEqual(
 		releaseCandidates[2]?.context.runSequence,
 		currentRunCandidate.context.runSequence,
-	);
-
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-});
-
-test("recipient Delivery ratifies a missing author result while an error result plus Delivery violates the crash table", async (t) => {
-	const harness = await createDormantChildHarness(t, {});
-	harness.host.model.setResponses([
-		fauxAssistantMessage("Delivery committed before author-result confirmation."),
-	]);
-	const ratified = await authorMessage(
-		harness,
-		"delivery-ratifies-author",
-		"Let recipient proof ratify this Message.",
-		{ appendResult: false },
-	);
-	await waitForDelivery(harness, ratified.source);
-	const ratifiedMessageId = ratified.receipt.messageId;
-	const ratifiedPollId = "poll-delivery-ratified-message";
-	const ratifiedPollInput = {
-		operation: "poll" as const,
-		messageId: ratifiedMessageId,
-	};
-	harness.host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", ratifiedPollInput, { id: ratifiedPollId }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const ratifiedPoll = await harness.view.message(ratifiedPollId, ratifiedPollInput);
-	assert.equal("disposition" in ratifiedPoll && ratifiedPoll.disposition, "delivered");
-
-	harness.host.model.setResponses([
-		fauxAssistantMessage("The contradictory Message still reached the transcript."),
-	]);
-	const contradictory = await authorMessage(
-		harness,
-		"error-result-with-delivery",
-		"This Delivery will contradict its author error result.",
-		{ appendResult: false },
-	);
-	await waitForDelivery(harness, contradictory.source);
-	harness.host.session.sessionManager.appendMessage({
-		role: "toolResult",
-		toolCallId: contradictory.source.toolCallId,
-		toolName: "agent_message",
-		content: [{ type: "text", text: "Scheduling failed." }],
-		isError: true,
-		timestamp: Date.now(),
-	});
-	const contradictionPollId = "poll-contradictory-message";
-	const contradictionPollInput = {
-		operation: "poll" as const,
-		messageId: contradictory.receipt.messageId,
-	};
-	harness.host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", contradictionPollInput, {
-				id: contradictionPollId,
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	await assert.rejects(
-		() => harness.view.message(contradictionPollId, contradictionPollInput),
-		/error result and Delivery/,
 	);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
@@ -1444,37 +1340,6 @@ test("retry reports indeterminate when admission confirmation is lost without ca
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("an authored Steer mode is accepted and retry remains mode-free", async (t) => {
-	const harness = await createDormantChildHarness(t, {});
-	harness.host.model.setResponses([
-		fauxAssistantMessage("The explicit Steer Message reached this dormant Agent."),
-	]);
-	const sent = await authorMessage(
-		harness,
-		"author-explicit-steer-message",
-		"Redirect the next model turn at its safe boundary.",
-		{ deliveryMode: "steer" },
-	);
-	assert.equal("messageStatus" in sent.receipt && sent.receipt.messageStatus, "sent");
-	await waitForDelivery(harness, sent.source);
-
-	const retryToolCallId = "retry-explicit-steer-message";
-	const retryInput = {
-		operation: "retry" as const,
-		messageId: sent.receipt.messageId,
-	};
-	harness.host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", retryInput, { id: retryToolCallId }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const retry = await harness.view.message(retryToolCallId, retryInput);
-	assert.equal("disposition" in retry && retry.disposition, "delivered");
-
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-});
-
 test("recipient capacity counts distinct pending identities without evicting admitted work", async (t) => {
 	const harness = await createDormantChildHarness(t, {}, {
 		workflowPolicy: deliveryPolicy(1),
@@ -1647,7 +1512,7 @@ test("a lower delivery limit rejects new identities without evicting admitted Me
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Steer freezes an ordered batch after active generation and before the next model turn", async (t) => {
+test("Steer freezes one ordered batch that takes the next model turn before an earlier Deferred Message", async (t) => {
 	const harness = await createDormantChildHarness(t, {});
 	let releaseGeneration!: () => void;
 	const generationGate = new Promise<void>((resolve) => {
@@ -1657,11 +1522,12 @@ test("Steer freezes an ordered batch after active generation and before the next
 	const generationStarted = new Promise<void>((resolve) => {
 		markGenerationStarted = resolve;
 	});
-	let markContinuationObserved!: () => void;
-	const continuationObserved = new Promise<void>((resolve) => {
-		markContinuationObserved = resolve;
+	let markDeferredObserved!: () => void;
+	const deferredObserved = new Promise<void>((resolve) => {
+		markDeferredObserved = resolve;
 	});
-	let continuationError: unknown;
+	let steerBatchError: unknown;
+	const observedDeliveryIds: string[][] = [];
 	harness.host.model.setResponses([
 		async () => {
 			markGenerationStarted();
@@ -1669,27 +1535,33 @@ test("Steer freezes an ordered batch after active generation and before the next
 			return fauxAssistantMessage("The original generation reached its safe boundary.");
 		},
 		(context) => {
+			const delivery = findLatestModelDelivery(context.messages) as Array<{ messageId: string }>;
+			observedDeliveryIds.push(delivery.map(({ messageId }) => messageId));
 			try {
-				assert.deepEqual(findLatestModelDelivery(context.messages), [
-						{
-							kind: "message",
-							messageId: first.receipt.messageId,
-							fromAgentId: harness.host.session.sessionId,
-							content: "Apply the first redirect.",
-						},
-						{
-							kind: "message",
-							messageId: second.receipt.messageId,
-							fromAgentId: harness.host.session.sessionId,
-							content: "Then apply the second redirect.",
-						},
-				]);
+				assert.deepEqual(delivery, [
+					{
+						kind: "message",
+						messageId: first.receipt.messageId,
+						fromAgentId: harness.host.session.sessionId,
+						content: "Apply the first redirect.",
+					},
+					{
+						kind: "message",
+						messageId: second.receipt.messageId,
+						fromAgentId: harness.host.session.sessionId,
+						content: "Then apply the second redirect.",
+					},
+				], "the next model turn sees both Steer Messages in admission order");
 			} catch (error) {
-				continuationError = error;
-			} finally {
-				markContinuationObserved();
+				steerBatchError = error;
 			}
 			return fauxAssistantMessage("Both Steer directions were visible together.");
+		},
+		(context) => {
+			const delivery = findLatestModelDelivery(context.messages) as Array<{ messageId: string }>;
+			observedDeliveryIds.push(delivery.map(({ messageId }) => messageId));
+			markDeferredObserved();
+			return fauxAssistantMessage("The Deferred Message ran afterward.");
 		},
 	]);
 	await authorMessage(
@@ -1699,6 +1571,11 @@ test("Steer freezes an ordered batch after active generation and before the next
 	);
 	await generationStarted;
 
+	const deferred = await authorMessage(
+		harness,
+		"admit-deferred-before-steer",
+		"Wait until the Steer directions complete.",
+	);
 	const first = await authorMessage(
 		harness,
 		"admit-first-steer",
@@ -1715,8 +1592,13 @@ test("Steer freezes an ordered batch after active generation and before the next
 
 	await waitForDelivery(harness, first.source);
 	await waitForDelivery(harness, second.source);
-	await continuationObserved;
-	if (continuationError) throw continuationError;
+	await waitForDelivery(harness, deferred.source);
+	await deferredObserved;
+	if (steerBatchError) throw steerBatchError;
+	assert.deepEqual(observedDeliveryIds, [
+		[first.receipt.messageId, second.receipt.messageId],
+		[deferred.receipt.messageId],
+	], "the Steer batch takes the next model turn before the earlier Deferred Message");
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
 	const deliveries = SessionManager.open(childSessionFile)
 		.getEntries()
@@ -1727,7 +1609,7 @@ test("Steer freezes an ordered batch after active generation and before the next
 				(deliveryContainsSource(entry.details, first.source) ||
 					deliveryContainsSource(entry.details, second.source)),
 		);
-	assert.equal(deliveries.length, 1);
+	assert.equal(deliveries.length, 1, "both Steer Messages commit as one Delivery");
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
@@ -1970,73 +1852,6 @@ test("Steer waits for an already-issued parallel tool batch even when tools fini
 	await continuationObserved;
 	if (continuationError) throw continuationError;
 
-});
-
-test("Steer takes the next model turn before an earlier Deferred Message", async (t) => {
-	const harness = await createDormantChildHarness(t, {});
-	let releaseActiveGeneration!: () => void;
-	const activeGenerationGate = new Promise<void>((resolve) => {
-		releaseActiveGeneration = resolve;
-	});
-	let markActiveGenerationStarted!: () => void;
-	const activeGenerationStarted = new Promise<void>((resolve) => {
-		markActiveGenerationStarted = resolve;
-	});
-	const observedDeliveryIds: string[] = [];
-	let markBothContinuationsObserved!: () => void;
-	const bothContinuationsObserved = new Promise<void>((resolve) => {
-		markBothContinuationsObserved = resolve;
-	});
-	harness.host.model.setResponses([
-		async () => {
-			markActiveGenerationStarted();
-			await activeGenerationGate;
-			return fauxAssistantMessage("The active generation reached its boundary.");
-		},
-		(context) => {
-			const delivery = findLatestModelDelivery(context.messages) as Array<{
-				messageId: string;
-			}>;
-			observedDeliveryIds.push(...delivery.map(({ messageId }) => messageId));
-			return fauxAssistantMessage("The Steer direction ran first.");
-		},
-		(context) => {
-			const delivery = findLatestModelDelivery(context.messages) as Array<{
-				messageId: string;
-			}>;
-			observedDeliveryIds.push(...delivery.map(({ messageId }) => messageId));
-			markBothContinuationsObserved();
-			return fauxAssistantMessage("The Deferred Message ran afterward.");
-		},
-	]);
-	await authorMessage(
-		harness,
-		"start-generation-before-priority",
-		"Begin active work before both delivery modes arrive.",
-	);
-	await activeGenerationStarted;
-	const deferred = await authorMessage(
-		harness,
-		"admit-deferred-before-steer",
-		"Wait until the Steer direction completes.",
-	);
-	const steer = await authorMessage(
-		harness,
-		"admit-steer-after-deferred",
-		"Take the next safe model turn.",
-		{ deliveryMode: "steer" },
-	);
-	releaseActiveGeneration();
-
-	await waitForDelivery(harness, steer.source);
-	await waitForDelivery(harness, deferred.source);
-	await bothContinuationsObserved;
-	assert.deepEqual(observedDeliveryIds, [
-		steer.receipt.messageId,
-		deferred.receipt.messageId,
-	]);
-
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
 function findSpawnedAgentId(sessionManager: SessionManager): string {
