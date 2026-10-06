@@ -34,6 +34,9 @@ test("Control observe and presentation rosters preserve a retained Run stop", ()
 		...status, run: { ...status.run, suspension: runtimeError },
 	}));
 	assert.ok(Check(agentControlProtocol.childToOwner.methods["coordination.observe"].response, { matches: [status], hasMore: false }));
+	assert.ok(Check(agentControlProtocol.childToOwner.methods["coordination.observe"].response, {
+		...status, run: { phase: "dormant", retentionReasons: [], queued: true },
+	}), "a Deferred Boot reaches the observing model as a dormant secondary state");
 	assert.ok(Check(agentControlProtocol.childToOwner.methods["presentation.agents.snapshot"].response, snapshot));
 	assert.ok(Check(agentControlProtocol.ownerToChild.events["presentation.agents.changed"].payload, snapshot));
 	for (const run of [
@@ -42,6 +45,8 @@ test("Control observe and presentation rosters preserve a retained Run stop", ()
 		{ ...status.run, suspension: { reason: "runtime_error", evidence: { diagnostic: "wrong evidence shape" } } },
 		{ ...status.run, suspension: { reason: "runtime_error", evidence: { stage: "model", error: "missing provenance" } } },
 		{ phase: "dormant", retentionReasons: [], suspension },
+		{ phase: "dormant", retentionReasons: [], queued: false },
+		{ ...status.run, queued: true },
 	]) {
 		assert.equal(Check(agentControlProtocol.childToOwner.methods["coordination.observe"].response, { ...status, run }), false);
 		assert.equal(Check(agentControlProtocol.childToOwner.methods["presentation.agents.snapshot"].response, { ...snapshot, live: [{ ...roster, run }] }), false);

@@ -838,7 +838,7 @@ export class WorkflowCoordinator {
 		const selector = targetAgentId.trim();
 		if (!selector) throw new Error("invalid_input: Agent selector must not be blank");
 		if (this.#agents.has(selector) || this.#quarantinedAgentIds.has(selector)) {
-			return statusOf(this.#requireObservable(callerAgentId, selector));
+			return this.#statusOf(this.#requireObservable(callerAgentId, selector));
 		}
 		const candidates = [...this.#agents.values()].map(({ identity }) => ({
 			agentId: identity.agentId,
@@ -852,7 +852,7 @@ export class WorkflowCoordinator {
 				.filter((agentId) => !this.#agents.has(agentId))
 				.map((agentId) => ({ agentId, label: "" })),
 		], selector);
-		if (identity) return statusOf(this.#requireObservable(callerAgentId, identity.agentId));
+		if (identity) return this.#statusOf(this.#requireObservable(callerAgentId, identity.agentId));
 		if (this.#quarantinedWorkflowAgentIds.size > 0) {
 			throw new EvidenceUnavailableError(
 				`Agent status target ${selector} depends on quarantined Agent proof`,
@@ -863,7 +863,7 @@ export class WorkflowCoordinator {
 			label: identity.metadata.label,
 		}));
 		const target = resolveAgentTarget([], labels, selector);
-		return statusOf(this.#requireObservable(callerAgentId, target.agentId));
+		return this.#statusOf(this.#requireObservable(callerAgentId, target.agentId));
 	}
 
 	#searchFor(callerAgentId: string, input: AgentSearchInput): AgentSearchResult {
@@ -924,7 +924,7 @@ export class WorkflowCoordinator {
 				left.relevance - right.relevance || left.order - right.order
 			);
 		return {
-			matches: matching.slice(0, limit).map(({ record }) => statusOf(record)),
+			matches: matching.slice(0, limit).map(({ record }) => this.#statusOf(record)),
 			hasMore: matching.length > limit,
 		};
 	}
@@ -966,7 +966,7 @@ export class WorkflowCoordinator {
 			);
 		}
 		const target = this.#requireObservable(callerAgentId, targetAgentId);
-		return target.children.map((agentId) => statusOf(this.#requireAgent(agentId)));
+		return target.children.map((agentId) => this.#statusOf(this.#requireAgent(agentId)));
 	}
 
 	#requireObservable(callerAgentId: string, targetAgentId: string): AgentRecord {
@@ -1015,7 +1015,8 @@ export class WorkflowCoordinator {
 		for (const [order, record] of authorityOrder.entries()) {
 			const transcript = record.transcript.snapshot() ?? record.transcript.inspect();
 			const status = this.#rosterStatus(record, transcript);
-			if (status.run.phase !== "dormant") {
+			// A queued child is about to work, so it belongs with the live Agents.
+			if (status.run.phase !== "dormant" || status.run.queued) {
 				live.push(status);
 				continue;
 			}
@@ -1043,13 +1044,21 @@ export class WorkflowCoordinator {
 		};
 	}
 
+	/** Agent status as observed by models and presentation, with a Deferred Boot shown as `queued`. */
+	#statusOf(record: AgentRecord, transcript?: TranscriptInspection): AgentStatus {
+		const status = statusOf(record, transcript);
+		return status.run.phase === "dormant" && this.#messages.isBootDeferred(record)
+			? { ...status, run: { ...status.run, queued: true } }
+			: status;
+	}
+
 	#rosterStatus(
 		record: AgentRecord,
 		transcript: TranscriptInspection = record.transcript.snapshot() ?? record.transcript.inspect(),
 	): AgentRosterStatus {
 		// Share one observation for the evidence pointer, configuration, and recency.
 		// File-backed transcripts otherwise reparse the whole history for each field.
-		const status = statusOf(record, transcript);
+		const status = this.#statusOf(record, transcript);
 		const runtimeSnapshot = status.run.phase === "starting"
 			? undefined
 			: record.host.effectiveRuntimeSnapshot();
@@ -1117,6 +1126,7 @@ export class WorkflowCoordinator {
 	#activityRefreshAll = false;
 	#notifyAgentActivityChanged(agentId?: string): void {
 		if (this.#shuttingDown) return;
+		this.#queueDeferredBootCheck();
 		// Unknown sources retain a conservative full refresh. A host or model event
 		// already identifies its source and must not read unrelated dormant history.
 		if (agentId === undefined) this.#activityRefreshAll = true;
@@ -1125,6 +1135,27 @@ export class WorkflowCoordinator {
 		// The selector shares this subscription with activity docks. Preserve global,
 		// immediate host-state publication even when transcript refresh is scoped.
 		for (const handler of this.#agentActivityChangeHandlers) handler();
+	}
+
+	#deferredBootCheckQueued = false;
+	/**
+	 * Every change that can free a concurrency slot (Run end, settlement, Agent Wait,
+	 * suspension, Holds) passes through activity notification. One
+	 * coalesced check per burst re-derives the count from current Run state (ADR 0007).
+	 */
+	#queueDeferredBootCheck(): void {
+		if (this.#deferredBootCheckQueued) return;
+		this.#deferredBootCheckQueued = true;
+		queueMicrotask(() => {
+			this.#deferredBootCheckQueued = false;
+			if (this.#shuttingDown) return;
+			this.#messages.startDeferredBoots().catch((error: unknown) => {
+				this.#ownerDiagnostics.push({
+					type: "error",
+					message: `Deferred Agent boot failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+		});
 	}
 
 	#scheduleAgentActivityRefresh(): void {

@@ -175,14 +175,22 @@ export class MessageDeliveryScheduler {
 	readonly #afterResumeReservation: ResumeReservationHandler | undefined;
 	readonly #preemptAgentWait: IncomingRequestWaitPreemptor | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
+	readonly #isShuttingDown: () => boolean;
+	readonly #agents: ReadonlyMap<string, AgentRecord>;
+	/** Agents whose boot the concurrency bound deferred, in deferral order. */
+	readonly #deferredBoots = new Set<string>();
+	/** Deferred boots started by `startDeferredBoots` that have not yet dispatched. */
+	readonly #bootsInFlight = new Set<string>();
 
 	constructor(options: {
+		agents: ReadonlyMap<string, AgentRecord>;
 		scheduleReleaseEvaluation?: ScheduleReleaseEvaluation;
 		scheduleDeliveryDispatch?: ScheduleDeliveryDispatch;
 		afterSteerFreeze?: SteerFreezeHandler;
 		afterResumeReservation?: ResumeReservationHandler;
 		preemptAgentWait?: IncomingRequestWaitPreemptor;
 		workflowPolicy: WorkflowPolicyStore;
+		isShuttingDown?: () => boolean;
 		deliveryProgressClock?: OperationReviewClock;
 		onDeliveryProgressChanged?(): void;
 		onDeliveryFailure?(failure: MessageDeliveryFailure): void | Promise<void>;
@@ -196,6 +204,8 @@ export class MessageDeliveryScheduler {
 		this.#afterResumeReservation = options.afterResumeReservation;
 		this.#preemptAgentWait = options.preemptAgentWait;
 		this.#workflowPolicy = options.workflowPolicy;
+		this.#isShuttingDown = options.isShuttingDown ?? (() => false);
+		this.#agents = options.agents;
 	}
 
 	isDeliveryBlocked(record: AgentRecord, deliveryMode: MessageDeliveryMode): boolean {
@@ -231,7 +241,12 @@ export class MessageDeliveryScheduler {
 			if (delivery.inspectProof() || delivery.isSuppressed?.() || item.failed ||
 				delivery.isReady?.() === false || record.host.blocksOrdinaryDelivery()) continue;
 			const run = record.host.observe();
-			if (run.phase === "dormant" || (run.phase === "live" && run.attention === "input_required")) continue;
+			if (run.phase === "dormant") {
+				// A deferred boot is queued behind working Runs, which are progress themselves.
+				if (this.isBootDeferred(record)) return true;
+				continue;
+			}
+			if (run.phase === "live" && run.attention === "input_required") continue;
 			if (watcher.observe(this.#deliveryWaitIsLegitimate(item))) continue;
 			if (item.dispatched) return true;
 			if (run.phase === "live" && run.attention === "agent_wait" &&
@@ -247,6 +262,7 @@ export class MessageDeliveryScheduler {
 	#deliveryWaitIsLegitimate(item: TrackedDeliveryProgress): boolean {
 		const { record, delivery } = item;
 		if (waitingReason(waitingFactsOf(record)) !== undefined) return true;
+		if (this.isBootDeferred(record)) return true;
 		const run = record.host.observe();
 		// Dispatched work belongs to delivery machinery until proof commits; its
 		// prompt Promise must not turn subsequent model duration into a deadline.
@@ -428,6 +444,15 @@ export class MessageDeliveryScheduler {
 			return "pending";
 		}
 		if (!record.host.currentHandle()) {
+			if (this.#mustDeferBoot(record)) {
+				// The concurrency bound defers the boot rather than rejecting the Delivery;
+				// `startDeferredBoots` boots the recipient once a slot frees (ADR 0007).
+				pending.set(delivery.messageId, delivery);
+				if (!this.#bootsInFlight.has(record.identity.agentId)) this.#deferredBoots.add(record.identity.agentId);
+				const progress = this.#progress.get(delivery.messageId);
+				if (progress) progress.admitted = true;
+				return "pending";
+			}
 			try {
 				await this.#startRecipientForDelivery(record);
 			} catch (error) {
@@ -609,6 +634,7 @@ export class MessageDeliveryScheduler {
 		this.#deferredResumeByAgent.delete(record.identity.agentId);
 		this.#parkedRunByAgent.delete(record.identity.agentId);
 		this.#pendingByAgent.delete(record.identity.agentId);
+		this.#deferredBoots.delete(record.identity.agentId);
 		record.host.removeRetentionReason("pending_delivery");
 	}
 
@@ -1231,6 +1257,7 @@ export class MessageDeliveryScheduler {
 	}
 
 	hasProgress(record: AgentRecord): boolean {
+		if (this.isBootDeferred(record)) return true;
 		const agentId = record.identity.agentId;
 		const activeDeferred = this.#activeDeferredByAgent.get(agentId);
 		// Transcript proof ends Delivery progress. A proven Delivery may still own its
@@ -1255,6 +1282,132 @@ export class MessageDeliveryScheduler {
 			(this.#isDeliveryBoundary(record) ||
 				(run.phase === "live" && run.attention === "agent_wait" && (delivery.isIncomingRequest || delivery.preemptsAgentWait)))
 		);
+	}
+
+	/**
+	 * Whether a spawned child may boot now: nothing is queued ahead of it and working
+	 * Runs are below `maxConcurrentAgentRuns`. Approximate: concurrent callers can
+	 * each see the same free slot (ADR 0007).
+	 */
+	mayBootNow(): boolean {
+		return this.#deferredBoots.size === 0 && this.#hasFreeSlot();
+	}
+
+	/**
+	 * Boots deferred recipients in deferral order while working Runs are below the
+	 * bound. The count is derived on every call, so any activity change may call
+	 * this. Resolves once the boots it started have dispatched or failed.
+	 */
+	startDeferredBoots(): Promise<void> {
+		const boots: Promise<void>[] = [];
+		for (const agentId of this.#deferredBoots) {
+			const record = this.#agents.get(agentId);
+			// Resolved, discarded, or booted by another path since it was deferred.
+			if (!record || !this.#awaitsBoot(record)) {
+				this.#deferredBoots.delete(agentId);
+				continue;
+			}
+			if (!this.#hasFreeSlot()) break;
+			this.#deferredBoots.delete(agentId);
+			boots.push(this.#startDeferredBoot(record));
+		}
+		// A boot that ends without work frees its slot without an activity change,
+		// so hand it on now. Each round removes the boots it starts, so this ends.
+		return Promise.all(boots).then(() =>
+			boots.length > 0 && this.#deferredBoots.size > 0 ? this.startDeferredBoots() : undefined);
+	}
+
+	#hasFreeSlot(): boolean {
+		return this.#countWorkingRuns() < this.#workflowPolicy.current().maxConcurrentAgentRuns;
+	}
+
+	#startDeferredBoot(record: AgentRecord): Promise<void> {
+		const agentId = record.identity.agentId;
+		// Held until dispatch: between boot and dispatch the Run is settled and
+		// would not count, so another check could hand out the same slot.
+		this.#bootsInFlight.add(agentId);
+		return record.host.lane.run(async () => {
+			try {
+				// The check that queued this boot ran before shutdown began.
+				if (this.#isShuttingDown()) return;
+				// Its Deliveries may have resolved, or another path booted it, meanwhile.
+				this.#removeProvenDeliveriesInLane(record);
+				if (!this.#pendingByAgent.get(agentId)?.size) return;
+				if (!record.host.currentHandle()) {
+					try {
+						await this.#startRecipientForDelivery(record);
+					} catch (error) {
+						for (const delivery of this.#pendingByAgent.get(agentId)?.values() ?? []) {
+							this.#failDeliveryProgress(delivery, error);
+						}
+						this.#pendingByAgent.delete(agentId);
+						if (
+							error instanceof ProtocolInvariantError ||
+							error instanceof EvidenceUnavailableError
+						) throw error;
+						return;
+					}
+				}
+				this.#addPendingDeliveryReason(record);
+				await this.#drainInLane(record);
+			} finally {
+				this.#bootsInFlight.delete(agentId);
+			}
+		});
+	}
+
+	#mustDeferBoot(record: AgentRecord): boolean {
+		// Only spawned children wait. The Owner and Moderators supervise the
+		// Workflow, so deferring them could stall the work that would free a slot.
+		if (record.identity.directSpawnerAgentId === null) return false;
+		return this.#bootsInFlight.has(record.identity.agentId) ||
+			this.#deferredBoots.has(record.identity.agentId) || !this.mayBootNow();
+	}
+
+	/**
+	 * Queue membership, not state alone, makes a boot deferred: a failed Run also
+	 * leaves a dormant Agent with pending Deliveries, and calling that queued would
+	 * hide the failure behind Delivery Progress.
+	 */
+	isBootDeferred(record: AgentRecord): boolean {
+		const agentId = record.identity.agentId;
+		return (this.#deferredBoots.has(agentId) || this.#bootsInFlight.has(agentId)) &&
+			this.#awaitsBoot(record);
+	}
+
+	/** A dormant Agent holding unresolved Deliveries. */
+	#awaitsBoot(record: AgentRecord): boolean {
+		const pending = this.#pendingByAgent.get(record.identity.agentId);
+		if (!pending?.size || record.host.currentHandle()) return false;
+		return [...pending.values()].some(delivery =>
+			!delivery.inspectProof() && !delivery.isSuppressed?.());
+	}
+
+	/** Working Runs, plus deferred boots started but not yet dispatched. */
+	#countWorkingRuns(): number {
+		let count = this.#bootsInFlight.size;
+		for (const record of this.#agents.values()) {
+			if (!this.#bootsInFlight.has(record.identity.agentId) && this.#isWorking(record)) count += 1;
+		}
+		return count;
+	}
+
+	/**
+	 * Only spawned children's model work holds a slot; the bound caps child
+	 * concurrency, and the Owner and Moderators supervise outside it. A settled
+	 * Run with Delivery Progress counts: a just-spawned child sits there while its
+	 * Creation Request dispatches, and skipping it would let a burst of spawns pass
+	 * the bound. Agent Wait, human input, Run Suspension, an Interruption Hold, and
+	 * an idle retained Run all wait on someone else; counting them would let a
+	 * waiting parent block the child it waits for.
+	 */
+	#isWorking(record: AgentRecord): boolean {
+		if (record.identity.directSpawnerAgentId === null) return false;
+		const run = record.host.observe();
+		if (run.phase === "dormant" || run.suspension) return false;
+		if (run.phase === "starting") return true;
+		return (run.work === "active" || this.hasProgress(record)) && run.attention === "none" &&
+			!record.host.hasRetentionReason("interruption_hold");
 	}
 
 	#hasPendingScheduling(record: AgentRecord): boolean {

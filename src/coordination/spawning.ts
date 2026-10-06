@@ -252,48 +252,52 @@ export class DefaultChildSpawner {
 			};
 		}
 
-		try {
-			if (this.#boundaryHooks.beforeRunStart?.() === "confirmed_failure") {
-				throw new Error("Confirmed Run startup failure");
-			}
-			await child.host.lane.run(() => {
-				if (this.#isShuttingDown()) {
-					throw new Error("host_shutting_down: Workflow is shutting down");
+		// Over `maxConcurrentAgentRuns`, or behind earlier deferred boots, skip the
+		// boot: Creation Request admission defers it until its turn (ADR 0007).
+		if (this.#messages.mayBootNow()) {
+			try {
+				if (this.#boundaryHooks.beforeRunStart?.() === "confirmed_failure") {
+					throw new Error("Confirmed Run startup failure");
 				}
-				return child.host.startInLane(["pending_delivery"]);
-			});
-		} catch (error) {
-			this.#messages.recordCreationRequestFailure(creationDelivery, error);
-			if (error instanceof ProtocolInvariantError) throw error;
-			return {
-				spawnStatus: "created",
-				agentId,
-				requestMessageId: requestId,
-				messageStatus: "not_sent",
-				failedStage: "run_start",
-				reason: errorMessage(error),
-				effectiveConfiguration: prepared.configuration,
-			};
-		}
-		const startedHandle = child.host.currentHandle();
-		if (!startedHandle) {
-			throw new Error("invariant_violation: confirmed child Run has no handle");
-		}
-		if (
-			this.#boundaryHooks.afterRunStart?.({
-				handle: startedHandle,
-				identity,
-			}) === "confirmation_lost"
-		) {
-			this.#messages.recordCreationRequestFailure(creationDelivery,
-				new Error("Creation Request scheduling stopped after uncertain Run confirmation"));
-			return {
-				spawnStatus: "unknown",
-				candidateAgentId: agentId,
-				candidateRequestMessageId: requestId,
-				lastConfirmedStage: "identity",
-				effectiveConfiguration: prepared.configuration,
-			};
+				await child.host.lane.run(() => {
+					if (this.#isShuttingDown()) {
+						throw new Error("host_shutting_down: Workflow is shutting down");
+					}
+					return child.host.startInLane(["pending_delivery"]);
+				});
+			} catch (error) {
+				this.#messages.recordCreationRequestFailure(creationDelivery, error);
+				if (error instanceof ProtocolInvariantError) throw error;
+				return {
+					spawnStatus: "created",
+					agentId,
+					requestMessageId: requestId,
+					messageStatus: "not_sent",
+					failedStage: "run_start",
+					reason: errorMessage(error),
+					effectiveConfiguration: prepared.configuration,
+				};
+			}
+			const startedHandle = child.host.currentHandle();
+			if (!startedHandle) {
+				throw new Error("invariant_violation: confirmed child Run has no handle");
+			}
+			if (
+				this.#boundaryHooks.afterRunStart?.({
+					handle: startedHandle,
+					identity,
+				}) === "confirmation_lost"
+			) {
+				this.#messages.recordCreationRequestFailure(creationDelivery,
+					new Error("Creation Request scheduling stopped after uncertain Run confirmation"));
+				return {
+					spawnStatus: "unknown",
+					candidateAgentId: agentId,
+					candidateRequestMessageId: requestId,
+					lastConfirmedStage: "identity",
+					effectiveConfiguration: prepared.configuration,
+				};
+			}
 		}
 
 		try {

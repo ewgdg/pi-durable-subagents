@@ -904,7 +904,7 @@ function formatDetailedRun(status: AgentRosterStatus): string {
 		return formatSuspensionDetail(run.suspension);
 	}
 	const state = run.phase === "dormant"
-		? ["Dormant"]
+		? [run.queued ? "Queued" : "Dormant"]
 		: [
 			capitalize(run.phase),
 			run.work,

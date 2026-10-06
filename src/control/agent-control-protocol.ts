@@ -231,7 +231,11 @@ const AgentRunSuspensionSchema = Type.Union([
 	closed({ reason: Type.Literal("runtime_error"), evidence: RunFailureEvidenceSchema }),
 ]);
 const AgentRunStateSchema = Type.Union([
-	closed({ phase: Type.Literal("dormant"), retentionReasons: Type.Tuple([]) }),
+	closed({
+		phase: Type.Literal("dormant"),
+		retentionReasons: Type.Tuple([]),
+		queued: Type.Optional(Type.Literal(true)),
+	}),
 	closed({
 		phase: Type.Union([Type.Literal("starting"), Type.Literal("live"), Type.Literal("ending")]),
 		work: Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("settled")])),

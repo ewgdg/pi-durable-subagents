@@ -120,7 +120,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 		const failures: string[] = [];
 		let dispatched!: ReturnType<typeof parent.deliver>;
 		const handle = Object.freeze({ sequence: 1 });
-		const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
+		const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: new WorkflowPolicyStore() });
 		const record = {
 			identity: { agentId: "recipient" },
 			host: {

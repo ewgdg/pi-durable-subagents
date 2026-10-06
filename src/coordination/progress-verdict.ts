@@ -139,7 +139,9 @@ function combineDependencies(
 const EXPLANATORY_WAITING_REASONS: ReadonlySet<WaitingReason> = new Set(["interactive_selection", "isolated_resumption"]);
 
 function localVerdict(facts: AgentProgressFacts): ProgressVerdict {
-	if (facts.phase === "dormant" || facts.currentRunFailed) return "inactive";
+	if (facts.currentRunFailed) return "inactive";
+	// Delivery Progress on a dormant Agent is a boot deferred by the concurrency bound.
+	if (facts.phase === "dormant") return facts.deliveryProgress ? "progressing" : "inactive";
 	const reason = waitingReason(facts);
 	const isExplanatory = reason !== undefined && EXPLANATORY_WAITING_REASONS.has(reason);
 	if (reason !== undefined && !isExplanatory) return "waiting";

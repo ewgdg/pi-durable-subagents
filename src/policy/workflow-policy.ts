@@ -7,6 +7,8 @@ import { parseDocument } from "yaml";
 import { parseExcludedModels } from "./model-exclusion.ts";
 
 export type WorkflowPolicySnapshot = Readonly<{
+	/** Approximate bound on concurrently working Agent Runs; see ADR 0007. */
+	maxConcurrentAgentRuns: number;
 	maxPendingDeliveriesPerAgent: number;
 	operationReviewIntervalMs: number;
 	deliveryProgressIntervalMs: number;
@@ -14,6 +16,7 @@ export type WorkflowPolicySnapshot = Readonly<{
 }>;
 
 export const DEFAULT_WORKFLOW_POLICY: WorkflowPolicySnapshot = Object.freeze({
+	maxConcurrentAgentRuns: 8,
 	maxPendingDeliveriesPerAgent: 256,
 	operationReviewIntervalMs: 600_000,
 	deliveryProgressIntervalMs: 60_000,
@@ -21,6 +24,7 @@ export const DEFAULT_WORKFLOW_POLICY: WorkflowPolicySnapshot = Object.freeze({
 });
 
 const POLICY_FIELDS = new Set<keyof WorkflowPolicySnapshot>([
+	"maxConcurrentAgentRuns",
 	"maxPendingDeliveriesPerAgent",
 	"operationReviewIntervalMs",
 	"deliveryProgressIntervalMs",
@@ -81,6 +85,10 @@ export function parseWorkflowPolicy(source: string): WorkflowPolicySnapshot {
 	}
 
 	const snapshot = Object.freeze({
+		maxConcurrentAgentRuns: parsePositiveSafeInteger(
+			"maxConcurrentAgentRuns",
+			policyValueOrDefault(parsed, "maxConcurrentAgentRuns"),
+		),
 		maxPendingDeliveriesPerAgent: parsePositiveSafeInteger(
 			"maxPendingDeliveriesPerAgent",
 			policyValueOrDefault(parsed, "maxPendingDeliveriesPerAgent"),
@@ -195,6 +203,7 @@ function parseBoundedInterval(value: unknown, field = "operationReviewIntervalMs
 }
 
 function assertCompleteWorkflowPolicy(snapshot: WorkflowPolicySnapshot): void {
+	parsePositiveSafeInteger("maxConcurrentAgentRuns", snapshot.maxConcurrentAgentRuns);
 	parsePositiveSafeInteger(
 		"maxPendingDeliveriesPerAgent",
 		snapshot.maxPendingDeliveriesPerAgent,

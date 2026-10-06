@@ -141,6 +141,7 @@ export class MessageCoordinator {
 		this.#requestEvidence = options.requestEvidence;
 		this.#requestRelationships = options.requestRelationships;
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
+			agents: this.#agents,
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			scheduleDeliveryDispatch: this.#boundaryHooks.scheduleDeliveryDispatch,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
@@ -148,6 +149,7 @@ export class MessageCoordinator {
 			preemptAgentWait: (record, reserveDelivery) =>
 				this.#waitPreemptionSubscriber?.(record, reserveDelivery) ?? Promise.resolve(),
 			workflowPolicy: options.workflowPolicy,
+			isShuttingDown: options.isShuttingDown,
 			deliveryProgressClock: options.deliveryProgressClock,
 			onDeliveryProgressChanged: () => {
 				for (const subscriber of this.#deliveryProgressSubscribers) subscriber();
@@ -274,6 +276,9 @@ export class MessageCoordinator {
 	blockedDeliveries() { return this.#deliveryScheduler.blockedDeliveries(); }
 	hasAutonomousDeliveryProgress(): boolean { return this.#deliveryScheduler.hasAutonomousProgress(); }
 
+	mayBootNow(): boolean { return this.#deliveryScheduler.mayBootNow(); }
+	startDeferredBoots(): Promise<void> { return this.#deliveryScheduler.startDeferredBoots(); }
+	isBootDeferred(record: AgentRecord): boolean { return this.#deliveryScheduler.isBootDeferred(record); }
 	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
 
 	shutdownDeliveryProgress(): void { this.#deliveryScheduler.shutdownProgress(); }
