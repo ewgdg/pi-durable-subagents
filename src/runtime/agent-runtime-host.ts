@@ -205,7 +205,8 @@ export interface AgentRuntimeHost {
 	currentResumptionHold(): RunResumptionHandle | undefined;
 	currentRunSuspension(): AgentRunSuspension | undefined;
 	runSuspensionBlocksExecution(): boolean;
-	prepareSuspensionResumptionInLane(options?: { humanInputPending: boolean }): Promise<void>;
+	waitForSuspendedRunToSettle(): Promise<void>;
+	prepareSuspensionResumptionInLane(): Promise<void>;
 	setRunSuspensionHandler(handler: (suspension: AgentRunSuspension | undefined, handle: AgentRunHandle, nativeInput?: SuspendedNativeInput) => void): void;
 	isCurrentResumptionHold(hold: RunResumptionHandle): boolean;
 	beginIsolatedResumptionInLane(hold: RunResumptionHandle): boolean;

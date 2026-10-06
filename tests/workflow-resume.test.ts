@@ -394,6 +394,7 @@ function runtimeParticipant(agentId: string) {
 		currentResumptionHold: () => hold,
 		currentRunSuspension: () => undefined,
 		prepareSuspensionResumptionInLane: async () => undefined,
+		waitForSuspendedRunToSettle: async () => undefined,
 		isCurrentResumptionHold: (candidate: unknown) => candidate === hold,
 		currentRunHasInput: () => hasInput,
 		currentHandle: () => handle, latestStartedRunSequence: () => sequence,
