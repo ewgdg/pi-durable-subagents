@@ -141,6 +141,10 @@ process.exitCode = await runTestProcess([
 	"--test",
 	`--test-concurrency=${concurrency}`,
 	`--test-timeout=${timeoutMs}`,
+	// Node marks a timed-out test failed but waits forever for its file's
+	// process while any handle keeps it alive, holding the suite until the
+	// supervisor deadline. Exit each file once its tests finish or time out.
+	"--test-force-exit",
 	"--test-reporter=dot",
 	...forwardedArguments,
 	...selectedFiles,
