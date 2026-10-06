@@ -527,6 +527,16 @@ export class MessageCoordinator {
 		this.#deliveryScheduler.recordAdmissionFailure(options.recipient, this.#creationRequestDelivery(options), error);
 	}
 
+	/**
+	 * Call only when returning a definitive not_sent receipt: the Spawner then knows
+	 * its Creation Request was never admitted, and retrying it is the Spawner's own
+	 * dependency, so it stays out of Delivery Stall observation. A failure that
+	 * throws instead keeps the recorded scheduling loss under observation.
+	 */
+	discardRejectedCreationRequestProgress(requestId: string): void {
+		this.#deliveryScheduler.discardUncreatedDeliveryProgress(requestId);
+	}
+
 	async admitCreationRequest(options: CreationRequestScheduling): Promise<MessageDeliveryAdmission> {
 		return this.#deliveryScheduler.admit(options.recipient, this.#creationRequestDelivery(options));
 	}

@@ -268,6 +268,7 @@ export class DefaultChildSpawner {
 			} catch (error) {
 				this.#messages.recordCreationRequestFailure(creationDelivery, error);
 				if (error instanceof ProtocolInvariantError) throw error;
+				this.#messages.discardRejectedCreationRequestProgress(requestId);
 				return {
 					spawnStatus: "created",
 					agentId,
@@ -314,6 +315,7 @@ export class DefaultChildSpawner {
 				throw new AggregateError([error, cleanupError], "Creation Request admission cleanup failed");
 			}
 			if (error instanceof ProtocolInvariantError) throw error;
+			this.#messages.discardRejectedCreationRequestProgress(requestId);
 			return {
 				spawnStatus: "created",
 				agentId,
