@@ -63,7 +63,7 @@ export class RunSupervisor {
 				new Error("Agent Run aborted during Runtime initialization"),
 			)
 			: undefined;
-		return target.host.lane.run(async () => {
+		const runInLane = (): Promise<RunControlReceipt> => target.host.lane.run(async () => {
 			if (control.operation === "abort") {
 				const abortReceipt = (
 					disposition: "aborted" | "not_running",
@@ -128,6 +128,9 @@ export class RunSupervisor {
 			const disposition = await target.host.interruptCurrentRunInLane();
 			return { agentId: target.identity.agentId, disposition };
 		});
+		return control.operation === "resume"
+			? target.host.waitForSuspendedRunToSettle().then(runInLane)
+			: runInLane();
 	}
 
 	/** Admit recovery through ordinary scheduling; admission is not turn completion. */
@@ -213,7 +216,7 @@ export class RunSupervisor {
 	): Promise<boolean> {
 		const hold = record.host.currentResumptionHold();
 		if (!hold) return false;
-		if (record.host.currentRunSuspension()) await record.host.prepareSuspensionResumptionInLane({ humanInputPending: true });
+		if (record.host.currentRunSuspension()) await record.host.prepareSuspensionResumptionInLane();
 		if (!record.host.beginIsolatedResumptionInLane(hold)) {
 			throw new Error("Run resumption is already in progress");
 		}

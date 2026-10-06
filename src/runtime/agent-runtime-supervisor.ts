@@ -439,13 +439,21 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#runSuspensionHandler = handler;
 	}
 
-	async prepareSuspensionResumptionInLane(options?: { humanInputPending: boolean }): Promise<void> {
+	/**
+	 * An explicit resume submits to an idle native session, so it waits for the
+	 * stopped turn to settle. Call it outside the Agent lane: that settlement
+	 * re-enters the lane at its safe boundary, which also records the Run's
+	 * owed Answers. Interactive input skips it, since the native prompt's own
+	 * preflight awaits the resumption decision.
+	 */
+	async waitForSuspendedRunToSettle(): Promise<void> {
+		if (this.#runSuspension) await this.#runtime?.runtime.waitForIdle();
+	}
+
+	async prepareSuspensionResumptionInLane(): Promise<void> {
 		// The terminal stop drains the native queue asynchronously. A resumption
 		// submission must observe that capture before it can be admitted.
 		await this.#suspensionQueueCapture;
-		// Interactive input preflight awaits this host decision. Waiting for the native
-		// prompt to become idle here would deadlock that same submission.
-		if (this.#runSuspension && !options?.humanInputPending) await this.#runtime?.runtime.waitForIdle();
 	}
 
 	isCurrentResumptionHold(hold: RunResumptionHandle): boolean {
