@@ -1397,16 +1397,19 @@ export class MessageDeliveryScheduler {
 	 * concurrency, and the Owner and Moderators supervise outside it. A settled
 	 * Run with Delivery Progress counts: a just-spawned child sits there while its
 	 * Creation Request dispatches, and skipping it would let a burst of spawns pass
-	 * the bound. Agent Wait, human input, Run Suspension, an Interruption Hold, and
-	 * an idle retained Run all wait on someone else; counting them would let a
-	 * waiting parent block the child it waits for.
+	 * the bound. A settled Run that still owes an Answer counts too: an Obligation
+	 * Reminder restarts it, and a boot in that gap would pass the bound. Agent Wait,
+	 * human input, Run Suspension, an Interruption Hold, and an idle retained Run
+	 * all wait on someone else; counting them would let a waiting parent block the
+	 * child it waits for.
 	 */
 	#isWorking(record: AgentRecord): boolean {
 		if (record.identity.directSpawnerAgentId === null) return false;
 		const run = record.host.observe();
 		if (run.phase === "dormant" || run.suspension) return false;
 		if (run.phase === "starting") return true;
-		return (run.work === "active" || this.hasProgress(record)) && run.attention === "none" &&
+		const owesAnswer = record.host.requestRelationshipIds("answer_owed").length > 0;
+		return (run.work === "active" || owesAnswer || this.hasProgress(record)) && run.attention === "none" &&
 			!record.host.hasRetentionReason("interruption_hold");
 	}
 
