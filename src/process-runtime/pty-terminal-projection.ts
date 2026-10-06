@@ -626,6 +626,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 				// handles and its output worker after process exit; skipping it keeps the Node
 				// test worker and production host alive indefinitely.
 				signalOwnedPty(this.#child, "SIGKILL");
+				releaseWindowsConptyInput(this.#child);
 			} catch (error) {
 				processGroupCleanupError = error;
 			}
@@ -741,6 +742,16 @@ function signalOwnedPty(child: nodePty.IPty, signal: NodeJS.Signals): void {
 		return;
 	}
 	signalOwnedProcessGroup(child.pid, signal);
+}
+
+// node-pty's default ConPTY kill never closes the agent's input pipe socket
+// (`WindowsPtyAgent.kill` destroys it only on the conpty.dll path), so each
+// disposed child leaks one pipe handle. node-pty offers no public close for it.
+// If its internals change, the Windows CI leaked-handle check reports the pipe.
+function releaseWindowsConptyInput(child: nodePty.IPty): void {
+	if (process.platform !== "win32") return;
+	const agent = (child as unknown as { _agent?: { inSocket?: { destroy(): void } } })._agent;
+	agent?.inSocket?.destroy();
 }
 
 function signalOwnedProcessGroup(pid: number, signal: NodeJS.Signals): void {

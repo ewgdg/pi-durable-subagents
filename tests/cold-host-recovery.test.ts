@@ -39,14 +39,7 @@ import {
 } from "./support/process-model-broker.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
-const durableModelBrokers = new Set<ProcessModelBroker>();
 const hostModelBrokers = new WeakMap<TestOwnerHost, ProcessModelBroker>();
-
-test.after(async () => {
-	const brokers = [...durableModelBrokers];
-	durableModelBrokers.clear();
-	await Promise.all(brokers.map((broker) => broker.close()));
-});
 
 test("a fresh Owner host rediscovers one dormant child without starting its Run", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
@@ -1321,14 +1314,19 @@ async function createUnboundTestOwnerHost(
 			return response ? fauxAssistantMessage(response) : undefined;
 		},
 	});
-	durableModelBrokers.add(broker);
+	let host: TestOwnerHost;
 	try {
-		return await createHostWithDurableModelBroker(t, extension, broker, options);
+		host = await createHostWithDurableModelBroker(t, extension, broker, options);
 	} catch (error) {
-		durableModelBrokers.delete(broker);
 		await broker.close();
 		throw error;
 	}
+	// The broker outlives host restarts within the test. Cleanup runs in
+	// registration order, so the first host is disposed before its model goes
+	// away. Reopened hosts register their cleanup later; tests dispose them
+	// before finishing, and a failed test disposes them after the broker closes.
+	t.after(() => broker.close());
+	return host;
 }
 
 async function reopenOwner(

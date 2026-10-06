@@ -121,6 +121,55 @@ test("direct process-test execution isolates Pi settings inherited from a spawne
 	]);
 });
 
+test("a test file fails when its tests leave a handle open, naming where it was created", {
+	timeout: SUPERVISOR_TEST_TIMEOUT_MS,
+}, async (t) => {
+	const fixtureDirectory = await mkdtemp(join(tmpdir(), "pi-test-leaked-handles-"));
+	t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
+	const supervisedRunUrl = new URL("./support/supervised-run.ts", import.meta.url).href;
+	const leakingPath = join(fixtureDirectory, "leaks.test.mjs");
+	const cleanPath = join(fixtureDirectory, "cleans-up.test.mjs");
+	await Promise.all([
+		writeFile(leakingPath, [
+			`import ${JSON.stringify(supervisedRunUrl)};`,
+			`import { createServer } from "node:net";`,
+			`import test from "node:test";`,
+			`test("leaves an interval and a server running", () => {`,
+			`	setInterval(() => {}, 1_000);`,
+			`	createServer().listen(0, "localhost");`,
+			`});`,
+		].join("\n"), "utf8"),
+		writeFile(cleanPath, [
+			`import ${JSON.stringify(supervisedRunUrl)};`,
+			`import { spawn } from "node:child_process";`,
+			`import { createServer } from "node:net";`,
+			`import { after, describe, test } from "node:test";`,
+			`test("closes asynchronously in test-owned cleanup", (t) => {`,
+			`	const server = createServer().listen(0);`,
+			`	const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"]);`,
+			`	t.after(() => { server.close(); child.kill(); });`,
+			`});`,
+			`describe("a suite sharing a server", () => {`,
+			`	const server = createServer().listen(0);`,
+			`	after(() => server.close());`,
+			`	test("uses the shared server", () => {});`,
+			`});`,
+		].join("\n"), "utf8"),
+	]);
+	const env = { ...process.env };
+	delete env.NODE_TEST_CONTEXT;
+	const run = (path: string) => runCommand(process.execPath, [
+		"--test", "--test-force-exit", "--test-reporter=dot", path,
+	], { cwd: fixtureDirectory, env });
+	const [leaking, clean] = await Promise.all([run(leakingPath), run(cleanPath)]);
+
+	assert.notEqual(leaking.code, 0, leaking.output);
+	assert.match(leaking.output, /Timeout created at:\n\s+at .*leaks\.test\.mjs:5:\d+/, leaking.output);
+	// The server binds after a host lookup, so only its trigger names this line.
+	assert.match(leaking.output, /TCPServerWrap created at:\n\s+at .*leaks\.test\.mjs:6:\d+/i, leaking.output);
+	assert.equal(clean.code, 0, clean.output);
+});
+
 async function assertPiSettingsRemainUnchanged(
 	t: TestContext,
 	arguments_: readonly string[],
