@@ -253,14 +253,15 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	const dormantView = await openDormantAgentView(host, moderator.id);
 	// The dormant re-attachment replays the complete Moderator transcript, so a fresh
 	// viewport shows its tail while the Moderator Input sits at the top. Pi's
-	// fullscreen transcript viewport scrolls with Page Up/Page Down and Home/End
-	// (docs/agent-selector.md:96), so return to the boundary this assertion names
-	// instead of reading the tail the display happens to hold.
+	// fullscreen transcript viewport jumps to its top with Ctrl+Home
+	// (docs/agent-selector.md); plain Home stays with the editor as cursor-line-start.
+	// Return to the boundary this assertion names instead of reading the tail the
+	// display happens to hold.
 	await waitForPhysicalDisplayContent(
 		dormantView.view,
 		(rendered) => rendered.includes("Moderator"),
 	);
-	dormantView.view.handleInput?.("\x1b[H");
+	dormantView.view.handleInput?.("\x1b[1;5H");
 	const dormantRendered = stripTerminalSequences(await waitForPhysicalDisplayContent(
 		dormantView.view,
 		(rendered) => rendered.includes("agent-coordination.moderator-input"),
