@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import xtermHeadless from "@xterm/headless";
+import { getKeybindings } from "@earendil-works/pi-tui";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
@@ -43,6 +44,9 @@ const FAILURE_FIXTURE = fileURLToPath(
 	new URL("./fixtures/agent-view-failure-pty-fixture.ts", import.meta.url),
 );
 const DIRECT_AGENT_INPUT = "direct input through child editor";
+// Pi binds fullscreen jump-to-latest (`tui.altScreen.bottom`) to Ctrl+End;
+// plain End only moves the editor cursor since Pi 1.0.3.
+const CTRL_END = "\x1b[1;5F";
 // Resolve through Node's package lookup rather than a path relative to this
 // file: worktrees under .worktrees/ use the root checkout's node_modules.
 const PI_CLI = fileURLToPath(
@@ -62,6 +66,12 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 	// long-transcript mouse navigation and complete-frame reflow at a non-default
 	// size (docs/agent-view-acceptance.md: mouse input, streaming, and reflow
 	// evidence). The remaining 80x24 cases still cover the default size.
+	// Fail fast if Pi rebinds jump-to-latest again: a stale key otherwise leaves
+	// the view scrolled up and surfaces only as a fixture timeout (#191).
+	assert.ok(
+		getKeybindings().matches(CTRL_END, "tui.altScreen.bottom"),
+		"Pi no longer binds Ctrl+End to fullscreen jump-to-latest (tui.altScreen.bottom)",
+	);
 	const terminal = launchFixture(FIXTURE, {
 		PTY_TEST_COLUMNS: "100",
 		PTY_TEST_ROWS: "30",
@@ -126,9 +136,10 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 			frame.some((line) => line.includes("Viewed child transcript line 3")) &&
 			!frame.some((line) => line.includes("Viewed child transcript line 59"))
 		);
-		terminal.write("\x1b[F");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Viewed child transcript line 59"))
+		terminal.write(CTRL_END);
+		await terminal.waitForScreen(
+			(frame) => frame.some((line) => line.includes("Viewed child transcript line 59")),
+			"Agent view tail after Ctrl+End",
 		);
 		terminal.write(DIRECT_AGENT_INPUT);
 		await terminal.waitForScreen((frame) =>
@@ -157,9 +168,10 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 			inspectedSettledFrame.some((line) => line.includes("Streaming child update 39")),
 			false,
 		);
-		terminal.write("\x1b[F");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Streaming child update 39"))
+		terminal.write(CTRL_END);
+		await terminal.waitForScreen(
+			(frame) => frame.some((line) => line.includes("Streaming child update 39")),
+			"streamed Agent view tail after Ctrl+End",
 		);
 		terminal.write("/agents");
 		await terminal.waitForScreen((frame) =>
