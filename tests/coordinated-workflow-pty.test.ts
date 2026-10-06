@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import xtermHeadless from "@xterm/headless";
+import { getKeybindings } from "@earendil-works/pi-tui";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
@@ -64,6 +65,12 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 	// long-transcript mouse navigation and complete-frame reflow at a non-default
 	// size (docs/agent-view-acceptance.md: mouse input, streaming, and reflow
 	// evidence). The remaining 80x24 cases still cover the default size.
+	// Fail fast if Pi rebinds jump-to-latest again: a stale key otherwise leaves
+	// the view scrolled up and surfaces only as a fixture timeout (#191).
+	assert.ok(
+		getKeybindings().matches(CTRL_END, "tui.altScreen.bottom"),
+		"Pi no longer binds Ctrl+End to fullscreen jump-to-latest (tui.altScreen.bottom)",
+	);
 	const terminal = launchFixture(FIXTURE, {
 		PTY_TEST_COLUMNS: "100",
 		PTY_TEST_ROWS: "30",
@@ -129,8 +136,9 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 			!frame.some((line) => line.includes("Viewed child transcript line 59"))
 		);
 		terminal.write(CTRL_END);
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Viewed child transcript line 59"))
+		await terminal.waitForScreen(
+			(frame) => frame.some((line) => line.includes("Viewed child transcript line 59")),
+			"Agent view tail after Ctrl+End",
 		);
 		terminal.write(DIRECT_AGENT_INPUT);
 		await terminal.waitForScreen((frame) =>
@@ -160,8 +168,9 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 			false,
 		);
 		terminal.write(CTRL_END);
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Streaming child update 39"))
+		await terminal.waitForScreen(
+			(frame) => frame.some((line) => line.includes("Streaming child update 39")),
+			"streamed Agent view tail after Ctrl+End",
 		);
 		terminal.write("/agents");
 		await terminal.waitForScreen((frame) =>
