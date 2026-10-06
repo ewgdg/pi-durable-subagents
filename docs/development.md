@@ -40,6 +40,12 @@ Keep one end-to-end process smoke per role (ordinary and Moderator).
 
 Cases that inject an event ordering a real child cannot produce on demand (for example a compaction edge without a Run, or dispatch completion racing settlement) use the scripted link in `tests/support/scripted-child-control-link.ts`.
 
+## Asserting after incident evaluation
+
+Operational Incident reconciliation and Request relationship retention trail a visible Run state change by at least one lane hop. Before asserting that something did *not* happen, or reading `retentionReasons`, await the affected Agent's `coordinator.forAgent(agentId).reachSafeBoundary()`: it runs after the reconciliation that Agent's settlement queued. Do not yield a fixed number of ticks instead; under load the outcome lands on either side of the check.
+
+Scope a negative check to the incident kind under test. A fixture that rejects a Delivery leaves a known scheduling loss, which can start a Delivery Stall Moderator on any obligated Request path reaching that recipient.
+
 ## Deadlines and containment
 
 Node's file timeout is 5 seconds for fast tests and 120 seconds for process/conformance tests. Independently, the supervisor starts a wall-clock timer when it launches the Node runner: `ceil(selected files / suite concurrency) × file timeout + 5 seconds`. A focused process file therefore gets 125 seconds; a name filter does not reduce that budget. Expiry reports the deadline, sends SIGTERM, then uses existing descendant force-kill cleanup after at most 100 ms of termination grace, and exits with code 124. Startup before launch and cleanup add time beyond that budget. This timer remains responsive when a test worker spins synchronously.
