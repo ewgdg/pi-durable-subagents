@@ -44,6 +44,7 @@ test("park entry does not await the idle Deferred prompt Promise after Delivery 
 		host,
 	} as unknown as AgentRecord;
 	const scheduler = new MessageDeliveryScheduler({
+		agents: new Map(),
 		workflowPolicy: new WorkflowPolicyStore(),
 	});
 	scheduler.integrate(record);
@@ -97,7 +98,7 @@ test("queued Delivery counts only while it can advance autonomously and before i
 		} as unknown as AgentRuntimeHost,
 	} as AgentRecord;
 	const policy = new WorkflowPolicyStore();
-	const scheduler = new MessageDeliveryScheduler({ workflowPolicy: policy, deliveryProgressClock: clock });
+	const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: policy, deliveryProgressClock: clock });
 	await scheduler.admitCustom(record, {
 		messageId: "ordinary-queued-work", deliveryMode: "deferred",
 		customMessage: { customType: "test", content: "Work", display: false } as never,
@@ -169,7 +170,7 @@ for (const scenario of ["safe boundary", "replaced reservation", "replaced reser
 			releaseIfEligibleInLane() {},
 		} as unknown as AgentRuntimeHost;
 		const record = { identity: { agentId: "recipient" }, host } as unknown as AgentRecord;
-		const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
+		const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: new WorkflowPolicyStore() });
 		scheduler.integrate(record);
 		const delivery = (messageId: string) => ({
 			messageId,
@@ -245,6 +246,7 @@ for (const scenario of [
 			} as unknown as AgentRuntimeHost,
 		} as unknown as AgentRecord;
 		const scheduler = new MessageDeliveryScheduler({
+			agents: new Map(),
 			workflowPolicy: new WorkflowPolicyStore(),
 			...(scenario === "frozen before dispatch" ? { afterSteerFreeze: () => "defer" as const } : {}),
 		});

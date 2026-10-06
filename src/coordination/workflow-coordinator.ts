@@ -806,6 +806,8 @@ export class WorkflowCoordinator {
 			entered = await this.#messages.beginParkingInLane(owner, handle);
 		});
 		if (!entered) return undefined;
+		// A parked Owner frees its concurrency slot without any host state change.
+		this.#queueDeferredBootCheck();
 		let left = false;
 		return async () => {
 			if (left) return;
@@ -1117,6 +1119,7 @@ export class WorkflowCoordinator {
 	#activityRefreshAll = false;
 	#notifyAgentActivityChanged(agentId?: string): void {
 		if (this.#shuttingDown) return;
+		this.#queueDeferredBootCheck();
 		// Unknown sources retain a conservative full refresh. A host or model event
 		// already identifies its source and must not read unrelated dormant history.
 		if (agentId === undefined) this.#activityRefreshAll = true;
@@ -1125,6 +1128,27 @@ export class WorkflowCoordinator {
 		// The selector shares this subscription with activity docks. Preserve global,
 		// immediate host-state publication even when transcript refresh is scoped.
 		for (const handler of this.#agentActivityChangeHandlers) handler();
+	}
+
+	#deferredBootCheckQueued = false;
+	/**
+	 * Every change that can free a concurrency slot (Run end, settlement, Agent Wait,
+	 * suspension, Holds, Owner parking) passes through activity notification. One
+	 * coalesced check per burst re-derives the count from current Run state (ADR 0007).
+	 */
+	#queueDeferredBootCheck(): void {
+		if (this.#deferredBootCheckQueued) return;
+		this.#deferredBootCheckQueued = true;
+		queueMicrotask(() => {
+			this.#deferredBootCheckQueued = false;
+			if (this.#shuttingDown) return;
+			this.#messages.startDeferredBoots().catch((error: unknown) => {
+				this.#ownerDiagnostics.push({
+					type: "error",
+					message: `Deferred Agent boot failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+		});
 	}
 
 	#scheduleAgentActivityRefresh(): void {

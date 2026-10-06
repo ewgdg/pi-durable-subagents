@@ -18,7 +18,7 @@ test("a failed Request remains blocked throughout unrelated recipient activity",
 			currentWorkState: () => run.phase === "live" ? run.work : "settled",
 		} as unknown as AgentRuntimeHost,
 	} as AgentRecord;
-	const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
+	const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: new WorkflowPolicyStore() });
 	scheduler.recordAdmissionFailure(record, {
 		messageId: "request",
 		deliveryMode: "deferred",

@@ -15,6 +15,7 @@ import { createUnboundTestOwnerHost } from "./support/pi-host.ts";
 test("strict Workflow Policy parsing fills defaults and freezes one complete snapshot", () => {
 	const defaults = parseWorkflowPolicy("{}");
 	assert.deepEqual(defaults, {
+		maxConcurrentAgentRuns: 8,
 		maxPendingDeliveriesPerAgent: 256,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 600_000,
@@ -23,12 +24,14 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 	assert.equal(Object.isFrozen(defaults), true);
 
 	const configured = parseWorkflowPolicy(JSON.stringify({
+		maxConcurrentAgentRuns: 3,
 		maxPendingDeliveriesPerAgent: 17,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
 		excludedModels: ["openai-codex/*", "openrouter/anthropic/claude-sonnet-4"],
 	}));
 	assert.deepEqual(configured, {
+		maxConcurrentAgentRuns: 3,
 		maxPendingDeliveriesPerAgent: 17,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
@@ -51,6 +54,9 @@ test("strict Workflow Policy parsing rejects the complete invalid document", () 
 		["null review interval", '{"operationReviewIntervalMs": null}'],
 		["zero delivery limit", '{"maxPendingDeliveriesPerAgent": 0}'],
 		["fractional delivery limit", '{"maxPendingDeliveriesPerAgent": 1.5}'],
+		["zero concurrency bound", '{"maxConcurrentAgentRuns": 0}'],
+		["fractional concurrency bound", '{"maxConcurrentAgentRuns": 2.5}'],
+		["null concurrency bound", '{"maxConcurrentAgentRuns": null}'],
 		["unsafe delivery limit", `{"maxPendingDeliveriesPerAgent": ${Number.MAX_SAFE_INTEGER + 1}}`],
 		["null delivery interval", '{"deliveryProgressIntervalMs": null}'],
 		["short delivery interval", '{"deliveryProgressIntervalMs": 999}'],
@@ -78,14 +84,6 @@ test("strict Workflow Policy parsing rejects the complete invalid document", () 
 	}
 });
 
-test("Workflow Policy rejects the removed execution limit as an unknown field", () => {
-	// ADR 0005 removed the Workflow-wide execution queue; strict parsing names the stale line.
-	assert.throws(
-		() => parseWorkflowPolicy('{"maxConcurrentAgentRuns": 8}'),
-		{ message: 'Workflow Policy contains unknown field "maxConcurrentAgentRuns"' },
-	);
-});
-
 test("Workflow Policy loads only the exact optional user file", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		processVisibleModel: false,
@@ -110,6 +108,7 @@ test("Workflow Policy loads only the exact optional user file", async (t) => {
 	assert.equal(loaded.ok, true);
 	if (!loaded.ok) throw new Error("Expected the configured policy to load");
 	assert.deepEqual(loaded.snapshot, {
+		maxConcurrentAgentRuns: 8,
 		maxPendingDeliveriesPerAgent: 2,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_200,
@@ -128,6 +127,7 @@ test("Workflow Policy reload publication replaces or preserves one whole snapsho
 	store.publish(replacement);
 	assert.equal(store.current(), replacement);
 	assert.deepEqual(store.current(), {
+		maxConcurrentAgentRuns: 8,
 		maxPendingDeliveriesPerAgent: 4,
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,

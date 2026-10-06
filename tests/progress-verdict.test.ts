@@ -40,6 +40,8 @@ function verdicts(snapshot: Partial<ProgressSnapshot> & Pick<ProgressSnapshot, "
 test("local facts map to one verdict: blocked waits outrank activity, explanatory waits only rescue a settled Agent", () => {
 	const rows: [string, AgentProgressFacts, string, string | undefined][] = [
 		["dormant", agent("a", { phase: "dormant", work: undefined, attention: undefined }), "inactive", undefined],
+		// A boot deferred by the concurrency bound waits only for capacity that working Runs hold.
+		["dormant with a deferred boot", agent("a", { phase: "dormant", work: undefined, attention: undefined, deliveryProgress: true }), "progressing", undefined],
 		["failed current Run", agent("a", { currentRunFailed: true, work: "active" }), "inactive", undefined],
 		["failed Run under human attention", agent("a", { currentRunFailed: true, attention: "input_required" }), "inactive", "input_required"],
 		["human input during active work", agent("a", { work: "active", attention: "input_required" }), "waiting", "input_required"],

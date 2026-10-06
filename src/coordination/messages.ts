@@ -141,6 +141,7 @@ export class MessageCoordinator {
 		this.#requestEvidence = options.requestEvidence;
 		this.#requestRelationships = options.requestRelationships;
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
+			agents: this.#agents,
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			scheduleDeliveryDispatch: this.#boundaryHooks.scheduleDeliveryDispatch,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
@@ -274,6 +275,8 @@ export class MessageCoordinator {
 	blockedDeliveries() { return this.#deliveryScheduler.blockedDeliveries(); }
 	hasAutonomousDeliveryProgress(): boolean { return this.#deliveryScheduler.hasAutonomousProgress(); }
 
+	hasBootCapacity(): boolean { return this.#deliveryScheduler.hasBootCapacity(); }
+	startDeferredBoots(): Promise<void> { return this.#deliveryScheduler.startDeferredBoots(); }
 	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
 
 	shutdownDeliveryProgress(): void { this.#deliveryScheduler.shutdownProgress(); }

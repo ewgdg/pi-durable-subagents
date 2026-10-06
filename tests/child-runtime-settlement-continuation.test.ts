@@ -65,6 +65,7 @@ test("an earlier settlement cannot mark a running child continuation idle", { ti
 	const policy = new WorkflowPolicyStore();
 	let dispatchAttempts = 0;
 	const scheduler = new MessageDeliveryScheduler({
+		agents: new Map(),
 		workflowPolicy: policy, deliveryProgressClock: clock,
 		// Retain the queued delivery at its dispatch boundary to test real eligibility.
 		scheduleDeliveryDispatch: () => { dispatchAttempts += 1; },

@@ -45,7 +45,7 @@ test("an active native Run cannot queue a reminder that clears before commitment
 		},
 	} as unknown as AgentRecord;
 	const reminder = createModelVisibleModeratorObligationReminder();
-	const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
+	const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: new WorkflowPolicyStore() });
 	try {
 		const delivery = {
 			messageId: "handling-reminder", deliveryMode: "deferred" as const, customMessage: reminder,
@@ -105,7 +105,7 @@ for (const outcome of ["suppressed", "failed"] as const) {
 				},
 			},
 		} as unknown as AgentRecord;
-		const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
+		const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: new WorkflowPolicyStore() });
 		try {
 			await scheduler.admitCustom(record, {
 				messageId: "reminder", deliveryMode: "deferred",
@@ -150,7 +150,7 @@ for (const kind of ["message", "request"] as const) {
 				},
 			},
 		} as unknown as AgentRecord;
-		const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
+		const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: new WorkflowPolicyStore() });
 		const content = `ordinary ${kind} admitted during reminder preparation`;
 		try {
 			await scheduler.admitCustom(record, {
