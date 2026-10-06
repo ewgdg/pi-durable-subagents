@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { escapeTerminalControls } from "./support/terminal-safe-text.ts";
+
 const SCRIPT = "/usr/bin/script";
 const FIXTURE = fileURLToPath(
 	new URL("./fixtures/human-request-native-editor-pty-fixture.ts", import.meta.url),
@@ -66,7 +68,7 @@ class PtyFixture {
 			child.once("close", (code, signal) => {
 				if (code === 0) resolve();
 				else reject(new Error(
-					`PTY fixture exited with ${code ?? signal ?? "unknown status"}\n${this.#output}`,
+					`PTY fixture exited with ${code ?? signal ?? "unknown status"}\n${escapeTerminalControls(this.#output)}`,
 				));
 			});
 		});
@@ -82,7 +84,7 @@ class PtyFixture {
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				cleanup();
-				reject(new Error(`Timed out waiting for ${JSON.stringify(value)}\n${this.#output}`));
+				reject(new Error(`Timed out waiting for ${JSON.stringify(value)}\n${escapeTerminalControls(this.#output)}`));
 			}, 10_000);
 			const inspect = () => {
 				if (!this.#output.includes(value)) return;
@@ -97,7 +99,7 @@ class PtyFixture {
 				}
 				cleanup();
 				reject(new Error(
-					`PTY fixture closed before ${JSON.stringify(value)} appeared\n${this.#output}`,
+					`PTY fixture closed before ${JSON.stringify(value)} appeared\n${escapeTerminalControls(this.#output)}`,
 				));
 			};
 			const cleanup = () => {
@@ -115,7 +117,7 @@ class PtyFixture {
 	async result(): Promise<{ answer: string }> {
 		await this.#closed;
 		const match = /__PTY_RESULT__(\{[^\r\n]+\})/.exec(this.#output);
-		if (!match) throw new Error(`PTY fixture produced no result marker\n${this.#output}`);
+		if (!match) throw new Error(`PTY fixture produced no result marker\n${escapeTerminalControls(this.#output)}`);
 		return JSON.parse(match[1]!) as { answer: string };
 	}
 

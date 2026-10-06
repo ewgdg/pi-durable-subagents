@@ -6,6 +6,8 @@ import test from "node:test";
 
 import xtermHeadless from "@xterm/headless";
 
+import { escapeTerminalControls } from "./support/terminal-safe-text.ts";
+
 const SCRIPT = "/usr/bin/script";
 const PTY_WAIT_TIMEOUT_MS = 5_000;
 const BANNER_ABSENCE_POLL_ATTEMPTS = 20;
@@ -104,7 +106,7 @@ class PtyFixture {
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				cleanup();
-				reject(new Error(`Timed out waiting for ${JSON.stringify(value)}\n${this.#output}`));
+				reject(new Error(`Timed out waiting for ${JSON.stringify(value)}\n${escapeTerminalControls(this.#output)}`));
 			}, PTY_WAIT_TIMEOUT_MS);
 			const inspect = () => {
 				if (!this.#output.includes(value)) return;
@@ -114,7 +116,7 @@ class PtyFixture {
 			const closed = () => {
 				cleanup();
 				reject(new Error(
-					`PTY fixture closed before ${JSON.stringify(value)} appeared\n${this.#output}`,
+					`PTY fixture closed before ${JSON.stringify(value)} appeared\n${escapeTerminalControls(this.#output)}`,
 				));
 			};
 			const cleanup = () => {

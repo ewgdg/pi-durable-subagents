@@ -19,6 +19,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { PI_CLI_READY_EVIDENCE_ENV } from "./fixtures/pi-cli-startup-ready-extension.ts";
 import { createProcessModelBroker } from "./support/process-model-broker.ts";
+import { escapeTerminalControls } from "./support/terminal-safe-text.ts";
 
 // These tests launch an *Owner* Pi CLI. A Pi-hosted test runner (one whose own
 // process is a coordination child) carries the child-only bootstrap variables,
@@ -1068,7 +1069,7 @@ class PtyFixture {
 			child.once("close", (code, signal) => {
 				if (code === 0) resolve();
 				else reject(new Error(
-					`PTY fixture exited with ${code ?? signal ?? "unknown status"}\n${this.#output}`,
+					`PTY fixture exited with ${code ?? signal ?? "unknown status"}\n${escapeTerminalControls(this.#output)}`,
 				));
 			});
 		});
@@ -1119,7 +1120,7 @@ class PtyFixture {
 			let poll: ReturnType<typeof setInterval> | undefined;
 			const timeout = setTimeout(() => {
 				cleanup();
-				reject(new Error(`Timed out waiting for ${description}\n${this.#output}`));
+				reject(new Error(`Timed out waiting for ${description}\n${escapeTerminalControls(this.#output)}`));
 			}, PTY_WAIT_TIMEOUT_MS);
 			const inspect = () => {
 				if (checking) return;
@@ -1140,7 +1141,7 @@ class PtyFixture {
 					cleanup();
 					if (predicate(frame)) resolve(frame);
 					else reject(new Error(
-						`PTY fixture closed before ${description} appeared\nFinal frame: ${JSON.stringify(frame)}\n${this.#output}`,
+						`PTY fixture closed before ${description} appeared\nFinal frame: ${JSON.stringify(frame)}\n${escapeTerminalControls(this.#output)}`,
 					));
 				}).catch((error: unknown) => {
 					cleanup();
@@ -1168,7 +1169,7 @@ class PtyFixture {
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				cleanup();
-				reject(new Error(`Timed out waiting for ${JSON.stringify(value)}\n${this.#output}`));
+				reject(new Error(`Timed out waiting for ${JSON.stringify(value)}\n${escapeTerminalControls(this.#output)}`));
 			}, PTY_WAIT_TIMEOUT_MS);
 			const inspect = () => {
 				if (!matches()) return;
@@ -1178,7 +1179,7 @@ class PtyFixture {
 			const closed = () => {
 				cleanup();
 				reject(new Error(
-					`PTY fixture closed before ${JSON.stringify(value)} appeared\n${this.#output}`,
+					`PTY fixture closed before ${JSON.stringify(value)} appeared\n${escapeTerminalControls(this.#output)}`,
 				));
 			};
 			const cleanup = () => {
