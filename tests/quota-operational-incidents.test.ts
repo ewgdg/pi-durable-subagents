@@ -33,7 +33,11 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 		let suspended = true;
 		for (const [agentId, record] of history.agents) {
 			if (agentId !== "requester") record.identity = { ...record.identity, directSpawnerAgentId: "requester" } as typeof record.identity;
+			// Each fixture host reports one live Run; its handle stays current.
+			const liveRun = { sequence: 1 };
 			record.host = {
+				currentHandle: () => liveRun,
+				isCurrent: (handle: unknown) => handle === liveRun,
 				observe: () => ({ phase: "live", work: "settled", attention: agentId === "requester" ? "agent_wait" : "none", retentionReasons: [{ reason: "answer_owed", count: 1 }],
 					suspension: agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined }),
 				currentRunSuspension: () => agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined,

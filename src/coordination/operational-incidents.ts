@@ -889,6 +889,13 @@ export class OperationalIncidentCoordinator {
 			);
 		}
 		const recipient = this.#requireAgent(snapshot.agentId);
+		// A Stall belongs to one settled Run. The admission below does not await the
+		// lane, so an abort queued there can end that Run first; a reminder that
+		// outlives it would boot a successor nobody asked for.
+		const stalledRun = recipient.host.currentHandle();
+		if (!stalledRun) {
+			throw new Error(`invariant_violation: Agent ${snapshot.agentId} has an Obligation Stall without a current Run`);
+		}
 		const requestTitle = this.#requestEvidence.requestMetadata(requestId).title;
 		const reminderEntryIds = () => obligationReminderEntryIds({
 			recipientAgentId: snapshot.agentId,
@@ -926,10 +933,11 @@ export class OperationalIncidentCoordinator {
 				requestTitle,
 			}),
 			inspectProof,
-			isSuppressed: () => this.#isWaiting(recipient, this.#assessOrdinary()) || !this.#requestRelationships.hasUnsettledAnswerObligation(
-				recipient,
-				[requestId],
-			),
+			isSuppressed: () => !recipient.host.isCurrent(stalledRun) ||
+				this.#isWaiting(recipient, this.#assessOrdinary()) || !this.#requestRelationships.hasUnsettledAnswerObligation(
+					recipient,
+					[requestId],
+				),
 		}).then((admission) => {
 			if (admission !== "pending") {
 				throw new Error(`Obligation Reminder delivery rejected: ${admission}`);
