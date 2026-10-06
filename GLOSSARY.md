@@ -245,7 +245,7 @@ One runtime-authored, model-visible Deferred Delivery sent when a simple Obligat
 A settled Agent Run retained by an Answer Obligation it must discharge, with no active or admitted work, external progress source, or Interruption Hold. An unresolved outgoing Request to a dormant Agent is not an external progress source unless that Agent has a Deferred Boot. The first simple occurrence schedules an Obligation Reminder; a later occurrence starts Moderator handling once the standing reminder is used, unless it began during human interruption.
 
 **Deferred Boot**:
-A spawned child's boot postponed because working Agent Runs are at the approximate `maxConcurrentAgentRuns` bound. Its Delivery stays pending for the dormant Agent, it counts as Delivery progress, and a later Workflow activity change boots it once a slot frees. It is never a rejection.
+A spawned child's boot postponed because working Agent Runs are at the approximate `maxConcurrentAgentRuns` bound. Its Delivery stays pending for the dormant Agent, it counts as Delivery progress, and a later Workflow activity change boots it, in deferral order, once a slot frees. It is never a rejection.
 _Avoid_: Capacity queue, execution permit
 
 **Delivery Progress Deadline**:

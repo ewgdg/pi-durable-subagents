@@ -201,3 +201,21 @@ test("one capacity check starts no more boots than free slots, counting boots st
 	assert.equal(second.starts, 0, "the booted child's work now holds the slot");
 	scheduler.shutdownProgress();
 });
+
+test("deferred boots start in deferral order, and a later boot queues behind them even when a slot is free", async () => {
+	const worker = fakeAgent("worker", { run: WORKING });
+	const earlier = fakeAgent("earlier");
+	const later = fakeAgent("later");
+	const scheduler = schedulerFor([worker, earlier, later], 1);
+	assert.equal(await admitWork(scheduler, earlier), "pending");
+
+	worker.run = { phase: "live", work: "settled", attention: "none", retentionReasons: [] };
+	assert.equal(scheduler.mayBootNow(), false, "spawn must not boot past the queue");
+	assert.equal(await admitWork(scheduler, later), "pending");
+	assert.equal(later.starts, 0, "a free slot belongs to the oldest deferred boot");
+
+	await scheduler.startDeferredBoots();
+	assert.equal(earlier.starts, 1);
+	assert.equal(later.starts, 0);
+	scheduler.shutdownProgress();
+});

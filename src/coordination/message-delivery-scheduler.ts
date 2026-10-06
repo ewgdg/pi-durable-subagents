@@ -176,6 +176,8 @@ export class MessageDeliveryScheduler {
 	readonly #preemptAgentWait: IncomingRequestWaitPreemptor | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #agents: ReadonlyMap<string, AgentRecord>;
+	/** Agents whose boot the concurrency bound deferred, in deferral order. */
+	readonly #deferredBoots = new Set<string>();
 	/** Deferred boots started by `startDeferredBoots` that have not yet dispatched. */
 	readonly #bootsInFlight = new Set<string>();
 
@@ -443,6 +445,7 @@ export class MessageDeliveryScheduler {
 				// The concurrency bound defers the boot rather than rejecting the Delivery;
 				// `startDeferredBoots` boots the recipient once a slot frees (ADR 0007).
 				pending.set(delivery.messageId, delivery);
+				if (!this.#bootsInFlight.has(record.identity.agentId)) this.#deferredBoots.add(record.identity.agentId);
 				const progress = this.#progress.get(delivery.messageId);
 				if (progress) progress.admitted = true;
 				return "pending";
@@ -628,6 +631,7 @@ export class MessageDeliveryScheduler {
 		this.#deferredResumeByAgent.delete(record.identity.agentId);
 		this.#parkedRunByAgent.delete(record.identity.agentId);
 		this.#pendingByAgent.delete(record.identity.agentId);
+		this.#deferredBoots.delete(record.identity.agentId);
 		record.host.removeRetentionReason("pending_delivery");
 	}
 
@@ -1278,30 +1282,37 @@ export class MessageDeliveryScheduler {
 	}
 
 	/**
-	 * Whether a spawned child may boot now under `maxConcurrentAgentRuns`. The answer
-	 * is approximate: concurrent callers can each see the same free slot (ADR 0007).
+	 * Whether a spawned child may boot now: nothing is queued ahead of it and working
+	 * Runs are below `maxConcurrentAgentRuns`. Approximate: concurrent callers can
+	 * each see the same free slot (ADR 0007).
 	 */
-	hasBootCapacity(): boolean {
-		return this.#countWorkingRuns() < this.#workflowPolicy.current().maxConcurrentAgentRuns;
+	mayBootNow(): boolean {
+		return this.#deferredBoots.size === 0 && this.#hasFreeSlot();
 	}
 
 	/**
-	 * Boots deferred recipients while working Runs are below the bound.
-	 * The count is derived on every call, so any activity change may call this.
-	 * Resolves once the boots it started have dispatched or failed.
+	 * Boots deferred recipients in deferral order while working Runs are below the
+	 * bound. The count is derived on every call, so any activity change may call
+	 * this. Resolves once the boots it started have dispatched or failed.
 	 */
 	startDeferredBoots(): Promise<void> {
-		let freeSlots: number | undefined;
 		const boots: Promise<void>[] = [];
-		for (const agentId of this.#pendingByAgent.keys()) {
+		for (const agentId of this.#deferredBoots) {
 			const record = this.#agents.get(agentId);
-			if (!record || this.#bootsInFlight.has(agentId) || !this.#isBootDeferred(record)) continue;
-			freeSlots ??= this.#workflowPolicy.current().maxConcurrentAgentRuns - this.#countWorkingRuns();
-			if (freeSlots <= 0) break;
-			freeSlots -= 1;
+			// Resolved, discarded, or booted by another path since it was deferred.
+			if (!record || !this.#isBootDeferred(record)) {
+				this.#deferredBoots.delete(agentId);
+				continue;
+			}
+			if (!this.#hasFreeSlot()) break;
+			this.#deferredBoots.delete(agentId);
 			boots.push(this.#startDeferredBoot(record));
 		}
 		return Promise.all(boots).then(() => undefined);
+	}
+
+	#hasFreeSlot(): boolean {
+		return this.#countWorkingRuns() < this.#workflowPolicy.current().maxConcurrentAgentRuns;
 	}
 
 	#startDeferredBoot(record: AgentRecord): Promise<void> {
@@ -1341,7 +1352,8 @@ export class MessageDeliveryScheduler {
 		// Only spawned children wait. The Owner and Moderators supervise the
 		// Workflow, so deferring them could stall the work that would free a slot.
 		if (record.identity.directSpawnerAgentId === null) return false;
-		return this.#bootsInFlight.has(record.identity.agentId) || !this.hasBootCapacity();
+		return this.#bootsInFlight.has(record.identity.agentId) ||
+			this.#deferredBoots.has(record.identity.agentId) || !this.mayBootNow();
 	}
 
 	/** A dormant Agent holding unresolved Deliveries is waiting only for its boot. */

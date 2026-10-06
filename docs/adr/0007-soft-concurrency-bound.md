@@ -4,7 +4,7 @@ status: accepted
 
 # Approximate concurrency bound by deferring child boots
 
-Supersedes [ADR 0005](0005-no-workflow-wide-execution-queue.md). `maxConcurrentAgentRuns` is back, but only as an approximate bound on concurrent model work. Nothing is rejected, and no tool call waits for capacity. When a spawned child would boot while the count is at the bound, the boot is deferred: its Delivery stays pending for the dormant Agent, and a later check boots it. The count is re-derived from current Run state at every check. Nothing is acquired or released, so the slot leaks behind ADR 0005 cannot happen.
+Supersedes [ADR 0005](0005-no-workflow-wide-execution-queue.md). `maxConcurrentAgentRuns` is back, but only as an approximate bound on concurrent model work. Nothing is rejected, and no tool call waits for capacity. When a spawned child would boot while the count is at the bound, or while earlier boots are still deferred, the boot is deferred: its Delivery stays pending for the dormant Agent, and later checks boot deferred Agents in deferral order. The count is re-derived from current Run state at every check. Nothing is acquired or released, so the slot leaks behind ADR 0005 cannot happen.
 
 A Run counts only while it does model work: starting, or live with active work and no attention. Agent Wait, human input, Run Suspension, an Interruption Hold, a settled Run kept live by retention, and a parked Owner do not count. A waiting parent therefore never holds the slot its child needs. No hand-off at wait boundaries is required.
 

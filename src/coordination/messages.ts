@@ -275,7 +275,7 @@ export class MessageCoordinator {
 	blockedDeliveries() { return this.#deliveryScheduler.blockedDeliveries(); }
 	hasAutonomousDeliveryProgress(): boolean { return this.#deliveryScheduler.hasAutonomousProgress(); }
 
-	hasBootCapacity(): boolean { return this.#deliveryScheduler.hasBootCapacity(); }
+	mayBootNow(): boolean { return this.#deliveryScheduler.mayBootNow(); }
 	startDeferredBoots(): Promise<void> { return this.#deliveryScheduler.startDeferredBoots(); }
 	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
 

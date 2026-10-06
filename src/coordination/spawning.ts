@@ -252,9 +252,9 @@ export class DefaultChildSpawner {
 			};
 		}
 
-		// Over `maxConcurrentAgentRuns`, skip the boot: Creation Request admission
-		// defers it until a slot frees (ADR 0007).
-		if (this.#messages.hasBootCapacity()) {
+		// Over `maxConcurrentAgentRuns`, or behind earlier deferred boots, skip the
+		// boot: Creation Request admission defers it until its turn (ADR 0007).
+		if (this.#messages.mayBootNow()) {
 			try {
 				if (this.#boundaryHooks.beforeRunStart?.() === "confirmed_failure") {
 					throw new Error("Confirmed Run startup failure");
