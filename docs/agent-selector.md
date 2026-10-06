@@ -93,7 +93,7 @@ All input is routed directly to the selected child PTY. Printable text, paste, c
 - select another Agent to retarget the same full-window attachment without exposing the Owner editor; or
 - select the current Agent to close the selector and keep the exact existing mode.
 
-Pi's fullscreen transcript viewport and editor dock coexist. Page Up/Page Down, Home/End, configured prompt navigation, and mouse scrolling move the transcript while the editor remains available. At the tail, new output follows automatically. Scrolling away preserves the inspected region until the native end action restores tail following. Resize updates the selected PTY and lets the child TUI reflow its complete native frame within the available rows.
+Pi's fullscreen transcript viewport and editor dock coexist. Page Up/Page Down, Ctrl+Home/Ctrl+End, configured prompt navigation, and mouse scrolling move the transcript while the editor remains available. At the tail, new output follows automatically. Scrolling away preserves the inspected region until the native end action restores tail following. Resize updates the selected PTY and lets the child TUI reflow its complete native frame within the available rows.
 
 A terminally failed selected Run leaves the same Agent Runtime and full-window view in place while the Agent becomes Dormant. The failed transcript remains visible. Explicit input, extension effects, or ordinary coordination may activate a successor in that Runtime without replacing the projection. Switching or Workflow-driven disposal settles the attachment once, removes Runtime retention, and restores the untouched Owner when appropriate.
 
