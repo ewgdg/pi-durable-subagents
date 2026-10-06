@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import { inspectCoordinationRejections } from "../src/protocol/replay-rejection.ts";
 import assert from "node:assert/strict";
 import test from "node:test";

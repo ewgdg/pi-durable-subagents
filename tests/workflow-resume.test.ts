@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import { RunSupervisor } from "../src/coordination/run-supervision.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { AgentTranscript } from "../src/transcript/agent-transcript.ts";

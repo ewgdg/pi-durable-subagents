@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";

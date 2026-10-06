@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatProviderError, normalizeProviderError } from "@earendil-works/pi-ai/utils/error-body";

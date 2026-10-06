@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatModeratorReport, validateReportToUserInput } from "../src/protocol/moderator-report.ts";

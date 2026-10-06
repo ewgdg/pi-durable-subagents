@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ModeratorReminderAdmission } from "../src/process-runtime/moderator-reminder-admission.ts";

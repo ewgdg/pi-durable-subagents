@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { access, readFile } from "node:fs/promises";

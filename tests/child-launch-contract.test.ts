@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import { cp, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

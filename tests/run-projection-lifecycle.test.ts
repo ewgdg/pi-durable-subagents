@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import assert from "node:assert/strict";
 import test from "node:test";

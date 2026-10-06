@@ -14,7 +14,9 @@ A protocol link is one whose absence changes coordination outcomes: Delivery, wa
 
 ## Running tests
 
-`npm test` is the complete regression suite. Use the supervised npm entry points for all development runs: `test:fast` (four concurrent files), `test:process` (serial), and `test:conformance` (serial, the focused compatibility gate). Direct `node --test` execution bypasses containment and is not supported for development runs.
+`npm test` is the complete regression suite. Use the supervised npm entry points for all development runs: `test:fast` (four concurrent files), `test:process` (serial), and `test:conformance` (serial, the focused compatibility gate). They forward any other Node test flag, such as `--test-only`.
+
+Direct `node --test` execution bypasses containment, and interrupted direct runs have leaked spinning workers and Pi processes. Every test file therefore starts with `import "./support/supervised-run.ts";`, which refuses to run unless the supervisor marked the run. Set `PI_TEST_UNSUPERVISED=1` to accept running without containment, for example in an IDE test runner. The supervisor refuses to start if a test file lacks that first import.
 
 Select one file and optionally a test name without bypassing supervision:
 

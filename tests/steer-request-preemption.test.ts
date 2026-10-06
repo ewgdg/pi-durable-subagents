@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
