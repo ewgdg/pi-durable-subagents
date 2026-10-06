@@ -20,8 +20,6 @@
   ],
   "files": [
     "src",
-    "docs",
-    "agents",
     "README.md"
   ],
   "exports": {
@@ -62,7 +60,7 @@
   "dependencies": {
     "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/headless": "^6.0.0",
-    "node-pty": ">=1.2.0-beta.15",
+    "node-pty": "^1.2.0-beta.15",
     "yaml": "^2.9.0"
   },
   "allowScripts": {

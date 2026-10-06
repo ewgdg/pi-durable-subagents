@@ -34,7 +34,13 @@ A Request creates an Answer obligation that the responder owes until it commits 
 
 ## Installation
 
-Install directly from the Git repository:
+Install from npm:
+
+```bash
+pi install npm:pi-durable-subagents
+```
+
+Or track the Git repository directly:
 
 ```bash
 pi install git:github.com/xian0x5a/pi-durable-subagents
