@@ -26,7 +26,11 @@ import {
 	initTheme,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import {
+	KeybindingsManager,
+	TUI_KEYBINDINGS,
+	stripTerminalSequences,
+} from "@earendil-works/pi-tui";
 
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
@@ -257,11 +261,19 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	// (docs/agent-selector.md); plain Home stays with the editor as cursor-line-start.
 	// Return to the boundary this assertion names instead of reading the tail the
 	// display happens to hold.
+	// The child reads keybindings from the test's isolated agent dir, which has none,
+	// so Pi's defaults decide the key. Check them here: a changed default otherwise
+	// shows up only as a display timeout below.
+	const scrollTranscriptToTop = "\x1b[1;5H";
+	assert.ok(
+		new KeybindingsManager(TUI_KEYBINDINGS).matches(scrollTranscriptToTop, "tui.altScreen.top"),
+		"Pi no longer binds Ctrl+Home to tui.altScreen.top; update this test and docs/agent-selector.md",
+	);
 	await waitForPhysicalDisplayContent(
 		dormantView.view,
 		(rendered) => rendered.includes("Moderator"),
 	);
-	dormantView.view.handleInput?.("\x1b[1;5H");
+	dormantView.view.handleInput?.(scrollTranscriptToTop);
 	const dormantRendered = stripTerminalSequences(await waitForPhysicalDisplayContent(
 		dormantView.view,
 		(rendered) => rendered.includes("agent-coordination.moderator-input"),
