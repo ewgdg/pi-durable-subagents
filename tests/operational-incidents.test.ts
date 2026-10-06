@@ -777,6 +777,9 @@ test("one failed provider request suspends an answer-obligated Run without regen
 			1,
 			"a suspended Run is not regenerated automatically",
 		);
+		// Suspension is visible at settlement; the committed Creation Request
+		// reaches retention one lane hop later, so read it at a safe boundary.
+		await coordinator.forAgent(affected.agentId).reachSafeBoundary();
 		assert.deepEqual(owner.reportHistory(), []);
 		assert.deepEqual(await findModerators(host), []);
 		const retained = owner.status(affected.agentId).run;
@@ -1748,10 +1751,19 @@ assert.equal(target.messageStatus, "not_sent");
 		const run = owner.status(affected.agentId).run;
 		return run.phase === "live" && run.work === "settled";
 	});
-	for (let attempt = 0; attempt < 50; attempt += 1) {
-		await new Promise<void>((resolve) => setImmediate(resolve));
-	}
-	assert.equal((await findModerators(host!)).length, 0);
+	// The affected Agent's boundary runs after the reconciliation its settlement queued.
+	await coordinator.forAgent(affected.agentId).reachSafeBoundary();
+	// The target's rejected Creation Request is a known scheduling loss on this
+	// Request path, so a Delivery Stall Moderator is expected. Suppression means
+	// no Obligation Stall: not even its reminder, which precedes any Moderator.
+	assert.equal(
+		SessionManager.open(await sessionPathFor(host, affected.agentId)).getEntries().some(
+			(entry) => entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.obligation-reminder",
+		),
+		false,
+	);
+	await assertNoModeratorKindAtSafeBoundary(owner, host, "obligation_stall");
 
 	targetReleased = true;
 	await executionGate.release();
