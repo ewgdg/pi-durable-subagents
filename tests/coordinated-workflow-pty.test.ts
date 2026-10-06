@@ -42,6 +42,9 @@ const FAILURE_FIXTURE = fileURLToPath(
 	new URL("./fixtures/agent-view-failure-pty-fixture.ts", import.meta.url),
 );
 const DIRECT_AGENT_INPUT = "direct input through child editor";
+// Pi binds fullscreen jump-to-latest (`tui.altScreen.bottom`) to Ctrl+End;
+// plain End only moves the editor cursor since Pi 1.0.3.
+const CTRL_END = "\x1b[1;5F";
 // Resolve through Node's package lookup rather than a path relative to this
 // file: worktrees under .worktrees/ use the root checkout's node_modules.
 const PI_CLI = fileURLToPath(
@@ -125,7 +128,7 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 			frame.some((line) => line.includes("Viewed child transcript line 3")) &&
 			!frame.some((line) => line.includes("Viewed child transcript line 59"))
 		);
-		terminal.write("\x1b[F");
+		terminal.write(CTRL_END);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Viewed child transcript line 59"))
 		);
@@ -156,7 +159,7 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 			inspectedSettledFrame.some((line) => line.includes("Streaming child update 39")),
 			false,
 		);
-		terminal.write("\x1b[F");
+		terminal.write(CTRL_END);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Streaming child update 39"))
 		);
