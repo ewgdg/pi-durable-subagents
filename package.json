@@ -5,11 +5,11 @@
   "description": "Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ewgdg/pi-durable-subagents.git"
+    "url": "git+https://github.com/xian0x5a/pi-durable-subagents.git"
   },
-  "homepage": "https://github.com/ewgdg/pi-durable-subagents#readme",
+  "homepage": "https://github.com/xian0x5a/pi-durable-subagents#readme",
   "bugs": {
-    "url": "https://github.com/ewgdg/pi-durable-subagents/issues"
+    "url": "https://github.com/xian0x5a/pi-durable-subagents/issues"
   },
   "type": "module",
   "engines": {

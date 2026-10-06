@@ -37,7 +37,7 @@ A Request creates an Answer obligation that the responder owes until it commits 
 Install directly from the Git repository:
 
 ```bash
-pi install git:github.com/ewgdg/pi-durable-subagents
+pi install git:github.com/xian0x5a/pi-durable-subagents
 ```
 
 Attached-terminal support uses the `node-pty` native addon. It ships prebuilt binaries for Linux, macOS, and Windows on x64 and arm64, so those platforms need no install-time build. Other platforms compile it from source, which needs a C++ toolchain and npm permission to run its install scripts.
