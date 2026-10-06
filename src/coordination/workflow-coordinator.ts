@@ -806,8 +806,6 @@ export class WorkflowCoordinator {
 			entered = await this.#messages.beginParkingInLane(owner, handle);
 		});
 		if (!entered) return undefined;
-		// A parked Owner frees its concurrency slot without any host state change.
-		this.#queueDeferredBootCheck();
 		let left = false;
 		return async () => {
 			if (left) return;
@@ -1142,7 +1140,7 @@ export class WorkflowCoordinator {
 	#deferredBootCheckQueued = false;
 	/**
 	 * Every change that can free a concurrency slot (Run end, settlement, Agent Wait,
-	 * suspension, Holds, Owner parking) passes through activity notification. One
+	 * suspension, Holds) passes through activity notification. One
 	 * coalesced check per burst re-derives the count from current Run state (ADR 0007).
 	 */
 	#queueDeferredBootCheck(): void {

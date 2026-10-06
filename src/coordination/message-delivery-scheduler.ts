@@ -1374,21 +1374,21 @@ export class MessageDeliveryScheduler {
 	}
 
 	/**
-	 * Only model work holds a slot, including a settled Run with Delivery Progress:
-	 * a just-spawned child sits there while its Creation Request dispatches, and
-	 * skipping it would let a burst of spawns pass the bound.
-	 * Agent Wait, human input, Run Suspension, an Interruption Hold, an idle
-	 * retained Run, and a parked Owner all wait on someone else; counting them
-	 * would let a waiting parent block the child it waits for.
+	 * Only spawned children's model work holds a slot; the bound caps child
+	 * concurrency, and the Owner and Moderators supervise outside it. A settled
+	 * Run with Delivery Progress counts: a just-spawned child sits there while its
+	 * Creation Request dispatches, and skipping it would let a burst of spawns pass
+	 * the bound. Agent Wait, human input, Run Suspension, an Interruption Hold, and
+	 * an idle retained Run all wait on someone else; counting them would let a
+	 * waiting parent block the child it waits for.
 	 */
 	#isWorking(record: AgentRecord): boolean {
+		if (record.identity.directSpawnerAgentId === null) return false;
 		const run = record.host.observe();
 		if (run.phase === "dormant" || run.suspension) return false;
 		if (run.phase === "starting") return true;
-		const parked = this.#parkedRunByAgent.get(record.identity.agentId);
 		return (run.work === "active" || this.hasProgress(record)) && run.attention === "none" &&
-			!record.host.hasRetentionReason("interruption_hold") &&
-			!(parked !== undefined && record.host.isCurrent(parked));
+			!record.host.hasRetentionReason("interruption_hold");
 	}
 
 	#hasPendingScheduling(record: AgentRecord): boolean {

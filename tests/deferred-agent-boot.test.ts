@@ -155,29 +155,17 @@ test("a starting Run holds a concurrency slot", async () => {
 	scheduler.shutdownProgress();
 });
 
-test("a parked Owner does not hold a concurrency slot", async () => {
+test("Owner and Moderator boots are never deferred, and their work holds no slot", async () => {
 	const owner = fakeAgent("owner", { directSpawnerAgentId: null, run: WORKING });
+	const moderator = fakeAgent("moderator", { directSpawnerAgentId: null });
 	const child = fakeAgent("child");
-	const scheduler = schedulerFor([owner, child], 1);
-	const ownerHandle = owner.record.host.currentHandle()!;
-	assert.equal(await owner.record.host.lane.run(() => scheduler.beginParkingInLane(owner.record, ownerHandle)), true);
-	assert.equal(await admitWork(scheduler, child), "pending");
-	assert.equal(child.starts, 1);
-	scheduler.endParkingInLane(owner.record, ownerHandle);
-	scheduler.shutdownProgress();
-});
+	const scheduler = schedulerFor([owner, moderator, child], 1);
+	assert.equal(await admitWork(scheduler, moderator), "pending");
+	assert.equal(moderator.starts, 1, "only spawned children are deferred");
+	assert.deepEqual(moderator.run, WORKING, "the Moderator is working");
 
-test("Owner and Moderator boots are never deferred, yet their work still counts", async () => {
-	const worker = fakeAgent("worker", { run: WORKING });
-	const unspawned = fakeAgent("moderator", { directSpawnerAgentId: null });
-	const child = fakeAgent("child");
-	const scheduler = schedulerFor([worker, unspawned, child], 1);
-	assert.equal(await admitWork(scheduler, unspawned), "pending");
-	assert.equal(unspawned.starts, 1, "only spawned children are deferred");
-
-	worker.run = { phase: "live", work: "settled", attention: "agent_wait", retentionReasons: [] };
 	assert.equal(await admitWork(scheduler, child), "pending");
-	assert.equal(child.starts, 0, "the working Moderator holds the slot");
+	assert.equal(child.starts, 1, "the bound caps concurrent child work only");
 	scheduler.shutdownProgress();
 });
 
