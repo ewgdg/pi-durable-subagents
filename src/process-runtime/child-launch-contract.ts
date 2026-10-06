@@ -38,15 +38,28 @@ export class ChildLaunchContractGuard {
 		try {
 			// A cache-busted import in this process still shares cached transitive modules.
 			// Both the child validator and this dependency-free probe use the same contract.
+			// Node refuses to strip .ts types under node_modules, where npm installs this
+			// package, so the probe imports a copy of the dependency-free module from a
+			// temporary directory instead.
 			const { stdout } = await execFileAsync(process.execPath, [
 				"--input-type=module", "--eval",
-				`try {
-					const schema = await import(${JSON.stringify(this.#schemaModuleUrl.href)});
+				`import { copyFile, mkdtemp, rm } from "node:fs/promises";
+				import { tmpdir } from "node:os";
+				import { basename, join } from "node:path";
+				import { fileURLToPath, pathToFileURL } from "node:url";
+				const source = fileURLToPath(${JSON.stringify(this.#schemaModuleUrl.href)});
+				const directory = await mkdtemp(join(tmpdir(), "pi-launch-contract-probe-"));
+				try {
+					const copy = join(directory, basename(source));
+					await copyFile(source, copy);
+					const schema = await import(pathToFileURL(copy).href);
 					process.stdout.write(JSON.stringify({version: schema.AGENT_CONTROL_PROTOCOL_VERSION, bootstrap: schema.ChildProcessBootstrapSchema}));
 				} catch (error) {
-					const failure = error?.code === "ERR_MODULE_NOT_FOUND" ? "module_unavailable"
+					const failure = error?.code === "ERR_MODULE_NOT_FOUND" || error?.code === "ENOENT" ? "module_unavailable"
 						: error instanceof SyntaxError ? "invalid_module" : "module_load_failed";
 					process.stdout.write(JSON.stringify({failure}));
+				} finally {
+					await rm(directory, { recursive: true, force: true });
 				}`,
 			], { timeout: PROBE_TIMEOUT_MS, maxBuffer: 256 * 1024 });
 			const contract = JSON.parse(stdout) as { version: unknown; bootstrap: unknown; failure?: unknown };
