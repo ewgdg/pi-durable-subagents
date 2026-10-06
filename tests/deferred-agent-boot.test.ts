@@ -109,6 +109,7 @@ test("a child's boot waits for capacity, counts as progress meanwhile, and start
 
 	assert.equal(await admitWork(scheduler, child), "pending", "deferral is not a rejection");
 	assert.equal(child.starts, 0, "the bound defers the boot");
+	assert.equal(scheduler.isBootDeferred(child.record), true, "observation reports the child as queued");
 	assert.equal(scheduler.hasProgress(child.record), true, "a parent waiting on a deferred child is not stalled");
 	assert.equal(scheduler.hasAutonomousProgress(), true, "the Owner may park behind a deferred boot");
 	assert.deepEqual(scheduler.blockedDeliveries(), [], "waiting for capacity is not a Delivery Stall");
@@ -120,6 +121,7 @@ test("a child's boot waits for capacity, counts as progress meanwhile, and start
 	await scheduler.startDeferredBoots();
 	assert.equal(child.starts, 1);
 	assert.equal(child.deliveries, 1, "the deferred Delivery dispatches after the boot");
+	assert.equal(scheduler.isBootDeferred(child.record), false);
 	scheduler.shutdownProgress();
 });
 

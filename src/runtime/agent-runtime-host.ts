@@ -58,6 +58,11 @@ export type DormantRunState = Readonly<{
 	phase: "dormant";
 	suspension?: never;
 	retentionReasons: readonly [];
+	/**
+	 * Secondary state for a dormant Agent whose boot waits on the concurrency bound
+	 * (ADR 0007). Coordination observation sets it; the host never does.
+	 */
+	queued?: true;
 }>;
 export type AgentRunState = LiveRunState | DormantRunState;
 export type AgentRunHandle = Readonly<{ sequence: number }>;

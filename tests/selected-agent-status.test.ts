@@ -54,6 +54,7 @@ test("selected Agent identity gives every work status its specified theme role",
 	const cases = [
 		{ status: { kind: "active" as const }, role: "success", label: "active" },
 		{ status: { kind: "dormant" as const }, role: "dim", label: "dormant" },
+		{ status: { kind: "queued" as const }, role: "accent", label: "queued" },
 		{ status: { kind: "idle" as const }, role: "dim", label: "idle" },
 		{
 			status: { kind: "waiting" as const, reason: "human input" },
@@ -81,6 +82,11 @@ test("selected Agent identity gives every work status its specified theme role",
 			`<accent><bold>Researcher</bold></accent><dim> · 983c81e3 · </dim><${role}>${label}</${role}>`,
 		);
 	}
+});
+
+test("a dormant Agent with a Deferred Boot is queued, not dormant", () => {
+	assert.deepEqual(selectedAgentWorkStatus({ phase: "dormant", retentionReasons: [], queued: true }, false), { kind: "queued" });
+	assert.deepEqual(selectedAgentWorkStatus({ phase: "dormant", retentionReasons: [] }, false), { kind: "dormant" });
 });
 
 test("selected status distinguishes external waits from active and settled work", () => {

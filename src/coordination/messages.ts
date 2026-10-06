@@ -277,6 +277,7 @@ export class MessageCoordinator {
 
 	mayBootNow(): boolean { return this.#deliveryScheduler.mayBootNow(); }
 	startDeferredBoots(): Promise<void> { return this.#deliveryScheduler.startDeferredBoots(); }
+	isBootDeferred(record: AgentRecord): boolean { return this.#deliveryScheduler.isBootDeferred(record); }
 	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
 
 	shutdownDeliveryProgress(): void { this.#deliveryScheduler.shutdownProgress(); }

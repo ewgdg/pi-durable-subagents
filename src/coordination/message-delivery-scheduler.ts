@@ -240,7 +240,7 @@ export class MessageDeliveryScheduler {
 			const run = record.host.observe();
 			if (run.phase === "dormant") {
 				// A deferred boot is queued behind working Runs, which are progress themselves.
-				if (this.#isBootDeferred(record)) return true;
+				if (this.isBootDeferred(record)) return true;
 				continue;
 			}
 			if (run.phase === "live" && run.attention === "input_required") continue;
@@ -259,7 +259,7 @@ export class MessageDeliveryScheduler {
 	#deliveryWaitIsLegitimate(item: TrackedDeliveryProgress): boolean {
 		const { record, delivery } = item;
 		if (waitingReason(waitingFactsOf(record)) !== undefined) return true;
-		if (this.#isBootDeferred(record)) return true;
+		if (this.isBootDeferred(record)) return true;
 		const run = record.host.observe();
 		// Dispatched work belongs to delivery machinery until proof commits; its
 		// prompt Promise must not turn subsequent model duration into a deadline.
@@ -1254,7 +1254,7 @@ export class MessageDeliveryScheduler {
 	}
 
 	hasProgress(record: AgentRecord): boolean {
-		if (this.#isBootDeferred(record)) return true;
+		if (this.isBootDeferred(record)) return true;
 		const agentId = record.identity.agentId;
 		const activeDeferred = this.#activeDeferredByAgent.get(agentId);
 		// Transcript proof ends Delivery progress. A proven Delivery may still own its
@@ -1300,7 +1300,7 @@ export class MessageDeliveryScheduler {
 		for (const agentId of this.#deferredBoots) {
 			const record = this.#agents.get(agentId);
 			// Resolved, discarded, or booted by another path since it was deferred.
-			if (!record || !this.#isBootDeferred(record)) {
+			if (!record || !this.isBootDeferred(record)) {
 				this.#deferredBoots.delete(agentId);
 				continue;
 			}
@@ -1357,7 +1357,7 @@ export class MessageDeliveryScheduler {
 	}
 
 	/** A dormant Agent holding unresolved Deliveries is waiting only for its boot. */
-	#isBootDeferred(record: AgentRecord): boolean {
+	isBootDeferred(record: AgentRecord): boolean {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending?.size || record.host.currentHandle()) return false;
 		return [...pending.values()].some(delivery =>
@@ -1374,17 +1374,19 @@ export class MessageDeliveryScheduler {
 	}
 
 	/**
-	 * Only model work holds a slot. Agent Wait, human input, Run Suspension, an
-	 * Interruption Hold, a settled Run kept live by retention, and a parked Owner
-	 * all wait on someone else; counting them would let a waiting parent block the
-	 * child it waits for.
+	 * Only model work holds a slot, including a settled Run with Delivery Progress:
+	 * a just-spawned child sits there while its Creation Request dispatches, and
+	 * skipping it would let a burst of spawns pass the bound.
+	 * Agent Wait, human input, Run Suspension, an Interruption Hold, an idle
+	 * retained Run, and a parked Owner all wait on someone else; counting them
+	 * would let a waiting parent block the child it waits for.
 	 */
 	#isWorking(record: AgentRecord): boolean {
 		const run = record.host.observe();
 		if (run.phase === "dormant" || run.suspension) return false;
 		if (run.phase === "starting") return true;
 		const parked = this.#parkedRunByAgent.get(record.identity.agentId);
-		return run.work === "active" && run.attention === "none" &&
+		return (run.work === "active" || this.hasProgress(record)) && run.attention === "none" &&
 			!record.host.hasRetentionReason("interruption_hold") &&
 			!(parked !== undefined && record.host.isCurrent(parked));
 	}

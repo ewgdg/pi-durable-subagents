@@ -6,7 +6,7 @@ import { compactAgentIdentity } from "./agent-identity.ts";
 export type AgentWorkStatus =
 	| Readonly<{ kind: "suspended"; suspension: AgentRunSuspension }>
 	| Readonly<{ kind: "active" | "compacting" }>
-	| Readonly<{ kind: "dormant" | "idle" }>
+	| Readonly<{ kind: "dormant" | "queued" | "idle" }>
 	| Readonly<{
 		kind: "waiting";
 		reason: "human input" | "agent answer" | "resumption";
@@ -26,7 +26,7 @@ export function selectedAgentWorkStatus(
 ): AgentWorkStatus {
 	if (run.phase === "starting") return { kind: "starting" };
 	if (run.phase === "ending") return { kind: "ending" };
-	if (run.phase === "dormant") return { kind: "dormant" };
+	if (run.phase === "dormant") return { kind: run.queued ? "queued" : "dormant" };
 	// A retained stop means the exact Run did not fail: the supervisor establishes a
 	// suspension instead of marking the Run failed, so a stale native failure flag
 	// (e.g. the child-side mirror's agent_end outcome) must not outrank it.
@@ -77,7 +77,7 @@ export function agentWorkStatusRole(status: AgentWorkStatus): "success" | "warni
 	// that need the user (input, resumption) or a stopped Run warrant a warning.
 	if (status.kind === "waiting") return status.reason === "agent answer" ? "accent" : "warning";
 	if (status.kind === "suspended") return "warning";
-	if (status.kind === "starting" || status.kind === "compacting") return "accent";
+	if (status.kind === "starting" || status.kind === "compacting" || status.kind === "queued") return "accent";
 	if (status.kind === "failed") return "error";
 	return "dim";
 }

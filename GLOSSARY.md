@@ -210,7 +210,7 @@ The one `/agents` navigation loop every participant runs: open the selector, pre
 _Avoid_: remote selector, local selector (one loop, two adapters)
 
 **Selected Agent Status**:
-The human-facing lifecycle and work disposition of an Agent under Interactive Selection. It is Dormant when no exact Run exists. A healthy current Run is Active while work is executing, Waiting with a concise reason when progress requires a named external condition or human action, and Idle when settled without such a wait. Starting, Ending, Failed, and Suspended communicate lifecycle transitions, failure, and a retained Run stop separately.
+The human-facing lifecycle and work disposition of an Agent under Interactive Selection. It is Dormant when no exact Run exists, or Queued when that Agent has a Deferred Boot. A healthy current Run is Active while work is executing, Waiting with a concise reason when progress requires a named external condition or human action, and Idle when settled without such a wait. Starting, Ending, Failed, and Suspended communicate lifecycle transitions, failure, and a retained Run stop separately.
 
 **Interruption Hold**:
 The transient exact-Run pause established by confirmed authorized-supervisor interruption or Human Escape. It retains the Run, Requests, obligations, and pending scheduling while blocking ordinary Message Delivery commits and stuck-condition moderation. Only a native human editor Message commit or a standalone Supervisory Resume Message Delivery commit bound to that exact Hold atomically replaces it with an isolated resumption turn; explicit Run Termination instead ends the held Run and discards its undelivered backlog.
@@ -245,7 +245,7 @@ One runtime-authored, model-visible Deferred Delivery sent when a simple Obligat
 A settled Agent Run retained by an Answer Obligation it must discharge, with no active or admitted work, external progress source, or Interruption Hold. An unresolved outgoing Request to a dormant Agent is not an external progress source unless that Agent has a Deferred Boot. The first simple occurrence schedules an Obligation Reminder; a later occurrence starts Moderator handling once the standing reminder is used, unless it began during human interruption.
 
 **Deferred Boot**:
-A spawned child's boot postponed because working Agent Runs are at the approximate `maxConcurrentAgentRuns` bound. Its Delivery stays pending for the dormant Agent, it counts as Delivery progress, and a later Workflow activity change boots it, in deferral order, once a slot frees. It is never a rejection.
+A spawned child's boot postponed because working Agent Runs are at the approximate `maxConcurrentAgentRuns` bound. Its Delivery stays pending for the dormant Agent, it counts as Delivery progress, and a later Workflow activity change boots it, in deferral order, once a slot frees. Observation reports it as dormant with `queued: true`. It is never a rejection.
 _Avoid_: Capacity queue, execution permit
 
 **Delivery Progress Deadline**:
