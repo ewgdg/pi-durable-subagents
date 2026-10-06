@@ -132,25 +132,27 @@ test("a test file fails when its tests leave a handle open, naming where it was 
 	await Promise.all([
 		writeFile(leakingPath, [
 			`import ${JSON.stringify(supervisedRunUrl)};`,
+			`import { createServer } from "node:net";`,
 			`import test from "node:test";`,
-			`test("leaves an interval running", () => {`,
+			`test("leaves an interval and a server running", () => {`,
 			`	setInterval(() => {}, 1_000);`,
+			`	createServer().listen(0, "localhost");`,
 			`});`,
 		].join("\n"), "utf8"),
 		writeFile(cleanPath, [
 			`import ${JSON.stringify(supervisedRunUrl)};`,
 			`import { spawn } from "node:child_process";`,
 			`import { createServer } from "node:net";`,
-			`import test from "node:test";`,
-			`const fileScopedServers = [];`,
-			`test.after(() => { for (const server of fileScopedServers) server.close(); });`,
+			`import { after, describe, test } from "node:test";`,
 			`test("closes asynchronously in test-owned cleanup", (t) => {`,
 			`	const server = createServer().listen(0);`,
 			`	const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"]);`,
 			`	t.after(() => { server.close(); child.kill(); });`,
 			`});`,
-			`test("keeps a server until file-level cleanup", () => {`,
-			`	fileScopedServers.push(createServer().listen(0));`,
+			`describe("a suite sharing a server", () => {`,
+			`	const server = createServer().listen(0);`,
+			`	after(() => server.close());`,
+			`	test("uses the shared server", () => {});`,
 			`});`,
 		].join("\n"), "utf8"),
 	]);
@@ -162,7 +164,9 @@ test("a test file fails when its tests leave a handle open, naming where it was 
 	const [leaking, clean] = await Promise.all([run(leakingPath), run(cleanPath)]);
 
 	assert.notEqual(leaking.code, 0, leaking.output);
-	assert.match(leaking.output, /leaks\.test\.mjs:4:\d+/, leaking.output);
+	assert.match(leaking.output, /Timeout created at:\n\s+at .*leaks\.test\.mjs:5:\d+/, leaking.output);
+	// The server binds after a host lookup, so only its trigger names this line.
+	assert.match(leaking.output, /TCPServerWrap created at:\n\s+at .*leaks\.test\.mjs:6:\d+/i, leaking.output);
 	assert.equal(clean.code, 0, clean.output);
 });
 

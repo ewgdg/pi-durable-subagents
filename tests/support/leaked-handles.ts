@@ -25,39 +25,50 @@ type ResourceCreation = Readonly<{
 export function failTestFileOnLeakedHandles(): void {
 	const baseline = process.getActiveResourcesInfo();
 	const liveCreations = trackRefableResourceCreations();
-	// Root `after` hooks run in registration order, and this module loads before
-	// the test file's body. A microtask runs once the whole import graph has
-	// evaluated, so the check follows the file's own `test.after` cleanup. A
-	// macrotask would be too late: a file of synchronous tests finishes first.
-	queueMicrotask(() => after(async () => {
+	// Registered before the test file's body, so this runs before any file-level
+	// `after` hook: cleanup must belong to a test (`t.after`, `t.signal`) or a
+	// `describe` suite, whose hooks finish first. Deferring registration past the
+	// file's own hooks has no reliable moment: a file of synchronous tests can
+	// finish within a macrotask, and a top-level await in its imports lets a
+	// microtask run before the file's body.
+	after(async () => {
 		const leftovers = await leftoverResourcesAfterGrace(baseline);
 		if (leftovers.length === 0) return;
 		throw new Error(
 			`${process.argv[1]} left resources keeping its process alive after its tests finished: `
-			+ `${leftovers.join(", ")}. Close them with test-owned cleanup (t.after or t.signal).\n`
+			+ `${leftovers.join(", ")}. Close them with cleanup owned by a test or suite `
+			+ "(t.after, t.signal, or a describe-level after).\n"
 			+ describeCreations(liveCreations()),
 		);
-	}));
+	});
 }
 
 // The Node docs discourage `createHook` for production use; here it only runs
 // under the test supervisor, to name the code that created a leaked resource.
 function trackRefableResourceCreations(): () => ResourceCreation[] {
-	const creations = new Map<number, ResourceCreation>();
+	const creationStacks = new Map<number, string>();
+	const refableCreations = new Map<number, ResourceCreation>();
 	createHook({
-		init(asyncId, type, _triggerAsyncId, resource) {
-			if (type === "PROMISE" || !isRefable(resource)) return;
-			const stack = captureCreationStack();
+		init(asyncId, type, triggerAsyncId, resource) {
+			if (type === "PROMISE") return;
+			// A resource created from a Node callback, such as a server bound after
+			// a host lookup, has no frames of its own; its trigger's stack names
+			// the code that started it.
+			const stack = captureCreationStack() || creationStacks.get(triggerAsyncId);
 			// Nothing to attribute, e.g. this module's own grace timers; the leftover
 			// list still names the type of any such resource left open.
-			if (stack === "") return;
-			creations.set(asyncId, { type, stack, resource: new WeakRef(resource) });
+			if (!stack) return;
+			creationStacks.set(asyncId, stack);
+			if (isRefable(resource)) {
+				refableCreations.set(asyncId, { type, stack, resource: new WeakRef(resource) });
+			}
 		},
 		destroy(asyncId) {
-			creations.delete(asyncId);
+			creationStacks.delete(asyncId);
+			refableCreations.delete(asyncId);
 		},
 	}).enable();
-	return () => [...creations.values()]
+	return () => [...refableCreations.values()]
 		.filter((creation) => creation.resource.deref()?.hasRef() === true);
 }
 
