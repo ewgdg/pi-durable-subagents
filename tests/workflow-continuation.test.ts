@@ -113,7 +113,9 @@ test("continuation crosses runtime transport and proves a custom entry, never an
 	const { transcriptFromSessionManager } = await import("../src/pi-integration/session-manager-transcript.ts");
 	const message = createWorkflowContinuation({ activationId: randomUUID(), agentId: "child", runSequence: 1, outstandingRequests: [] });
 	assert.equal(Check(agentControlProtocol.ownerToChild.methods["message.deliver"].request, {
-		deliveryId: "continuation-delivery", delivery: { kind: "custom", message, triggerTurn: true },
+		// The Owner proves a continuation from its own transcript evidence, so it
+		// never asks the child to prove the commit.
+		deliveryId: "continuation-delivery", delivery: { kind: "custom", message, triggerTurn: true }, proveCommit: false,
 	}), true);
 	const session = SessionManager.inMemory(process.cwd(), { id: "child" });
 	session.appendCustomEntry("agent-coordination.identity", { agentId: "child" });
