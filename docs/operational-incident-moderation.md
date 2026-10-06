@@ -48,7 +48,8 @@ Delivery progress uses the admission-time `deliveryProgressIntervalMs` from [Wor
 | Active recipient work before dispatch, or admission behind an existing Answer Obligation | Suspend; follow outstanding Request dependencies rather than timing the wait |
 | Human attention, interactive selection, intentional Hold, Run Suspension, or isolated resumption on the recipient | Suspend; regain eligibility with a fresh interval |
 | Poll, heartbeat, repeated state observation, or policy reload | No extension |
-| Scheduling/dispatch exception with no continuing delivery path, including startup/admission exits before dispatch | Immediately request investigation once a qualifying obligation path exists |
+| Scheduling/dispatch exception with no continuing delivery path, including startup/admission exits before dispatch, except a spawn reporting `not_sent` (below) | Immediately request investigation once a qualifying obligation path exists |
+| Spawn reporting `not_sent` for its Creation Request (Run startup or Delivery admission failure) | None: the Spawner holds the definitive receipt and owns any retry. A settled Spawner falls to Obligation Stall handling; an Agent Wait on that Request retries it. An `unknown` spawn outcome stays observed |
 
 A dispatch Promise can cover the entire Pi model turn. It is not Delivery proof, and waiting for its completion must not time model generation: transcript commitment ends delivery observation independently of that Promise. A proven Deferred Delivery may retain its dispatch reservation for prompt ownership and serialization, but that reservation is not an external progress source that excludes a parked `agent_wait` from Dependency Deadlock handling.
 

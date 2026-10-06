@@ -44,7 +44,7 @@ Cases that inject an event ordering a real child cannot produce on demand (for e
 
 Operational Incident reconciliation and Request relationship retention trail a visible Run state change by at least one lane hop. Before asserting that something did *not* happen, or reading `retentionReasons`, await the affected Agent's `coordinator.forAgent(agentId).reachSafeBoundary()`: it runs after the reconciliation that Agent's settlement queued. Do not yield a fixed number of ticks instead; under load the outcome lands on either side of the check.
 
-Scope a negative check to the incident kind under test. A fixture that rejects a Delivery leaves a known scheduling loss, which can start a Delivery Stall Moderator on any obligated Request path reaching that recipient.
+Scope a negative check to the incident kind under test. A fixture that loses an admitted Delivery leaves a known scheduling loss, which can start a Delivery Stall Moderator on any obligated Request path reaching that recipient.
 
 ## Deadlines and containment
 

@@ -1753,9 +1753,8 @@ assert.equal(target.messageStatus, "not_sent");
 	});
 	// The affected Agent's boundary runs after the reconciliation its settlement queued.
 	await coordinator.forAgent(affected.agentId).reachSafeBoundary();
-	// The target's rejected Creation Request is a known scheduling loss on this
-	// Request path, so a Delivery Stall Moderator is expected. Suppression means
-	// no Obligation Stall: not even its reminder, which precedes any Moderator.
+	// Suppression means no Obligation Stall: not even its reminder, which
+	// precedes any Moderator.
 	assert.equal(
 		SessionManager.open(await sessionPathFor(host, affected.agentId)).getEntries().some(
 			(entry) => entry.type === "custom_message" &&
@@ -3268,15 +3267,19 @@ test("blocked Delivery failure moderates an upstream obligated parent immediatel
 	const clock = new ControllableOperationReviewClock();
 	const requestDispatches: string[] = [];
 	let blockedRequestId = "";
+	let leafAgentId = "";
 	const { host, coordinator, owner } = await createIncidentBoundaryHarness(t, {}, {
 		deliveryProgressClock: clock,
 		messageBoundaryHooks: {
 			scheduleDeliveryDispatch(context, dispatch) {
 				if (context.kind === "request") {
 					requestDispatches.push(context.messageId);
+					// Withhold the admitted leaf Request: an admission-time failure would
+					// report not_sent, which leaves the stranded Request to its Spawner.
 					if (requestDispatches.length > 1) {
 						blockedRequestId = context.messageId;
-						throw new Error("controlled pre-dispatch failure");
+						leafAgentId = context.recipientAgentId;
+						return;
 					}
 				}
 				dispatch();
@@ -3290,9 +3293,16 @@ test("blocked Delivery failure moderates an upstream obligated parent immediatel
 		}, { id: "spawn-blocked-leaf" }), { stopReason: "toolUse" }),
 		// Agent Wait explicitly renews undelivered Requests; settle instead to isolate moderation.
 		fauxAssistantMessage("The leaf remains responsible for the work; do not retry delivery."),
-		fauxAssistantMessage("Investigate the blocked delivery, without retrying."),
+		// The parent's delivery-failure notice turn and the Moderator race for these.
+		...Array.from({ length: 2 }, () => fauxAssistantMessage("Investigate the blocked delivery, without retrying.")),
 	]);
 	const parent = await spawnFromView(host.session, owner, "spawn-obligated-parent", "Delegate, then leave the blocked Request outstanding without retrying.");
+	await waitForCondition(() => {
+		const run = owner.status(parent.agentId).run;
+		return leafAgentId !== "" && run.phase === "live" && run.work === "settled";
+	});
+	// Losing the leaf Run before Delivery is a known scheduling loss after admission.
+	await controlFromView(host.session, owner, "abort-blocked-leaf", { operation: "abort", agentId: leafAgentId });
 	const moderator = await waitForModeratorKind(host, "delivery_stall");
 	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
 		(entry) => entry.type === "custom_message" && entry.customType === "agent-coordination.moderator-input",
@@ -3386,6 +3396,7 @@ test("blocked Delivery deadline catches a silent leaf while its obligated parent
 
 test("blocked Delivery Moderator creation failure reports original incident before any Moderator commits", async (t) => {
 	let requests = 0;
+	let leafAgentId = "";
 	let bootstrapAttempts = 0;
 	let inspectionUnavailable = false;
 	const { host, owner } = await createIncidentBoundaryHarness(t, {
@@ -3394,7 +3405,8 @@ test("blocked Delivery Moderator creation failure reports original incident befo
 	}, {
 		messageBoundaryHooks: {
 			scheduleDeliveryDispatch(context, dispatch) {
-				if (context.kind === "request" && ++requests > 1) throw new Error("controlled blocked delivery");
+				// Withhold the admitted leaf Request; the abort below loses it.
+				if (context.kind === "request" && ++requests > 1) { leafAgentId = context.recipientAgentId; return; }
 				dispatch();
 			},
 		},
@@ -3402,8 +3414,14 @@ test("blocked Delivery Moderator creation failure reports original incident befo
 	host.model.setResponses([
 		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Leaf work." }, { id: "unavailable-leaf" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Await the leaf."),
+		fauxAssistantMessage("Noted the delivery failure."),
 	]);
-	await spawnFromView(host.session, owner, "unavailable-parent", "Delegate.");
+	const parent = await spawnFromView(host.session, owner, "unavailable-parent", "Delegate.");
+	await waitForCondition(() => {
+		const run = owner.status(parent.agentId).run;
+		return leafAgentId !== "" && run.phase === "live" && run.work === "settled";
+	});
+	await controlFromView(host.session, owner, "abort-unavailable-leaf", { operation: "abort", agentId: leafAgentId });
 	await waitForCondition(() => owner.operationalAttention().length > 0);
 	const attention = owner.operationalAttention();
 	assert.equal(attention.length, 1);
@@ -3739,28 +3757,62 @@ test("moderation inspection deadline reports Owner attention while the inspectio
 	assert.deepEqual(owner.reportHistory(), [{ report }], "successful inspection does not erase its earlier report");
 });
 
-test("blocked Delivery detects a Creation Request stranded before scheduler admission without changing its canonical identity", async (t) => {
-	const clock = new ControllableOperationReviewClock();
+for (const stage of ["run_start", "delivery_admission"] as const) {
+	test(`a Creation Request reported not_sent at ${stage} leaves its stranded spawner to Obligation Stall handling`, async (t) => {
+		// The spawner already holds the definitive not_sent receipt, so the stranded
+		// Request is its own dependency to retry: it gets a reminder first, not an
+		// immediate Delivery Stall Moderator.
+		let attempts = 0;
+		const failSecondAttempt = () => ++attempts > 1 ? "confirmed_failure" as const : undefined;
+		const { host, coordinator, owner } = await createIncidentBoundaryHarness(t, {}, {
+			deliveryProgressClock: new ControllableOperationReviewClock(),
+			spawnBoundaryHooks: stage === "run_start"
+				? { beforeRunStart: failSecondAttempt }
+				: { beforeDeliveryAdmission: failSecondAttempt },
+		});
+		host.model.setResponses([
+			fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Never delivered leaf." }, { id: "not-sent-leaf" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("The leaf remains responsible for the work."),
+			fauxAssistantMessage("I remained settled after the runtime reminder."),
+			fauxAssistantMessage("I will inspect the stalled spawner."),
+		]);
+		const parent = await spawnFromView(host.session, owner, "not-sent-parent", "Delegate.");
+		const moderator = await waitForModeratorKind(host, "obligation_stall");
+		assert.equal(moderatorAffectedAgentId(moderator.path), parent.agentId);
+		assert.equal(
+			SessionManager.open(await sessionPathFor(host, parent.agentId)).getEntries().some(
+				(entry) => entry.type === "custom_message" &&
+					entry.customType === "agent-coordination.obligation-reminder",
+			),
+			true,
+		);
+		await assertNoModeratorKindAtSafeBoundary(coordinator.forAgent(parent.agentId), host, "delivery_stall");
+		assert.equal(attempts, 2);
+	});
+}
+
+test("blocked Delivery keeps observing a Creation Request whose spawn outcome is unknown", async (t) => {
+	// Unlike not_sent, an unknown receipt leaves the Spawner unsure whether its
+	// Creation Request is scheduled, so the stranded Request stays a scheduling loss.
 	let starts = 0;
 	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
-		deliveryProgressClock: clock,
-		spawnBoundaryHooks: { beforeRunStart: () => ++starts > 1 ? "confirmed_failure" : undefined },
+		deliveryProgressClock: new ControllableOperationReviewClock(),
+		spawnBoundaryHooks: { afterRunStart: () => ++starts > 1 ? "confirmation_lost" : undefined },
 	});
 	host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request",request: "Never admitted leaf."}, {id: "pre-admission-leaf"}), {stopReason: "toolUse"}),
-		fauxAssistantMessage("The leaf remains responsible for the admitted work."),
-		fauxAssistantMessage("Investigate startup without retrying."),
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Unconfirmed leaf." }, { id: "unknown-leaf" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("The leaf remains responsible for the work."),
+		fauxAssistantMessage("Investigate the unconfirmed startup without retrying."),
 	]);
-	const parent = await spawnFromView(host.session, owner, "pre-admission-parent", "Delegate.");
+	const parent = await spawnFromView(host.session, owner, "unknown-parent", "Delegate.");
 	const moderator = await waitForModeratorKind(host, "delivery_stall");
 	const entry = SessionManager.open(moderator.path).getEntries()[0];
 	assert.ok(entry?.type === "custom_message");
 	const trigger = JSON.parse(entry.content as string).trigger;
 	assert.equal(trigger.reason.kind, "scheduling_failure");
-	const leafSource = trigger.requests.sources.find((source: {toolCallId: string}) => source.toolCallId === "pre-admission-leaf");
+	const leafSource = trigger.requests.sources.find((source: { toolCallId: string }) => source.toolCallId === "unknown-leaf");
 	assert.ok(leafSource);
 	assert.equal(trigger.delivery.messageId, deriveMessageIdentity(leafSource));
-	assert.equal(owner.status(trigger.delivery.recipientAgentId).run.phase, "dormant");
 	assert.ok(trigger.agentIds.includes(parent.agentId));
 	assert.equal(starts, 2);
 });
