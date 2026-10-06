@@ -708,7 +708,7 @@ test("an unregistered tool name beside a parked parallel root call keeps that ba
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("one failed provider request suspends an answer-obligated Run without regenerating it", async (t) => {
+test("one failed provider request suspends an answer-obligated Run without regeneration, and its Request Cancellation starts no Incident", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-run-suspension-"));
 	const agentDir = join(cwd, ".pi-agent");
 	await mkdir(agentDir, { recursive: true });
@@ -817,6 +817,9 @@ test("one failed provider request suspends an answer-obligated Run without regen
 			[affected.requestMessageId],
 			"the undelivered Cancellation leaves the suspended responder's obligation open",
 		);
+		assert.deepEqual(owner.operationalAttention(), [], "the Cancellation publishes no Operational Attention");
+		assert.deepEqual(owner.reportHistory(), [], "the Cancellation publishes no runtime report");
+		assert.deepEqual(await findModerators(host), [], "the Cancellation starts no successor Incident Moderator");
 	} finally {
 		await coordinator.shutdown(async () => host.runtime.dispose());
 	}
@@ -951,104 +954,10 @@ test("an unexpectedly ended answer-obligated Owner Run suspends until explicit h
 	assert.deepEqual(reports.history(), []);
 });
 
-test("Request Cancellation retains the suspended Run without starting a successor Incident", async (t) => {
-	const harness = await createIncidentBoundaryHarness(t);
-	harness.host.model.setResponses(Array.from(
-		{
-			length:
-				harness.host.services.settingsManager.getRetrySettings().maxRetries + 4,
-		},
-		() =>
-			fauxAssistantMessage("The exact Run fails before answering.", {
-				stopReason: "error",
-				errorMessage: "deterministic cancellable Run failure",
-			}),
-	));
-	const affected = await spawnFromView(
-		harness.host.session,
-		harness.owner,
-		"spawn-suspended-cancellation",
-		"Fail before answering this Creation Request.",
-	);
-	await waitForCondition(() =>
-		runSuspension(harness.owner.status(affected.agentId).run)?.reason === "runtime_error"
-	);
-	await cancelRequestFromView(
-		harness.host.session,
-		harness.owner,
-		"cancel-suspended-obligation",
-		affected.requestMessageId,
-	);
-	await harness.owner.reachSafeBoundary();
-	assert.equal(
-		runSuspension(harness.owner.status(affected.agentId).run)?.reason,
-		"runtime_error",
-		"cancelling the Request does not clear the Run stop",
-	);
-	assert.deepEqual(harness.owner.operationalAttention(), []);
-	assert.deepEqual(harness.owner.reportHistory(), []);
-	assert.deepEqual(await findModerators(harness.host), []);
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-});
-
-test("Moderator Resolution is blocked while the Obligation Stall remains", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-		implicitModeratorResponses: false,
-	});
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall(
-				"agent_spawn",
-				{ title: "Fixture request", request: "Leave this Answer obligation unresolved." },
-				{ id: "spawn-resolution-blocker" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The unresolved Request is delegated."),
-		fauxAssistantMessage("I settled without an Answer."),
-		fauxAssistantMessage("I remained settled after the runtime reminder."),
-		fauxAssistantMessage(
-			fauxToolCall(
-				"moderator_control",
-				{
-					operation: "resolve",
-					summary: "The Agent remains stalled.",
-					rationale: "The qualifying Answer obligation is still unresolved.",
-				},
-				{ id: "resolve-active-stall" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("Resolution remains blocked."),
-	]);
-
-	const ownerPrompt = host.session.prompt("Create a blocked moderation case.");
-	t.after(async () => {
-		await host.session.abort();
-		await ownerPrompt;
-	});
-	const moderator = await waitForModerator(host);
-	const result = await waitForTranscriptEntry(
-		moderator.path,
-		(entry) =>
-			entry.type === "message" &&
-			entry.message.role === "toolResult" &&
-			entry.message.toolCallId === "resolve-active-stall",
-	);
-	assert.ok(result.type === "message" && result.message.role === "toolResult");
-	assert.equal(result.message.isError, false);
-	assert.deepEqual(result.message.details, {
-		disposition: "blocked",
-		predicates: ["obligation_stall"],
-	});
-	assert.equal((await findModerators(host)).length, 1);
-
-	await host.runtime.dispose();
-});
-
-test("a Moderator observes the Workflow and controls only non-Owner Runs", async (t) => {
+// One Moderator Run covers its whole authority over an Obligation Stall: Resolution
+// is blocked while the Stall remains, it may observe and control only non-Owner Runs,
+// a Hold restores progress for Resolution, and a later abort keeps the obligation.
+test("a Moderator resolves an Obligation Stall only after controlling non-Owner Runs, and its abort keeps the Answer obligation", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
@@ -1066,6 +975,18 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 		fauxAssistantMessage("The control target is delegated."),
 		fauxAssistantMessage("I settled without answering."),
 		fauxAssistantMessage("I remained settled after the runtime reminder."),
+		fauxAssistantMessage(
+			fauxToolCall(
+				"moderator_control",
+				{
+					operation: "resolve",
+					summary: "The Agent remains stalled.",
+					rationale: "The qualifying Answer obligation is still unresolved.",
+				},
+				{ id: "resolve-active-stall" },
+			),
+			{ stopReason: "toolUse" },
+		),
 		(context) => {
 			const input = context.messages.flatMap((message) => {
 				if (message.role !== "user") return [];
@@ -1111,7 +1032,27 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 			),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage("Moderation resolved after restoring progress."),
+		(context) => {
+			const input = context.messages.flatMap((message) => {
+				if (message.role !== "user") return [];
+				return typeof message.content === "string"
+					? [message.content]
+					: message.content.flatMap((part) => part.type === "text" ? [part.text] : []);
+			}).find((content) => content.includes('"kind":"obligation_stall"'));
+			assert.ok(input);
+			const affectedAgentId = (JSON.parse(input) as {
+				trigger: { agentId: string };
+			}).trigger.agentId;
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_control",
+					{ operation: "abort", agentId: affectedAgentId },
+					{ id: "abort-stalled-run" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		},
+		fauxAssistantMessage("The held Run was aborted after Resolution."),
 	]);
 
 	const ownerPrompt = host.session.prompt("Create a Moderator supervision case.");
@@ -1120,6 +1061,19 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 		await ownerPrompt;
 	});
 	const moderator = await waitForModerator(host);
+	const blockedResolution = await waitForTranscriptEntry(
+		moderator.path,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "resolve-active-stall",
+	);
+	assert.ok(blockedResolution.type === "message" && blockedResolution.message.role === "toolResult");
+	assert.equal(blockedResolution.message.isError, false);
+	assert.deepEqual(blockedResolution.message.details, {
+		disposition: "blocked",
+		predicates: ["obligation_stall"],
+	}, "Resolution is blocked while the Obligation Stall remains");
 	const observed = await waitForTranscriptEntry(
 		moderator.path,
 		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
@@ -1159,74 +1113,7 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 			entry.message.toolCallId === "resolve-after-restoring-progress",
 	);
 	assert.ok(resolution.type === "message" && resolution.message.role === "toolResult");
-	assert.deepEqual(resolution.message.details, { disposition: "resolved" });
-	assert.deepEqual(
-		(await findModerators(host)).map(({ path }) => moderatorTriggerKind(path)),
-		["obligation_stall"],
-	);
-
-	await host.runtime.dispose();
-});
-
-test("aborting the affected Run does not erase its durable Answer obligation", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-		implicitModeratorResponses: false,
-	});
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall(
-				"agent_spawn",
-				{ title: "Fixture request", request: "Leave this Answer obligation unresolved after abort." },
-				{ id: "spawn-aborted-stall-agent" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The abort case is delegated."),
-		fauxAssistantMessage("I settled without answering."),
-		fauxAssistantMessage("I remained settled after the runtime reminder."),
-		(context) => {
-			const input = context.messages.flatMap((message) => {
-				if (message.role !== "user") return [];
-				return typeof message.content === "string"
-					? [message.content]
-					: message.content.flatMap((part) => part.type === "text" ? [part.text] : []);
-			}).find((content) => content.includes('"kind":"obligation_stall"'));
-			assert.ok(input);
-			const affectedAgentId = (JSON.parse(input) as {
-				trigger: { agentId: string };
-			}).trigger.agentId;
-			return fauxAssistantMessage(
-				fauxToolCall(
-					"agent_control",
-					{ operation: "abort", agentId: affectedAgentId },
-					{ id: "abort-stalled-run" },
-				),
-				{ stopReason: "toolUse" },
-			);
-		},
-		fauxAssistantMessage(
-			fauxToolCall(
-				"moderator_control",
-				{
-					operation: "resolve",
-					summary: "The exact stalled Run was aborted.",
-					rationale: "The durable obligation remains for a successor Run.",
-				},
-				{ id: "resolve-after-abort" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The aborted attempt is resolved."),
-	]);
-
-	const ownerPrompt = host.session.prompt("Create an aborted Obligation Stall.");
-	t.after(async () => {
-		await host.session.abort();
-		await ownerPrompt;
-	});
-	const moderator = await waitForModerator(host);
+	assert.deepEqual(resolution.message.details, { disposition: "resolved" }, "the Hold restores progress for Resolution");
 	const abortEntry = await waitForTranscriptEntry(
 		moderator.path,
 		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
@@ -1234,18 +1121,15 @@ test("aborting the affected Run does not erase its durable Answer obligation", a
 	);
 	assert.ok(abortEntry.type === "message" && abortEntry.message.role === "toolResult");
 	assert.deepEqual(abortEntry.message.details, {
-		agentId: moderatorAffectedAgentId(moderator.path),
+		agentId: affectedAgentId,
 		disposition: "aborted",
 		residualRequests: { incoming: 1, outgoing: 0 },
 		callerOutstandingRequests: [],
-	});
-	const resolution = await waitForTranscriptEntry(
-		moderator.path,
-		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
-			entry.message.toolCallId === "resolve-after-abort",
+	}, "aborting the affected Run does not erase its durable Answer obligation");
+	assert.deepEqual(
+		(await findModerators(host)).map(({ path }) => moderatorTriggerKind(path)),
+		["obligation_stall"],
 	);
-	assert.ok(resolution.type === "message" && resolution.message.role === "toolResult");
-	assert.deepEqual(resolution.message.details, { disposition: "resolved" });
 
 	await host.runtime.dispose();
 });
@@ -2167,59 +2051,6 @@ test("shutdown before Moderator bootstrap prevents a post-snapshot Moderator adm
 	assert.deepEqual(await findModerators(harness.host), []);
 });
 
-test("a post-commit Moderator startup failure creates one linked replacement", async (t) => {
-	let startupAttempts = 0;
-	const harness = await createIncidentBoundaryHarness(t, {
-		beforeModeratorRunStart: () => {
-			startupAttempts += 1;
-			return startupAttempts === 1 ? "confirmed_failure" : undefined;
-		},
-	});
-	harness.host.model.setResponses([
-		fauxAssistantMessage("I settled without answering the Creation Request."),
-		fauxAssistantMessage("I am the replacement Moderator."),
-	]);
-	await spawnFromView(
-		harness.host.session,
-		harness.owner,
-		"spawn-post-commit-moderator-failure",
-		"Settle with an Answer obligation.",
-	);
-	await waitForCondition(async () => (await findModerators(harness.host)).length === 2);
-	const moderators = await findModerators(harness.host);
-	const first = moderators.find(({ path }) =>
-		moderatorPreviousAttempt(path) === undefined
-	);
-	const replacement = moderators.find(({ path }) =>
-		moderatorPreviousAttempt(path) !== undefined
-	);
-	assert.ok(first);
-	assert.ok(replacement);
-	assert.deepEqual(harness.owner.status(first.id).run, {
-		phase: "dormant",
-		retentionReasons: [],
-	});
-	const firstEntries = SessionManager.open(first.path).getEntries();
-	assert.equal(firstEntries.length, 1);
-	assert.equal(firstEntries[0]?.type, "custom_message");
-	const replacementInput = SessionManager.open(replacement.path).getEntries().find(
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === "agent-coordination.moderator-input",
-	);
-	assert.ok(
-		replacementInput?.type === "custom_message" &&
-			typeof replacementInput.content === "string",
-	);
-	assert.deepEqual(
-		(JSON.parse(replacementInput.content) as {
-			previousAttempt?: { agentId: string; entryId: string };
-		}).previousAttempt,
-		{ agentId: first.id, entryId: firstEntries.at(-1)!.id },
-	);
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
-});
-
 test("a terminal Moderator Run error suspends the handling Moderator without a replacement", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	const routeFailure = (context: Context) => {
@@ -2374,7 +2205,7 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 	assert.equal(host.runtime.session, ownerSession);
 });
 
-test("two committed Moderator failures publish bounded Owner Attention until clearance", async (t) => {
+test("two committed Moderator startup failures link the replacement and publish bounded Owner Attention until clearance", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorRunStart: () => "confirmed_failure",
 	});
@@ -2413,6 +2244,15 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 			SessionManager.open(moderator.path).getEntries().at(-1)!.id,
 		);
 	}
+	const first = moderators.find(({ id }) => id === attention.diagnostics[0]!.agentId);
+	assert.ok(first);
+	assert.deepEqual(harness.owner.status(first.id).run, {
+		phase: "dormant",
+		retentionReasons: [],
+	}, "the failed post-commit attempt is dormant without retention");
+	const firstEntries = SessionManager.open(first.path).getEntries();
+	assert.equal(firstEntries.length, 1, "the failed post-commit attempt holds only its Moderator Input");
+	assert.equal(firstEntries[0]?.type, "custom_message");
 	const replacement = moderators.find(({ id }) => id === attention.diagnostics[1]!.agentId);
 	assert.ok(replacement);
 	const replacementInput = SessionManager.open(replacement.path).getEntries()[0];
@@ -2541,72 +2381,6 @@ test("startup rejection before any child error transcript retains the original f
 	const manager = SessionManager.open(host.session.sessionManager.getSessionFile()!);
 	const reopened = new ModeratorReportStore({ transcript: transcriptFromSessionManager(manager), appendCustomEntry: (type, data) => manager.appendCustomEntry(type, data) });
 	assert.deepEqual(reopened.history(), owner.reportHistory());
-});
-
-test("an un-obligated terminal Run error suspends without widening Moderator eligibility", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-		implicitModeratorResponses: false,
-	});
-	const terminalFailure = (message: string, errorMessage: string) =>
-		fauxAssistantMessage(message, {
-			stopReason: "error",
-			errorMessage,
-		});
-	host.model.setResponses(Array.from(
-		{ length: host.services.settingsManager.getRetrySettings().maxRetries + 4 },
-		() => terminalFailure(
-			"Failed without obligations",
-			"400 deterministic un-obligated terminal failure",
-		),
-	));
-	await host.session.prompt("Fail this Owner Run without delegating anything.");
-	await waitForCondition(async () => {
-		const run = (await observeStatus(host, host.session.sessionId)).run;
-		return run.phase === "live" && run.suspension?.reason === "runtime_error";
-	});
-	const suspended = (await observeStatus(host, host.session.sessionId)).run;
-	assert.deepEqual(suspended.suspension, {
-		reason: "runtime_error",
-		evidence: {
-			stage: "model",
-			error: "400 deterministic un-obligated terminal failure",
-			provenance: "native-session-driver",
-		},
-	});
-	assert.deepEqual(await findModerators(host), []);
-	const reports = new ModeratorReportStore({
-		transcript: transcriptFromSessionManager(host.session.sessionManager),
-		appendCustomEntry: (type, data) =>
-			host.session.sessionManager.appendCustomEntry(type, data),
-	});
-	assert.deepEqual(reports.history(), []);
-
-	// Repeated observation of the stop must not widen Moderator eligibility.
-	await host.session.waitForIdle();
-	assert.deepEqual(await findModerators(host), []);
-	assert.deepEqual(reports.history(), []);
-
-	// An explicit human resume clears the stop and lets the Run continue.
-	host.model.setResponses([
-		fauxAssistantMessage("Recovered after explicit resumption."),
-		fauxAssistantMessage("The resumed Run settled."),
-	]);
-	await host.session.prompt("Resume this Owner Run after the provider error.", {
-		source: "interactive",
-	});
-	await waitForCondition(async () => {
-		const run = (await observeStatus(host, host.session.sessionId)).run;
-		return run.suspension === undefined;
-	});
-	await waitForCondition(() =>
-		JSON.stringify(host.session.sessionManager.getEntries()).includes(
-			"Recovered after explicit resumption.",
-		)
-	);
-	assert.deepEqual(await findModerators(host), []);
-	assert.deepEqual(reports.history(), []);
 });
 
 test("selected-child native quit fences Workflow shutdown before exit and creates no Moderator", async (t) => {
@@ -3147,22 +2921,6 @@ function moderatorAffectedAgentId(sessionFile: string): string {
 	);
 	assert.ok(input?.type === "custom_message" && typeof input.content === "string");
 	return (JSON.parse(input.content) as { trigger: { agentId: string } }).trigger.agentId;
-}
-
-function moderatorPreviousAttempt(
-	sessionFile: string,
-): { agentId: string; entryId: string } | undefined {
-	const input = SessionManager.open(sessionFile).getEntries().find(
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === "agent-coordination.moderator-input",
-	);
-	assert.ok(
-		input?.type === "custom_message" && typeof input.content === "string",
-	);
-	return (JSON.parse(input.content) as {
-		previousAttempt?: { agentId: string; entryId: string };
-	}).previousAttempt;
 }
 
 function moderatorTriggerKind(sessionFile: string): string {
