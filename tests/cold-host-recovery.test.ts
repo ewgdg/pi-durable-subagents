@@ -1323,7 +1323,8 @@ async function createUnboundTestOwnerHost(
 	}
 	// The broker outlives host restarts within the test. Cleanup runs in
 	// registration order, so the first host is disposed before its model goes
-	// away; tests dispose reopened hosts themselves.
+	// away. Reopened hosts register their cleanup later; tests dispose them
+	// before finishing, and a failed test disposes them after the broker closes.
 	t.after(() => broker.close());
 	return host;
 }

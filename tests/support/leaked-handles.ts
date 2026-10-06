@@ -97,6 +97,8 @@ async function leftoverResourcesAfterGrace(baseline: readonly string[]): Promise
 	return leftovers;
 }
 
+// Resources are only named by type, so a baseline stdio pipe closing while a
+// leaked pipe opens would hide the leak; the baseline is just those pipes.
 function resourcesBeyond(baseline: readonly string[]): string[] {
 	const unmatchedBaseline = [...baseline];
 	return process.getActiveResourcesInfo().filter((resource) => {

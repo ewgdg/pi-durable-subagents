@@ -13,7 +13,7 @@ Name what keeps a test file's process alive after its tests finish, and fail tha
 
 ## Work plan
 
-1. Regression test: a leaking fixture file fails naming the creation site; a file cleaning up in `t.after` or file-level `test.after` passes.
+1. Regression test: a leaking fixture file fails naming the creation site; a file cleaning up in `t.after` or a `describe`-level `after` passes.
 2. Implement the detector.
 3. Fix reported leaks: `interactive-host-conformance` (faux stream timer); probe `quota-lifecycle-integration` failure path.
 4. Document under "Deadlines and containment" in `docs/development.md`.
@@ -35,7 +35,7 @@ Name what keeps a test file's process alive after its tests finish, and fail tha
 - Register the check as a root `after` hook directly from the guard, so it runs before any file-level `after` hook, and require cleanup owned by a test or `describe` suite. Deferring registration past the file's own hooks has no reliable moment: from `setImmediate` a file of synchronous tests finished first and silently skipped the check (caught by the regression test); from `queueMicrotask` a top-level await in `cold-host-recovery`'s imports ran it before the file's body, so its file-level broker cleanup ran after the check. That file now closes each broker with `t.after`.
 - Rejected `process.on("exit")`: it can't wait, so in-flight `FSReqPromise`/`Immediate` work and handles still closing flagged ~25 clean fast-suite files; and dot hides its output.
 - Poll up to a short grace for resources to drop back to the baseline captured at guard import (the runner's stdio pipes). Async closes (`server.close()`, `child.kill()`) finish within it.
-- Always record creation sites with `async_hooks.createHook` (user choice). The Node docs discourage the API, but it is test-only and showed no measurable overhead (fast suite 13.4 s vs 13.35 s, mean of two runs each). Only ref'd handles are reported, since unref'd ones don't keep the process alive. A resource created from a Node callback (a server bound after a host lookup) has no frames of its own, so it inherits its trigger resource's stack; the fast suite went from 13.4 s to 13.6 s with this.
+- Always record creation sites with `async_hooks.createHook` (user choice). The Node docs discourage the API, but it is test-only and showed no measurable overhead (fast suite 13.4 s vs 13.35 s, mean of two runs each). Only ref'd handles are reported, since unref'd ones don't keep the process alive. A resource created from a Node callback (a server bound after a host lookup) has no frames of its own, so it inherits its trigger resource's stack; the fast suite went from 13.4 s to 13.6 s with this, and a full process run took 441 s, within the 434–444 s of earlier runs.
 
 ## Surprises and discoveries
 

@@ -187,7 +187,6 @@ test("a third-party child-view command remains unique and does not interfere wit
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
-		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	const commands = host.session.extensionRunner.getRegisteredCommands()
