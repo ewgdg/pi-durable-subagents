@@ -19,6 +19,8 @@ type FakeAgent = {
 	deliveries: number;
 	/** Resolves a boot that the test holds open; undefined while no boot is pending. */
 	finishStart?: () => void;
+	/** Ends the current Run the way a Run Failure does: the Agent becomes dormant. */
+	failRun: () => void;
 };
 
 /**
@@ -29,6 +31,7 @@ function fakeAgent(agentId: string, options: {
 	directSpawnerAgentId?: string | null;
 	run?: AgentRunState;
 	holdStart?: boolean;
+	failStart?: boolean;
 } = {}): FakeAgent {
 	let handle: AgentRunHandle | undefined = options.run && options.run.phase !== "dormant"
 		? Object.freeze({ sequence: 1 })
@@ -38,6 +41,10 @@ function fakeAgent(agentId: string, options: {
 		held: false,
 		starts: 0,
 		deliveries: 0,
+		failRun: () => {
+			handle = undefined;
+			agent.run = { phase: "dormant", retentionReasons: [] };
+		},
 	} as FakeAgent;
 	const workState = () => agent.run.phase === "dormant" ? "unavailable" : agent.run.work ?? "settled";
 	const host = {
@@ -54,6 +61,7 @@ function fakeAgent(agentId: string, options: {
 		removeRetentionReason: () => undefined,
 		startInLane: async () => {
 			agent.starts += 1;
+			if (options.failStart) throw new Error("Confirmed Run startup failure");
 			if (options.holdStart) {
 				await new Promise<void>((resolve) => {
 					agent.finishStart = resolve;
@@ -83,9 +91,10 @@ function fakeAgent(agentId: string, options: {
 
 const WORKING: AgentRunState = { phase: "live", work: "active", attention: "none", retentionReasons: [] };
 
-function schedulerFor(agents: readonly FakeAgent[], maxConcurrentAgentRuns: number) {
+function schedulerFor(agents: readonly FakeAgent[], maxConcurrentAgentRuns: number, isShuttingDown = () => false) {
 	return new MessageDeliveryScheduler({
 		agents: new Map(agents.map(({ record }) => [record.identity.agentId, record])),
+		isShuttingDown,
 		workflowPolicy: new WorkflowPolicyStore(Object.freeze({
 			...DEFAULT_WORKFLOW_POLICY,
 			maxConcurrentAgentRuns,
@@ -207,5 +216,44 @@ test("deferred boots start in deferral order, and a later boot queues behind the
 	await scheduler.startDeferredBoots();
 	assert.equal(earlier.starts, 1);
 	assert.equal(later.starts, 0);
+	scheduler.shutdownProgress();
+});
+
+test("a failed Run's leftover Delivery is not reported as a queued boot", async () => {
+	const child = fakeAgent("child", { run: WORKING });
+	const scheduler = schedulerFor([child], 1);
+	assert.equal(await admitWork(scheduler, child), "pending", "work waits for the active turn to settle");
+	child.failRun();
+	assert.equal(scheduler.isBootDeferred(child.record), false, "only the boot queue makes a child queued");
+	assert.equal(scheduler.hasProgress(child.record), false, "a Run Failure must stay visible");
+	scheduler.shutdownProgress();
+});
+
+test("a deferred boot that fails hands its slot to the next queued child", async () => {
+	const worker = fakeAgent("worker", { run: WORKING });
+	const failing = fakeAgent("failing", { failStart: true });
+	const next = fakeAgent("next");
+	const scheduler = schedulerFor([worker, failing, next], 1);
+	await admitWork(scheduler, failing);
+	await admitWork(scheduler, next);
+
+	worker.run = { phase: "live", work: "settled", attention: "none", retentionReasons: [] };
+	await scheduler.startDeferredBoots();
+	assert.equal(failing.starts, 1);
+	assert.equal(next.starts, 1, "no further activity is needed to use the freed slot");
+	scheduler.shutdownProgress();
+});
+
+test("no deferred boot starts once the Workflow is shutting down", async () => {
+	const worker = fakeAgent("worker", { run: WORKING });
+	const child = fakeAgent("child");
+	let shuttingDown = false;
+	const scheduler = schedulerFor([worker, child], 1, () => shuttingDown);
+	await admitWork(scheduler, child);
+
+	worker.run = { phase: "live", work: "settled", attention: "none", retentionReasons: [] };
+	shuttingDown = true;
+	await scheduler.startDeferredBoots();
+	assert.equal(child.starts, 0);
 	scheduler.shutdownProgress();
 });

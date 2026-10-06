@@ -1073,12 +1073,13 @@ test("forged Creation Request Delivery evidence is an invariant violation", asyn
 	}
 });
 
-test("a child spawned over the concurrency bound is observed as queued and listed with live Agents", { timeout: 15_000 }, async (t) => {
+test("a child spawned over the concurrency bound is observed as queued, listed with live Agents, and boots once the slot frees", { timeout: 15_000 }, async (t) => {
 	const harness = await createCoordinatorHarness(t, {}, undefined, {}, new WorkflowPolicyStore(Object.freeze({
 		...DEFAULT_WORKFLOW_POLICY,
 		maxConcurrentAgentRuns: 1,
 	})));
-	await harness.spawn("spawn-working-capped-child");
+	const working = await harness.spawn("spawn-working-capped-child");
+	assert.ok("agentId" in working);
 	const queued = await harness.spawn("spawn-queued-capped-child");
 	assert.ok("agentId" in queued);
 	assert.equal(queued.messageStatus, "sent", "deferral is not a rejection");
@@ -1088,6 +1089,15 @@ test("a child spawned over the concurrency bound is observed as queued and liste
 	assert.deepEqual(harness.view.children().at(-1)?.run, queuedRun);
 	assert.ok(harness.view.selectionRoster().live.some(({ agentId }) => agentId === queued.agentId));
 	assert.ok(!harness.view.selectionRoster().dormant.some(({ agentId }) => agentId === queued.agentId));
+
+	// Ending the working Run is an ordinary activity change; nothing calls the queue directly.
+	const terminationInput = { operation: "terminate" as const, agentId: working.agentId };
+	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_control", terminationInput, { id: "terminate-working-capped-child" }),
+		{ stopReason: "toolUse" },
+	));
+	await harness.view.control("terminate-working-capped-child", terminationInput);
+	await waitForCondition(() => harness.view.status(queued.agentId).run.phase !== "dormant");
 	await harness.shutdown();
 });
 

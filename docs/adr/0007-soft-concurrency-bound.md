@@ -6,11 +6,11 @@ status: accepted
 
 Supersedes [ADR 0005](0005-no-workflow-wide-execution-queue.md). `maxConcurrentAgentRuns` is back, but only as an approximate bound on concurrent child model work. Nothing is rejected, and no tool call waits for capacity. When a spawned child would boot while the count is at the bound, or while earlier boots are still deferred, the boot is deferred: its Delivery stays pending for the dormant Agent, and later checks boot deferred Agents in deferral order. The count is re-derived from current Run state at every check. Nothing is acquired or released, so the slot leaks behind ADR 0005 cannot happen.
 
-Only spawned children count, and a child's Run counts only while it does model work: starting, or live with no attention and either active work or Delivery Progress. The second case covers a just-spawned child whose Creation Request is still dispatching; without it, a burst of spawns would all see a free slot. Agent Wait, human input, Run Suspension, an Interruption Hold, and a settled Run kept live by retention do not count. A waiting parent therefore never holds the slot its child needs. No hand-off at wait boundaries is required.
+Only spawned children count, and a child's Run counts only while it does model work: starting, or live or ending with no attention and either active work or Delivery Progress. The second case covers a just-spawned child whose Creation Request is still dispatching; without it, a burst of spawns would all see a free slot. Agent Wait, human input, Run Suspension, an Interruption Hold, and a settled Run kept live by retention do not count. A waiting parent therefore never holds the slot its child needs. No hand-off at wait boundaries is required.
 
 The bound is approximate in both directions, and this is deliberate:
 
-- Concurrent checks can see the same free slot. A parked Run that resumes, a Moderator, the Owner, interactive input, and Workflow recovery all start work without a check. The count can exceed the bound.
+- Concurrent checks can see the same free slot. A parked Run that resumes, interactive input, and a Moderator continuing a dormant responder all start child work without a check. The count can exceed the bound.
 - A parked Run still holds its process and memory, so the bound limits concurrent model work, not live child processes.
 
 ## Supervisors
@@ -23,7 +23,7 @@ Every Workflow activity notification (Run state change, settlement, attention ch
 
 ## Observation
 
-A deferred boot is a secondary state of `dormant`, not a new phase: observation reports `{ phase: "dormant", queued: true }`. The host Run is still dormant, so every phase consumer stays correct. A parent polling its child can still tell "queued" from "finished", and `/agents` shows the child as `queued` with the live Agents.
+A deferred boot is a secondary state of `dormant`, not a new phase. Queue membership defines it, not state alone: a failed Run can also leave a dormant child with pending Deliveries, and that must stay visible as a failure. Observation reports it as `{ phase: "dormant", queued: true }`. The host Run is still dormant, so every phase consumer stays correct. A parent polling its child can still tell "queued" from "finished", and `/agents` shows the child as `queued` with the live Agents.
 
 ## Progress
 

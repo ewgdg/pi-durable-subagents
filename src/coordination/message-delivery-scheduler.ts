@@ -175,6 +175,7 @@ export class MessageDeliveryScheduler {
 	readonly #afterResumeReservation: ResumeReservationHandler | undefined;
 	readonly #preemptAgentWait: IncomingRequestWaitPreemptor | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
+	readonly #isShuttingDown: () => boolean;
 	readonly #agents: ReadonlyMap<string, AgentRecord>;
 	/** Agents whose boot the concurrency bound deferred, in deferral order. */
 	readonly #deferredBoots = new Set<string>();
@@ -189,6 +190,7 @@ export class MessageDeliveryScheduler {
 		afterResumeReservation?: ResumeReservationHandler;
 		preemptAgentWait?: IncomingRequestWaitPreemptor;
 		workflowPolicy: WorkflowPolicyStore;
+		isShuttingDown?: () => boolean;
 		deliveryProgressClock?: OperationReviewClock;
 		onDeliveryProgressChanged?(): void;
 		onDeliveryFailure?(failure: MessageDeliveryFailure): void | Promise<void>;
@@ -202,6 +204,7 @@ export class MessageDeliveryScheduler {
 		this.#afterResumeReservation = options.afterResumeReservation;
 		this.#preemptAgentWait = options.preemptAgentWait;
 		this.#workflowPolicy = options.workflowPolicy;
+		this.#isShuttingDown = options.isShuttingDown ?? (() => false);
 		this.#agents = options.agents;
 	}
 
@@ -1300,7 +1303,7 @@ export class MessageDeliveryScheduler {
 		for (const agentId of this.#deferredBoots) {
 			const record = this.#agents.get(agentId);
 			// Resolved, discarded, or booted by another path since it was deferred.
-			if (!record || !this.isBootDeferred(record)) {
+			if (!record || !this.#awaitsBoot(record)) {
 				this.#deferredBoots.delete(agentId);
 				continue;
 			}
@@ -1308,7 +1311,10 @@ export class MessageDeliveryScheduler {
 			this.#deferredBoots.delete(agentId);
 			boots.push(this.#startDeferredBoot(record));
 		}
-		return Promise.all(boots).then(() => undefined);
+		// A boot that ends without work frees its slot without an activity change,
+		// so hand it on now. Each round removes the boots it starts, so this ends.
+		return Promise.all(boots).then(() =>
+			boots.length > 0 && this.#deferredBoots.size > 0 ? this.startDeferredBoots() : undefined);
 	}
 
 	#hasFreeSlot(): boolean {
@@ -1322,6 +1328,8 @@ export class MessageDeliveryScheduler {
 		this.#bootsInFlight.add(agentId);
 		return record.host.lane.run(async () => {
 			try {
+				// The check that queued this boot ran before shutdown began.
+				if (this.#isShuttingDown()) return;
 				// Its Deliveries may have resolved, or another path booted it, meanwhile.
 				this.#removeProvenDeliveriesInLane(record);
 				if (!this.#pendingByAgent.get(agentId)?.size) return;
@@ -1356,8 +1364,19 @@ export class MessageDeliveryScheduler {
 			this.#deferredBoots.has(record.identity.agentId) || !this.mayBootNow();
 	}
 
-	/** A dormant Agent holding unresolved Deliveries is waiting only for its boot. */
+	/**
+	 * Queue membership, not state alone, makes a boot deferred: a failed Run also
+	 * leaves a dormant Agent with pending Deliveries, and calling that queued would
+	 * hide the failure behind Delivery Progress.
+	 */
 	isBootDeferred(record: AgentRecord): boolean {
+		const agentId = record.identity.agentId;
+		return (this.#deferredBoots.has(agentId) || this.#bootsInFlight.has(agentId)) &&
+			this.#awaitsBoot(record);
+	}
+
+	/** A dormant Agent holding unresolved Deliveries. */
+	#awaitsBoot(record: AgentRecord): boolean {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending?.size || record.host.currentHandle()) return false;
 		return [...pending.values()].some(delivery =>

@@ -149,6 +149,7 @@ export class MessageCoordinator {
 			preemptAgentWait: (record, reserveDelivery) =>
 				this.#waitPreemptionSubscriber?.(record, reserveDelivery) ?? Promise.resolve(),
 			workflowPolicy: options.workflowPolicy,
+			isShuttingDown: options.isShuttingDown,
 			deliveryProgressClock: options.deliveryProgressClock,
 			onDeliveryProgressChanged: () => {
 				for (const subscriber of this.#deliveryProgressSubscribers) subscriber();

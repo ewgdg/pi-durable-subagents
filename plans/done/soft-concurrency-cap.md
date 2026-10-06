@@ -7,7 +7,7 @@ Bring back `maxConcurrentAgentRuns` as an approximate bound on concurrent model 
 ## Design
 
 - **Count, derived per check.** Only spawned children count; the Owner and Moderators never do. A child's Run counts when it is starting, or live/ending with active work or Delivery Progress, no attention, and no Interruption Hold. Agent Wait, suspension (reported settled), human input, and settled-but-retained Runs do not count. Boots this scheduler has issued but that have not reached `starting` count separately, so one re-check cannot overshoot.
-- **One gate.** Delivery admission to a dormant ordinary child (`directSpawnerAgentId !== null`) defers when the count is at the cap: the Delivery stays in `#pendingByAgent` without a boot. Spawn skips its own boot when there is no capacity, so its Creation Request reaches that gate. Owner, Moderator, interactive, and recovery boots are not gated.
+- **One gate.** Delivery admission to a dormant ordinary child (`directSpawnerAgentId !== null`) defers when the count is at the cap: the Delivery stays in `#pendingByAgent` without a boot. Spawn skips its own boot when there is no capacity, so its Creation Request reaches that gate. Owner, Moderator, interactive, and Moderator-continuation boots are not gated.
 - **Deferred = pending Delivery for a dormant Agent.** No new durable state; cold recovery already re-drives it.
 - **Re-check trigger.** The coordinator's existing coalesced activity notification (state change, settlement, attention, delivery progress). No polling, no age bound.
 - **Progress.** A deferred boot is Delivery progress: the deferred child is Progressing, Owner parking sees autonomous progress, and the Delivery wait is legitimate. Otherwise a parent waiting on it would look Stalled and summon the Moderator.
@@ -31,4 +31,4 @@ Bring back `maxConcurrentAgentRuns` as an approximate bound on concurrent model 
 
 ## Outcome
 
-Spawned-child boots defer over `maxConcurrentAgentRuns` (default 8) and start from the coordinator's activity notification once a slot frees. No permits, no rejection, no tool-call blocking. Not done: a model-visible "queued" marker on the spawn receipt or status; a deferred child currently shows as dormant.
+Spawned-child boots defer over `maxConcurrentAgentRuns` (default 8) and start from the coordinator's activity notification once a slot frees. No permits, no rejection, no tool-call blocking. Status reports a deferred child as `{ phase: "dormant", queued: true }`, and `/agents` lists it as `queued` on the Live tab. Only spawned children count; the Owner and Moderators neither count nor wait. Not done: queued rows in the activity dock, and terminating a queued child (it reports `not_running` and boots later).
