@@ -1,6 +1,6 @@
 # Request lifetime versus replay rejection and context-only marking
 
-Decision support for [#131](https://github.com/ewgdg/pi-durable-subagents/issues/131).
+Decision support for [#131](https://github.com/xian0x5a/pi-durable-subagents/issues/131).
 **Alternative B selected; not implemented.** The weights and scores remain
 judgment-based decision support. The accepted direction is recorded in the
 [skip-and-mark replay design](coordination-replay-rejection-design.md).

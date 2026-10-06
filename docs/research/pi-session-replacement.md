@@ -1,6 +1,6 @@
 # Pi session replacement: repair feasibility
 
-Research for [#129](https://github.com/ewgdg/pi-durable-subagents/issues/129),
+Research for [#129](https://github.com/xian0x5a/pi-durable-subagents/issues/129),
 2026-09-13. Installed `@earendil-works/pi-coding-agent` **0.85.1**; the project
 also pins 0.85.1 for development. This is evidence, not an implementation contract.
 

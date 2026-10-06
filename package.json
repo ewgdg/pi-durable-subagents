@@ -1,5 +1,5 @@
 {
-  "name": "pi-durable-subagents",
+  "name": "@xian0x5a/pi-durable-subagents",
   "version": "0.1.0",
   "license": "MIT",
   "description": "Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.",
@@ -22,6 +22,9 @@
     "src",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",

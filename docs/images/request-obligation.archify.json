@@ -6,7 +6,7 @@
     "output": ".archify/architecture-request-obligation-20261001-165833/request-obligation.html",
     "quality_profile": "showcase",
     "repository": {
-      "url": "https://github.com/ewgdg/pi-durable-subagents",
+      "url": "https://github.com/xian0x5a/pi-durable-subagents",
       "provider": "github",
       "link_mode": "local-only",
       "revision": "deb70f777c55c1e50c2a56a9b816d580ccaeed99"

@@ -59,6 +59,6 @@ npm version patch   # bumps package.json and package-lock.json, commits, tags vX
 git push --follow-tags
 ```
 
-The npm package must list `ewgdg/pi-durable-subagents` with workflow `release.yml` as its trusted publisher (npmjs.com → package Settings → Trusted publishing).
+The npm package must list `xian0x5a/pi-durable-subagents` with workflow `release.yml` as its trusted publisher (npmjs.com → package Settings → Trusted publishing).
 
-The first version is published by hand (`npm publish`), because npm only accepts a trusted publisher for an existing package. Its tag then runs the workflow, which skips versions already on npm and only creates the GitHub Release.
+The package is scoped as `@xian0x5a/pi-durable-subagents` because the unscoped name was claimed by an unrelated placeholder; `publishConfig.access` keeps it public. The first version is published by hand (`npm publish`), because npm only accepts a trusted publisher for an existing package. Its tag then runs the workflow, which skips versions already on npm and only creates the GitHub Release.

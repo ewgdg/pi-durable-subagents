@@ -1,6 +1,6 @@
 # Skip-and-mark coordination replay — selected design
 
-Design for [#131](https://github.com/ewgdg/pi-durable-subagents/issues/131).
+Design for [#131](https://github.com/xian0x5a/pi-durable-subagents/issues/131).
 **Implemented with explicit user authorization beyond the design-only issue.**
 Execution and validation are recorded in
 `plans/done/131-coordination-replay-rejection.md`.
@@ -100,7 +100,7 @@ commitment with a missing original Request, and the shared invalid/context-only
 presentation contract. It must establish the affected retry, cancellation, Wait,
 and delivery outcomes without reintroducing uncertainty reconstruction.
 
-**[#134](https://github.com/ewgdg/pi-durable-subagents/issues/134) owns fork-side projection.**
+**[#134](https://github.com/xian0x5a/pi-durable-subagents/issues/134) owns fork-side projection.**
 It applies the shared representation to inherited coordination, including copied
 Request Deliveries. Markers and shared guidance provide model orientation; there
 is no separate Owner identity block. Preserve the durable Identity cutoff after

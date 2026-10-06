@@ -11,7 +11,7 @@ import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-co
 test("launch preflight works from an installed extension with host-provided peers only", { timeout: 20_000 }, async () => {
 	const agentRoot = await mkdtemp(join(tmpdir(), "pi-installed-launch-contract-"));
 	// npm installs land under node_modules, where Node refuses to strip .ts types.
-	const root = join(agentRoot, "node_modules", "pi-durable-subagents");
+	const root = join(agentRoot, "node_modules", "@xian0x5a", "pi-durable-subagents");
 	await cp(new URL("../src/", import.meta.url), join(root, "src"), { recursive: true });
 	const extensionPath = join(root, "probe.ts");
 	await writeFile(extensionPath, `

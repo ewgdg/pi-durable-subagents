@@ -1,6 +1,6 @@
 # Workflow-owned transcript repair — proposed design
 
-Design for [#129](https://github.com/ewgdg/pi-durable-subagents/issues/129).
+Design for [#129](https://github.com/xian0x5a/pi-durable-subagents/issues/129).
 **Not implemented; repair mechanics remain proposed.** `/agents repair` remains unavailable.
 This document separates the proposed contract from existing behavior. It does not
 authorize an autonomous repair engine or implement a missing-title migration.
