@@ -13,12 +13,15 @@ const FAST_TEST_TIMEOUT_MS = 5_000;
 const PROCESS_TEST_TIMEOUT_MS = 120_000;
 
 // These files launch real Pi processes, PTYs, sockets, or process-visible model
-// brokers. Keeping the boundary explicit prevents machine CPU count from turning
-// integration tests into a resource-contention lottery.
+// brokers, or load the whole package through Pi's extension loader, whose cold
+// transpile can exceed the fast timeout on a fresh machine. Keeping the boundary
+// explicit prevents machine CPU count from turning integration tests into a
+// resource-contention lottery.
 const PROCESS_TEST_FILES = new Set([
 	"idle-custom-process-startup.test.ts",
 	"child-launch-contract.test.ts",
 	"child-launch-contract-containment.test.ts",
+	"host-module-world.test.ts",
 	"background-delivery-process.test.ts",
 	"causal-request-preemption.test.ts",
 	"agent-request.test.ts",
