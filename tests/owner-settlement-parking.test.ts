@@ -207,33 +207,33 @@ test("Owner stays parked until a child provider error suspends it, then settles 
 	assert.equal(moderatorStarted, false);
 });
 
-test("terminating the last progressing child releases Owner parking without an Answer", { timeout: 10_000 }, async (t) => {
+test("aborting the last progressing child releases Owner parking without an Answer", { timeout: 10_000 }, async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
 	let releaseChild!: () => void;
 	const gate = new Promise<void>((resolve) => { releaseChild = resolve; });
 	t.after(releaseChild);
 	const routeResponse = async (context: Context) => {
 		const serialized = JSON.stringify(context.messages);
-		if (hasDeliveredRequest(context) && !serialized.includes("spawn-to-terminate")) {
+		if (hasDeliveredRequest(context) && !serialized.includes("spawn-to-abort")) {
 			await gate;
-			return fauxAssistantMessage("Unused after termination.");
+			return fauxAssistantMessage("Unused after abort.");
 		}
-		if (!serialized.includes("spawn-to-terminate")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+		if (!serialized.includes("spawn-to-abort")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
 			title: "Fixture request",
 			request: "Work in the background.",
-		}, { id: "spawn-to-terminate" }), { stopReason: "toolUse" });
+		}, { id: "spawn-to-abort" }), { stopReason: "toolUse" });
 		return fauxAssistantMessage("Waiting for the background work.");
 	};
 	host.model.setResponses(Array.from({ length: 6 }, () => routeResponse));
 	const prompt = host.session.prompt("Start background work.");
 	await waitUntil(() => ownerAssistantTexts(host).includes("Waiting for the background work."));
 	const receipt = host.session.sessionManager.getEntries().find((entry) => entry.type === "message" &&
-		entry.message.role === "toolResult" && entry.message.toolCallId === "spawn-to-terminate");
+		entry.message.role === "toolResult" && entry.message.toolCallId === "spawn-to-abort");
 	assert.ok(receipt?.type === "message" && receipt.message.role === "toolResult");
 	const { agentId } = receipt.message.details as { agentId: string };
 	assert.equal(host.session.isIdle, false);
-	await executeAndCommitRegisteredTool(host.session, "agent_control", "terminate-background", { operation: "abort", agentId });
-	await withTimeout(prompt, 3_000, "Termination left the Owner parked on its unanswered Request");
+	await executeAndCommitRegisteredTool(host.session, "agent_control", "abort-background", { operation: "abort", agentId });
+	await withTimeout(prompt, 3_000, "Abort left the Owner parked on its unanswered Request");
 	assert.equal(host.session.isIdle, true);
 	const status = await executeAndCommitRegisteredTool(host.session, "agent_observe", "observe-dormant-background", { operation: "status", agentId });
 	assert.equal((status.details as { run: { phase: string } }).run.phase, "dormant");

@@ -36,7 +36,7 @@ for (const prepared of [false, true]) test(`shutdown during ${prepared ? "prepar
 	await assert.rejects(starting, /shutdown|host_shutting_down/);
 	await shuttingDown;
 	assert.equal(started, false);
-	assert.deepEqual(ended, ["termination"]);
+	assert.deepEqual(ended, ["abort"]);
 	assert.equal(host.hasRetentionReason("awaiting_answer", "unpublished-request"), false);
 });
 
@@ -54,10 +54,10 @@ test("Run input ownership survives settlement and resets only for a successor", 
 	host.deliverInLane({ kind: "user", content: "Continue the foreground" });
 	assert.equal(host.currentWorkState(), "settled");
 	assert.equal(host.currentRunHasInput(), true, "dispatch owns continuation even before runtime activity publishes");
-	await host.lane.run(() => host.discardAndEndInLane("termination"));
+	await host.lane.run(() => host.discardAndEndInLane("abort"));
 	await host.lane.run(() => host.startInLane(["pending_delivery"]));
 	assert.equal(host.currentRunHasInput(), false);
-	await host.lane.run(() => host.discardAndEndInLane("termination"));
+	await host.lane.run(() => host.discardAndEndInLane("abort"));
 });
 
 test("native Runtime activity owns continuation after it settles", { timeout: 5_000 }, async () => {
@@ -73,7 +73,7 @@ test("native Runtime activity owns continuation after it settles", { timeout: 5_
 	work = "settled";
 	resource.emitStateChanged();
 	assert.equal(host.currentRunHasInput(), true);
-	await host.lane.run(() => host.discardAndEndInLane("termination"));
+	await host.lane.run(() => host.discardAndEndInLane("abort"));
 });
 
 test("clean release disposes the exact projection and session once", async () => {
@@ -204,8 +204,8 @@ test("selected clean Runs release inside one retained Runtime", async () => {
 	});
 });
 
-test("failure, termination, and Workflow shutdown each dispose their exact projection and session once", async () => {
-	for (const cause of ["failure", "termination", "shutdown"] as const) {
+test("failure, abort, and Workflow shutdown each dispose their exact projection and session once", async () => {
+	for (const cause of ["failure", "abort", "shutdown"] as const) {
 		const resource = createRunResource();
 		const host = AgentRuntimeSupervisor.createChild({
 			agentId: "projection-test-agent",
@@ -497,7 +497,7 @@ test("shutdown fenced before projection binding observes accepted startup cancel
 
 	await assert.rejects(startup, /Workflow shutdown during Agent Run initialization/);
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.deepEqual(endedCauses, ["termination"]);
+	assert.deepEqual(endedCauses, ["abort"]);
 	assert.deepEqual(resource.counts(), {
 		projectionDisposals: 1,
 		sessionDisposals: 1,
@@ -506,7 +506,7 @@ test("shutdown fenced before projection binding observes accepted startup cancel
 	assert.equal(host.observe().phase, "dormant");
 });
 
-test("starting-Run termination fences its projection and queued successor admission", async () => {
+test("starting-Run abort fences its projection and queued successor admission", async () => {
 	const resource = createRunResource();
 	const successorResource = createRunResource();
 	let rejectReady!: (error: unknown) => void;
@@ -535,7 +535,7 @@ test("starting-Run termination fences its projection and queued successor admiss
 	};
 	let runtimeStarts = 0;
 	const host = AgentRuntimeSupervisor.createChild({
-		agentId: "starting-termination-fence-agent",
+		agentId: "starting-abort-fence-agent",
 		startSession: async () => {
 			runtimeStarts += 1;
 			return runtimeStarts === 1
@@ -549,20 +549,20 @@ test("starting-Run termination fences its projection and queued successor admiss
 	assert.equal(host.currentProjection(), projection);
 	const inputSubmission = host.captureProjectionInputSubmission(1);
 	assert.ok(inputSubmission);
-	const terminationError = new Error("terminate exact starting Run");
-	const termination = host.requestRuntimeInitializationTermination(
+	const abortError = new Error("abort exact starting Run");
+	const initializationAbort = host.requestRuntimeInitializationAbort(
 		projection,
-		terminationError,
+		abortError,
 	);
-	assert.ok(termination);
+	assert.ok(initializationAbort);
 	const queuedSuccessor = host.lane.run(() => host.startInLane());
 
-	assert.equal(await termination.cancellation, true);
-	await assert.rejects(startup, terminationError);
-	await assert.rejects(queuedSuccessor, /run_termination_pending/);
+	assert.equal(await initializationAbort.cancellation, true);
+	await assert.rejects(startup, abortError);
+	await assert.rejects(queuedSuccessor, /run_abort_pending/);
 	assert.equal(host.projectionInputSubmissionIsFenced(inputSubmission), true);
 	assert.equal(
-		host.completeRuntimeInitializationTerminationInLane(termination),
+		host.completeRuntimeInitializationAbortInLane(initializationAbort),
 		true,
 	);
 	assert.equal(host.observe().phase, "dormant");
@@ -734,7 +734,7 @@ test("a prepared Runtime does not expose an effective Run snapshot before admiss
 	assert.equal(host.currentHandle(), undefined);
 	assert.equal(host.effectiveRuntimeSnapshot(), undefined);
 	assert.deepEqual(host.observe(), { phase: "dormant", retentionReasons: [] });
-	await host.lane.run(() => host.discardAndEndInLane("termination"));
+	await host.lane.run(() => host.discardAndEndInLane("abort"));
 });
 
 test("cleanup continues through projection failure and still disposes the exact session", async () => {

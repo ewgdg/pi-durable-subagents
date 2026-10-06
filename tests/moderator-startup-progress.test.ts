@@ -91,11 +91,11 @@ test("initial Moderator startup counts as progress before native agent.start and
 });
 
 
-test("termination queued behind Moderator startup cannot resurrect its Run", { timeout: 15000 }, async t => {
+test("abort queued behind Moderator startup cannot resurrect its Run", { timeout: 15000 }, async t => {
 	let coordinator!: OperationalIncidentCoordinator;
 	let moderator: AgentRecord | undefined;
 	let starts = 0;
-	const terminated = deferred();
+	const aborted = deferred();
 	const integrate = OperationalIncidentCoordinator.prototype.integrate;
 	t.mock.method(OperationalIncidentCoordinator.prototype, "integrate", function (
 		this: OperationalIncidentCoordinator, ...args: Parameters<typeof integrate>
@@ -109,10 +109,10 @@ test("termination queued behind Moderator startup cannot resurrect its Run", { t
 				const handle = await start(...startArgs);
 				starts++;
 				if (starts === 1) {
-					// Queue a real termination after readiness while startup still owns the lane.
+					// Queue a real abort after readiness while startup still owns the lane.
 					void record.host.lane.run(async () => {
-						await record.host.discardAndEndInLane("termination");
-						terminated.resolve();
+						await record.host.discardAndEndInLane("abort");
+						aborted.resolve();
 					});
 				}
 				return handle;
@@ -125,7 +125,7 @@ test("termination queued behind Moderator startup cannot resurrect its Run", { t
 	});
 	host.model.setResponses([
 		fauxAssistantMessage(fauxToolCall("agent_spawn", { title: "Fixture request", request: "Demonstrate a stalled obligation." },
-			{ id: "spawn-for-startup-termination" }), { stopReason: "toolUse" }),
+			{ id: "spawn-for-startup-abort" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Delegated."),
 		fauxAssistantMessage("Still owe an Answer."),
 		fauxAssistantMessage("Still owe an Answer after reminder."),
@@ -133,11 +133,11 @@ test("termination queued behind Moderator startup cannot resurrect its Run", { t
 	]);
 	const prompt = host.session.prompt("Create the stalled Agent.");
 	try {
-		await bounded(terminated.promise);
+		await bounded(aborted.promise);
 		// Drain reconciliation and the host lane, rather than relying on a timing grace period.
 		await bounded(coordinator.reachSafeBoundary());
 		await bounded(moderator!.host.lane.run(() => undefined));
-		assert.equal(starts, 1, "initial delivery must not start a second Run after termination");
+		assert.equal(starts, 1, "initial delivery must not start a second Run after abort");
 		assert.equal(moderator!.host.currentHandle(), undefined);
 	} finally {
 		await host.session.abort();

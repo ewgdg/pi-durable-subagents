@@ -113,10 +113,10 @@ test("repeated Agent view attachment does not replay either session startup life
 	assert.equal(host.runtime.session, host.session);
 });
 
-test("exact-Run termination of an open Agent view retains the Runtime and view", {
+test("exact-Run abort of an open Agent view retains the Runtime and view", {
 	timeout: 20_000,
 }, async (t) => {
-	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-termination.jsonl`);
+	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-abort.jsonl`);
 	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
 	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
@@ -128,10 +128,10 @@ test("exact-Run termination of an open Agent view retains the Runtime and view",
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	host.model.setResponses([
-		fauxAssistantMessage("Remain live until exact-Run termination."),
+		fauxAssistantMessage("Remain live until exact-Run abort."),
 		fauxAssistantMessage("Done."),
 	]);
-	const agentId = await spawnRetainedChild(host, "spawn-view-termination-agent");
+	const agentId = await spawnRetainedChild(host, "spawn-view-abort-agent");
 	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "session_start" && entry.sessionId === agentId,
 	));
@@ -145,13 +145,13 @@ test("exact-Run termination of an open Agent view retains the Runtime and view",
 	const childPid = startsBefore[0]!.pid;
 
 	await waitForAsyncCondition(async () => (await agentRunStatus(host, agentId)).phase === "live");
-	const terminated = await executeAndCommitRegisteredTool(
+	const aborted = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-viewed-run",
+		"abort-viewed-run",
 		{ operation: "abort", agentId },
 	);
-	assert.equal((terminated.details as { disposition: string }).disposition, "aborted");
+	assert.equal((aborted.details as { disposition: string }).disposition, "aborted");
 	assert.equal(host.runtime.session, ownerSession);
 	// The retained Runtime keeps the open view attached while the Agent becomes Dormant.
 	const retainedStatus = await agentRunStatus(host, agentId);
@@ -250,7 +250,7 @@ test("the named llama.cpp extension remains usable through child startup and shu
 		await executeAndCommitRegisteredTool(
 			host.session,
 			"agent_control",
-			"terminate-llama-child",
+			"abort-llama-child",
 			{ operation: "abort", agentId },
 		);
 		assert.equal(host.runtime.session, ownerSession);
@@ -416,7 +416,7 @@ async function agentRunStatus(
 ): Promise<ObservedAgentRun> {
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
-	const toolCallId = `observe-terminated-view-${Date.now()}`;
+	const toolCallId = `observe-aborted-view-${Date.now()}`;
 	const status = await observe.execute(
 		toolCallId,
 		{ operation: "status", agentId },

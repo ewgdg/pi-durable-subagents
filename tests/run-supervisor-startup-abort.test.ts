@@ -12,16 +12,16 @@ import { transcriptFromSessionManager } from "../src/pi-integration/session-mana
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
 import type {
 	AgentRuntimeHost,
-	RuntimeInitializationTermination,
+	RuntimeInitializationAbort,
 } from "../src/runtime/agent-runtime-host.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { AgentTranscript, type TranscriptInspection } from "../src/transcript/agent-transcript.ts";
 
-const TERMINATION_WAIT_MS = 100;
+const ABORT_WAIT_MS = 100;
 
-test("termination cancels a selected starting Run before its occupied lane", async () => {
+test("abort cancels a selected starting Run before its occupied lane", async () => {
 	const targetAgentId = "starting-target";
-	const toolCallId = "terminate-starting-target";
+	const toolCallId = "abort-starting-target";
 	const input = { operation: "abort" as const, agentId: targetAgentId };
 	const ownerTranscript = transcriptWithRunControl("owner", toolCallId, input);
 	const lane = new SerialLane();
@@ -33,8 +33,8 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 	let phase: "starting" | "live" | "dormant" = "starting";
 	let currentHandle: Readonly<{ sequence: number }> | undefined = { sequence: 1 };
 	let cancellationRequests = 0;
-	let ordinaryTerminations = 0;
-	let pendingTermination: RuntimeInitializationTermination | undefined;
+	let ordinaryAborts = 0;
+	let pendingAbort: RuntimeInitializationAbort | undefined;
 	let successorStarts = 0;
 	const projection = {} as TerminalProjection;
 	const targetHost = {
@@ -47,7 +47,7 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 		residualRequestCounts: () => phase === "dormant"
 			? { incoming: 0, outgoing: 0 }
 			: { incoming: 1, outgoing: 2 },
-		requestRuntimeInitializationTermination(exactProjection: TerminalProjection) {
+		requestRuntimeInitializationAbort(exactProjection: TerminalProjection) {
 			assert.equal(exactProjection, projection);
 			cancellationRequests += 1;
 			const cancellation = Promise.resolve().then(() => {
@@ -56,16 +56,16 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 				releaseStartup();
 				return true;
 			});
-			pendingTermination = { cancellation };
-			return pendingTermination;
+			pendingAbort = { cancellation };
+			return pendingAbort;
 		},
-		completeRuntimeInitializationTerminationInLane(request: RuntimeInitializationTermination) {
-			if (pendingTermination !== request) return false;
-			pendingTermination = undefined;
+		completeRuntimeInitializationAbortInLane(request: RuntimeInitializationAbort) {
+			if (pendingAbort !== request) return false;
+			pendingAbort = undefined;
 			return true;
 		},
 		async discardAndEndInLane() {
-			ordinaryTerminations += 1;
+			ordinaryAborts += 1;
 			phase = "dormant";
 			currentHandle = undefined;
 		},
@@ -100,22 +100,22 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 	});
 
 	const earlierAdmission = lane.run(() => {
-		if (pendingTermination) return "fenced" as const;
+		if (pendingAbort) return "fenced" as const;
 		successorStarts += 1;
 		phase = "live";
 		currentHandle = { sequence: 2 };
 		return "started" as const;
 	});
-	const termination = supervisor.execute("owner", toolCallId, input);
+	const abortReceipt = supervisor.execute("owner", toolCallId, input);
 	const outcome = await Promise.race([
-		termination.then((receipt) => ({ kind: "aborted" as const, receipt })),
+		abortReceipt.then((receipt) => ({ kind: "aborted" as const, receipt })),
 		new Promise<Readonly<{ kind: "blocked" }>>((resolve) =>
-			setTimeout(() => resolve({ kind: "blocked" }), TERMINATION_WAIT_MS)
+			setTimeout(() => resolve({ kind: "blocked" }), ABORT_WAIT_MS)
 		),
 	]);
 	if (outcome.kind === "blocked") {
 		releaseStartup();
-		await termination;
+		await abortReceipt;
 	}
 	await occupiedLane;
 	assert.equal(await earlierAdmission, "fenced");
@@ -129,10 +129,10 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 		callerOutstandingRequests: [],
 	});
 	assert.equal(cancellationRequests, 1);
-	assert.equal(ordinaryTerminations, 0);
+	assert.equal(ordinaryAborts, 0);
 	assert.equal(discardedScheduling, 1);
 	assert.equal(successorStarts, 0);
-	assert.equal(pendingTermination, undefined);
+	assert.equal(pendingAbort, undefined);
 });
 
 function record(

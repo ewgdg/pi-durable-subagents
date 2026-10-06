@@ -93,12 +93,12 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	assert.equal(view.status(agentId).run.suspension, undefined);
 	await until(() => childEntries().includes("QUEUED_STEER_COMPLETED"), "the re-admitted queued work continues in its own turn");
 	// The Answer Obligation is deliberately still outstanding, so the recovered Run stays
-	// retained until explicit termination ends it before teardown.
-	const terminate = { operation: "abort" as const, agentId };
-	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_control", terminate, { id: "terminate-recovered-run" }), { stopReason: "toolUse" }));
-	const termination = await view.control("terminate-recovered-run", terminate);
-	reopened.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_control", toolCallId: "terminate-recovered-run", details: termination, content: [{ type: "text", text: JSON.stringify(termination) }], isError: false, timestamp: Date.now() });
-	await until(() => view.status(agentId).run.phase === "dormant", "termination ends the recovered Run before teardown");
+	// retained until explicit abort ends it before teardown.
+	const abortInput = { operation: "abort" as const, agentId };
+	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_control", abortInput, { id: "abort-recovered-run" }), { stopReason: "toolUse" }));
+	const abortReceipt = await view.control("abort-recovered-run", abortInput);
+	reopened.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_control", toolCallId: "abort-recovered-run", details: abortReceipt, content: [{ type: "text", text: JSON.stringify(abortReceipt) }], isError: false, timestamp: Date.now() });
+	await until(() => view.status(agentId).run.phase === "dormant", "abort ends the recovered Run before teardown");
 	assert.equal(view.status(agentId).primaryEvidence.transcriptPath, originalStatus.primaryEvidence.transcriptPath);
 	assert.deepEqual(coordinator.forAgent(agentId).obligationFrames(), originalObligations);
 });

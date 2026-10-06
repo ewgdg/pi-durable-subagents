@@ -380,7 +380,7 @@ function runtimeParticipant(agentId: string) {
 		commitPending() { for (const commit of proofCommits.splice(0)) commit(); },
 		settle() { if (handle) for (const handler of settled) handler(handle, "settled"); },
 		dispatches: [] as AgentRuntimeDelivery[],
-		stop(cause: AgentRunEndCause = "termination") {
+		stop(cause: AgentRunEndCause = "abort") {
 			const previous = handle;
 			handle = undefined;
 			if (previous) for (const handler of ended) handler(previous, cause);

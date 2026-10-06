@@ -20,7 +20,7 @@ import type {
 	ProjectionInputSubmission,
 	RequestRelationshipReason,
 	RequestRelationshipSet,
-	RuntimeInitializationTermination,
+	RuntimeInitializationAbort,
 	TranscriptCommitConfirmation,
 } from "./agent-runtime-host.ts";
 export type {
@@ -117,7 +117,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	// the Agent lane, so lane work can run while startup UI is pending.
 	#preparedReadiness: BoundAgentRuntime | undefined;
 	#startingCancellationRequested = false;
-	#pendingInitializationTermination: RuntimeInitializationTermination | undefined;
+	#pendingInitializationAbort: RuntimeInitializationAbort | undefined;
 	#runStartsClosed = false;
 	#ending = false;
 	#interrupting = false;
@@ -200,7 +200,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		}
 		const run = this.#runtime;
 		// A suspended Run being discarded is still ending: re-entrant settlement
-		// boundaries rely on that phase to stay off the lane termination holds.
+		// boundaries rely on that phase to stay off the lane an abort holds.
 		if (this.#runSuspension) return {
 			phase: this.#ending ? "ending" : "live", work: "settled", attention: "none", retentionReasons,
 			suspension: this.#runSuspension,
@@ -364,13 +364,13 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		return true;
 	}
 
-	requestRuntimeInitializationTermination(
+	requestRuntimeInitializationAbort(
 		projection: TerminalProjection,
 		error: unknown,
-	): RuntimeInitializationTermination | undefined {
+	): RuntimeInitializationAbort | undefined {
 		const run = this.#runtime;
 		if (
-			this.#pendingInitializationTermination ||
+			this.#pendingInitializationAbort ||
 			!this.#starting ||
 			!run ||
 			run.runtime.projection !== projection
@@ -386,15 +386,15 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 				? cancellation.then(() => true)
 				: Promise.resolve(false),
 		});
-		this.#pendingInitializationTermination = request;
+		this.#pendingInitializationAbort = request;
 		return request;
 	}
 
-	completeRuntimeInitializationTerminationInLane(
-		request: RuntimeInitializationTermination,
+	completeRuntimeInitializationAbortInLane(
+		request: RuntimeInitializationAbort,
 	): boolean {
-		if (this.#pendingInitializationTermination !== request) return false;
-		this.#pendingInitializationTermination = undefined;
+		if (this.#pendingInitializationAbort !== request) return false;
+		this.#pendingInitializationAbort = undefined;
 		return true;
 	}
 
@@ -683,10 +683,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		if (this.#runSuspension) {
 			throw new Error("run_suspended: human input or authorized agent_control resume is required");
 		}
-		if (this.#pendingInitializationTermination) {
-			// Cancellation releases the occupied startup lane before its termination
+		if (this.#pendingInitializationAbort) {
+			// Cancellation releases the occupied startup lane before its abort
 			// receipt can run. Earlier lane waiters must not fill that gap with Run B.
-			throw new Error("run_termination_pending: Agent Run startup is fenced");
+			throw new Error("run_abort_pending: Agent Run startup is fenced");
 		}
 		const existing = this.#runtime;
 		if (existing) {
@@ -702,7 +702,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 				await this.#admitPreparedRun(existing);
 				return existing.runtime;
 			} catch (error) {
-				const cleanupErrors = [error, ...await this.#discardFailedStart(this.#startingCancellationRequested ? "termination" : "failure", startupFailure(error))];
+				const cleanupErrors = [error, ...await this.#discardFailedStart(this.#startingCancellationRequested ? "abort" : "failure", startupFailure(error))];
 				this.#clearRunScopedState();
 				if (cleanupErrors.length > 1) {
 					throw new AggregateError(cleanupErrors, "Agent Run admission cleanup failed");
@@ -754,7 +754,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 					throw shutdownError;
 				}
 				// Cancellation can lose to readiness or natural failure. Observe that exact
-				// result before choosing termination versus Run Failure classification.
+				// result before choosing Run Abort versus Run Failure classification.
 				await readiness;
 				readinessObserved = true;
 				this.#startingCancellationRequested = true;
@@ -828,7 +828,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			}
 		}
 		const endCause = this.#startingCancellationRequested
-			? "termination" as const
+			? "abort" as const
 			: "failure" as const;
 		const failure = startupFailure(error);
 		if (this.#runtime && this.#startingHandle && !this.#runtime.admitted) {
@@ -1089,20 +1089,20 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			return;
 		}
 		this.#cancelReleaseAfterActivitySettlement(run);
-		if (cause === "termination") run.runtime.projection?.fenceInputSubmissions();
+		if (cause === "abort") run.runtime.projection?.fenceInputSubmissions();
 		// Pi owns the native Owner Runtime across coordination Runs. A selected child
 		// is supervisor-owned but temporarily retained to preserve its attached view
 		// when its exact Run ends in a terminal event that bypasses Run Retention.
 		const retainRuntime = disposeRuntime === undefined && (
 			this.#runtimeOwnership === "native-host" ||
 			(
-				(cause === "failure" || cause === "termination") &&
+				(cause === "failure" || cause === "abort") &&
 				run.runtime.projection !== undefined &&
 				this.#retentionReasons.has("interactive_selection")
 			)
 		);
 		const endedHandle = run.handle;
-		// Shutdown preserves the durable stop; only explicit termination/resumption clears it.
+		// Shutdown preserves the durable stop; only explicit abort or resumption clears it.
 		if (this.#runSuspension && cause !== "shutdown") this.#runSuspensionHandler?.(undefined, endedHandle);
 		const failure = cause === "failure" ? run.failure : undefined;
 		const cleanupErrors: unknown[] = [];
@@ -1196,7 +1196,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	async #discardFailedStart(
-		cause: Extract<AgentRunEndCause, "failure" | "termination">,
+		cause: Extract<AgentRunEndCause, "failure" | "abort">,
 		failure?: AgentRunFailure,
 	): Promise<unknown[]> {
 		const failedStart = this.#runtime;

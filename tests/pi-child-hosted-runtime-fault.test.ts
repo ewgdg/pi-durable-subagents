@@ -245,7 +245,7 @@ test("compaction is observable, refreshes on both edges, and clears on disposal 
  }
 });
 
-test("host presentation observes compaction changes without changing Run state and clears on termination", async () => {
+test("host presentation observes compaction changes without changing Run state and clears on abort", async () => {
  const { runtime, emit } = createFakeRuntime();
  const host = AgentRuntimeSupervisor.createChild({
   agentId: "compaction-presentation",

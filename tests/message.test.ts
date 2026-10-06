@@ -1201,7 +1201,7 @@ test("only the original sender can poll a Message", async (t) => {
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("Explicit termination discards a stopped Run backlog and a successor receives only newly admitted work", async (t) => {
+test("Explicit abort discards a stopped Run backlog and a successor receives only newly admitted work", async (t) => {
 	const harness = await createDormantChildHarness(t, {});
 	let releaseFailure!: () => void;
 	const failureGate = new Promise<void>((resolve) => {
@@ -1229,27 +1229,27 @@ test("Explicit termination discards a stopped Run backlog and a successor receiv
 	);
 	releaseFailure();
 	await waitForDelivery(harness, deliveredBeforeFailure.source);
-	// The terminal error retains the exact Run as a stop; explicit termination is what
+	// The terminal error retains the exact Run as a stop; explicit abort is what
 	// discards its volatile backlog.
 	await waitForCondition(() => {
 		const run = harness.view.status(harness.childId).run;
 		return run.phase === "live" && run.suspension?.reason === "runtime_error";
 	});
 	const abortInput = { operation: "abort" as const, agentId: harness.childId };
-	const terminateCallId = "terminate-suspended-recipient";
+	const abortCallId = "abort-suspended-recipient";
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_control", abortInput, { id: terminateCallId }),
+			fauxToolCall("agent_control", abortInput, { id: abortCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
-	const termination = await harness.view.control(terminateCallId, abortInput);
+	const abortReceipt = await harness.view.control(abortCallId, abortInput);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
-		toolCallId: terminateCallId,
+		toolCallId: abortCallId,
 		toolName: "agent_control",
-		content: [{ type: "text", text: JSON.stringify(termination) }],
-		details: termination,
+		content: [{ type: "text", text: JSON.stringify(abortReceipt) }],
+		details: abortReceipt,
 		isError: false,
 		timestamp: Date.now(),
 	});

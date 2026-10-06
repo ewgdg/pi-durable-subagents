@@ -514,17 +514,17 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_control", abortInput, {
-				id: "terminate-configured-child-v1",
+				id: "abort-configured-child-v1",
 			}),
 			{ stopReason: "toolUse" },
 		),
 	);
-	const termination = await view.control(
-		"terminate-configured-child-v1",
+	const abortReceipt = await view.control(
+		"abort-configured-child-v1",
 		abortInput,
 	);
-	assert.ok("disposition" in termination);
-	assert.equal(termination.disposition, "aborted");
+	assert.ok("disposition" in abortReceipt);
+	assert.equal(abortReceipt.disposition, "aborted");
 	await writeFile(
 		join(templateRoot, "research.md"),
 		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nexcludeTools: read\n---\nChanged Template context",
@@ -1094,10 +1094,10 @@ test("a child spawned over the concurrency bound is observed as queued, listed w
 	// Ending the working Run is an ordinary activity change; nothing calls the queue directly.
 	const abortInput = { operation: "abort" as const, agentId: working.agentId };
 	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
-		fauxToolCall("agent_control", abortInput, { id: "terminate-working-capped-child" }),
+		fauxToolCall("agent_control", abortInput, { id: "abort-working-capped-child" }),
 		{ stopReason: "toolUse" },
 	));
-	await harness.view.control("terminate-working-capped-child", abortInput);
+	await harness.view.control("abort-working-capped-child", abortInput);
 	await waitForCondition(() => harness.view.status(queued.agentId).run.phase !== "dormant");
 	await harness.shutdown();
 });

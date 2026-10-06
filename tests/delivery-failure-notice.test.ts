@@ -244,12 +244,12 @@ for (const operation of ["send", "request"] as const) {
 	}
 }
 
-test("recipient termination before dispatch confirms non-Delivery of this attempt", { timeout: 5_000 }, async t => {
+test("recipient abort before dispatch confirms non-Delivery of this attempt", { timeout: 5_000 }, async t => {
 	const h = harness(t, { scheduleDeliveryDispatch: (context, release) => {
 		if (context.recipientAgentId !== "recipient") release();
 	} });
 	await h.send("send");
-	h.recipient.end("termination");
+	h.recipient.end("abort");
 	await flush();
 	assert.equal(h.notices()[0].failure.outcome, "confirmed_not_delivered");
 	assert.equal(h.recipient.dispatches.length, 0);
@@ -396,14 +396,14 @@ for (const outcome of ["dispatch_rejected", "channel_loss", "process_exit", "com
 	}
 });
 
-test("terminating a held author's queued notice does not restart it", { timeout: 5_000 }, async t => {
+test("aborting a held author's queued notice does not restart it", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	h.author.blocked = true;
 	await h.send("send");
 	h.recipient.fail(new Error("lost"));
 	await flush();
 	h.messages.discardSchedulingInLane(h.author.record);
-	h.author.end("termination");
+	h.author.end("abort");
 	h.author.blocked = false;
 	await h.messages.deliveryEligibilityChanged(h.author.record);
 	await flush();
@@ -432,7 +432,7 @@ test("missing recipient transcript evidence produces uncertainty, not false non-
 	const transcript = h.recipient.record.transcript;
 	const inspect = transcript.inspect.bind(transcript);
 	transcript.inspect = () => { throw new EvidenceUnavailableError("recipient evidence unavailable"); };
-	h.recipient.end("termination");
+	h.recipient.end("abort");
 	await flush();
 	transcript.inspect = inspect;
 	assert.equal(h.notices()[0].failure.outcome, "uncertain");

@@ -633,9 +633,9 @@ test("supervisory interruption settles an active Human Request through its error
 	await harness.shutdown();
 });
 
-test("termination discards exact-Run backlog, reports residual Requests, and permits a successor", async (t) => {
+test("abort discards exact-Run backlog, reports residual Requests, and permits a successor", async (t) => {
 	const harness = await createRunSupervisionHarness(t);
-	const child = await harness.spawnChild("spawn-terminated-child");
+	const child = await harness.spawnChild("spawn-aborted-child");
 	await child.waitForIdle();
 
 	harness.host.model.setResponses([
@@ -643,12 +643,12 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 	]);
 	const outgoingRequest = await harness.requestFromChild(
 		child,
-		"child-request-before-termination",
-		"This outgoing Request must remain residual after termination.",
+		"child-request-before-abort",
+		"This outgoing Request must remain residual after abort.",
 	);
 	assert.ok("requestMessageId" in outgoingRequest);
 	await harness.host.session.waitForIdle();
-	await harness.control("interrupt-before-termination", {
+	await harness.control("interrupt-before-abort", {
 		operation: "interrupt",
 		agentId: child.agentId,
 	});
@@ -658,12 +658,12 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 		"This uncommitted exact-Run backlog must be discarded.",
 	);
 
-	const terminated = await harness.control("terminate-held-child", {
+	const aborted = await harness.control("abort-held-child", {
 		operation: "abort",
 		agentId: child.agentId,
 	});
-	assert.ok("callerOutstandingRequests" in terminated);
-	assert.deepEqual({ ...terminated, callerOutstandingRequests: terminated.callerOutstandingRequests.map(({ title }) => title) }, {
+	assert.ok("callerOutstandingRequests" in aborted);
+	assert.deepEqual({ ...aborted, callerOutstandingRequests: aborted.callerOutstandingRequests.map(({ title }) => title) }, {
 		agentId: child.agentId,
 		disposition: "aborted",
 		residualRequests: { incoming: 1, outgoing: 1 },
@@ -683,14 +683,14 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 		false,
 	);
 
-	// Termination preserves the Owner's Answer Obligation, so settle that
+	// Abort preserves the Owner's Answer Obligation, so settle that
 	// residual Request before an ordinary Owner Message can target the child.
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The child received the residual Answer."),
 	]);
 	await harness.messageAs(
 		{ session: harness.host.session, view: harness.ownerView },
-		"answer-residual-request-after-termination",
+		"answer-residual-request-after-abort",
 		{ operation: "answer", requestId: outgoingRequest.requestMessageId, answer: "The Owner answered the residual Request." },
 	);
 	await child.waitForIdle();
@@ -698,9 +698,9 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 		fauxAssistantMessage("A fresh successor Run received only later input."),
 	]);
 	await harness.sendMessage(
-		"start-successor-after-termination",
+		"start-successor-after-abort",
 		child.agentId,
-		"Start a successor after exact Run termination.",
+		"Start a successor after exact Run abort.",
 	);
 	await waitForCondition(() =>
 		child.entries().some(
@@ -718,7 +718,7 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 	await harness.shutdown();
 });
 
-test("Agent Wait awaits delivered work without reviving a terminated responder", async (t) => {
+test("Agent Wait awaits delivered work without reviving an aborted responder", async (t) => {
 	const harness = await createRunSupervisionHarness(t);
 	const spawnToolCallId = "spawn-before-dormant-wait";
 	const child = await harness.spawnChild(spawnToolCallId);
@@ -738,7 +738,7 @@ test("Agent Wait awaits delivered work without reviving a terminated responder",
 		entryId: spawnSourceEntry.id,
 		toolCallId: spawnToolCallId,
 	});
-	await harness.control("terminate-before-dormant-wait", {
+	await harness.control("abort-before-dormant-wait", {
 		operation: "abort",
 		agentId: child.agentId,
 	});
@@ -831,12 +831,12 @@ test("authority follows only Owner descendants and immediate Direct-Spawner edge
 	);
 	assert.ok("disposition" in heldByDirectSpawner);
 	assert.equal(heldByDirectSpawner.disposition, "held");
-	const parentTermination = await harness.control("owner-terminates-parent-only", {
+	const parentAbort = await harness.control("owner-aborts-parent-only", {
 		operation: "abort",
 		agentId: parent.agentId,
 	});
-	assert.ok("disposition" in parentTermination);
-	assert.equal(parentTermination.disposition, "aborted");
+	assert.ok("disposition" in parentAbort);
+	assert.equal(parentAbort.disposition, "aborted");
 	assert.equal(harness.ownerView.status(parent.agentId).run.phase, "dormant");
 	assert.equal(harness.ownerView.status(grandchild.agentId).run.phase, "live");
 	assert.equal(
@@ -1512,7 +1512,7 @@ test("workflow resume and cancellation retain canonical identities through a lat
 	const [request] = child.view.openIncomingRequests().requests;
 	assert.ok(request);
 	const canonicalRequest = harness.ownerView.inspectRequest(request.requestMessageId);
-	await harness.control("terminate-before-contract-change", { operation: "abort", agentId: child.agentId });
+	await harness.control("abort-before-contract-change", { operation: "abort", agentId: child.agentId });
 	assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
 	const transcriptBefore = await readFile(child.transcriptPath, "utf8");
 	const allAgents = () => (["starting", "live", "ending", "dormant"] as const).flatMap(phase =>

@@ -247,13 +247,13 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	);
 	await returnAgentViewToOwner(host, liveView);
 
-	const termination = await executeAndCommitRegisteredTool(
+	const abortReceipt = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-moderator-before-dormant-view",
+		"abort-moderator-before-dormant-view",
 		{ operation: "abort", agentId: moderator.id },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
+	assert.equal((abortReceipt.details as { disposition: string }).disposition, "aborted");
 	const dormantView = await openDormantAgentView(host, moderator.id);
 	// The dormant re-attachment replays the complete Moderator transcript, so a fresh
 	// viewport shows its tail while the Moderator Input sits at the top. Pi's
@@ -1164,7 +1164,7 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 	await host.runtime.dispose();
 });
 
-test("terminating the affected Run does not erase its durable Answer obligation", async (t) => {
+test("aborting the affected Run does not erase its durable Answer obligation", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
@@ -1174,12 +1174,12 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
-				{ title: "Fixture request", request: "Leave this Answer obligation unresolved after termination." },
-				{ id: "spawn-terminated-stall-agent" },
+				{ title: "Fixture request", request: "Leave this Answer obligation unresolved after abort." },
+				{ id: "spawn-aborted-stall-agent" },
 			),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage("The termination case is delegated."),
+		fauxAssistantMessage("The abort case is delegated."),
 		fauxAssistantMessage("I settled without answering."),
 		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		(context) => {
@@ -1197,7 +1197,7 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 				fauxToolCall(
 					"agent_control",
 					{ operation: "abort", agentId: affectedAgentId },
-					{ id: "terminate-stalled-run" },
+					{ id: "abort-stalled-run" },
 				),
 				{ stopReason: "toolUse" },
 			);
@@ -1207,29 +1207,29 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 				"moderator_control",
 				{
 					operation: "resolve",
-					summary: "The exact stalled Run was terminated.",
+					summary: "The exact stalled Run was aborted.",
 					rationale: "The durable obligation remains for a successor Run.",
 				},
-				{ id: "resolve-after-termination" },
+				{ id: "resolve-after-abort" },
 			),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage("The terminated attempt is resolved."),
+		fauxAssistantMessage("The aborted attempt is resolved."),
 	]);
 
-	const ownerPrompt = host.session.prompt("Create a terminated Obligation Stall.");
+	const ownerPrompt = host.session.prompt("Create an aborted Obligation Stall.");
 	t.after(async () => {
 		await host.session.abort();
 		await ownerPrompt;
 	});
 	const moderator = await waitForModerator(host);
-	const termination = await waitForTranscriptEntry(
+	const abortEntry = await waitForTranscriptEntry(
 		moderator.path,
 		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
-			entry.message.toolCallId === "terminate-stalled-run",
+			entry.message.toolCallId === "abort-stalled-run",
 	);
-	assert.ok(termination.type === "message" && termination.message.role === "toolResult");
-	assert.deepEqual(termination.message.details, {
+	assert.ok(abortEntry.type === "message" && abortEntry.message.role === "toolResult");
+	assert.deepEqual(abortEntry.message.details, {
 		agentId: moderatorAffectedAgentId(moderator.path),
 		disposition: "aborted",
 		residualRequests: { incoming: 1, outgoing: 0 },
@@ -1238,7 +1238,7 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 	const resolution = await waitForTranscriptEntry(
 		moderator.path,
 		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
-			entry.message.toolCallId === "resolve-after-termination",
+			entry.message.toolCallId === "resolve-after-abort",
 	);
 	assert.ok(resolution.type === "message" && resolution.message.role === "toolResult");
 	assert.deepEqual(resolution.message.details, { disposition: "resolved" });
@@ -2317,19 +2317,19 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 	const [moderator] = await findModerators(host);
 	assert.ok(moderator);
 	const failedModeratorId = moderator.id;
-	// A terminal Moderator error suspends its Run; terminating that Run leaves the
+	// A terminal Moderator error suspends its Run; aborting that Run leaves the
 	// failed Moderator Dormant.
 	await waitForCondition(async () => {
 		const run = (await observeStatus(host, failedModeratorId)).run;
 		return run.phase === "live" && run.suspension?.reason === "runtime_error";
 	});
-	const termination = await executeAndCommitRegisteredTool(
+	const abortReceipt = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-failed-moderator",
+		"abort-failed-moderator",
 		{ operation: "abort", agentId: failedModeratorId },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
+	assert.equal((abortReceipt.details as { disposition: string }).disposition, "aborted");
 
 	// A Template is selected from current trusted discovery only at creation and its
 	// rules are captured atomically in the child Identity or Moderator Input
@@ -2475,12 +2475,12 @@ test("a same-obligation Stall recurrence publishes fresh attention after its pri
 	assert.ok(owner.reportHistory()[0]?.readAt, "a late stop publishes no evidence that could reopen its original report");
 });
 
-test("intentional child termination does not publish a Run failure report", async (t) => {
+test("intentional child abort does not publish a Run failure report", async (t) => {
 	const { host, owner, coordinator } = await createIncidentBoundaryHarness(t);
-	host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Wait for intentional termination." }, { id: "intentional-termination-wait" }), { stopReason: "toolUse" })]);
-	const child = await spawnFromView(host.session, owner, "intentional-termination-report", "Wait for a human.");
+	host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Wait for intentional abort." }, { id: "intentional-abort-wait" }), { stopReason: "toolUse" })]);
+	const child = await spawnFromView(host.session, owner, "intentional-abort-report", "Wait for a human.");
 	await waitForCondition(() => coordinator.forAgent(child.agentId).obligationFrames().length > 0);
-	await controlFromView(host.session, owner, "terminate-without-failure-report", { operation: "abort", agentId: child.agentId });
+	await controlFromView(host.session, owner, "abort-without-failure-report", { operation: "abort", agentId: child.agentId });
 	await owner.reachSafeBoundary();
 	assert.deepEqual(owner.reportHistory(), []);
 	assert.deepEqual(await findModerators(host), []);
@@ -3753,9 +3753,9 @@ test("blocked Delivery detects a Creation Request stranded before scheduler admi
 	assert.equal(starts, 2);
 });
 
-test("blocked Delivery remains observable after leaf termination without cancellation or automatic restart", async (t) => {
+test("blocked Delivery remains observable after leaf abort without cancellation or automatic restart", async (t) => {
 	const { host, owner, clock, parent, leafAgentId } = await createSilentLeafHarness(t);
-	await controlFromView(host.session, owner, "terminate-stranded-leaf", {
+	await controlFromView(host.session, owner, "abort-stranded-leaf", {
 		operation: "abort", agentId: leafAgentId,
 	});
 	const moderator = await waitForModeratorKind(host, "delivery_stall");

@@ -123,11 +123,11 @@ async function finishInteractiveFailure(): Promise<void> {
 			20_000,
 		);
 		// The terminal error retains the exact Run as a stop; the selected view only reaches
-		// its durable Dormant Agent through explicit termination.
+		// its durable Dormant Agent through explicit abort.
 		await waitForAgentSuspension(childAgentId as string);
 		await executeCommittedTool(
 			ownerSession,
-			appendToolSource(ownerSession, "agent_control", "pty-terminate-stopped-run", {
+			appendToolSource(ownerSession, "agent_control", "pty-abort-stopped-run", {
 				operation: "abort",
 				agentId: childAgentId,
 			}),

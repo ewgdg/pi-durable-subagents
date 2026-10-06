@@ -132,7 +132,7 @@ test("only the exact Run and its resumption hold can clear a quota stop", async 
 	assert.equal(host.currentRunSuspension(), undefined);
 });
 
-test("termination clears the live quota stop, but relationship cancellation alone does not", async () => {
+test("abort clears the live quota stop, but relationship cancellation alone does not", async () => {
 	const { host, emit, starts } = fixture();
 	await host.startInLane();
 	host.replaceRequestRelationships({ awaitingAnswerRequestIds: [], answerOwedRequestIds: ["incoming"] });
@@ -142,14 +142,14 @@ test("termination clears the live quota stop, but relationship cancellation alon
 	assert.ok(host.currentRunSuspension());
 	const ended: unknown[] = [];
 	host.addEndedHandler((...args) => ended.push(args));
-	await host.discardAndEndInLane("termination");
+	await host.discardAndEndInLane("abort");
 	assert.equal(host.currentRunSuspension(), undefined);
 	assert.equal(host.observe().phase, "dormant");
 	assert.equal(starts(), 1);
 	assert.equal(ended.length, 1);
 });
 
-test("terminating a suspended Run observes it as ending while the Runtime aborts", async () => {
+test("aborting a suspended Run observes it as ending while the Runtime aborts", async () => {
 	let phaseDuringAbort: string | undefined;
 	let observe!: () => string;
 	const { host, emit } = fixture({ onAbort: () => { phaseDuringAbort = observe(); } });
@@ -158,8 +158,8 @@ test("terminating a suspended Run observes it as ending while the Runtime aborts
 	emit({ type: "agent_end", outcome: "error", willRetry: false, failure: terminalFailure });
 	assert.equal(host.currentRunSuspension()?.reason, "runtime_error");
 	// Abort lets the child settle, and its settlement boundary re-enters the Owner.
-	// It must see "ending" to stay off the lane termination already holds.
-	await host.lane.run(() => host.discardAndEndInLane("termination"));
+	// It must see "ending" to stay off the lane abort already holds.
+	await host.lane.run(() => host.discardAndEndInLane("abort"));
 	assert.equal(phaseDuringAbort, "ending");
 	assert.equal(host.observe().phase, "dormant");
 });

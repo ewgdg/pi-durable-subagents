@@ -59,8 +59,8 @@ for (const willRetry of [false, true]) test(`terminal metadata excludes retry=${
 		? undefined
 		: { reason: "runtime_error", evidence: failure });
 	assert.equal(host.currentRunFailed(), false);
-	await host.lane.run(() => host.discardAndEndInLane(willRetry ? "termination" : "failure"));
+	await host.lane.run(() => host.discardAndEndInLane(willRetry ? "abort" : "failure"));
 	// The terminal error evidence belongs to the retained suspension, so a later
-	// fence or termination ends the Run without repeating it.
-	assert.deepEqual(ended, [[handle, willRetry ? "termination" : "failure", undefined]]);
+	// fence or abort ends the Run without repeating it.
+	assert.deepEqual(ended, [[handle, willRetry ? "abort" : "failure", undefined]]);
 });

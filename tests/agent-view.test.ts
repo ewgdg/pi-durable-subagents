@@ -418,7 +418,7 @@ test("a selected Agent whose runtime initialization fails opens a read-only post
 	await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-before-selected-startup-failure",
+		"abort-before-selected-startup-failure",
 		{ operation: "abort", agentId },
 	);
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
@@ -470,7 +470,7 @@ test("an unexpected child-process exit closes the exact selected view", async (t
 	await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-passive-failure-worker",
+		"abort-passive-failure-worker",
 		{ operation: "abort", agentId },
 	);
 
@@ -619,11 +619,11 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
 });
 
-test("termination discards selected native input already in prompt preflight", {
+test("abort discards selected native input already in prompt preflight", {
 	timeout: 10_000,
 }, async (t) => {
 	const discardedInput = "Continue after the Owner leaves this Agent view.";
-	const successorInput = "Start only from input submitted after termination.";
+	const successorInput = "Start only from input submitted after abort.";
 	const probe = configureProcessAgentViewProbe(t, "prompt-preflight");
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
@@ -642,8 +642,8 @@ test("termination discards selected native input already in prompt preflight", {
 		if (transcript.includes(successorInput)) successorInputExecutions += 1;
 		return fauxAssistantMessage(
 			transcript.includes(successorInput)
-				? "Only the post-termination input started a successor."
-				: "Input submitted before termination incorrectly survived.",
+				? "Only the post-abort input started a successor."
+				: "Input submitted before abort incorrectly survived.",
 		);
 	};
 	host.model.setResponses([
@@ -654,8 +654,8 @@ test("termination discards selected native input already in prompt preflight", {
 	const spawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
-		"spawn-preflight-termination-worker",
-		{ title: "Fixture request", request: "Remain live for selected termination.", label: "Termination Fence Worker" },
+		"spawn-preflight-abort-worker",
+		{ title: "Fixture request", request: "Remain live for selected abort.", label: "Abort Fence Worker" },
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
 	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "live"));
@@ -674,7 +674,7 @@ test("termination discards selected native input already in prompt preflight", {
 	// Built-in commands consume terminal submissions without entering model input.
 	// The later fence must therefore use the terminal's exact sequence, not a count
 	// inferred only from participant input callbacks.
-	opened.view.handleInput?.("/name termination-sequence-probe");
+	opened.view.handleInput?.("/name abort-sequence-probe");
 	opened.view.handleInput?.("\r");
 
 	for (const character of discardedInput) opened.view.handleInput?.(character);
@@ -682,13 +682,13 @@ test("termination discards selected native input already in prompt preflight", {
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "input_preflight_started" && entry.sessionId === agentId,
 	));
-	const termination = await executeAndCommitRegisteredTool(
+	const abortReceipt = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-during-selected-input-preflight",
+		"abort-during-selected-input-preflight",
 		{ operation: "abort", agentId },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
+	assert.equal((abortReceipt.details as { disposition: string }).disposition, "aborted");
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
 
 	await releaseProcessAgentViewProbe(probe.releasePath);
@@ -724,7 +724,7 @@ test("termination discards selected native input already in prompt preflight", {
 	await returnAgentViewToOwner(host, opened.view, opened.command);
 });
 
-test("termination fences selected input between participant handling and Agent admission", async (t) => {
+test("abort fences selected input between participant handling and Agent admission", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
@@ -747,12 +747,12 @@ test("termination fences selected input between participant handling and Agent a
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_spawn", spawnInput, {
-				id: "spawn-agent-start-termination-worker",
+				id: "spawn-agent-start-abort-worker",
 			}),
 			{ stopReason: "toolUse" },
 		),
 	);
-	const spawn = await owner.spawn("spawn-agent-start-termination-worker", spawnInput);
+	const spawn = await owner.spawn("spawn-agent-start-abort-worker", spawnInput);
 	assert.ok("agentId" in spawn && spawn.agentId);
 	const agentId = spawn.agentId;
 	await waitForCondition(() => {
@@ -776,22 +776,22 @@ test("termination fences selected input between participant handling and Agent a
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_control", abortInput, {
-				id: "terminate-before-selected-agent-admission",
+				id: "abort-before-selected-agent-admission",
 			}),
 			{ stopReason: "toolUse" },
 		),
 	);
-	const termination = await owner.control(
-		"terminate-before-selected-agent-admission",
+	const abortReceipt = await owner.control(
+		"abort-before-selected-agent-admission",
 		abortInput,
 	);
-	assert.ok("disposition" in termination);
-	assert.equal(termination.disposition, "aborted");
+	assert.ok("disposition" in abortReceipt);
+	assert.equal(abortReceipt.disposition, "aborted");
 	assert.equal(owner.status(agentId).run.phase, "dormant");
 
 	await assert.rejects(
 		coordinator.forAgent(agentId).beginExecution(1),
-		/stale_native_input: submission preceded exact-Run termination/,
+		/stale_native_input: submission preceded exact-Run abort/,
 	);
 	assert.equal(owner.status(agentId).run.phase, "dormant");
 	await activeView.close();
@@ -819,7 +819,7 @@ test("a handled Dormant Agent input can return to Owner after prompt preflight",
 	await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-handled-preflight-worker",
+		"abort-handled-preflight-worker",
 		{ operation: "abort", agentId },
 	);
 	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "dormant"));
@@ -888,13 +888,13 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 			"Persist this response for interactive Dormant inspection.",
 		)
 	);
-	const termination = await executeAndCommitRegisteredTool(
+	const abortReceipt = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-before-dormant-agent-view",
+		"abort-before-dormant-agent-view",
 		{ operation: "abort", agentId },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
+	assert.equal((abortReceipt.details as { disposition: string }).disposition, "aborted");
 	const ownerSession = host.runtime.session;
 	const ownerEditor = "Owner draft survives Dormant inspection";
 	host.ui.setEditorText(ownerEditor);
@@ -1036,13 +1036,13 @@ test("detached Dormant compaction retains its Runtime until queued input starts 
 		)
 	);
 	await returnAgentViewToOwner(host, initialView.view, initialView.command);
-	const termination = await executeAndCommitRegisteredTool(
+	const abortReceipt = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-before-dormant-compaction",
+		"abort-before-dormant-compaction",
 		{ operation: "abort", agentId },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
+	assert.equal((abortReceipt.details as { disposition: string }).disposition, "aborted");
 
 	const opened = await openDormantAgentView(host, agentId);
 	await waitForCondition(() =>
@@ -1125,7 +1125,7 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 	await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-before-dormant-command-message",
+		"abort-before-dormant-command-message",
 		{ operation: "abort", agentId },
 	);
 	let successorModelRequests = 0;
@@ -1139,14 +1139,14 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
 		childProcessSessionStarts(entries, agentId).length === 2
 	);
-	const passiveTermination = await executeAndCommitRegisteredTool(
+	const passiveAbort = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-prepared-dormant-runtime",
+		"abort-prepared-dormant-runtime",
 		{ operation: "abort", agentId },
 	);
 	assert.equal(
-		(passiveTermination.details as { disposition: string }).disposition,
+		(passiveAbort.details as { disposition: string }).disposition,
 		"not_running",
 	);
 	opened.view.handleInput?.("/wake-dormant-agent");
@@ -1206,7 +1206,7 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 	await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-before-dormant-runtime-modal",
+		"abort-before-dormant-runtime-modal",
 		{ operation: "abort", agentId },
 	);
 
@@ -1285,12 +1285,12 @@ test("closing a Dormant session_start modal cancels view initialization without 
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_control", abortInput, {
-				id: "terminate-startup-close-worker",
+				id: "abort-startup-close-worker",
 			}),
 			{ stopReason: "toolUse" },
 		),
 	);
-	await owner.control("terminate-startup-close-worker", abortInput);
+	await owner.control("abort-startup-close-worker", abortInput);
 
 	activeView = await owner.openAgentView(agentId);
 	assert.ok(activeView);
@@ -1403,10 +1403,10 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	const abortInput = { operation: "abort" as const, agentId };
 	appendToolSource(
 		"agent_control",
-		"terminate-unselected-startup-worker",
+		"abort-unselected-startup-worker",
 		abortInput,
 	);
-	await owner.control("terminate-unselected-startup-worker", abortInput);
+	await owner.control("abort-unselected-startup-worker", abortInput);
 	const messageInput = {
 		operation: "send" as const,
 		targetAgent: agentId,
@@ -1714,16 +1714,16 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		)
 	);
 	// Answering the Creation Request ends its model/tool loop and settles the Run
-	// (docs/run-supervision.md), so this Agent is already Dormant before termination;
+	// (docs/run-supervision.md), so this Agent is already Dormant before abort;
 	// an already-Dormant receipt reports `not_running` (docs/run-supervision.md:163).
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
-	const terminated = await executeAndCommitRegisteredTool(
+	const aborted = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-ready-viewed-failure-worker",
+		"abort-ready-viewed-failure-worker",
 		{ operation: "abort", agentId },
 	);
-	assert.equal((terminated.details as { disposition: string }).disposition, "not_running");
+	assert.equal((aborted.details as { disposition: string }).disposition, "not_running");
 	const ownerSession = host.runtime.session;
 	const { command, view } = await openDormantAgentView(host, agentId);
 	await waitForCondition(() =>
@@ -1746,7 +1746,7 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	releaseFailure();
 	// An unexpected terminal error retains the exact Run as a stop: the view stays
 	// open on the same Agent, the exception stays in its transcript, and the Run only
-	// ends through explicit termination.
+	// ends through explicit abort.
 	await waitForCondition(async () => (await currentRunState(host, agentId)).suspension?.reason === "runtime_error");
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(host.runtime.session, ownerSession);
@@ -1760,14 +1760,14 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	await waitForCondition(() =>
 		/Failing Worker.*Suspended · Runtime error/.test(stripTerminalSequences(view.render(80).join("\n")))
 	);
-	// Explicit termination still reaches the durable Dormant Agent without closing the view.
-	const stoppedTerminated = await executeAndCommitRegisteredTool(
+	// Explicit abort still reaches the durable Dormant Agent without closing the view.
+	const stoppedAborted = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-stopped-viewed-failure-worker",
+		"abort-stopped-viewed-failure-worker",
 		{ operation: "abort", agentId },
 	);
-	assert.equal((stoppedTerminated.details as { disposition: string }).disposition, "aborted");
+	assert.equal((stoppedAborted.details as { disposition: string }).disposition, "aborted");
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 
 	await host.session.prompt("Confirm the Owner input loop still runs.");
@@ -1965,15 +1965,15 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	view = opened.view;
 	releaseInitialFailure();
 	// The stop retains the Run, so the ordinary Message below needs the Agent dormant
-	// again: explicit termination is what ends a stopped Run.
+	// again: explicit abort is what ends a stopped Run.
 	await waitForCondition(async () => (await currentRunState(host, agentId)).suspension?.reason === "runtime_error");
-	const stoppedTermination = await executeAndCommitRegisteredTool(
+	const stoppedAbort = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-stopped-viewed-successor",
+		"abort-stopped-viewed-successor",
 		{ operation: "abort", agentId },
 	);
-	assert.equal((stoppedTermination.details as { disposition: string }).disposition, "aborted");
+	assert.equal((stoppedAbort.details as { disposition: string }).disposition, "aborted");
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 
 	const sent = await executeAndCommitRegisteredTool(

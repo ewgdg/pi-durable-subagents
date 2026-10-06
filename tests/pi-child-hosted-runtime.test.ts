@@ -318,7 +318,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 			retentionReasons: [{ reason: "interruption_hold", count: 1 }],
 		});
 
-		await host.lane.run(() => host.discardAndEndInLane("termination"));
+		await host.lane.run(() => host.discardAndEndInLane("abort"));
 		assert.equal(host.observe().phase, "dormant");
 		assert.throws(() => process.kill(pid, 0), hasCode("ESRCH"));
 		await assert.rejects(lstat(bootstrapPath), hasCode("ENOENT"));

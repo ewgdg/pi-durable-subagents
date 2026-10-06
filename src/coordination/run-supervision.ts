@@ -57,8 +57,8 @@ export class RunSupervisor {
 			target.host.observe().phase === "starting"
 			? target.host.currentProjection()
 			: undefined;
-		const initializationTermination = startingProjection
-			? target.host.requestRuntimeInitializationTermination(
+		const initializationAbort = startingProjection
+			? target.host.requestRuntimeInitializationAbort(
 				startingProjection,
 				new Error("Agent Run aborted during Runtime initialization"),
 			)
@@ -76,8 +76,8 @@ export class RunSupervisor {
 					// Read before ending the Run: abort cannot change them, and a failed
 					// read must not report an error for a Run that already ended.
 					const callerOutstandingRequests = this.#messages.outstandingRequestsTo(caller, target.identity.agentId);
-					const initializationCancelled = initializationTermination
-						? await initializationTermination.cancellation
+					const initializationCancelled = initializationAbort
+						? await initializationAbort.cancellation
 						: false;
 					const residualRequests = initializationCancelled
 						? residualRequestsBeforeCancellation
@@ -88,12 +88,12 @@ export class RunSupervisor {
 					}
 					if (!target.host.currentHandle()) return abortReceipt("not_running", residualRequests, callerOutstandingRequests);
 					this.#messages.discardSchedulingInLane(target);
-					await target.host.discardAndEndInLane("termination");
+					await target.host.discardAndEndInLane("abort");
 					return abortReceipt("aborted", residualRequests, callerOutstandingRequests);
 				} finally {
-					if (initializationTermination) {
-						target.host.completeRuntimeInitializationTerminationInLane(
-							initializationTermination,
+					if (initializationAbort) {
+						target.host.completeRuntimeInitializationAbortInLane(
+							initializationAbort,
 						);
 					}
 				}

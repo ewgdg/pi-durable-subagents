@@ -203,7 +203,7 @@ test("Wait coalesces a held queue, repairs loss in the same Run, and delivers on
 		[receipt.requestMessageId]);
 });
 
-test("fresh Wait may start a Dormant recipient, but a parked Wait cannot undo later termination", async (t) => {
+test("fresh Wait may start a Dormant recipient, but a parked Wait cannot undo later abort", async (t) => {
 	const h = harness(t);
 	h.responder.blocked = true;
 	await h.message(h.requester, "lost-request", {
@@ -612,7 +612,7 @@ for (const transition of ["ending", "failure", "replacement"] as const) {
 		await h.tick();
 		assert.equal(h.deliveries(h.responder).length, 0);
 		if (transition !== "replacement") {
-			h.responder.stop(transition === "failure" ? "failure" : "termination");
+			h.responder.stop(transition === "failure" ? "failure" : "abort");
 			await h.tick();
 			assert.equal(h.responder.record.host.observe().phase, "dormant");
 			assert.equal(h.deliveries(h.responder).length, 0);
@@ -1236,7 +1236,7 @@ function runtimeParticipant(agentId: string) {
 		settle() { if (handle) for (const handler of settled) handler(handle, "settled"); },
 		dispatches: [] as AgentRuntimeDelivery[],
 		retentionReasons: new Set<string>(),
-		stop(cause: AgentRunEndCause = "termination") {
+		stop(cause: AgentRunEndCause = "abort") {
 			const previous = handle;
 			handle = undefined;
 			if (previous) for (const handler of ended) handler(previous, cause);

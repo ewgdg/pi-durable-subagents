@@ -67,7 +67,7 @@ export type DormantRunState = Readonly<{
 export type AgentRunState = LiveRunState | DormantRunState;
 export type AgentRunHandle = Readonly<{ sequence: number }>;
 export type ProjectionInputSubmission = Readonly<{ sequence: number }>;
-export type RuntimeInitializationTermination = Readonly<{
+export type RuntimeInitializationAbort = Readonly<{
 	cancellation: Promise<boolean>;
 }>;
 export type RunResumptionHandle = Readonly<{
@@ -75,7 +75,7 @@ export type RunResumptionHandle = Readonly<{
 	sequence: number;
 }>;
 export type AgentRunSettlement = "settled" | "failed";
-export type AgentRunEndCause = "clean" | "failure" | "termination" | "shutdown";
+export type AgentRunEndCause = "clean" | "failure" | "abort" | "shutdown";
 export type AgentRunFailure = Readonly<{ stage: string; error: string; provenance: string }>;
 export type RequestRelationshipSet = Readonly<{
 	awaitingAnswerRequestIds: readonly string[];
@@ -168,12 +168,12 @@ export interface AgentRuntimeHost {
 	prepareInLane(reasons?: readonly AgentRetentionReason[]): Promise<void>;
 	beginShutdown(): Promise<boolean>;
 	cancelRuntimeInitialization(projection: TerminalProjection, error: unknown): Promise<boolean>;
-	requestRuntimeInitializationTermination(
+	requestRuntimeInitializationAbort(
 		projection: TerminalProjection,
 		error: unknown,
-	): RuntimeInitializationTermination | undefined;
-	completeRuntimeInitializationTerminationInLane(
-		request: RuntimeInitializationTermination,
+	): RuntimeInitializationAbort | undefined;
+	completeRuntimeInitializationAbortInLane(
+		request: RuntimeInitializationAbort,
 	): boolean;
 	addSettledHandler(
 		handler: (handle: AgentRunHandle, settlement: AgentRunSettlement) => void,

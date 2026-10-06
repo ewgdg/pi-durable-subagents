@@ -4777,22 +4777,22 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 		return run.phase === "live" && run.suspension?.reason === "runtime_error";
 	});
 	// The requester's terminal error retains its exact Run as a stop. Explicit
-	// termination reaches the dormant requester this Answer must wake.
+	// abort reaches the dormant requester this Answer must wake.
 	const abortInput = { operation: "abort" as const, agentId: harness.childId };
-	const terminateCallId = "terminate-failed-requester";
+	const abortCallId = "abort-failed-requester";
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_control", abortInput, { id: terminateCallId }),
+			fauxToolCall("agent_control", abortInput, { id: abortCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
-	const termination = await harness.view.control(terminateCallId, abortInput);
+	const abortReceipt = await harness.view.control(abortCallId, abortInput);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
-		toolCallId: terminateCallId,
+		toolCallId: abortCallId,
 		toolName: "agent_control",
-		content: [{ type: "text", text: JSON.stringify(termination) }],
-		details: termination,
+		content: [{ type: "text", text: JSON.stringify(abortReceipt) }],
+		details: abortReceipt,
 		isError: false,
 		timestamp: Date.now(),
 	});

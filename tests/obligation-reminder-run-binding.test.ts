@@ -72,7 +72,7 @@ test("an Obligation Reminder is suppressed once the stalled Run it was evaluated
 		const [reminder] = reminders;
 		assert.equal(reminder!.isSuppressed?.(), false);
 
-		await child.record.host.lane.run(() => child.record.host.discardAndEndInLane("termination"));
+		await child.record.host.lane.run(() => child.record.host.discardAndEndInLane("abort"));
 		assert.equal(child.record.host.observe().phase, "dormant");
 		assert.equal(reminder!.isSuppressed?.(), true);
 	} finally {

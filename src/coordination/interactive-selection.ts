@@ -432,7 +432,7 @@ export class InteractiveSelection {
 	async #handleViewedRunEndingInLane(
 		record: AgentRecord,
 		handle: Readonly<{ sequence: number }>,
-		cause: "failure" | "termination" | "shutdown",
+		cause: "failure" | "abort" | "shutdown",
 	): Promise<void> {
 		const active = this.#active;
 		if (

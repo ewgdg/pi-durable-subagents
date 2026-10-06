@@ -346,7 +346,7 @@ export class MessageDeliveryScheduler {
 				if (item.record !== record) continue;
 				// A Run Abort does not cancel Requests: without proof, the
 				// upstream obligation still depends on this stranded Delivery.
-				if (cause === "failure" || cause === "termination") {
+				if (cause === "failure" || cause === "abort") {
 					this.#failDeliveryProgress(item.delivery, new Error("Recipient Run ended before Delivery proof"));
 				} else if (cause === "shutdown") {
 					item.watcher.dispose();

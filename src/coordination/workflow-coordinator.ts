@@ -1320,7 +1320,7 @@ export class WorkflowCoordinator {
 			submission !== undefined &&
 			record.host.projectionInputSubmissionIsFenced(submission)
 		) {
-			throw new Error("stale_native_input: submission preceded exact-Run termination");
+			throw new Error("stale_native_input: submission preceded exact-Run abort");
 		}
 	}
 
