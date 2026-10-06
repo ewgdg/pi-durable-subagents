@@ -1,6 +1,6 @@
 # Local repair launch integration — feasibility investigation
 
-Investigation for [#129](https://github.com/ewgdg/pi-durable-subagents/issues/129),
+Investigation for [#129](https://github.com/xian0x5a/pi-durable-subagents/issues/129),
 2026-09-15. **Design evidence, not implemented repair functionality.**
 
 The user excludes upstream changes and asks to prove the local-launcher idea

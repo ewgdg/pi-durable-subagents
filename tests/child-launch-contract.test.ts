@@ -9,14 +9,16 @@ import { AGENT_CONTROL_PROTOCOL_VERSION, ChildProcessBootstrapSchema } from "../
 import { ChildLaunchContractGuard } from "../src/process-runtime/child-launch-contract.ts";
 
 test("launch preflight works from an installed extension with host-provided peers only", { timeout: 20_000 }, async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-installed-launch-contract-"));
+	const agentRoot = await mkdtemp(join(tmpdir(), "pi-installed-launch-contract-"));
+	// npm installs land under node_modules, where Node refuses to strip .ts types.
+	const root = join(agentRoot, "node_modules", "@xian0x5a", "pi-durable-subagents");
 	await cp(new URL("../src/", import.meta.url), join(root, "src"), { recursive: true });
 	const extensionPath = join(root, "probe.ts");
 	await writeFile(extensionPath, `
 		import { ChildLaunchContractGuard } from "./src/process-runtime/child-launch-contract.ts";
 		export default async function () { await new ChildLaunchContractGuard().assertCompatible(); }
 	`);
-	const loaded = await discoverAndLoadExtensions([extensionPath], root, join(root, "agent"));
+	const loaded = await discoverAndLoadExtensions([extensionPath], agentRoot, join(agentRoot, "agent"));
 	assert.deepEqual(loaded.errors, []);
 	assert.equal(loaded.extensions.length, 1);
 });

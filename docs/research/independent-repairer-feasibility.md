@@ -1,6 +1,6 @@
 # Independent repairer with clean Owner handoff
 
-Follow-up for [#129](https://github.com/ewgdg/pi-durable-subagents/issues/129),
+Follow-up for [#129](https://github.com/xian0x5a/pi-durable-subagents/issues/129),
 2026-09-15. **Disposable proof, not implemented repair functionality.** No
 upstream, production-runtime, dependency, or live-transcript changes.
 

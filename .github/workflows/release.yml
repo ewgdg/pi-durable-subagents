@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release
+      id-token: write # npm Trusted Publishing (OIDC); also signs provenance
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          # Trusted Publishing needs npm >= 11.5.1, which Node 24 bundles.
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          # Release builds must not restore a cache another workflow could have written.
+          package-manager-cache: false
+      - name: Check tag matches package version
+        run: |
+          package_version="$(node -p 'require("./package.json").version')"
+          if [ "${GITHUB_REF_NAME}" != "v${package_version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${package_version}"
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:ci
+      # Skip a version already on npm: the first release is published by hand
+      # (Trusted Publishing needs an existing package), and reruns stay safe.
+      - name: Publish to npm
+        run: |
+          package_spec="$(node -p 'const p = require("./package.json"); `${p.name}@${p.version}`')"
+          if npm view "${package_spec}" version > /dev/null 2>&1; then
+            echo "${package_spec} is already published; skipping npm publish"
+          else
+            npm publish
+          fi
+      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

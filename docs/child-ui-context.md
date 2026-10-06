@@ -43,6 +43,8 @@ Before ordinary child or Moderator preparation, a bounded fresh Node probe check
 the installed bootstrap schema and protocol version against the Owner's contract.
 The child validator and probe share one dependency-free JSON Schema definition;
 the probe does not import peers that only Pi's extension loader can supply.
+It imports a temporary copy of that module, because Node refuses to strip
+TypeScript types under `node_modules`, where npm installs the package.
 Low-level launch rechecks before allocating process resources. An incompatible or
 unverifiable contract blocks that factory's launch path for its remaining lifetime,
 preventing repeated failed launches and Moderator diagnosis through the same path.

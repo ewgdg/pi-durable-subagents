@@ -47,3 +47,18 @@ Node's file timeout is 5 seconds for fast tests and 120 seconds for process/conf
 For a deliberately different budget, append `--deadline-ms=10000`. It must be an integer from 1 through 2147483647; zero cannot disable containment. Forwarded Node flags do not alter the independently calculated suite budget; use the explicit deadline override when changing concurrency or Node timeouts.
 
 On Linux with writable cgroup-v2 support, the existing cgroup and guardian contain Node/PTY descendants even if the supervisor is killed. Otherwise cleanup is best-effort: Linux tracks observed descendants via `/proc` (short-lived/reparented processes can escape observation); other Unix systems kill the runner process group, and Windows kills only the root process. The deadline requires the supervisor itself to remain alive and responsive; it is not a machine-level resource limit.
+
+## Releasing
+
+CI runs `typecheck` and `test:ci` on Node 22 and 24 for pull requests and `main`. `test:ci` is the fast suite with a 15-second file timeout and an 8-minute deadline, because shared runners can be several times slower than a development machine. Run `npm run test:process` locally before a release; it launches real Pi processes and stays out of CI.
+
+Pushing a `v*` tag runs the Release workflow. It checks that the tag matches `package.json`, repeats the CI gate, publishes to npm through Trusted Publishing (OIDC, with provenance), and creates a GitHub Release with generated notes.
+
+```bash
+npm version patch   # bumps package.json and package-lock.json, commits, tags vX.Y.Z
+git push --follow-tags
+```
+
+The npm package must list `xian0x5a/pi-durable-subagents` with workflow `release.yml` as its trusted publisher (npmjs.com → package Settings → Trusted publishing).
+
+The package is scoped as `@xian0x5a/pi-durable-subagents` because the unscoped name was claimed by an unrelated placeholder; `publishConfig.access` keeps it public. The first version is published by hand (`npm publish`), because npm only accepts a trusted publisher for an existing package. Its tag then runs the workflow, which skips versions already on npm and only creates the GitHub Release.

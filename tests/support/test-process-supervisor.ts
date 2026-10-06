@@ -360,7 +360,7 @@ function observeProcesses(): Map<number, ProcessObservation> {
 				startTime: fields[19]!,
 			});
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			if (!isExitedProcessError(error)) throw error;
 		}
 	}
 	return processes;
@@ -450,7 +450,7 @@ function processState(pid: number): string | undefined {
 	try {
 		return statFields(pid)[0];
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		if (isExitedProcessError(error)) return undefined;
 		throw error;
 	}
 }
@@ -468,9 +468,16 @@ function sameProcess(identity: ProcessIdentity): boolean {
 	try {
 		return statFields(identity.pid)[19] === identity.startTime;
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		if (isExitedProcessError(error)) return false;
 		throw error;
 	}
+}
+
+// A process that exits between the /proc listing and the read surfaces as
+// ENOENT on open, or ESRCH when the exit lands after open.
+function isExitedProcessError(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException).code;
+	return code === "ENOENT" || code === "ESRCH";
 }
 
 function statFields(pid: number): string[] {

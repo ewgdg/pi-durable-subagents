@@ -1,5 +1,5 @@
 {
-  "name": "pi-durable-subagents",
+  "name": "@xian0x5a/pi-durable-subagents",
   "version": "0.1.0",
   "license": "MIT",
   "description": "Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.",
@@ -20,10 +20,11 @@
   ],
   "files": [
     "src",
-    "docs",
-    "agents",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -39,6 +40,7 @@
     "benchmark:attached-terminal": "node benchmarks/attached-terminal-output.ts",
     "test": "npm run test:fast && npm run test:process",
     "test:fast": "node tests/support/run-test-suite.ts fast",
+    "test:ci": "node tests/support/run-test-suite.ts fast --test-timeout=15000 --deadline-ms=480000",
     "test:process": "node tests/support/run-test-suite.ts process",
     "test:conformance": "node tests/support/run-test-suite.ts conformance",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -62,7 +64,7 @@
   "dependencies": {
     "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/headless": "^6.0.0",
-    "node-pty": ">=1.2.0-beta.15",
+    "node-pty": "^1.2.0-beta.15",
     "yaml": "^2.9.0"
   },
   "allowScripts": {
