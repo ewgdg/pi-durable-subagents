@@ -128,7 +128,7 @@ async function finishInteractiveFailure(): Promise<void> {
 		await executeCommittedTool(
 			ownerSession,
 			appendToolSource(ownerSession, "agent_control", "pty-terminate-stopped-run", {
-				operation: "terminate",
+				operation: "abort",
 				agentId: childAgentId,
 			}),
 		);

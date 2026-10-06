@@ -12,6 +12,7 @@ import type { MessageCoordinator } from "./messages.ts";
 import {
 	createSupervisoryResumeMessage,
 	resolveCommittedRunControl,
+	type RunAbortReceipt,
 	type RunControlInput,
 	type RunControlReceipt,
 } from "../protocol/run-control.ts";
@@ -52,19 +53,29 @@ export class RunSupervisor {
 		const control = committed.input;
 		const target = this.#requireControllableTarget(callerAgentId, control.agentId);
 		const residualRequestsBeforeCancellation = target.host.residualRequestCounts();
-		const startingProjection = control.operation === "terminate" &&
+		const startingProjection = control.operation === "abort" &&
 			target.host.observe().phase === "starting"
 			? target.host.currentProjection()
 			: undefined;
 		const initializationTermination = startingProjection
 			? target.host.requestRuntimeInitializationTermination(
 				startingProjection,
-				new Error("Agent Run terminated during Runtime initialization"),
+				new Error("Agent Run aborted during Runtime initialization"),
 			)
 			: undefined;
 		return target.host.lane.run(async () => {
-			if (control.operation === "terminate") {
+			if (control.operation === "abort") {
+				const abortReceipt = (
+					disposition: "aborted" | "not_running",
+					residualRequests: { incoming: number; outgoing: number },
+					callerOutstandingRequests: RunAbortReceipt["callerOutstandingRequests"],
+				) => ({ agentId: target.identity.agentId, disposition, residualRequests, callerOutstandingRequests });
 				try {
+					// Abort ends only the Run, so it names the caller's own Requests the
+					// caller may now need to cancel (a queued child has no Run at all).
+					// Read before ending the Run: abort cannot change them, and a failed
+					// read must not report an error for a Run that already ended.
+					const callerOutstandingRequests = this.#messages.outstandingRequestsTo(caller, target.identity.agentId);
 					const initializationCancelled = initializationTermination
 						? await initializationTermination.cancellation
 						: false;
@@ -73,26 +84,12 @@ export class RunSupervisor {
 						: target.host.residualRequestCounts();
 					if (initializationCancelled) {
 						this.#messages.discardSchedulingInLane(target);
-						return {
-							agentId: target.identity.agentId,
-							disposition: "terminated",
-							residualRequests,
-						};
+						return abortReceipt("aborted", residualRequests, callerOutstandingRequests);
 					}
-					if (!target.host.currentHandle()) {
-						return {
-							agentId: target.identity.agentId,
-							disposition: "not_running",
-							residualRequests,
-						};
-					}
+					if (!target.host.currentHandle()) return abortReceipt("not_running", residualRequests, callerOutstandingRequests);
 					this.#messages.discardSchedulingInLane(target);
 					await target.host.discardAndEndInLane("termination");
-					return {
-						agentId: target.identity.agentId,
-						disposition: "terminated",
-						residualRequests,
-					};
+					return abortReceipt("aborted", residualRequests, callerOutstandingRequests);
 				} finally {
 					if (initializationTermination) {
 						target.host.completeRuntimeInitializationTerminationInLane(

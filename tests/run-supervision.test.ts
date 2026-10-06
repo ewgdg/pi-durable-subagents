@@ -659,13 +659,16 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 	);
 
 	const terminated = await harness.control("terminate-held-child", {
-		operation: "terminate",
+		operation: "abort",
 		agentId: child.agentId,
 	});
-	assert.deepEqual(terminated, {
+	assert.ok("callerOutstandingRequests" in terminated);
+	assert.deepEqual({ ...terminated, callerOutstandingRequests: terminated.callerOutstandingRequests.map(({ title }) => title) }, {
 		agentId: child.agentId,
-		disposition: "terminated",
+		disposition: "aborted",
 		residualRequests: { incoming: 1, outgoing: 1 },
+		// The Owner's Creation Request remains outstanding: abort never cancels it.
+		callerOutstandingRequests: ["Fixture request"],
 	});
 	assert.deepEqual(harness.ownerView.status(child.agentId).run, {
 		phase: "dormant",
@@ -736,7 +739,7 @@ test("Agent Wait awaits delivered work without reviving a terminated responder",
 		toolCallId: spawnToolCallId,
 	});
 	await harness.control("terminate-before-dormant-wait", {
-		operation: "terminate",
+		operation: "abort",
 		agentId: child.agentId,
 	});
 	assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
@@ -829,11 +832,11 @@ test("authority follows only Owner descendants and immediate Direct-Spawner edge
 	assert.ok("disposition" in heldByDirectSpawner);
 	assert.equal(heldByDirectSpawner.disposition, "held");
 	const parentTermination = await harness.control("owner-terminates-parent-only", {
-		operation: "terminate",
+		operation: "abort",
 		agentId: parent.agentId,
 	});
 	assert.ok("disposition" in parentTermination);
-	assert.equal(parentTermination.disposition, "terminated");
+	assert.equal(parentTermination.disposition, "aborted");
 	assert.equal(harness.ownerView.status(parent.agentId).run.phase, "dormant");
 	assert.equal(harness.ownerView.status(grandchild.agentId).run.phase, "live");
 	assert.equal(
@@ -1401,7 +1404,7 @@ async function createRunSupervisionHarness(
 			input:
 				| { operation: "interrupt"; agentId: string }
 				| { operation: "resume"; agentId: string; content: string }
-				| { operation: "terminate"; agentId: string },
+				| { operation: "abort"; agentId: string },
 		) {
 			host.session.sessionManager.appendMessage(
 				fauxAssistantMessage(
@@ -1445,7 +1448,7 @@ async function createRunSupervisionHarness(
 			input:
 				| { operation: "interrupt"; agentId: string }
 				| { operation: "resume"; agentId: string; content: string }
-				| { operation: "terminate"; agentId: string },
+				| { operation: "abort"; agentId: string },
 		) {
 			caller.appendToolCall("agent_control", toolCallId, input);
 			return caller.view.control(toolCallId, input);
@@ -1509,7 +1512,7 @@ test("workflow resume and cancellation retain canonical identities through a lat
 	const [request] = child.view.openIncomingRequests().requests;
 	assert.ok(request);
 	const canonicalRequest = harness.ownerView.inspectRequest(request.requestMessageId);
-	await harness.control("terminate-before-contract-change", { operation: "terminate", agentId: child.agentId });
+	await harness.control("terminate-before-contract-change", { operation: "abort", agentId: child.agentId });
 	assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
 	const transcriptBefore = await readFile(child.transcriptPath, "utf8");
 	const allAgents = () => (["starting", "live", "ending", "dormant"] as const).flatMap(phase =>

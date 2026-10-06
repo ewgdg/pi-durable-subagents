@@ -19,7 +19,7 @@ Select a subagent to enter its complete Pi session and interact with it directly
 - **Messaging and Requests:** `agent_message` sends Messages and titled Requests; `agent_wait` joins their Answers. See [Agent messaging](docs/agent-messaging.md).
 - **Visible obligations:** `agent_observe` lists and retrieves your outstanding Requests.
 - **Human decisions:** in the TUI, a spawned Agent can block on one free-form Human Answer with `ask_user`. See [Human Requests](docs/human-requests.md).
-- **Run supervision:** Owners and Direct Spawners inspect, interrupt, resume, or terminate exact Runs with `agent_observe` and `agent_control`. See [Run supervision](docs/run-supervision.md).
+- **Run supervision:** Owners and Direct Spawners inspect, interrupt, resume, or abort exact Runs with `agent_observe` and `agent_control`. See [Run supervision](docs/run-supervision.md).
 - **Incident handling:** a runtime reminder recovers forgotten Answers; isolated Moderators handle persistent stalls, deadlocks, and failures under policy bounds. See [Operational Incident moderation](docs/operational-incident-moderation.md).
 - **Durable recovery:** a fresh host rebuilds authority and pending Requests from Pi transcripts. See [Cold host recovery](docs/cold-host-recovery.md).
 - **Model policy:** `/agents models` maintains a durable deny list of models children may not use. See [Workflow Policy](docs/workflow-policy.md).
@@ -130,5 +130,5 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 - [Human Requests](docs/human-requests.md) — transcript-native questions, Answer mode, and commitment
 - [Agent selector](docs/agent-selector.md) — Live hierarchy, Dormant recency, attention, and keyboard navigation
 - [Interactive Agent view acceptance](docs/agent-view-acceptance.md) — complete-mode rendering, input, transitions, isolation, and lifecycle evidence
-- [Run supervision](docs/run-supervision.md) — observation, interruption, resumption, termination, and Agent-view retention
+- [Run supervision](docs/run-supervision.md) — observation, interruption, resumption, abort, and Agent-view retention
 - [Development](docs/development.md) — compatibility gate, supervised test runs, and deadlines

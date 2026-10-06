@@ -451,8 +451,9 @@ const RunControlReceiptSchema = bindEquivalent<RunControlReceipt>()(Type.Union([
 	}),
 	closed({
 		agentId: NonEmptyStringSchema,
-		disposition: Type.Union([Type.Literal("terminated"), Type.Literal("not_running")]),
+		disposition: Type.Union([Type.Literal("aborted"), Type.Literal("not_running")]),
 		residualRequests: closed({ incoming: Type.Integer({ minimum: 0 }), outgoing: Type.Integer({ minimum: 0 }) }),
+		callerOutstandingRequests: Type.Array(closed({ requestMessageId: NonEmptyStringSchema, title: NonEmptyStringSchema })),
 	}),
 ]));
 const AgentWaitAnswerSchema = Type.Union([

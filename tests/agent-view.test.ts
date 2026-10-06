@@ -419,7 +419,7 @@ test("a selected Agent whose runtime initialization fails opens a read-only post
 		host.session,
 		"agent_control",
 		"terminate-before-selected-startup-failure",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	host.services.modelRuntime.unregisterProvider("coordination-test");
@@ -471,7 +471,7 @@ test("an unexpected child-process exit closes the exact selected view", async (t
 		host.session,
 		"agent_control",
 		"terminate-passive-failure-worker",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
 
 	const { command, view } = await openDormantAgentView(host, agentId);
@@ -686,9 +686,9 @@ test("termination discards selected native input already in prompt preflight", {
 		host.session,
 		"agent_control",
 		"terminate-during-selected-input-preflight",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
+	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
 
 	await releaseProcessAgentViewProbe(probe.releasePath);
@@ -772,10 +772,10 @@ test("termination fences selected input between participant handling and Agent a
 	// Establish one exact native submission identity without initiating model work.
 	activeView.projection().dispatchInput("/name admission-fence-probe");
 	activeView.projection().dispatchInput("\r");
-	const terminateInput = { operation: "terminate" as const, agentId };
+	const abortInput = { operation: "abort" as const, agentId };
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_control", terminateInput, {
+			fauxToolCall("agent_control", abortInput, {
 				id: "terminate-before-selected-agent-admission",
 			}),
 			{ stopReason: "toolUse" },
@@ -783,10 +783,10 @@ test("termination fences selected input between participant handling and Agent a
 	);
 	const termination = await owner.control(
 		"terminate-before-selected-agent-admission",
-		terminateInput,
+		abortInput,
 	);
 	assert.ok("disposition" in termination);
-	assert.equal(termination.disposition, "terminated");
+	assert.equal(termination.disposition, "aborted");
 	assert.equal(owner.status(agentId).run.phase, "dormant");
 
 	await assert.rejects(
@@ -820,7 +820,7 @@ test("a handled Dormant Agent input can return to Owner after prompt preflight",
 		host.session,
 		"agent_control",
 		"terminate-handled-preflight-worker",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
 	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "dormant"));
 
@@ -892,9 +892,9 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 		host.session,
 		"agent_control",
 		"terminate-before-dormant-agent-view",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
+	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
 	const ownerSession = host.runtime.session;
 	const ownerEditor = "Owner draft survives Dormant inspection";
 	host.ui.setEditorText(ownerEditor);
@@ -1040,9 +1040,9 @@ test("detached Dormant compaction retains its Runtime until queued input starts 
 		host.session,
 		"agent_control",
 		"terminate-before-dormant-compaction",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
+	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
 
 	const opened = await openDormantAgentView(host, agentId);
 	await waitForCondition(() =>
@@ -1126,7 +1126,7 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 		host.session,
 		"agent_control",
 		"terminate-before-dormant-command-message",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
 	let successorModelRequests = 0;
 	host.model.setResponses([() => {
@@ -1143,7 +1143,7 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 		host.session,
 		"agent_control",
 		"terminate-prepared-dormant-runtime",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
 	assert.equal(
 		(passiveTermination.details as { disposition: string }).disposition,
@@ -1207,7 +1207,7 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 		host.session,
 		"agent_control",
 		"terminate-before-dormant-runtime-modal",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
 
 	const opening = openDormantAgentView(host, agentId);
@@ -1278,19 +1278,19 @@ test("closing a Dormant session_start modal cancels view initialization without 
 		const run = owner.status(agentId).run;
 		return run.phase === "live" && run.work === "settled";
 	});
-	const terminateInput = {
-		operation: "terminate" as const,
+	const abortInput = {
+		operation: "abort" as const,
 		agentId,
 	};
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_control", terminateInput, {
+			fauxToolCall("agent_control", abortInput, {
 				id: "terminate-startup-close-worker",
 			}),
 			{ stopReason: "toolUse" },
 		),
 	);
-	await owner.control("terminate-startup-close-worker", terminateInput);
+	await owner.control("terminate-startup-close-worker", abortInput);
 
 	activeView = await owner.openAgentView(agentId);
 	assert.ok(activeView);
@@ -1400,13 +1400,13 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 		const run = owner.status(agentId).run;
 		return run.phase === "live" && run.work === "settled";
 	});
-	const terminateInput = { operation: "terminate" as const, agentId };
+	const abortInput = { operation: "abort" as const, agentId };
 	appendToolSource(
 		"agent_control",
 		"terminate-unselected-startup-worker",
-		terminateInput,
+		abortInput,
 	);
-	await owner.control("terminate-unselected-startup-worker", terminateInput);
+	await owner.control("terminate-unselected-startup-worker", abortInput);
 	const messageInput = {
 		operation: "send" as const,
 		targetAgent: agentId,
@@ -1721,7 +1721,7 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		host.session,
 		"agent_control",
 		"terminate-ready-viewed-failure-worker",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
 	assert.equal((terminated.details as { disposition: string }).disposition, "not_running");
 	const ownerSession = host.runtime.session;
@@ -1765,9 +1765,9 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		host.session,
 		"agent_control",
 		"terminate-stopped-viewed-failure-worker",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
-	assert.equal((stoppedTerminated.details as { disposition: string }).disposition, "terminated");
+	assert.equal((stoppedTerminated.details as { disposition: string }).disposition, "aborted");
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 
 	await host.session.prompt("Confirm the Owner input loop still runs.");
@@ -1971,9 +1971,9 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 		host.session,
 		"agent_control",
 		"terminate-stopped-viewed-successor",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
-	assert.equal((stoppedTermination.details as { disposition: string }).disposition, "terminated");
+	assert.equal((stoppedTermination.details as { disposition: string }).disposition, "aborted");
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 
 	const sent = await executeAndCommitRegisteredTool(

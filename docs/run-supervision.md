@@ -92,7 +92,7 @@ Address the underlying stop (restore quota, select an available model/account, o
 
 Human intent uses Pi's trusted `interactive` input provenance, and `rpc` provenance for an RPC Owner, whose client is the human of its session; queued follow-ups and extension `sendUserMessage` cannot resume the Run. In a [headless Workflow](owner-workflow.md#headless-workflows) no human resumes a suspended child, so its Direct Spawner receives a suspension notice that preempts `agent_wait`. Direct noninteractive native input is consumed before generation while suspended; ordinary coordination Messages remain queued with their original identities. This is not an authentication boundary: SDK callers must label their source truthfully (`session.prompt()` defaults to interactive).
 
-Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. Explicit termination ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
+Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. An explicit abort ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
 
 If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota or another terminal error establishes a new suspension of the matching reason, and a non-error end follows ordinary settlement. An aborted attempt before confirmation retains the original stop rather than inventing a human Interruption Hold.
 
@@ -156,24 +156,33 @@ A resume that loses its bound Hold before Delivery becomes an ordinary Steer Mes
 
 A supervisory dispatch failure reports an error, clears only the failed resumption attempt, and leaves the exact Hold available for an explicit retry.
 
-The [Agent selector and view](agent-selector.md) present a durable Agent without changing protocol authority or Owner runtime ownership. `interactive_selection` retains the Agent Runtime without itself admitting work. Selecting a Dormant Agent prepares its ordinary configured session, complete Pi mode, and persisted evidence while observation remains Dormant. Extension behavior is not filtered: editor input, extension effects, and ordinary coordination Delivery may activate an exact Run in that same Runtime. Run release, failure, or termination can return the selected Agent to Dormant without replacing its projection. Switching or closing removes Runtime retention, and orderly shutdown closes the overlay before ending child Runs and disposing retained Runtimes.
+The [Agent selector and view](agent-selector.md) present a durable Agent without changing protocol authority or Owner runtime ownership. `interactive_selection` retains the Agent Runtime without itself admitting work. Selecting a Dormant Agent prepares its ordinary configured session, complete Pi mode, and persisted evidence while observation remains Dormant. Extension behavior is not filtered: editor input, extension effects, and ordinary coordination Delivery may activate an exact Run in that same Runtime. Run release, failure, or abort can return the selected Agent to Dormant without replacing its projection. Switching or closing removes Runtime retention, and orderly shutdown closes the overlay before ending child Runs and disposing retained Runtimes.
 
 The native above-editor activity dock identifies the selected durable Agent by label, compact Agent identity, and semantic work status. It also projects only that Agent's direct children with a current Run; Dormant children remain absent from activity. Owner scope prepends Owner-only attention. The child mode's complete fullscreen transcript, Run state, widgets, editor, footer, commands, and extension UI render inside the headerless outer overlay, while the Owner presentation remains mounted and unchanged underneath.
 
-## Terminate an exact Run
+## Abort an exact Run
 
 ```json
 {
-  "operation": "terminate",
+  "operation": "abort",
   "agentId": "child-agent-id"
 }
 ```
 
-Termination fences and confirms the end of the target's exact current Run, bypasses every Retention Reason, and discards its uncommitted coordination and native input. The fence includes every native editor submission observed before termination: a submission still inside asynchronous input preflight cannot later admit a successor Run. It does not roll back effects, Answer or cancel Requests, notify participants, mutate descendants, remove the Agent, or create Agent lifecycle evidence. Later Message Delivery may start a fresh successor Run for the same Agent identity. Recovery of any discarded Message remains explicit through transcript inspection, poll, or retry.
+Abort stops what the Agent is doing now and leaves it Dormant rather than paused: unlike `interrupt` (which Human Escape also uses), no `resume` follows. It ends the work, not the Agent: Requests stay unresolved until they are answered or their requester cancels them.
 
-A selected Agent with a ready Runtime keeps that Runtime and open view after termination; the Agent becomes Dormant in place, and only later editor submissions or Message Delivery may admit a successor Run in that same Runtime. If termination wins while the selected Runtime is still initializing, it fences that exact projection's input, cancels initialization outside the occupied Agent lane, and closes the not-yet-usable view instead of waiting for startup UI. An initialization-termination intention blocks queued successor admission until its lane-final receipt, so work queued behind startup cannot insert a new Run between cancellation and termination finalization. A successful or already-Dormant receipt reports `terminated` or `not_running` plus complete live `residualRequests.incoming` and `residualRequests.outgoing` counts.
+Abort fences and confirms the end of the target's exact current Run, bypasses every Retention Reason, and discards its uncommitted coordination and native input. The fence includes every native editor submission observed before the abort: a submission still inside asynchronous input preflight cannot later admit a successor Run. It does not roll back effects, Answer or cancel Requests, notify participants, mutate descendants, remove the Agent, or create Agent lifecycle evidence. Later Message Delivery may start a fresh successor Run for the same Agent identity. Recovery of any discarded Message remains explicit through transcript inspection, poll, or retry.
 
-Treat those residual counts as unresolved work, not as termination cleanup. If the supervisor authored a Request whose work is being abandoned, it cancels that Request by `requestMessageId` before delegating a replacement or calling `agent_wait`. If the work remains needed, an ordinary Message can reactivate the same durable Agent in a successor Run. A supervisor that did not author the Request cannot cancel it and must coordinate with its requester. A fresh `agent_wait` may also start a Dormant responder when its captured Request was never delivered; an already parked Wait cannot undo later termination. Delivered Requests are awaited without replay.
+A selected Agent with a ready Runtime keeps that Runtime and open view after an abort; the Agent becomes Dormant in place, and only later editor submissions or Message Delivery may admit a successor Run in that same Runtime. If the abort wins while the selected Runtime is still initializing, it fences that exact projection's input, cancels initialization outside the occupied Agent lane, and closes the not-yet-usable view instead of waiting for startup UI. An initialization-abort intention blocks queued successor admission until its lane-final receipt, so work queued behind startup cannot insert a new Run between cancellation and abort finalization.
+
+A successful or already-Dormant receipt reports `aborted` or `not_running` with:
+
+- `residualRequests`: complete live counts of the target's unresolved `incoming` and `outgoing` Requests.
+- `callerOutstandingRequests`: the caller's own unresolved Requests to the target, each with `requestMessageId` and `title`, in authoring order. These are the Requests the caller can cancel.
+
+Treat the residual Requests as unresolved work, not as abort cleanup. If the supervisor authored a Request whose work is being abandoned, it cancels that Request by `requestMessageId` before delegating a replacement or calling `agent_wait`. If the work remains needed, an ordinary Message can reactivate the same durable Agent in a successor Run. A supervisor that did not author the Request cannot cancel it and must coordinate with its requester. A fresh `agent_wait` may also start a Dormant responder when its captured Request was never delivered; an already parked Wait cannot undo a later abort. Delivered Requests are awaited without replay.
+
+A child queued behind `maxConcurrentAgentRuns` has no Run, so aborting it reports `not_running` and it still boots once a slot frees. Cancelling its Creation Request withdraws the queued boot: the child stays Dormant and the next queued child takes the slot.
 
 Coordinated shutdown remains a dedicated lifecycle path and closes any open Agent view before ending child Runs.
 

@@ -119,9 +119,14 @@ To locate the transcript for the caller or an authorized Agent, use primaryEvide
 </agent_observe>`;
 
 const AGENT_CONTROL_PROMPT_GUIDE = `<agent_control>
-agent_control operation "terminate" ends one exact Agent Run. It does not remove the durable Agent, cancel Agent Requests, affect descendants, or prevent a later successor Run. A terminate receipt's residualRequests reports the unresolved incoming and outgoing Request counts left on that Agent.
+Choose by intent:
+- Pause a Run to redirect it: operation "interrupt", then "resume" with new instructions.
+- Stop what an Agent is doing now: operation "abort". It ends only the current Run. The Agent, its Requests, and its descendants remain, and a later Message starts a successor Run.
+- Withdraw work you no longer need: agent_message operation "cancel" on your Request. Abort never cancels Requests, so aborted work you authored stays outstanding until you cancel it or it is answered.
 
-If termination abandons work from a Request you authored, use agent_message operation "cancel" with its requestMessageId before delegating replacement work or calling agent_wait. If the work remains needed, reactivate the same Agent with an ordinary Message instead. Do not assume Run termination resolves delegated work.
+An abort receipt's callerOutstandingRequests lists your unresolved Requests to that Agent; residualRequests counts all of that Agent's unresolved incoming and outgoing Requests. A queued child has no Run, so abort reports "not_running" and the child still boots later unless you cancel its Creation Request.
+
+If the aborted work remains needed, reactivate the same Agent with an ordinary Message instead of cancelling. Otherwise cancel it before delegating replacement work or calling agent_wait.
 </agent_control>`;
 
 export type AgentObservePhase = "starting" | "live" | "ending" | "dormant";
@@ -434,7 +439,7 @@ const agentControlParameters = objectRootUnion(Type.Union([
 	),
 	Type.Object(
 		{
-			operation: Type.Literal("terminate"),
+			operation: Type.Literal("abort"),
 			agentId: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },
@@ -670,7 +675,7 @@ export const agentControlEntry = defineCoordinationTool({
 	name: "agent_control",
 	label: "Control Agent Run",
 	description:
-		"Interrupt, explicitly resume, or terminate one authorized exact Agent Run.",
+		"Interrupt, explicitly resume, or abort one authorized exact Agent Run.",
 	promptSnippet: {
 		default: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
 		moderator: "Supervise any current non-Owner Run needed to restore safe progress.",

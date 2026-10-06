@@ -11,6 +11,7 @@ import {
 	getCurrentSystemPrompt,
 	getCurrentTools,
 	type Context,
+	type JsonObject,
 } from "@earendil-works/pi-ai";
 import { ProjectTrustStore, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -509,10 +510,10 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 		const run = view.status(agentId).run;
 		return run.phase === "live" && run.work === "settled";
 	});
-	const terminationInput = { operation: "terminate" as const, agentId };
+	const abortInput = { operation: "abort" as const, agentId };
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_control", terminationInput, {
+			fauxToolCall("agent_control", abortInput, {
 				id: "terminate-configured-child-v1",
 			}),
 			{ stopReason: "toolUse" },
@@ -520,10 +521,10 @@ test(`a successor Runtime retains its creation preset while resolving current pr
 	);
 	const termination = await view.control(
 		"terminate-configured-child-v1",
-		terminationInput,
+		abortInput,
 	);
 	assert.ok("disposition" in termination);
-	assert.equal(termination.disposition, "terminated");
+	assert.equal(termination.disposition, "aborted");
 	await writeFile(
 		join(templateRoot, "research.md"),
 		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nexcludeTools: read\n---\nChanged Template context",
@@ -1091,13 +1092,65 @@ test("a child spawned over the concurrency bound is observed as queued, listed w
 	assert.ok(!harness.view.selectionRoster().dormant.some(({ agentId }) => agentId === queued.agentId));
 
 	// Ending the working Run is an ordinary activity change; nothing calls the queue directly.
-	const terminationInput = { operation: "terminate" as const, agentId: working.agentId };
+	const abortInput = { operation: "abort" as const, agentId: working.agentId };
 	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
-		fauxToolCall("agent_control", terminationInput, { id: "terminate-working-capped-child" }),
+		fauxToolCall("agent_control", abortInput, { id: "terminate-working-capped-child" }),
 		{ stopReason: "toolUse" },
 	));
-	await harness.view.control("terminate-working-capped-child", terminationInput);
+	await harness.view.control("terminate-working-capped-child", abortInput);
 	await waitForCondition(() => harness.view.status(queued.agentId).run.phase !== "dormant");
+	await harness.shutdown();
+});
+
+test("aborting a queued child names the caller's Creation Request, and cancelling it means the child never boots", { timeout: 15_000 }, async (t) => {
+	const harness = await createCoordinatorHarness(t, {}, undefined, {}, new WorkflowPolicyStore(Object.freeze({
+		...DEFAULT_WORKFLOW_POLICY,
+		maxConcurrentAgentRuns: 1,
+	})));
+	const appendCall = (toolName: string, input: JsonObject, id: string) =>
+		harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+			fauxToolCall(toolName, input, { id }),
+			{ stopReason: "toolUse" },
+		));
+	const working = await harness.spawn("spawn-working-before-abandoned-child");
+	const abandoned = await harness.spawn("spawn-abandoned-queued-child");
+	assert.ok("agentId" in working && "agentId" in abandoned);
+	assert.deepEqual(harness.view.status(abandoned.agentId).run, { phase: "dormant", retentionReasons: [], queued: true });
+
+	// A queued child has no Run to abort; the receipt still names the work to withdraw.
+	const abortQueued = { operation: "abort" as const, agentId: abandoned.agentId };
+	appendCall("agent_control", abortQueued, "abort-queued-child");
+	assert.deepEqual(await harness.view.control("abort-queued-child", abortQueued), {
+		agentId: abandoned.agentId,
+		disposition: "not_running",
+		residualRequests: { incoming: 0, outgoing: 0 },
+		callerOutstandingRequests: [{ requestMessageId: abandoned.requestMessageId, title: "Fixture request" }],
+	});
+
+	const cancel = { operation: "cancel" as const, requestMessageId: abandoned.requestMessageId, reason: "No longer needed" };
+	appendCall("agent_message", cancel, "cancel-queued-creation-request");
+	await harness.view.message("cancel-queued-creation-request", cancel);
+	assert.deepEqual(harness.view.status(abandoned.agentId).run, { phase: "dormant", retentionReasons: [] });
+
+	const abortWorking = { operation: "abort" as const, agentId: working.agentId };
+	appendCall("agent_control", abortWorking, "abort-working-child");
+	const aborted = await harness.view.control("abort-working-child", abortWorking);
+	assert.ok("disposition" in aborted && aborted.disposition === "aborted");
+	// Strict FIFO dispatches any still-queued boot before a later child starts,
+	// so the successor starting orders this check after the freed slot was handed on.
+	const successor = await harness.spawn("spawn-successor-after-freed-slot");
+	assert.ok("agentId" in successor);
+	await waitForCondition(() => harness.view.status(successor.agentId).run.phase !== "dormant");
+	const abandonedStatus = harness.view.status(abandoned.agentId);
+	assert.deepEqual(abandonedStatus.run, { phase: "dormant", retentionReasons: [] });
+	// A booted-then-released child would also look Dormant; only its transcript
+	// proves no Run ever received the Creation Request or its Cancellation.
+	assert.ok(abandonedStatus.primaryEvidence.transcriptPath);
+	assert.deepEqual(
+		SessionManager.open(abandonedStatus.primaryEvidence.transcriptPath).getEntries()
+			.filter(entry => entry.type === "message" || entry.type === "custom_message"),
+		[],
+	);
 	await harness.shutdown();
 });
 

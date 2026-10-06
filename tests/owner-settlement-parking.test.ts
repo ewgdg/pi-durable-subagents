@@ -232,7 +232,7 @@ test("terminating the last progressing child releases Owner parking without an A
 	assert.ok(receipt?.type === "message" && receipt.message.role === "toolResult");
 	const { agentId } = receipt.message.details as { agentId: string };
 	assert.equal(host.session.isIdle, false);
-	await executeAndCommitRegisteredTool(host.session, "agent_control", "terminate-background", { operation: "terminate", agentId });
+	await executeAndCommitRegisteredTool(host.session, "agent_control", "terminate-background", { operation: "abort", agentId });
 	await withTimeout(prompt, 3_000, "Termination left the Owner parked on its unanswered Request");
 	assert.equal(host.session.isIdle, true);
 	const status = await executeAndCommitRegisteredTool(host.session, "agent_observe", "observe-dormant-background", { operation: "status", agentId });

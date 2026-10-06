@@ -94,7 +94,7 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	await until(() => childEntries().includes("QUEUED_STEER_COMPLETED"), "the re-admitted queued work continues in its own turn");
 	// The Answer Obligation is deliberately still outstanding, so the recovered Run stays
 	// retained until explicit termination ends it before teardown.
-	const terminate = { operation: "terminate" as const, agentId };
+	const terminate = { operation: "abort" as const, agentId };
 	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_control", terminate, { id: "terminate-recovered-run" }), { stopReason: "toolUse" }));
 	const termination = await view.control("terminate-recovered-run", terminate);
 	reopened.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_control", toolCallId: "terminate-recovered-run", details: termination, content: [{ type: "text", text: JSON.stringify(termination) }], isError: false, timestamp: Date.now() });

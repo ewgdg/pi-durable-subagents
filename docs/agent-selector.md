@@ -65,7 +65,7 @@ Clicking **Agents** from a nested Live scope refocuses the previous top-level an
 
 The Agents/path line stays visible while the roster scrolls, below any visible Attention rows. All breadcrumb segments use the same separator: `Agents › Architecture › Research`. Breadcrumbs retain at most the newest three Agent scopes and replace older segments with informational `…` as width tightens, preserving Agents and prioritizing the current scope. At widths too narrow for the current label, that label is truncated.
 
-Opening a live Agent view attaches its Agent Runtime's complete Pi mode. `interactive_selection` retains that Runtime without itself admitting or prolonging a Run. Run failure or ordinary termination may end the exact Run while keeping a ready Runtime and view attached, leaving the Agent Dormant. Termination that wins during Runtime initialization instead cancels the unusable Runtime and closes its view without waiting for startup UI. Returning to Owner or switching Agents removes Runtime retention; an unselected Dormant Runtime is then disposed, while live work follows ordinary Run retention.
+Opening a live Agent view attaches its Agent Runtime's complete Pi mode. `interactive_selection` retains that Runtime without itself admitting or prolonging a Run. Run failure or an ordinary abort may end the exact Run while keeping a ready Runtime and view attached, leaving the Agent Dormant. An abort that wins during Runtime initialization instead cancels the unusable Runtime and closes its view without waiting for startup UI. Returning to Owner or switching Agents removes Runtime retention; an unselected Dormant Runtime is then disposed, while live work follows ordinary Run retention.
 
 ## Dormant roster
 

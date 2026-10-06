@@ -22,7 +22,7 @@ const TERMINATION_WAIT_MS = 100;
 test("termination cancels a selected starting Run before its occupied lane", async () => {
 	const targetAgentId = "starting-target";
 	const toolCallId = "terminate-starting-target";
-	const input = { operation: "terminate" as const, agentId: targetAgentId };
+	const input = { operation: "abort" as const, agentId: targetAgentId };
 	const ownerTranscript = transcriptWithRunControl("owner", toolCallId, input);
 	const lane = new SerialLane();
 	let releaseStartup!: () => void;
@@ -75,6 +75,7 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 		discardSchedulingInLane() {
 			discardedScheduling += 1;
 		},
+		outstandingRequestsTo: () => [],
 	} as unknown as MessageCoordinator;
 	const agents = new Map<string, AgentRecord>([
 		["owner", record({
@@ -107,7 +108,7 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 	});
 	const termination = supervisor.execute("owner", toolCallId, input);
 	const outcome = await Promise.race([
-		termination.then((receipt) => ({ kind: "terminated" as const, receipt })),
+		termination.then((receipt) => ({ kind: "aborted" as const, receipt })),
 		new Promise<Readonly<{ kind: "blocked" }>>((resolve) =>
 			setTimeout(() => resolve({ kind: "blocked" }), TERMINATION_WAIT_MS)
 		),
@@ -119,12 +120,13 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 	await occupiedLane;
 	assert.equal(await earlierAdmission, "fenced");
 
-	assert.equal(outcome.kind, "terminated");
-	if (outcome.kind !== "terminated") return;
+	assert.equal(outcome.kind, "aborted");
+	if (outcome.kind !== "aborted") return;
 	assert.deepEqual(outcome.receipt, {
 		agentId: targetAgentId,
-		disposition: "terminated",
+		disposition: "aborted",
 		residualRequests: { incoming: 1, outgoing: 2 },
+		callerOutstandingRequests: [],
 	});
 	assert.equal(cancellationRequests, 1);
 	assert.equal(ordinaryTerminations, 0);
@@ -144,7 +146,7 @@ function record(
 function transcriptWithRunControl(
 	agentId: string,
 	toolCallId: string,
-	input: Readonly<{ operation: "terminate"; agentId: string }>,
+	input: Readonly<{ operation: "abort"; agentId: string }>,
 ): AgentTranscript {
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });

@@ -1033,7 +1033,7 @@ export class OperationalIncidentCoordinator {
 			return;
 		}
 		try {
-			// Keep startup and scheduler admission atomic against queued Run termination.
+			// Keep startup and scheduler admission atomic against a queued Run Abort.
 			await moderator.host.lane.run(async () => {
 				if (this.#isShuttingDown()) return;
 				await moderator.host.startInLane(["moderator_handling"]);
