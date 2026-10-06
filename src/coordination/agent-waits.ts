@@ -218,7 +218,7 @@ export class AgentWaitCoordinator {
 			.filter((agentId) => this.#agents.get(agentId)?.host.currentRunSuspension() !== undefined);
 		if (suspended.length === 0) return;
 		throw new Error(
-			`responder_suspended: ${[...new Set(suspended)].join(", ")} ${suspended.length === 1 ? "is" : "are"} suspended and no human will resume ${suspended.length === 1 ? "it" : "them"} in this headless Workflow. Resume with agent_control operation "resume", terminate, or cancel the Request instead of waiting.`,
+			`responder_suspended: ${[...new Set(suspended)].join(", ")} ${suspended.length === 1 ? "is" : "are"} suspended and no human will resume ${suspended.length === 1 ? "it" : "them"} in this headless Workflow. Resume with agent_control operation "resume", abort, or cancel the Request instead of waiting.`,
 		);
 	}
 

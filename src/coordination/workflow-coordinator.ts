@@ -1292,7 +1292,7 @@ export class WorkflowCoordinator {
 			return record.host.currentHandle() ?? await record.host.startInLane();
 		});
 		// No await may separate these final checks from the successful lifecycle
-		// response: termination can fence the submission and replace the exact Run.
+		// response: an abort can fence the submission and replace the exact Run.
 		this.#assertNotShutDownOrSuspended(agentId);
 		this.#assertInputSubmissionAdmissible(record, inputSubmission);
 		if (!record.host.isCurrent(handle)) {

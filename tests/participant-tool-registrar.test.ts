@@ -420,7 +420,7 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	assert.deepEqual(toolMetadata(ordinary, "agent_control"), {
 		label: "Control Agent Run",
 		description:
-			"Interrupt, explicitly resume, or terminate one authorized exact Agent Run.",
+			"Interrupt, explicitly resume, or abort one authorized exact Agent Run.",
 		promptSnippet:
 			"Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
 		renderShell: undefined,
@@ -428,7 +428,7 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	assert.deepEqual(toolMetadata(moderator, "agent_control"), {
 		label: "Control Agent Run",
 		description:
-			"Interrupt, explicitly resume, or terminate one authorized exact Agent Run.",
+			"Interrupt, explicitly resume, or abort one authorized exact Agent Run.",
 		promptSnippet: "Supervise any current non-Owner Run needed to restore safe progress.",
 		renderShell: undefined,
 	});
@@ -575,7 +575,7 @@ test("participant registrar preserves handler errors and Moderator control routi
 			host,
 			"agent_control",
 			"call-failure",
-			{ operation: "terminate", agentId: "child-agent" },
+			{ operation: "abort", agentId: "child-agent" },
 		),
 		(error) => error === failure,
 	);

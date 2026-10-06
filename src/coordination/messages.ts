@@ -1,5 +1,5 @@
 import { scheduleDeliveryFailureNotice } from "./delivery-failure-notifications.ts";
-import { findAuthoredSupervisoryResumeMessages } from "../protocol/run-control.ts";
+import { findAuthoredSupervisoryResumeMessages, type CallerOutstandingRequest } from "../protocol/run-control.ts";
 import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
 import { compareCommittedToolCallOrder, deriveMessageIdentity } from "../protocol/identities.ts";
 import type { WorkflowResumeDelivery } from "./workflow-recovery-outcomes.ts";
@@ -209,6 +209,16 @@ export class MessageCoordinator {
 			this.#requestEvidence.resolveRecoveryMessage(author, messageId);
 	}
 
+	/** The author's unresolved Requests to one target, in authoring order. */
+	outstandingRequestsTo(author: AgentRecord, targetAgentId: string): readonly CallerOutstandingRequest[] {
+		const transcript = author.transcript.inspect();
+		return this.#requestRelationships.outstandingRequestIds(author)
+			.map(requestId => this.#requestEvidence.requireRequest(requestId))
+			.filter(request => request.targetAgentId === targetAgentId)
+			.sort((left, right) => compareCommittedToolCallOrder(transcript, left.source, right.source))
+			.map(request => ({ requestMessageId: request.messageId, title: request.title }));
+	}
+
 	recoveryRequestIds(record: AgentRecord): readonly string[] {
 		return this.#requestRelationships.obligationFrames(record).flatMap(frame => {
 			const request = this.#requestEvidence.findRequest(frame.requestId);
@@ -381,7 +391,7 @@ export class MessageCoordinator {
 								responder.host.observe().phase === "ending") return;
 							const request = this.#requestEvidence.requireRequest(requestId);
 							if (this.#requestEvidence.findAnswer(request) || this.#requestEvidence.findCancellation(request)) continue;
-							// A fresh Wait may start a Dormant recipient. A later termination,
+							// A fresh Wait may start a Dormant recipient. A later abort,
 							// failure or successor Run ends this Wait's readmission authority.
 							// Inspecting delivered work leaves dormant admission available.
 							if (intent.handle

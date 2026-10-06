@@ -344,7 +344,7 @@ export class MessageDeliveryScheduler {
 		record.host.addEndedHandler((_handle, cause) => {
 			for (const [messageId, item] of this.#progress) {
 				if (item.record !== record) continue;
-				// Run termination does not cancel Requests: without proof, the
+				// A Run Abort does not cancel Requests: without proof, the
 				// upstream obligation still depends on this stranded Delivery.
 				if (cause === "failure" || cause === "termination") {
 					this.#failDeliveryProgress(item.delivery, new Error("Recipient Run ended before Delivery proof"));

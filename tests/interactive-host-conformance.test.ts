@@ -149,9 +149,9 @@ test("exact-Run termination of an open Agent view retains the Runtime and view",
 		host.session,
 		"agent_control",
 		"terminate-viewed-run",
-		{ operation: "terminate", agentId },
+		{ operation: "abort", agentId },
 	);
-	assert.equal((terminated.details as { disposition: string }).disposition, "terminated");
+	assert.equal((terminated.details as { disposition: string }).disposition, "aborted");
 	assert.equal(host.runtime.session, ownerSession);
 	// The retained Runtime keeps the open view attached while the Agent becomes Dormant.
 	const retainedStatus = await agentRunStatus(host, agentId);
@@ -251,7 +251,7 @@ test("the named llama.cpp extension remains usable through child startup and shu
 			host.session,
 			"agent_control",
 			"terminate-llama-child",
-			{ operation: "terminate", agentId },
+			{ operation: "abort", agentId },
 		);
 		assert.equal(host.runtime.session, ownerSession);
 		assert.ok(sharedModelRuntime.getProvider("llama.cpp"));

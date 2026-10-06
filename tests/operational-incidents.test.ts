@@ -247,9 +247,9 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		host.session,
 		"agent_control",
 		"terminate-moderator-before-dormant-view",
-		{ operation: "terminate", agentId: moderator.id },
+		{ operation: "abort", agentId: moderator.id },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
+	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
 	const dormantView = await openDormantAgentView(host, moderator.id);
 	// The dormant re-attachment replays the complete Moderator transcript, so a fresh
 	// viewport shows its tail while the Moderator Input sits at the top. Pi's
@@ -1183,7 +1183,7 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_control",
-					{ operation: "terminate", agentId: affectedAgentId },
+					{ operation: "abort", agentId: affectedAgentId },
 					{ id: "terminate-stalled-run" },
 				),
 				{ stopReason: "toolUse" },
@@ -1218,8 +1218,9 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 	assert.ok(termination.type === "message" && termination.message.role === "toolResult");
 	assert.deepEqual(termination.message.details, {
 		agentId: moderatorAffectedAgentId(moderator.path),
-		disposition: "terminated",
+		disposition: "aborted",
 		residualRequests: { incoming: 1, outgoing: 0 },
+		callerOutstandingRequests: [],
 	});
 	const resolution = await waitForTranscriptEntry(
 		moderator.path,
@@ -2313,9 +2314,9 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 		host.session,
 		"agent_control",
 		"terminate-failed-moderator",
-		{ operation: "terminate", agentId: failedModeratorId },
+		{ operation: "abort", agentId: failedModeratorId },
 	);
-	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
+	assert.equal((termination.details as { disposition: string }).disposition, "aborted");
 
 	// A Template is selected from current trusted discovery only at creation and its
 	// rules are captured atomically in the child Identity or Moderator Input
@@ -2466,7 +2467,7 @@ test("intentional child termination does not publish a Run failure report", asyn
 	host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Wait for intentional termination." }, { id: "intentional-termination-wait" }), { stopReason: "toolUse" })]);
 	const child = await spawnFromView(host.session, owner, "intentional-termination-report", "Wait for a human.");
 	await waitForCondition(() => coordinator.forAgent(child.agentId).obligationFrames().length > 0);
-	await controlFromView(host.session, owner, "terminate-without-failure-report", { operation: "terminate", agentId: child.agentId });
+	await controlFromView(host.session, owner, "terminate-without-failure-report", { operation: "abort", agentId: child.agentId });
 	await owner.reachSafeBoundary();
 	assert.deepEqual(owner.reportHistory(), []);
 	assert.deepEqual(await findModerators(host), []);
@@ -2963,7 +2964,7 @@ async function controlFromView(
 	input:
 		| { operation: "interrupt"; agentId: string }
 		| { operation: "resume"; agentId: string; content: string }
-		| { operation: "terminate"; agentId: string },
+		| { operation: "abort"; agentId: string },
 ): Promise<void> {
 	session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -3742,7 +3743,7 @@ test("blocked Delivery detects a Creation Request stranded before scheduler admi
 test("blocked Delivery remains observable after leaf termination without cancellation or automatic restart", async (t) => {
 	const { host, owner, clock, parent, leafAgentId } = await createSilentLeafHarness(t);
 	await controlFromView(host.session, owner, "terminate-stranded-leaf", {
-		operation: "terminate", agentId: leafAgentId,
+		operation: "abort", agentId: leafAgentId,
 	});
 	const moderator = await waitForModeratorKind(host, "delivery_stall");
 	const input = SessionManager.open(moderator.path).getEntries()[0];

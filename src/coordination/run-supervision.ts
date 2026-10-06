@@ -52,18 +52,26 @@ export class RunSupervisor {
 		const control = committed.input;
 		const target = this.#requireControllableTarget(callerAgentId, control.agentId);
 		const residualRequestsBeforeCancellation = target.host.residualRequestCounts();
-		const startingProjection = control.operation === "terminate" &&
+		const startingProjection = control.operation === "abort" &&
 			target.host.observe().phase === "starting"
 			? target.host.currentProjection()
 			: undefined;
 		const initializationTermination = startingProjection
 			? target.host.requestRuntimeInitializationTermination(
 				startingProjection,
-				new Error("Agent Run terminated during Runtime initialization"),
+				new Error("Agent Run aborted during Runtime initialization"),
 			)
 			: undefined;
 		return target.host.lane.run(async () => {
-			if (control.operation === "terminate") {
+			if (control.operation === "abort") {
+				// Abort ends only the Run, so it names the caller's own Requests the
+				// caller may now need to cancel (a queued child has no Run at all).
+				const abortReceipt = (disposition: "aborted" | "not_running", residualRequests: { incoming: number; outgoing: number }) => ({
+					agentId: target.identity.agentId,
+					disposition,
+					residualRequests,
+					callerOutstandingRequests: this.#messages.outstandingRequestsTo(caller, target.identity.agentId),
+				});
 				try {
 					const initializationCancelled = initializationTermination
 						? await initializationTermination.cancellation
@@ -73,26 +81,12 @@ export class RunSupervisor {
 						: target.host.residualRequestCounts();
 					if (initializationCancelled) {
 						this.#messages.discardSchedulingInLane(target);
-						return {
-							agentId: target.identity.agentId,
-							disposition: "terminated",
-							residualRequests,
-						};
+						return abortReceipt("aborted", residualRequests);
 					}
-					if (!target.host.currentHandle()) {
-						return {
-							agentId: target.identity.agentId,
-							disposition: "not_running",
-							residualRequests,
-						};
-					}
+					if (!target.host.currentHandle()) return abortReceipt("not_running", residualRequests);
 					this.#messages.discardSchedulingInLane(target);
 					await target.host.discardAndEndInLane("termination");
-					return {
-						agentId: target.identity.agentId,
-						disposition: "terminated",
-						residualRequests,
-					};
+					return abortReceipt("aborted", residualRequests);
 				} finally {
 					if (initializationTermination) {
 						target.host.completeRuntimeInitializationTerminationInLane(

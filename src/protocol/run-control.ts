@@ -22,7 +22,7 @@ export type RunControlInput =
 		content: string;
 	}>
 	| Readonly<{
-		operation: "terminate";
+		operation: "abort";
 		agentId: string;
 	}>;
 
@@ -42,19 +42,26 @@ export type RunResumeReceipt = Readonly<{
 	}>
 );
 
-export type RunTerminationReceipt = Readonly<{
+/** One unresolved Request the controlling caller authored to the controlled Agent. */
+export type CallerOutstandingRequest = Readonly<{
+	requestMessageId: string;
+	title: string;
+}>;
+
+export type RunAbortReceipt = Readonly<{
 	agentId: string;
-	disposition: "terminated" | "not_running";
+	disposition: "aborted" | "not_running";
 	residualRequests: Readonly<{
 		incoming: number;
 		outgoing: number;
 	}>;
+	callerOutstandingRequests: readonly CallerOutstandingRequest[];
 }>;
 
 export type RunControlReceipt =
 	| RunInterruptionReceipt
 	| RunResumeReceipt
-	| RunTerminationReceipt;
+	| RunAbortReceipt;
 
 export function validateRunControlInput(value: unknown): RunControlInput {
 	if (!isRecord(value)) throw new CoordinationRecordValidationError("invalid_input: Run control input must be an object");
@@ -64,8 +71,8 @@ export function validateRunControlInput(value: unknown): RunControlInput {
 	if (value.operation === "interrupt" && Object.keys(value).length === 2) {
 		return { operation: "interrupt", agentId: value.agentId };
 	}
-	if (value.operation === "terminate" && Object.keys(value).length === 2) {
-		return { operation: "terminate", agentId: value.agentId };
+	if (value.operation === "abort" && Object.keys(value).length === 2) {
+		return { operation: "abort", agentId: value.agentId };
 	}
 	if (
 		value.operation === "resume" &&
@@ -126,7 +133,7 @@ function sameRunControlInput(left: RunControlInput, right: RunControlInput): boo
 		(right.operation === "resume" && left.content === right.content);
 }
 
-/** Resume authors a Message; interrupt and terminate do not. */
+/** Resume authors a Message; interrupt and abort do not. */
 export function findAuthoredSupervisoryResumeMessages(options: {
 	workflowId: string;
 	authorAgentId: string;
