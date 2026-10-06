@@ -17,6 +17,8 @@ type FakeAgent = {
 	held: boolean;
 	starts: number;
 	deliveries: number;
+	/** Request ids this Agent still owes an Answer for. */
+	answersOwed: string[];
 	/** Resolves a boot that the test holds open; undefined while no boot is pending. */
 	finishStart?: () => void;
 	/** Ends the current Run the way a Run Failure does: the Agent becomes dormant. */
@@ -41,6 +43,7 @@ function fakeAgent(agentId: string, options: {
 		held: false,
 		starts: 0,
 		deliveries: 0,
+		answersOwed: [] as string[],
 		failRun: () => {
 			handle = undefined;
 			agent.run = { phase: "dormant", retentionReasons: [] };
@@ -54,6 +57,7 @@ function fakeAgent(agentId: string, options: {
 		observe: () => agent.run,
 		currentWorkState: workState,
 		hasRetentionReason: (reason: string) => reason === "interruption_hold" && agent.held,
+		requestRelationshipIds: (reason: string) => reason === "answer_owed" ? agent.answersOwed : [],
 		blocksOrdinaryDelivery: () => agent.held,
 		addSettledHandler: () => () => undefined,
 		addEndedHandler: () => () => undefined,
@@ -161,6 +165,33 @@ test("a starting Run holds a concurrency slot", async () => {
 	const scheduler = schedulerFor([starting, child], 1);
 	assert.equal(await admitWork(scheduler, child), "pending");
 	assert.equal(child.starts, 0);
+	scheduler.shutdownProgress();
+});
+
+test("a Run settled while it still owes an Answer holds its slot until it answers", async () => {
+	// Settling without an Answer is followed by an Obligation Reminder that restarts
+	// the work; a boot in that gap would push concurrent child work past the bound.
+	const obligor = fakeAgent("obligor", { run: { phase: "live", work: "settled", attention: "none", retentionReasons: [] } });
+	obligor.answersOwed = ["request"];
+	const child = fakeAgent("child");
+	const scheduler = schedulerFor([obligor, child], 1);
+	assert.equal(await admitWork(scheduler, child), "pending");
+	assert.equal(child.starts, 0);
+
+	obligor.answersOwed = [];
+	await scheduler.startDeferredBoots();
+	assert.equal(child.starts, 1, "answering frees the slot");
+	scheduler.shutdownProgress();
+});
+
+test("a Run that owes an Answer but parks in Agent Wait does not hold a concurrency slot", async () => {
+	// It may be waiting on the very child the bound would otherwise queue.
+	const obligor = fakeAgent("obligor", { run: { phase: "live", work: "settled", attention: "agent_wait", retentionReasons: [] } });
+	obligor.answersOwed = ["request"];
+	const child = fakeAgent("child");
+	const scheduler = schedulerFor([obligor, child], 1);
+	assert.equal(await admitWork(scheduler, child), "pending");
+	assert.equal(child.starts, 1);
 	scheduler.shutdownProgress();
 });
 

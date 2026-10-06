@@ -24,7 +24,7 @@ Invalid initial policy does not block admission: the Owner starts with the defau
 
 ## Concurrent Agent Runs
 
-`maxConcurrentAgentRuns` is an approximate bound on spawned children doing model work at the same time. It is not a hard limit. The Owner and Moderators never count. A child's Run counts while it is starting, or live or ending with no attention and either active work or a Delivery about to dispatch. Agent Wait, human input, Run Suspension, an Interruption Hold, and a settled Run kept live by retention do not count.
+`maxConcurrentAgentRuns` is an approximate bound on spawned children doing model work at the same time. It is not a hard limit. The Owner and Moderators never count. A child's Run counts while it is starting, or live or ending with no attention and either active work, a Delivery about to dispatch, or an Answer it still owes. Agent Wait, human input, Run Suspension, an Interruption Hold, and a settled Run kept live only by other retention do not count.
 
 When a spawned child would boot while the count is at the bound, its boot is deferred and nothing is rejected. `agent_spawn` and `agent_message` report the Delivery as admitted. The child stays dormant with its Delivery pending, and it boots once a Workflow activity change finds a free slot. Deferred boots start in deferral order, and a later child queues behind them even when a slot is free. Status observation reports the child as `{ "phase": "dormant", "queued": true }`, and `/agents` lists it as `queued` on the Live tab. A deferred boot counts as Delivery progress, so a parent waiting on that child is not treated as stalled. The Owner and Moderators are never deferred.
 
