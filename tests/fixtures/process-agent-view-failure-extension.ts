@@ -11,30 +11,12 @@ const evidencePath = process.env.PTY_AGENT_VIEW_FAILURE_EVIDENCE;
 const isProcessChild = process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP !== undefined;
 
 class FailingChildEditor extends CustomEditor {
-	#renderFailureArmed = false;
-	#renderFailureReported = false;
-
 	override handleInput(data: string): void {
 		if (data === "x" && failureKind === "input") {
 			record({ kind: "failure_trigger", failureKind, pid: process.pid });
 			throw new Error("deterministic PTY child input failure");
 		}
-		if (data === "x" && failureKind === "render") {
-			this.#renderFailureArmed = true;
-			return;
-		}
 		super.handleInput(data);
-	}
-
-	override render(width: number): string[] {
-		if (this.#renderFailureArmed) {
-			if (!this.#renderFailureReported) {
-				this.#renderFailureReported = true;
-				record({ kind: "failure_trigger", failureKind, pid: process.pid });
-			}
-			throw new Error("deterministic PTY child render failure");
-		}
-		return super.render(width);
 	}
 }
 

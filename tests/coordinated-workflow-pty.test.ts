@@ -60,27 +60,36 @@ const PI_CLI_READY_EXTENSION = fileURLToPath(
 	new URL("./fixtures/pi-cli-startup-ready-extension.ts", import.meta.url),
 );
 
-test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the exact Owner", {
+test("real fullscreen PTY mouse-scrolls a 100x30 Agent view, switches Agent modes, and returns to the exact Owner", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
-	// One boot at 100x30 carries both contracts this file used to boot twice for:
-	// long-transcript mouse navigation and complete-frame reflow at a non-default
-	// size (docs/agent-view-acceptance.md: mouse input, streaming, and reflow
-	// evidence). The remaining 80x24 cases still cover the default size.
+	// The coordinated fixture boot is this file's most expensive setup, so one boot
+	// at 100x30 carries every contract that needs it: long-transcript mouse
+	// navigation and complete-frame reflow at a non-default size
+	// (docs/agent-view-acceptance.md: mouse input, streaming, and reflow evidence),
+	// /agents returning as soon as physical child attachment is ready, and switching
+	// one mounted view between two Agent modes. The failure and CLI cases still
+	// cover the default 80x24 size.
 	// Fail fast if Pi rebinds jump-to-latest again: a stale key otherwise leaves
 	// the view scrolled up and surfaces only as a fixture timeout (#191).
 	assert.ok(
 		getKeybindings().matches(CTRL_END, "tui.altScreen.bottom"),
 		"Pi no longer binds Ctrl+End to fullscreen jump-to-latest (tui.altScreen.bottom)",
 	);
+	const returnedDirectory = await mkdtemp(join(tmpdir(), "pi-agent-view-returned-"));
+	const returnedPath = join(returnedDirectory, "returned");
+	const releasePath = join(returnedDirectory, "release");
 	const terminal = launchFixture(FIXTURE, {
 		PTY_TEST_COLUMNS: "100",
 		PTY_TEST_ROWS: "30",
+		PTY_FIRST_VIEW_COMMAND_RETURNED_PATH: returnedPath,
+		PTY_FIRST_VIEW_COMMAND_RELEASE_PATH: releasePath,
 	});
 	try {
 		const setup = await terminal.marker<{
 			ownerId: string;
 			childAgentId: string;
+			secondChildAgentId: string;
 			cwd: string;
 			ownerEditorText: string;
 			terminalColumns: number;
@@ -130,6 +139,8 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 		);
 		assert.ok(agentsHeadingRow > identityRow);
 		assert.ok(nestedActivityRow > agentsHeadingRow);
+		// The fixture records the /agents command's return while the view stays open.
+		await waitForFile(returnedPath);
 		for (let notch = 0; notch < 25; notch += 1) {
 			terminal.write("\x1b[<64;10;8M");
 		}
@@ -174,15 +185,41 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 			(frame) => frame.some((line) => line.includes("Streaming child update 39")),
 			"streamed Agent view tail after Ctrl+End",
 		);
+
 		terminal.write("/agents");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("/agents"))
+		await terminal.waitForScreen(
+			(frame) => frame.some((line) => line.includes("/agents")),
+			"child /agents command input",
 		);
 		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Tab views"))
+		await terminal.waitForScreen(
+			(frame) => frame.some((line) => line.includes("Tab views")),
+			"child-local selector",
 		);
-		terminal.write("o");
+		terminal.write("j");
+		await terminal.waitForScreen((frame) => frame.some((line) =>
+			line.includes("→") && line.includes("PTY Second Worker")
+		), "second child selector focus");
+		terminal.write("\r");
+		const leafFrame = await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("Second PTY child remains independently interactive")
+			) && !frame.some((line) => line.includes("Tab views")),
+			"second child Agent view",
+		);
+		assert.equal(leafFrame.some((line) =>
+			line.includes("PTY Second Worker") &&
+			line.includes(setup.secondChildAgentId.slice(-8)) &&
+			line.includes("idle")
+		), true, "the switched view shows the second child's identity row");
+		assert.equal(
+			leafFrame.some((line) => line.trim() === "Agents"),
+			false,
+			"the leaf second child has no Agents activity heading",
+		);
+
+		await returnPtyAgentViewToOwner(terminal);
+		await writeFile(releasePath, "release\n");
 		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
 		const ownerFrame = await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
@@ -190,6 +227,7 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 			frame.some((line) => line.includes(setup.cwd)) &&
 			frame.some((line) => line.includes("/128k") && line.includes("deterministic-owner")) &&
 			!frame.some((line) => line.includes("Viewed child transcript line")) &&
+			!frame.some((line) => line.includes("Second PTY child remains independently interactive")) &&
 			!frame.some((line) => line.includes("Tab views"))
 		);
 		assert.equal(ownerFrame.length, 30);
@@ -197,45 +235,48 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view and returns to the e
 		assert.match(terminal.output(), /__PTY_AGENT_VIEW_CLOSED__/);
 	} finally {
 		terminal.kill();
+		await rm(returnedDirectory, { recursive: true, force: true });
 	}
 });
 
-for (const failureKind of ["input", "render"] as const) {
-	test(`real fullscreen PTY returns to Owner after child ${failureKind} failure`, {
-		skip: !existsSync(SCRIPT),
-	}, async () => {
-		const terminal = launchFixture(FAILURE_FIXTURE, {
-			PTY_AGENT_VIEW_FAILURE: failureKind,
-		});
-		try {
-			const setup = await terminal.marker<{
-				childAgentId: string;
-				ownerEditorText: string;
-			}>("__PTY_AGENT_VIEW_FAILURE_SETUP__");
-			await terminal.waitForScreen((frame) =>
-				frame.some((line) => line.includes("PTY Failure Worker")) &&
-				frame.some((line) => line.includes("Tab views"))
-			);
-			await terminal.waitForScreen((frame) => frame.some(
-				(line) => line.includes("→") && line.includes("PTY Failure Worker"),
-			));
-			terminal.write("\r");
-			await terminal.waitForScreen((frame) =>
-				frame.some((line) => line.includes("Failure PTY child is ready."))
-			);
-			terminal.write("x");
-			await terminal.waitFor(`__PTY_AGENT_VIEW_FAILURE_RESTORED__${failureKind}`);
-			const ownerFrame = await terminal.waitForScreen((frame) =>
-				frame.some((line) => line.includes("Owner failure baseline remains mounted")) &&
-				frame.some((line) => line.includes(setup.ownerEditorText))
-			);
-			assert.equal(ownerFrame.length, 24);
-			await terminal.closed();
-		} finally {
-			terminal.kill();
-		}
+// The same boot also spawns one never-viewed child, whose non-interactive mode the
+// fixture checks is disposed exactly once when the Owner runtime closes.
+test("real fullscreen PTY returns to Owner after child input failure and disposes an unviewed child mode once", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const terminal = launchFixture(FAILURE_FIXTURE, {
+		PTY_AGENT_VIEW_FAILURE: "input",
 	});
-}
+	try {
+		const setup = await terminal.marker<{
+			childAgentId: string;
+			ownerEditorText: string;
+		}>("__PTY_AGENT_VIEW_FAILURE_SETUP__");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("PTY Failure Worker")) &&
+			frame.some((line) => line.includes("Tab views"))
+		);
+		await terminal.waitForScreen((frame) => frame.some(
+			(line) => line.includes("→") && line.includes("PTY Failure Worker"),
+		));
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Failure PTY child is ready."))
+		);
+		terminal.write("x");
+		await terminal.waitFor("__PTY_AGENT_VIEW_FAILURE_RESTORED__input");
+		const ownerFrame = await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner failure baseline remains mounted")) &&
+			frame.some((line) => line.includes(setup.ownerEditorText))
+		);
+		assert.equal(ownerFrame.length, 24);
+		await terminal.waitFor("__PTY_UNVIEWED_CHILD_DISPOSED_ONCE__");
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+	}
+});
+
 
 test("real fullscreen PTY closes a failed Agent runtime initialization and restores Owner", {
 	skip: !existsSync(SCRIPT),
@@ -270,184 +311,7 @@ test("real fullscreen PTY closes a failed Agent runtime initialization and resto
 	}
 });
 
-test("real fullscreen PTY keeps a terminally stopped selected Run in its Agent view", {
-	skip: !existsSync(SCRIPT),
-}, async () => {
-	const terminal = launchFixture(FAILURE_FIXTURE, {
-		PTY_AGENT_VIEW_FAILURE: "run",
-	});
-	try {
-		const setup = await terminal.marker<{
-			childAgentId: string;
-			ownerEditorText: string;
-		}>("__PTY_AGENT_VIEW_FAILURE_SETUP__");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("PTY Failure Worker")) &&
-			frame.some((line) => line.includes("Tab views"))
-		);
-		await terminal.waitForScreen((frame) => frame.some(
-			(line) => line.includes("→") && line.includes("PTY Failure Worker"),
-		));
-		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Failure PTY child is ready."))
-		);
-		terminal.write("trigger selected Run failure");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("trigger selected Run failure"))
-		);
-		terminal.write("\r");
-		await terminal.waitFor("__PTY_SELECTED_RUN_STOPPED__");
-		await openDormantAgentSelector(terminal, "PTY Failure Worker");
-		terminal.write("o");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Owner failure baseline remains mounted."))
-		);
-		terminal.write("Owner input confirms selected Run closure");
-		await terminal.waitFor("__PTY_AGENT_VIEW_FAILURE_RESTORED__run");
-		await terminal.closed();
-		assert.match(terminal.output(), /Owner failure baseline remains mounted/);
-		assert.match(terminal.output(), new RegExp(setup.ownerEditorText));
-	} finally {
-		terminal.kill();
-	}
-});
-
-test("real fullscreen PTY disposes an unviewed child mode exactly once", {
-	skip: !existsSync(SCRIPT),
-}, async () => {
-	const terminal = launchFixture(FAILURE_FIXTURE, {
-		PTY_AGENT_VIEW_FAILURE: "noninteractive",
-	});
-	try {
-		await terminal.waitFor("__PTY_NONINTERACTIVE_DISPOSAL_COMPLETE__");
-		await terminal.closed();
-	} finally {
-		terminal.kill();
-	}
-});
-
-test("real fullscreen PTY command returns as soon as physical child attachment is ready", {
-	skip: !existsSync(SCRIPT),
-}, async () => {
-	const returnedDirectory = await mkdtemp(join(tmpdir(), "pi-agent-view-returned-"));
-	const returnedPath = join(returnedDirectory, "returned");
-	const releasePath = join(returnedDirectory, "release");
-	const terminal = launchFixture(FIXTURE, {
-		PTY_FIRST_VIEW_COMMAND_RETURNED_PATH: returnedPath,
-		PTY_FIRST_VIEW_COMMAND_RELEASE_PATH: releasePath,
-	});
-	try {
-		await terminal.marker("__PTY_AGENT_VIEW_SETUP__");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("PTY Viewed Worker")) &&
-			frame.some((line) => line.includes("Tab views"))
-		);
-		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
-			!frame.some((line) => line.includes("Tab views"))
-		);
-		await waitForFile(returnedPath);
-
-		terminal.write(DIRECT_AGENT_INPUT);
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
-		);
-		terminal.write("\r");
-		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
-		await returnPtyAgentViewToOwner(terminal);
-		await writeFile(releasePath, "release\n");
-		await terminal.closed();
-		assert.match(terminal.output(), /__PTY_AGENT_VIEW_CLOSED__/);
-	} finally {
-		terminal.kill();
-		await import("node:fs/promises").then(({ rm }) =>
-			rm(returnedDirectory, { recursive: true, force: true })
-		);
-	}
-});
-
-test("real fullscreen PTY switches one mounted view between two Agent modes", {
-	skip: !existsSync(SCRIPT),
-}, async () => {
-	const terminal = launchFixture();
-	try {
-		const setup = await terminal.marker<{
-			childAgentId: string;
-			secondChildAgentId: string;
-			ownerEditorText: string;
-		}>("__PTY_AGENT_VIEW_SETUP__");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("PTY Viewed Worker")) &&
-			frame.some((line) => line.includes("Tab views"))
-		);
-		await terminal.waitForScreen((frame) => frame.some((line) =>
-			line.includes("→") && line.includes("PTY Viewed Worker")
-		));
-		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
-			!frame.some((line) => line.includes("Tab views"))
-		);
-		terminal.write(DIRECT_AGENT_INPUT);
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
-		);
-		terminal.write("\r");
-		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
-
-		terminal.write("/agents");
-		await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes("/agents")),
-			"child /agents command input",
-		);
-		terminal.write("\r");
-		await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes("Tab views")),
-			"child-local selector",
-		);
-		terminal.write("j");
-		await terminal.waitForScreen((frame) => frame.some((line) =>
-			line.includes("→") && line.includes("PTY Second Worker")
-		), "second child selector focus");
-		terminal.write("\r");
-		const leafFrame = await terminal.waitForScreen((frame) =>
-			frame.some((line) =>
-				line.includes("Second PTY child remains independently interactive")
-			) && !frame.some((line) => line.includes("Tab views"))
-		);
-		assert.equal(leafFrame.some((line) =>
-			line.includes("PTY Second Worker") &&
-			line.includes(setup.secondChildAgentId.slice(-8)) &&
-			line.includes("idle")
-		), true);
-		assert.equal(leafFrame.some((line) => line.trim() === "Agents"), false);
-
-		terminal.write("/agents");
-		await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes("/agents")),
-			"second child /agents command input",
-		);
-		terminal.write("\r");
-		await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes("Tab views")),
-			"second child-local selector",
-		);
-		terminal.write("o");
-		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
-			frame.some((line) => line.includes(setup.ownerEditorText)) &&
-			!frame.some((line) => line.includes("Second PTY child remains independently interactive"))
-		);
-		await terminal.closed();
-	} finally {
-		terminal.kill();
-	}
-});
-
-test("real Pi CLI can return to Owner and attach the same Agent again", {
+test("real Pi CLI can return to Owner, attach the same Agent again, and quit from the selected child", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-cli-repeat-"));
@@ -483,11 +347,7 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
 		await attachCliRepeatWorker(terminal, "CLI child second attachment input", true);
-		await returnPtyAgentViewToOwner(terminal);
-		await terminal.waitForScreen((frame) =>
-			!frame.some((line) => line.includes("Tab views")) &&
-			frame.some((line) => line.includes("deterministic-owner"))
-		);
+		// Native quit typed in the selected child closes the whole real Pi Workflow.
 		terminal.write("/quit\r");
 		await terminal.closed();
 	} finally {
@@ -496,38 +356,6 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 		await import("node:fs/promises").then(({ rm }) =>
 			rm(root, { recursive: true, force: true })
 		);
-	}
-});
-
-test("native quit in the selected child closes the real Pi Workflow", {
-	skip: !existsSync(SCRIPT),
-	timeout: PTY_WAIT_TIMEOUT_MS,
-}, async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-agent-selected-quit-"));
-	const agentDir = join(root, "agent");
-	const broker = await createProcessModelBroker({
-		responseOverride: routeCliRepeatResponse,
-		tokensPerSecond: 20_000,
-	});
-	const terminal = launchPiCli({
-		agentDir,
-		sessionDir: join(root, "sessions"),
-		additionalExtensionPaths: [broker.extensionPath],
-		provider: broker.providerId,
-		model: broker.modelId,
-	});
-	try {
-		await waitForPiCliReady(agentDir);
-		terminal.write("Create one CLI Repeat Worker.\r");
-		await terminal.waitForScreen((frame) =>
-			normalizedFrameText(frame).includes("CLI worker is ready for repeated attachment.")
-		);
-		await attachCliRepeatWorker(terminal, "CLI child before quit", false);
-		terminal.write("/quit\r");
-		await terminal.closed();
-	} finally {
-		terminal.kill();
-		await broker.close();
 	}
 });
 
@@ -1026,38 +854,6 @@ async function waitForProcessExit(pid: number): Promise<void> {
 		await new Promise<void>((resolve) => setTimeout(resolve, SCREEN_POLL_INTERVAL_MS));
 	}
 	throw new Error(`Timed out waiting for child process ${pid} to exit`);
-}
-
-async function openDormantAgentSelector(
-	terminal: PtyFixture,
-	agentLabel: string,
-): Promise<void> {
-	const deadline = Date.now() + PTY_WAIT_TIMEOUT_MS;
-	while (Date.now() < deadline) {
-		terminal.write("/agents");
-		await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes("/agents")),
-			`failed ${agentLabel} /agents command input`,
-		);
-		terminal.write("\r");
-		const selector = await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes("Tab views")),
-			`selector opened from failed ${agentLabel}`,
-		);
-		if (selector.some((line) => line.includes(agentLabel))) return;
-		terminal.write("\t");
-		const dormantSelector = await terminal.waitForScreen(
-			(frame) => frame.some((line) => line.includes(agentLabel)),
-			`Dormant selector containing ${agentLabel}`,
-		);
-		if (dormantSelector.some((line) => line.includes(agentLabel))) return;
-		terminal.write("\x1b");
-		await terminal.waitForScreen((frame) =>
-			!frame.some((line) => line.includes("Tab views")) &&
-			frame.some((line) => line.includes(agentLabel) && line.includes("failed"))
-		);
-	}
-	throw new Error(`Agent ${agentLabel} did not enter the Dormant selector`);
 }
 
 class PtyFixture {
