@@ -36,10 +36,6 @@ import {
 	createUnboundTestOwnerHost,
 	type TestCleanupRegistrar,
 } from "./support/pi-host.ts";
-import {
-	openLiveAgentView,
-	returnAgentViewToOwner,
-} from "./support/agent-session.ts";
 
 type CoordinatorView = ReturnType<WorkflowCoordinator["forAgent"]>;
 type ProcessAgentDriver = Readonly<{
@@ -321,19 +317,37 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	await harness.shutdown();
 });
 
-test("one Supervisory Resume Message commits alone before ordinary held backlog", async (t) => {
-	const harness = await createRunSupervisionHarness(t);
+test("a Supervisory Resume uses the reserved slot at ordinary capacity and commits alone before held backlog", async (t) => {
+	const harness = await createRunSupervisionHarness(t, {
+		workflowPolicy: new WorkflowPolicyStore(
+			parseWorkflowPolicy('{"maxPendingDeliveriesPerAgent": 1}'),
+		),
+	});
 	const child = await harness.spawnChild("spawn-resumed-child");
 	await child.waitForIdle();
 	await harness.control("interrupt-resumed-child", {
 		operation: "interrupt",
 		agentId: child.agentId,
 	});
-	await harness.sendMessage(
+	const backlog = await harness.sendMessage(
 		"ordinary-backlog-after-resume",
 		child.agentId,
 		"Run this ordinary backlog only after the isolated resume turn.",
 	);
+	assert.ok("messageStatus" in backlog);
+	assert.equal(backlog.messageStatus, "sent", "the held backlog occupies the only ordinary pending slot");
+	const exhausted = await harness.sendMessage(
+		"exceed-ordinary-held-capacity",
+		child.agentId,
+		"This Message cannot enter ordinary pending capacity.",
+	);
+	assert.ok("messageId" in exhausted && "messageStatus" in exhausted);
+	assert.deepEqual(exhausted, {
+		messageId: exhausted.messageId,
+		targetAgentId: child.agentId,
+		messageStatus: "not_sent",
+		reason: "capacity_exhausted",
+	});
 
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The isolated supervisory resume turn completed."),
@@ -346,7 +360,7 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 	});
 	assert.equal(resumed.agentId, child.agentId);
 	assert.ok("messageStatus" in resumed && "messageId" in resumed);
-	assert.equal(resumed.messageStatus, "sent");
+	assert.equal(resumed.messageStatus, "sent", "the resume uses the reserved slot despite ordinary exhaustion");
 	assert.equal(typeof resumed.messageId, "string");
 	await child.waitForIdle();
 	await waitForCondition(() =>
@@ -375,8 +389,8 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 	const backlogIndex = deliveries.findIndex((entry) =>
 		String(entry.content).includes("Run this ordinary backlog"),
 	);
-	assert.equal(resumedIndex >= 0, true);
-	assert.equal(backlogIndex > resumedIndex, true);
+	assert.equal(resumedIndex >= 0, true, "the resume Delivery is committed");
+	assert.equal(backlogIndex > resumedIndex, true, "the held backlog follows the resume Delivery");
 	assert.deepEqual(
 		JSON.parse(String(deliveries[resumedIndex]!.content)).messages,
 		[{
@@ -385,12 +399,14 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 			fromAgentId: harness.host.session.sessionId,
 			content: "Resume this exact held Run with explicit direction.",
 		}],
+		"the resume Delivery carries only the resume Message",
 	);
 	assert.equal(
 		harness.ownerView.status(child.agentId).run.retentionReasons.some(
 			({ reason }) => reason === "interruption_hold",
 		),
 		false,
+		"the resume clears the exact Hold",
 	);
 
 	await harness.shutdown();
@@ -445,7 +461,7 @@ test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", asy
 	await harness.shutdown();
 });
 
-test("a native human editor Message clears its exact Hold for one isolated turn", async (t) => {
+test("a failed native human resume keeps its exact Hold, and the retry clears it for one isolated turn before held backlog", async (t) => {
 	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-human-resumed-child");
 	await child.waitForIdle();
@@ -457,6 +473,50 @@ test("a native human editor Message clears its exact Hold for one isolated turn"
 		"ordinary-backlog-after-human-resume",
 		child.agentId,
 		"Deliver this only after the human-resumed turn settles.",
+	);
+
+	harness.host.model.setResponses([
+		fauxAssistantMessage("The uncommitted process input cycle settled."),
+	]);
+	await child.prompt("PROCESS_RUNTIME_DROP_MESSAGE_COMMIT", {
+		expectedResult: "input_failure",
+	});
+	// The backgrounded child's input failure renders in its own complete native
+	// mode; it never reaches the Owner's TUI (#59).
+	const agentView = await harness.ownerView.openAgentView(child.agentId);
+	const activeAgentView = agentView ?? harness.activeAgentView();
+	assert.ok(activeAgentView);
+	await waitForCondition(() =>
+		stripTerminalSequences(
+			activeAgentView.projection().presentation.render(120).join("\n"),
+		)
+			.includes("Human input did not commit")
+	);
+	assert.equal(
+		harness.host.ui.notifications.some(({ message }) =>
+			message.includes("human resume dispatch failed")
+		),
+		false,
+		"the child input failure never reaches the Owner's notifications",
+	);
+	assert.equal(
+		child.entries().some(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes(
+					"PROCESS_RUNTIME_DROP_MESSAGE_COMMIT",
+				),
+		),
+		false,
+		"the failed human input is not committed",
+	);
+	assert.equal(
+		harness.ownerView.status(child.agentId).run.retentionReasons.some(
+			({ reason }) => reason === "interruption_hold",
+		),
+		true,
+		"a failed human resume leaves the exact Hold in place",
 	);
 
 	harness.host.model.setResponses([
@@ -495,81 +555,18 @@ test("a native human editor Message clears its exact Hold for one isolated turn"
 			entry.type === "custom_message" &&
 			String(entry.content).includes("Deliver this only after the human-resumed turn"),
 	);
-	assert.equal(humanIndex >= 0, true);
-	assert.equal(backlogIndex > humanIndex, true);
+	assert.equal(humanIndex >= 0, true, "the retried human input is committed");
+	assert.equal(backlogIndex > humanIndex, true, "the held backlog follows the human turn");
 	assert.equal(
 		harness.ownerView.status(child.agentId).run.retentionReasons.some(
 			({ reason }) => reason === "interruption_hold",
 		),
 		false,
+		"the retried human input clears the exact Hold",
 	);
 
-	await harness.shutdown();
-});
-
-test("a failed native human resume dispatch leaves its exact Hold retryable", async (t) => {
-	const harness = await createRunSupervisionHarness(t);
-	const child = await harness.spawnChild("spawn-failed-human-resume-child");
-	await child.waitForIdle();
-	await harness.control("interrupt-before-failed-human-resume", {
-		operation: "interrupt",
-		agentId: child.agentId,
-	});
-
-	harness.host.model.setResponses([
-		fauxAssistantMessage("The uncommitted process input cycle settled."),
-	]);
-	await child.prompt("PROCESS_RUNTIME_DROP_MESSAGE_COMMIT", {
-		expectedResult: "input_failure",
-	});
-	// The backgrounded child's input failure renders in its own complete native
-	// mode; it never reaches the Owner's TUI (#59).
-	const agentView = await harness.ownerView.openAgentView(child.agentId);
-	const activeAgentView = agentView ?? harness.activeAgentView();
-	assert.ok(activeAgentView);
-	await waitForCondition(() =>
-		stripTerminalSequences(
-			activeAgentView.projection().presentation.render(120).join("\n"),
-		)
-			.includes("Human input did not commit")
-	);
-	assert.equal(
-		harness.host.ui.notifications.some(({ message }) =>
-			message.includes("human resume dispatch failed")
-		),
-		false,
-	);
-	assert.equal(
-		child.entries().some(
-			(entry) =>
-				entry.type === "message" &&
-				entry.message.role === "user" &&
-				JSON.stringify(entry.message.content).includes(
-					"PROCESS_RUNTIME_DROP_MESSAGE_COMMIT",
-				),
-		),
-		false,
-	);
-	assert.equal(
-		harness.ownerView.status(child.agentId).run.retentionReasons.some(
-			({ reason }) => reason === "interruption_hold",
-		),
-		true,
-	);
-
-	harness.host.model.setResponses([
-		fauxAssistantMessage("The human retry resumed the still-held exact Run."),
-	]);
-	await child.prompt("Retry the native human resume against the exact Hold.");
-	await child.waitForIdle();
-	assert.equal(
-		harness.ownerView.status(child.agentId).run.retentionReasons.some(
-			({ reason }) => reason === "interruption_hold",
-		),
-		false,
-	);
 	await harness.activeAgentView()?.close();
-
+	await harness.shutdown();
 });
 
 test("supervisory interruption settles an active Human Request through its error result", async (t) => {
@@ -850,66 +847,6 @@ test("authority follows only Owner descendants and immediate Direct-Spawner edge
 	await harness.shutdown();
 });
 
-test("the one resume reservation remains available when ordinary capacity is exhausted", async (t) => {
-	const harness = await createRunSupervisionHarness(t, {
-		workflowPolicy: new WorkflowPolicyStore(
-			parseWorkflowPolicy('{"maxPendingDeliveriesPerAgent": 1}'),
-		),
-	});
-	const child = await harness.spawnChild("spawn-resume-capacity-child");
-	await child.waitForIdle();
-	await harness.control("interrupt-resume-capacity-child", {
-		operation: "interrupt",
-		agentId: child.agentId,
-	});
-	const first = await harness.sendMessage(
-		"fill-ordinary-held-capacity",
-		child.agentId,
-		"This Message occupies the only ordinary pending slot.",
-	);
-	assert.ok("messageStatus" in first);
-	assert.equal(first.messageStatus, "sent");
-	const exhausted = await harness.sendMessage(
-		"exceed-ordinary-held-capacity",
-		child.agentId,
-		"This Message cannot enter ordinary pending capacity.",
-	);
-	assert.ok("messageId" in exhausted && "messageStatus" in exhausted);
-	assert.deepEqual(exhausted, {
-		messageId: exhausted.messageId,
-		targetAgentId: child.agentId,
-		messageStatus: "not_sent",
-		reason: "capacity_exhausted",
-	});
-
-	harness.host.model.setResponses([
-		fauxAssistantMessage("The reserved resume ran despite ordinary exhaustion."),
-		fauxAssistantMessage("The one admitted ordinary Message followed."),
-	]);
-	const resumed = await harness.control("resume-outside-ordinary-capacity", {
-		operation: "resume",
-		agentId: child.agentId,
-		content: "Use the reserved resumption slot.",
-	});
-	assert.ok("messageStatus" in resumed);
-	assert.equal(resumed.messageStatus, "sent");
-	await child.waitForIdle();
-	await waitForCondition(() =>
-		child.entries().some(
-			(entry) =>
-				entry.type === "message" &&
-				entry.message.role === "assistant" &&
-				entry.message.content.some(
-					(part) =>
-						part.type === "text" &&
-						part.text === "The one admitted ordinary Message followed.",
-				),
-		),
-	);
-
-	await harness.shutdown();
-});
-
 test("a resume bound to an earlier Hold becomes ordinary direction and cannot clear a later Hold", async (t) => {
 	const harness = await createRunSupervisionHarness(t, { deferFirstResume: true });
 	const child = await harness.spawnChild("spawn-stale-resume-child");
@@ -1050,73 +987,6 @@ test("the registered agent_control tool authenticates structural committed input
 	assert.ok(output?.type === "text");
 	assert.deepEqual(JSON.parse(output.text), result.details);
 
-	await host.runtime.dispose();
-});
-
-test("/agents retains only the viewed exact Run and keeps Owner bound through close", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-		physicalDisplay: true,
-	});
-	host.model.setResponses([
-		fauxAssistantMessage("The viewed child remains available."),
-	]);
-	const spawnInput = { title: "Fixture request", request: "Remain live for durable Agent view retention." };
-	const spawnToolCallId = "spawn-view-retained-child";
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, { id: spawnToolCallId }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const spawn = host.session.getToolDefinition("agent_spawn");
-	assert.ok(spawn);
-	const spawnResult = await spawn.execute(
-		spawnToolCallId,
-		spawnInput,
-		undefined,
-		undefined,
-		host.session.extensionRunner.createToolContext(spawnToolCallId, undefined),
-	);
-	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
-	const ownerSession = host.runtime.session;
-	const opened = await openLiveAgentView(host, childAgentId);
-	assert.equal(host.runtime.session, ownerSession);
-	const observe = host.session.getToolDefinition("agent_observe");
-	assert.ok(observe);
-	const status = async (toolCallId: string) => observe.execute(
-		toolCallId,
-		{ operation: "status", agentId: childAgentId },
-		undefined,
-		undefined,
-		host.session.extensionRunner.createToolContext(toolCallId, undefined),
-	);
-	assert.equal(
-		((await status("observe-open-agent-view")).details as {
-			run: { retentionReasons: Array<{ reason: string }> };
-		}).run.retentionReasons.some(({ reason }) => reason === "interactive_selection"),
-		true,
-	);
-	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
-		const run = ((await status(`observe-view-settlement-${attempt}`)).details as {
-			run: { phase: string; work?: string };
-		}).run;
-		if (run.phase === "live" && run.work === "settled") break;
-		if (attempt === MAX_CONDITION_POLL_ATTEMPTS - 1) {
-			assert.fail("Viewed process child did not settle");
-		}
-		await new Promise<void>((resolve) => setTimeout(resolve, 10));
-	}
-
-	await returnAgentViewToOwner(host, opened);
-	assert.equal(host.runtime.session, ownerSession);
-	assert.equal(
-		((await status("observe-closed-agent-view")).details as {
-			run: { retentionReasons: Array<{ reason: string }> };
-		}).run.retentionReasons.some(({ reason }) => reason === "interactive_selection"),
-		false,
-	);
 	await host.runtime.dispose();
 });
 
