@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
 import test from "node:test";

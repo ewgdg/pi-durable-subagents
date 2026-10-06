@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import test from "node:test";

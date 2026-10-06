@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import { EvidenceUnavailableError } from "../src/coordination/agent-record.ts";
 import assert from "node:assert/strict";
 import test from "node:test";

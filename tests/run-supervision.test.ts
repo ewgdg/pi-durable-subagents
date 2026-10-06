@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import test from "node:test";

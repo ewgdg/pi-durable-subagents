@@ -1,3 +1,4 @@
+import "./support/supervised-run.ts";
 import { Check } from "typebox/value";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { createAgentSelectorSnapshot } from "../src/process-runtime/remote-agent-selector.ts";

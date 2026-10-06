@@ -14,6 +14,8 @@ import { randomUUID } from "node:crypto";
 const PROCESS_SCAN_INTERVAL_MS = 10;
 const TERMINATION_GRACE_MS = 100;
 const SUPERVISED_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+// Marks the run as contained for tests/support/supervised-run.ts.
+const SUPERVISED_RUN_VARIABLE = "PI_TEST_SUPERVISED";
 
 export async function runTestProcess(arguments_: readonly string[], deadlineMs: number): Promise<number> {
 	if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 2_147_483_647) {
@@ -49,7 +51,7 @@ async function runOwnedTestProcess(
 		await cgroup?.dispose();
 		throw error;
 	}
-	const childEnvironment = cgroup?.testEnvironment() ?? process.env;
+	const childEnvironment = { ...(cgroup?.testEnvironment() ?? process.env), [SUPERVISED_RUN_VARIABLE]: "1" };
 	// Isolate the test runner from terminal/CI group signals. The supervisor must
 	// remain alive long enough to clean descendants in separate PTY process groups.
 	const child = cgroup
