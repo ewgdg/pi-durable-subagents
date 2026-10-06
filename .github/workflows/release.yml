@@ -31,7 +31,7 @@ jobs:
           fi
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run test:fast
+      - run: npm run test:ci
       # Skip a version already on npm: the first release is published by hand
       # (Trusted Publishing needs an existing package), and reruns stay safe.
       - name: Publish to npm

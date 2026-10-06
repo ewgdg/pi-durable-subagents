@@ -37,6 +37,7 @@
     "benchmark:attached-terminal": "node benchmarks/attached-terminal-output.ts",
     "test": "npm run test:fast && npm run test:process",
     "test:fast": "node tests/support/run-test-suite.ts fast",
+    "test:ci": "node tests/support/run-test-suite.ts fast --test-timeout=15000 --deadline-ms=480000",
     "test:process": "node tests/support/run-test-suite.ts process",
     "test:conformance": "node tests/support/run-test-suite.ts conformance",
     "typecheck": "tsc -p tsconfig.json --noEmit"

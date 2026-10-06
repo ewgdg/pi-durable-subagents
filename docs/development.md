@@ -50,7 +50,7 @@ On Linux with writable cgroup-v2 support, the existing cgroup and guardian conta
 
 ## Releasing
 
-CI runs `typecheck` and `test:fast` on Node 22 and 24 for pull requests and `main`. Run `npm run test:process` locally before a release; it launches real Pi processes and stays out of CI.
+CI runs `typecheck` and `test:ci` on Node 22 and 24 for pull requests and `main`. `test:ci` is the fast suite with a 15-second file timeout and an 8-minute deadline, because shared runners can be several times slower than a development machine. Run `npm run test:process` locally before a release; it launches real Pi processes and stays out of CI.
 
 Pushing a `v*` tag runs the Release workflow. It checks that the tag matches `package.json`, repeats the CI gate, publishes to npm through Trusted Publishing (OIDC, with provenance), and creates a GitHub Release with generated notes.
 
