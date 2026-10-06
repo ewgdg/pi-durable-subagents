@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Context } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context, FauxResponseFactory } from "@earendil-works/pi-ai";
 
 /**
  * The Request a fake responder reads from its own visible Delivery. The JSON scan
@@ -32,4 +32,18 @@ export function latestRequestFromContext(context: { messages: readonly unknown[]
 	const request = findDeliveredRequest(context);
 	if (request) return request;
 	assert.fail("Fake responder needs a delivered Request");
+}
+
+/**
+ * Keeps a fake model call in flight until its caller aborts it, holding an Agent
+ * live. A slow streaming rate would also hold it, but the fake provider only
+ * observes an abort after each chunk's timer, which then outlives the test.
+ */
+export function heldUntilAborted(message: AssistantMessage): FauxResponseFactory {
+	return (_context, options) => new Promise((resolve) => {
+		const signal = options?.signal;
+		assert.ok(signal, "A held fake response needs an abortable model call");
+		if (signal.aborted) resolve(message);
+		else signal.addEventListener("abort", () => resolve(message), { once: true });
+	});
 }

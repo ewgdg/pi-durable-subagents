@@ -17,6 +17,7 @@ import {
 	openLiveAgentView,
 	returnAgentViewToOwner,
 } from "./support/agent-session.ts";
+import { heldUntilAborted } from "./support/model-requests.ts";
 import {
 	createPiCliTestOwnerHost,
 	createTestOwnerHost,
@@ -43,7 +44,6 @@ test("child session_start UI side effects stay detached before, during, and afte
 		persistent: true,
 		processVisibleModel: true,
 		physicalDisplay: true,
-		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	assert.equal(host.ui.notifications.length, 1);
@@ -52,7 +52,7 @@ test("child session_start UI side effects stay detached before, during, and afte
 	const ownerStatuses = new Map(host.ui.statuses);
 	const ownerWidgets = new Map(host.ui.widgets);
 	host.model.setResponses([
-		fauxAssistantMessage("Remain live while detached UI conformance is checked."),
+		heldUntilAborted(fauxAssistantMessage("Remain live while detached UI conformance is checked.")),
 	]);
 	const agentId = await spawnRetainedChild(host, "spawn-detached-ui-agent");
 	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
@@ -89,11 +89,10 @@ test("repeated Agent view attachment does not replay either session startup life
 		persistent: true,
 		processVisibleModel: true,
 		physicalDisplay: true,
-		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	host.model.setResponses([
-		fauxAssistantMessage("Remain live through repeated interactive view cycles."),
+		heldUntilAborted(fauxAssistantMessage("Remain live through repeated interactive view cycles.")),
 	]);
 	const agentId = await spawnRetainedChild(host, "spawn-view-lifecycle-agent");
 	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
@@ -125,11 +124,10 @@ test("exact-Run abort of an open Agent view retains the Runtime and view", {
 		persistent: true,
 		processVisibleModel: true,
 		physicalDisplay: true,
-		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	host.model.setResponses([
-		fauxAssistantMessage("Remain live until exact-Run abort."),
+		heldUntilAborted(fauxAssistantMessage("Remain live until exact-Run abort.")),
 		fauxAssistantMessage("Done."),
 	]);
 	const agentId = await spawnRetainedChild(host, "spawn-view-abort-agent");
@@ -231,7 +229,6 @@ test("the named llama.cpp extension remains usable through child startup and shu
 	const host = await createPiCliTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
-		fauxTokensPerSecond: 1,
 	});
 	try {
 		const ownerSession = host.runtime.session;
@@ -240,7 +237,7 @@ test("the named llama.cpp extension remains usable through child startup and shu
 		await refreshLlamaCatalogThroughCommand(host, host.session);
 		await assertLlamaInference(sharedModelRuntime, "before child startup");
 		host.model.setResponses([
-			fauxAssistantMessage("Remain live while llama.cpp conformance is checked."),
+			heldUntilAborted(fauxAssistantMessage("Remain live while llama.cpp conformance is checked.")),
 		]);
 		const agentId = await spawnRetainedChild(host, "spawn-llama-agent");
 		assert.equal(host.runtime.session, ownerSession);
