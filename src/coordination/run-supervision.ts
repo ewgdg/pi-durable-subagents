@@ -12,6 +12,7 @@ import type { MessageCoordinator } from "./messages.ts";
 import {
 	createSupervisoryResumeMessage,
 	resolveCommittedRunControl,
+	type RunAbortReceipt,
 	type RunControlInput,
 	type RunControlReceipt,
 } from "../protocol/run-control.ts";
@@ -64,15 +65,17 @@ export class RunSupervisor {
 			: undefined;
 		return target.host.lane.run(async () => {
 			if (control.operation === "abort") {
-				// Abort ends only the Run, so it names the caller's own Requests the
-				// caller may now need to cancel (a queued child has no Run at all).
-				const abortReceipt = (disposition: "aborted" | "not_running", residualRequests: { incoming: number; outgoing: number }) => ({
-					agentId: target.identity.agentId,
-					disposition,
-					residualRequests,
-					callerOutstandingRequests: this.#messages.outstandingRequestsTo(caller, target.identity.agentId),
-				});
+				const abortReceipt = (
+					disposition: "aborted" | "not_running",
+					residualRequests: { incoming: number; outgoing: number },
+					callerOutstandingRequests: RunAbortReceipt["callerOutstandingRequests"],
+				) => ({ agentId: target.identity.agentId, disposition, residualRequests, callerOutstandingRequests });
 				try {
+					// Abort ends only the Run, so it names the caller's own Requests the
+					// caller may now need to cancel (a queued child has no Run at all).
+					// Read before ending the Run: abort cannot change them, and a failed
+					// read must not report an error for a Run that already ended.
+					const callerOutstandingRequests = this.#messages.outstandingRequestsTo(caller, target.identity.agentId);
 					const initializationCancelled = initializationTermination
 						? await initializationTermination.cancellation
 						: false;
@@ -81,12 +84,12 @@ export class RunSupervisor {
 						: target.host.residualRequestCounts();
 					if (initializationCancelled) {
 						this.#messages.discardSchedulingInLane(target);
-						return abortReceipt("aborted", residualRequests);
+						return abortReceipt("aborted", residualRequests, callerOutstandingRequests);
 					}
-					if (!target.host.currentHandle()) return abortReceipt("not_running", residualRequests);
+					if (!target.host.currentHandle()) return abortReceipt("not_running", residualRequests, callerOutstandingRequests);
 					this.#messages.discardSchedulingInLane(target);
 					await target.host.discardAndEndInLane("termination");
-					return abortReceipt("aborted", residualRequests);
+					return abortReceipt("aborted", residualRequests, callerOutstandingRequests);
 				} finally {
 					if (initializationTermination) {
 						target.host.completeRuntimeInitializationTerminationInLane(

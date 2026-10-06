@@ -1136,12 +1136,21 @@ test("aborting a queued child names the caller's Creation Request, and cancellin
 	appendCall("agent_control", abortWorking, "abort-working-child");
 	const aborted = await harness.view.control("abort-working-child", abortWorking);
 	assert.ok("disposition" in aborted && aborted.disposition === "aborted");
-	// Strict FIFO would queue a later child behind a still-pending boot, so a
-	// successor that starts proves the withdrawn child left the queue for good.
+	// Strict FIFO dispatches any still-queued boot before a later child starts,
+	// so the successor starting orders this check after the freed slot was handed on.
 	const successor = await harness.spawn("spawn-successor-after-freed-slot");
 	assert.ok("agentId" in successor);
 	await waitForCondition(() => harness.view.status(successor.agentId).run.phase !== "dormant");
-	assert.deepEqual(harness.view.status(abandoned.agentId).run, { phase: "dormant", retentionReasons: [] });
+	const abandonedStatus = harness.view.status(abandoned.agentId);
+	assert.deepEqual(abandonedStatus.run, { phase: "dormant", retentionReasons: [] });
+	// A booted-then-released child would also look Dormant; only its transcript
+	// proves no Run ever received the Creation Request or its Cancellation.
+	assert.ok(abandonedStatus.primaryEvidence.transcriptPath);
+	assert.deepEqual(
+		SessionManager.open(abandonedStatus.primaryEvidence.transcriptPath).getEntries()
+			.filter(entry => entry.type === "message" || entry.type === "custom_message"),
+		[],
+	);
 	await harness.shutdown();
 });
 

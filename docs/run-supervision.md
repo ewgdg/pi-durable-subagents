@@ -169,7 +169,7 @@ The native above-editor activity dock identifies the selected durable Agent by l
 }
 ```
 
-Abort stops what the Agent is doing now, like pressing Escape in Pi, and leaves it Dormant rather than paused: unlike `interrupt`, no `resume` follows. It ends the work, not the Agent: Requests stay unresolved until they are answered or their requester cancels them.
+Abort stops what the Agent is doing now and leaves it Dormant rather than paused: unlike `interrupt` (which Human Escape also uses), no `resume` follows. It ends the work, not the Agent: Requests stay unresolved until they are answered or their requester cancels them.
 
 Abort fences and confirms the end of the target's exact current Run, bypasses every Retention Reason, and discards its uncommitted coordination and native input. The fence includes every native editor submission observed before the abort: a submission still inside asynchronous input preflight cannot later admit a successor Run. It does not roll back effects, Answer or cancel Requests, notify participants, mutate descendants, remove the Agent, or create Agent lifecycle evidence. Later Message Delivery may start a fresh successor Run for the same Agent identity. Recovery of any discarded Message remains explicit through transcript inspection, poll, or retry.
 
