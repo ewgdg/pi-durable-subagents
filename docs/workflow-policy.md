@@ -10,6 +10,7 @@ The file is a strict UTF-8 JSON object. Its complete optional surface is:
 
 ```json
 {
+  "maxConcurrentAgentRuns": 8,
   "maxPendingDeliveriesPerAgent": 256,
   "operationReviewIntervalMs": 600000,
   "deliveryProgressIntervalMs": 60000,
@@ -17,11 +18,17 @@ The file is a strict UTF-8 JSON object. Its complete optional surface is:
 }
 ```
 
-An omitted file or field uses the shown default. Unknown fields, duplicate keys, comments, trailing commas, wrong types, and invalid integers reject the complete file. `maxPendingDeliveriesPerAgent` must be a positive safe integer. `operationReviewIntervalMs` and `deliveryProgressIntervalMs` must each be an integer from `1000` through `2147483647` milliseconds. `excludedModels` defaults to an empty list.
+An omitted file or field uses the shown default. Unknown fields, duplicate keys, comments, trailing commas, wrong types, and invalid integers reject the complete file. `maxConcurrentAgentRuns` and `maxPendingDeliveriesPerAgent` must each be a positive safe integer. `operationReviewIntervalMs` and `deliveryProgressIntervalMs` must each be an integer from `1000` through `2147483647` milliseconds. `excludedModels` defaults to an empty list.
 
 Invalid initial policy does not block admission: the Owner starts with the default policy, and a warning names the problem. Owner resource reload reads the file again: a valid file atomically publishes one frozen complete snapshot, while an invalid file warns and preserves the previous snapshot. Model-exclusion toggles still refuse to rewrite an invalid file. Reloading child resources does not reload Workflow Policy. Policy is volatile Owner-scoped configuration; it is not written to any Agent transcript.
 
-The Workflow has no execution limit: every ready Agent Run executes as soon as Pi admits it, and Pi's native retry and Run Suspension handle provider rate limits and quota. See [ADR 0005](adr/0005-no-workflow-wide-execution-queue.md). A file that still sets the removed `maxConcurrentAgentRuns` field is rejected as an unknown field.
+## Concurrent Agent Runs
+
+`maxConcurrentAgentRuns` is an approximate bound on Agent Runs doing model work at the same time. It is not a hard limit. A Run counts while it is starting, or live with active work and no attention. Agent Wait, human input, Run Suspension, an Interruption Hold, a settled Run kept live by retention, and a parked Owner do not count.
+
+When a spawned child would boot while the count is at the bound, its boot is deferred and nothing is rejected. `agent_spawn` and `agent_message` report the Delivery as admitted. The child stays dormant with its Delivery pending, and it boots once a Workflow activity change finds a free slot. A deferred boot counts as Delivery progress, so a parent waiting on that child is not treated as stalled. The Owner and Moderators are never deferred, but their working Runs count.
+
+The count can exceed the bound. Concurrent checks can see the same free slot, and resumed waits, Moderators, the Owner, interactive input, and Workflow recovery start work without a check. Parked Runs keep their processes, so the bound limits model work, not child processes. Pi's native retry and Run Suspension still handle provider rate limits and quota. See [ADR 0007](adr/0007-soft-concurrency-bound.md).
 
 ## Pending Message delivery
 

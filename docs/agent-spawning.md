@@ -104,7 +104,7 @@ After child Identity commit, the Creation Request uses the ordinary [Request pro
 
 ## Receipts
 
-- `spawnStatus: "created"` with `messageStatus: "sent"` — the child and Creation Request exist, the first Run started, and the Request was admitted for asynchronous Delivery. It may still be queued and is not necessarily delivered.
+- `spawnStatus: "created"` with `messageStatus: "sent"` — the child and Creation Request exist, the first Run started (or, over `maxConcurrentAgentRuns`, its boot was deferred until a slot frees; see [Workflow Policy](workflow-policy.md#concurrent-agent-runs)), and the Request was admitted for asynchronous Delivery. It may still be queued and is not necessarily delivered.
 - `spawnStatus: "created"` with `messageStatus: "not_sent"` — the child and Creation Request exist, but confirmed Run startup or Delivery admission failed. `failedStage` identifies that exact stage and `reason` reports the failure.
 - `spawnStatus: "not_created"` — validation failed before child Identity committed. `failedStage` and `reason` report where and why.
 - `spawnStatus: "unknown"` — confirmation was lost at a boundary where effects may exist. Candidate Agent and Request Message identities are returned when available.
