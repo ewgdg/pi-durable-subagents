@@ -92,7 +92,8 @@ const allTestFiles = readdirSync(testsDirectory)
 // The guard must be the first import so it runs before any other test module.
 const SUPERVISED_RUN_GUARD = 'import "./support/supervised-run.ts";';
 const unguardedFiles = allTestFiles.filter((file) =>
-	!readFileSync(join(testsDirectory, file), "utf8").startsWith(`${SUPERVISED_RUN_GUARD}\n`));
+	// Windows checkouts may use CRLF line endings.
+	readFileSync(join(testsDirectory, file), "utf8").split(/\r?\n/, 1)[0] !== SUPERVISED_RUN_GUARD);
 if (unguardedFiles.length > 0) {
 	throw new Error(`Test files must start with ${SUPERVISED_RUN_GUARD}: ${unguardedFiles.join(", ")}`);
 }
