@@ -922,9 +922,8 @@ export class OperationalIncidentCoordinator {
 			return entryId === undefined ? undefined : { agentId: snapshot.agentId, entryId };
 		};
 		if (inspectProof()) return false;
-		// Settlement reconciliation can run while the affected Agent lane is held.
-		// Schedule admission without awaiting that lane so the reminder cannot
-		// deadlock behind the reconciliation that requested it.
+		// Schedule admission without awaiting the recipient lane: a reminder must not
+		// stall the reconciliation pass behind that Agent's queued work.
 		void this.#messages.admitCustomDelivery(recipient, {
 			messageId: obligationReminderDeliveryId(requestId, freeReminderIndex),
 			deliveryMode: "deferred",
@@ -1220,8 +1219,7 @@ export class OperationalIncidentCoordinator {
 			transcript: recipient.transcript.inspect(),
 		});
 		if (inspectProof()) return;
-		// Do not await the recipient lane from reconciliation: settlement can hold
-		// that lane while waiting for this inspection, just as for ordinary reminders.
+		// Do not await the recipient lane from reconciliation, as for ordinary reminders.
 		void this.#messages.admitCustomDelivery(recipient, {
 			messageId: moderatorObligationReminderDeliveryId(recipient.identity.agentId),
 			commitIfCurrent: commit => this.#reconciliationLane.run(async () => {
@@ -1449,8 +1447,10 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#scheduleReconciliationAfterHostLane(record: AgentRecord): void {
+		// Enter the lane only to order the pass after work already queued there.
+		// Holding it through the pass deadlocks any pass that admits to this Agent.
 		void record.host.lane
-			.run(() => this.#scheduleReconciliation())
+			.run(() => { void this.#scheduleReconciliation(); })
 			.catch((error: unknown) => this.#reportError(error));
 	}
 
