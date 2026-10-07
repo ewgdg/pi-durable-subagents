@@ -143,7 +143,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 			} as unknown as AgentRuntimeHost,
 		} as unknown as AgentRecord;
 		scheduler.integrate(record);
-		safeBoundary = () => scheduler.reachSafeBoundary(record);
+		safeBoundary = () => record.host.lane.run(() => scheduler.reachSafeBoundaryInLane(record));
 		try {
 			// Reuse the same bridge/adapter after an earlier model cycle settles.
 			const previous = parent.deliver({
