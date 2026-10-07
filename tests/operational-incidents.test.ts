@@ -67,6 +67,8 @@ import {
 
 const CONDITION_WAIT_TIMEOUT_MS = 5_000;
 const CONDITION_POLL_INTERVAL_MS = 1;
+// Long enough for an admitted reminder to reach the transcript in a control run.
+const ABSENCE_OBSERVATION_WINDOW_MS = 500;
 
 test("a settled answer-obligated Agent is reminded once before one atomic Obligation Stall Moderator", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
@@ -1549,6 +1551,125 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 	await host.runtime.dispose();
 });
 
+test("an obligation orphaned by its requester's cancelled Request is not moderated", async (t) => {
+	let requests = 0;
+	let leafAgentId = "";
+	const harness = await createIncidentBoundaryHarness(t, {}, {
+		messageBoundaryHooks: {
+			scheduleDeliveryDispatch(context, dispatch) {
+				if (context.kind === "request" && ++requests === 2) leafAgentId = context.recipientAgentId;
+				dispatch();
+			},
+		},
+	});
+	let releaseLeaf!: () => void;
+	const leafGate = new Promise<void>((resolve) => { releaseLeaf = resolve; });
+	t.after(() => releaseLeaf());
+	let leafStarted = false;
+	const route = async (context: Context) => {
+		const messages = JSON.stringify(context.messages);
+		if (messages.includes("Delegate the leaf work.")) {
+			return messages.includes('"id":"spawn-orphaned-leaf"')
+				? fauxAssistantMessage("The leaf owns this work.")
+				: fauxAssistantMessage(fauxToolCall("agent_spawn", {
+					title: "Fixture request", request: "Orphaned leaf work.",
+				}, { id: "spawn-orphaned-leaf" }), { stopReason: "toolUse" });
+		}
+		if (messages.includes("Orphaned leaf work.")) {
+			leafStarted = true;
+			await leafGate;
+			return fauxAssistantMessage("I settled without answering.");
+		}
+		return fauxAssistantMessage("Investigate this incident.");
+	};
+	harness.host.model.setResponses(Array.from({ length: 8 }, () => route));
+	const parent = await spawnFromView(harness.host.session, harness.owner, "spawn-orphaning-parent", "Delegate the leaf work.");
+	await waitForCondition(() => leafStarted && leafAgentId !== "");
+
+	// The Owner abandons the parent's work; the parent's Creation Request to the leaf stays open.
+	await cancelRequestFromView(harness.host.session, harness.owner, "abandon-parent", parent.requestMessageId);
+	releaseLeaf();
+	await waitForCondition(() => {
+		const run = harness.owner.status(leafAgentId).run;
+		return run.phase === "live" && run.work === "settled";
+	});
+	await harness.owner.reachSafeBoundary();
+
+	const leafSessionPath = await sessionPathFor(harness.host, leafAgentId);
+	// Reminder Delivery commits after the reconciliation pass, so absence needs a window.
+	await assertRemainsFalse(async () =>
+		SessionManager.open(leafSessionPath).getEntries().some((entry) => entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.obligation-reminder") ||
+		(await findModerators(harness.host)).length > 0
+	);
+	assert.ok(harness.owner.status(leafAgentId).run.retentionReasons.some(({ reason }) => reason === "answer_owed"));
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("a Stall reminds the demanded obligation even when an undemanded Request arrived last", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
+	let releaseWorker!: () => void;
+	const workerGate = new Promise<void>((resolve) => { releaseWorker = resolve; });
+	t.after(() => releaseWorker());
+	let workerAgentId = "";
+	const route = async (context: Context) => {
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
+			return fauxAssistantMessage("Investigate this incident.");
+		}
+		const messages = JSON.stringify(context.messages);
+		if (messages.includes("Peer work for the shared worker.")) {
+			if (!messages.includes('"id":"peer-requests-worker"')) {
+				return fauxAssistantMessage(fauxToolCall("agent_message", {
+					title: "Undemanded peer question", operation: "request",
+					targetAgent: workerAgentId, question: "Answer this peer question.",
+				}, { id: "peer-requests-worker" }), { stopReason: "toolUse" });
+			}
+			// Once answered, the peer carries no Owner Demand into its Request.
+			if (!messages.includes('"id":"peer-answers-creation"')) {
+				return fauxAssistantMessage(fauxToolCall("agent_message", {
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
+					answer: "The peer finished its delegated work.",
+				}, { id: "peer-answers-creation" }), { stopReason: "toolUse" });
+			}
+			return fauxAssistantMessage("The peer settled.");
+		}
+		if (messages.includes("Owner work for the shared worker.")) {
+			// Answering the Creation Request frees the incoming slot for later Requests.
+			if (!messages.includes('"id":"worker-answers-creation"')) {
+				return fauxAssistantMessage(fauxToolCall("agent_message", {
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
+					answer: "The worker is ready.",
+				}, { id: "worker-answers-creation" }), { stopReason: "toolUse" });
+			}
+			await workerGate;
+			return fauxAssistantMessage("I settled without answering.");
+		}
+		return fauxAssistantMessage("Investigate this incident.");
+	};
+	harness.host.model.setResponses(Array.from({ length: 12 }, () => route));
+	const worker = await spawnFromView(harness.host.session, harness.owner, "spawn-shared-worker", "Owner work for the shared worker.");
+	workerAgentId = worker.agentId;
+	await waitForTranscriptEntry(await sessionPathFor(harness.host, worker.agentId), (entry) =>
+		entry.type === "message" && entry.message.role === "toolResult" &&
+		entry.message.toolCallId === "worker-answers-creation");
+	const demandedRequestId = await requestFromView(harness.host.session, harness.owner, "owner-requests-worker", worker.agentId, "Owner follow-up for the worker.");
+	const peer = await spawnFromView(harness.host.session, harness.owner, "spawn-undemanded-peer", "Peer work for the shared worker.");
+	await waitForTranscriptEntry(await sessionPathFor(harness.host, peer.agentId), (entry) =>
+		entry.type === "message" && entry.message.role === "toolResult" &&
+		entry.message.toolCallId === "peer-answers-creation");
+	releaseWorker();
+
+	const workerSessionPath = await sessionPathFor(harness.host, worker.agentId);
+	await waitForCondition(() => SessionManager.open(workerSessionPath).getEntries().some((entry) =>
+		entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.obligation-reminder" &&
+		String(entry.content).includes(demandedRequestId)
+	));
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
 test("an outgoing Request suppresses a Stall only while its responder can progress", async (t) => {
 	const executionGate = await createProcessExecutionGate("external-progress");
 	let targetReleased = false;
@@ -2930,6 +3051,34 @@ async function cancelRequestFromView(
 	});
 }
 
+async function requestFromView(
+	session: AgentSession,
+	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	toolCallId: string,
+	targetAgentId: string,
+	question: string,
+): Promise<string> {
+	const input = { operation: "request" as const, title: "Fixture request", targetAgent: targetAgentId, question };
+	session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const receipt = await view.message(toolCallId, input);
+	session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(receipt) }],
+		details: receipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	assert.ok("requestMessageId" in receipt && typeof receipt.requestMessageId === "string");
+	return receipt.requestMessageId;
+}
+
 async function sendMessageFromView(
 	session: AgentSession,
 	view: ReturnType<WorkflowCoordinator["forAgent"]>,
@@ -3214,6 +3363,16 @@ async function waitForCondition(
 		await waitForConditionPoll();
 	}
 	throw new Error("Expected incident condition did not become true");
+}
+
+async function assertRemainsFalse(
+	predicate: () => boolean | Promise<boolean>,
+): Promise<void> {
+	const deadline = Date.now() + ABSENCE_OBSERVATION_WINDOW_MS;
+	while (Date.now() < deadline) {
+		assert.equal(await predicate(), false, "Expected incident condition to remain false");
+		await waitForConditionPoll();
+	}
 }
 
 async function waitForConditionPoll(): Promise<void> {

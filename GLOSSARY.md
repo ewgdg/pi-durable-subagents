@@ -235,6 +235,10 @@ The unexpected terminal end of one exact Agent Run after Pi's user-configured na
 The single classification of an Agent's progress shared by every Operational Incident detector and Owner Settlement Parking: Progressing, Waiting, Stalled, or Inactive. Progressing means execution or deliverable work will advance it; Waiting means it is parked on a legitimate external condition such as human attention, Interactive Selection, a Hold, or Run Suspension; Inactive means dormant or failed. A dormant Agent with a Deferred Boot is Progressing. Interactive Selection and isolated resumption are explanatory waits that rank below Progressing: they keep a settled Agent from being Stalled, but a selected or resumed Agent that is executing is still Progressing. A settled Agent takes the best verdict among its unanswered outgoing Requests, so one Progressing or Waiting dependency keeps it from being Stalled.
 _Avoid_: progress source check, exclusion
 
+**Owner Demand**:
+The unanswered Requests someone upstream still awaits: every unanswered Request authored by the Workflow Owner or a Moderator, and every unanswered Request authored by the target of a demanded Request. Operational Incident detection considers only Answer Obligations under Owner Demand. When a requester cancels, the work beneath it falls outside Owner Demand and stops being moderated, even where an Agent there can never act again. Requests themselves are unchanged and stay open.
+_Avoid_: reachability, orphan filter
+
 **Dependency Deadlock**:
 A live closed component of settled Agent Runs whose unanswered Agent-owned outbound dependencies remain within the component, with no actionable input or external progress source. A committed Answer removes its dependency edge even while requester-side Answer Delivery remains outstanding for Wait. Ineligible queued Delivery and upstream dependants are not progress. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.
 
