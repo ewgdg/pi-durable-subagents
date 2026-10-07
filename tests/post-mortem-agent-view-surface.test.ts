@@ -97,7 +97,7 @@ test("fullscreen terminal wheel input scrolls the post-mortem overlay and return
 		columns: 80, rows: 12, kittyProtocolActive: false,
 		start(onInput) { input = onInput; }, stop() {}, async drainInput() {},
 		write() {}, moveBy() {}, hideCursor() {}, showCursor() {},
-		clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {},
+		clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {}, setProgramStatus() {},
 	};
 	const tui = new TuiAltScreen(terminal);
 	let underlyingWheels = 0;

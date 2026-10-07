@@ -25,6 +25,7 @@ export class ScreenTerminal implements Terminal {
 	clearScreen() { this.write("\x1b[2J"); }
 	setTitle() {}
 	setProgress() {}
+	setProgramStatus() {}
 	async flush() { await new Promise<void>((resolve) => this.screen.write("", resolve)); }
 	resize(columns: number, rows: number) {
 		this.columns = columns; this.rows = rows;

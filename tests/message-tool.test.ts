@@ -77,7 +77,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		expanded: false,
 		showImages: false,
 		isError: false,
-		executionStarted: true,
+		executionStarted: true, durationMs: undefined, outputPad: 0,
 	};
 	const callText = tool.renderCall(args, plainTheme, renderContext).render(160).join("\n");
 	assert.match(callText, new RegExp(`Owner · ${receiverAgentId.slice(-8)}`));
@@ -246,7 +246,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		expanded: false,
 		showImages: false,
 		isError: false,
-		executionStarted: true,
+		executionStarted: true, durationMs: undefined, outputPad: 0,
 	};
 	assert.doesNotThrow(() =>
 		tool.renderCall!(

@@ -19,7 +19,7 @@ const theme = {
 const context = {
 	args: {}, lastComponent: undefined, toolCallId: "resume", invalidate() {}, state: {}, cwd: process.cwd(),
 	argsComplete: true, isPartial: false, expanded: false, showImages: false,
-	isError: false, executionStarted: true,
+	isError: false, executionStarted: true, durationMs: undefined, outputPad: 0,
 };
 const receipt: WorkflowResumeReceipt = {
 	workflowId: "workflow-full-id",

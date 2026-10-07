@@ -182,7 +182,7 @@ test("fullscreen terminal wheel input reaches the report overlay and returns to 
 		columns: 80, rows: 12, kittyProtocolActive: false,
 		start(onInput) { input = onInput; }, stop() {}, async drainInput() {},
 		write() {}, moveBy() {}, hideCursor() {}, showCursor() {},
-		clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {},
+		clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {}, setProgramStatus() {},
 	};
 	const tui = new TuiAltScreen(terminal);
 	let underlyingWheels = 0;

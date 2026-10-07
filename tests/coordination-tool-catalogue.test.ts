@@ -208,7 +208,7 @@ function renderToolResult(
 		taggedTheme,
 		{
 			args: {}, lastComponent: undefined, toolCallId: tool.name, invalidate() {}, state: {}, cwd: process.cwd(),
-			argsComplete: true, executionStarted: true, showImages: false, ...state,
+			argsComplete: true, executionStarted: true, durationMs: undefined, outputPad: 0, showImages: false, ...state,
 		},
 	).render(240).join("\n");
 }
