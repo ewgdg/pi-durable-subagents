@@ -218,6 +218,29 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view, switches Agent mode
 			"the leaf second child has no Agents activity heading",
 		);
 
+		// Return to the Owner from the first child's dense, full-screen transcript so
+		// the leftover-row checks below prove the Owner repaint replaced every row.
+		terminal.write("/agents");
+		await terminal.waitForScreen(
+			(frame) => frame.some((line) => line.includes("/agents")),
+			"second child /agents command input",
+		);
+		terminal.write("\r");
+		await terminal.waitForScreen(
+			(frame) => frame.some((line) => line.includes("Tab views")),
+			"second child-local selector",
+		);
+		terminal.write("k");
+		await terminal.waitForScreen((frame) => frame.some((line) =>
+			line.includes("→") && line.includes("PTY Viewed Worker")
+		), "first child selector focus");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Streaming child update 39")) &&
+			!frame.some((line) => line.includes("Tab views")),
+			"first child dense Agent view",
+		);
+
 		await returnPtyAgentViewToOwner(terminal);
 		await writeFile(releasePath, "release\n");
 		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
@@ -227,6 +250,7 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view, switches Agent mode
 			frame.some((line) => line.includes(setup.cwd)) &&
 			frame.some((line) => line.includes("/128k") && line.includes("deterministic-owner")) &&
 			!frame.some((line) => line.includes("Viewed child transcript line")) &&
+			!frame.some((line) => line.includes("Streaming child update")) &&
 			!frame.some((line) => line.includes("Second PTY child remains independently interactive")) &&
 			!frame.some((line) => line.includes("Tab views"))
 		);
@@ -349,7 +373,7 @@ test("real Pi CLI can return to Owner, attach the same Agent again, and quit fro
 		await attachCliRepeatWorker(terminal, "CLI child second attachment input", true);
 		// Native quit typed in the selected child closes the whole real Pi Workflow.
 		terminal.write("/quit\r");
-		await terminal.closed();
+		await terminal.waitForClose("selected-child native quit to close the Workflow");
 	} finally {
 		terminal.kill();
 		await broker.close();
@@ -909,6 +933,22 @@ class PtyFixture {
 
 	closed(): Promise<void> {
 		return this.#closed;
+	}
+
+	async waitForClose(description: string): Promise<void> {
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				this.#closed,
+				new Promise<never>((_resolve, reject) => {
+					timeout = setTimeout(() => reject(new Error(
+						`Timed out waiting for ${description}\n${escapeTerminalControls(this.#output)}`,
+					)), PTY_WAIT_TIMEOUT_MS);
+				}),
+			]);
+		} finally {
+			clearTimeout(timeout);
+		}
 	}
 
 	async marker<T>(prefix: string): Promise<T> {
