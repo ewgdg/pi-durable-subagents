@@ -1594,11 +1594,11 @@ test("Steer freezes one ordered batch that takes the next model turn before an e
 	await waitForDelivery(harness, second.source);
 	await waitForDelivery(harness, deferred.source);
 	await deferredObserved;
-	if (steerBatchError) throw steerBatchError;
 	assert.deepEqual(observedDeliveryIds, [
 		[first.receipt.messageId, second.receipt.messageId],
 		[deferred.receipt.messageId],
 	], "the Steer batch takes the next model turn before the earlier Deferred Message");
+	if (steerBatchError) throw steerBatchError;
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
 	const deliveries = SessionManager.open(childSessionFile)
 		.getEntries()
