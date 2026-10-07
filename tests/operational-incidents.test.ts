@@ -956,13 +956,17 @@ test("an unexpectedly ended answer-obligated Owner Run suspends until explicit h
 
 // One Moderator Run covers its whole authority over an Obligation Stall: Resolution
 // is blocked while the Stall remains, it may observe and control only non-Owner Runs,
-// a Hold restores progress for Resolution, and a later abort keeps the obligation.
+// and aborting the stalled Run keeps the obligation while allowing Resolution.
+// Hold-then-resolve is covered by tests/moderator-report-integration.test.ts.
 test("a Moderator resolves an Obligation Stall only after controlling non-Owner Runs, and its abort keeps the Answer obligation", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
+	// The Moderator aborts in the turn right after its Hold, so the Hold is sampled
+	// before that turn is answered rather than racing the abort from the test body.
+	let heldAffectedStatus: Awaited<ReturnType<typeof observeStatus>> | undefined;
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -1020,19 +1024,7 @@ test("a Moderator resolves an Obligation Stall only after controlling non-Owner 
 				{ stopReason: "toolUse" },
 			);
 		},
-		fauxAssistantMessage(
-			fauxToolCall(
-				"moderator_control",
-				{
-					operation: "resolve",
-					summary: "The affected Run is held for safe diagnosis.",
-					rationale: "The Hold restores an explicit progress boundary.",
-				},
-				{ id: "resolve-after-restoring-progress" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		(context) => {
+		async (context) => {
 			const input = context.messages.flatMap((message) => {
 				if (message.role !== "user") return [];
 				return typeof message.content === "string"
@@ -1043,6 +1035,7 @@ test("a Moderator resolves an Obligation Stall only after controlling non-Owner 
 			const affectedAgentId = (JSON.parse(input) as {
 				trigger: { agentId: string };
 			}).trigger.agentId;
+			heldAffectedStatus = await observeStatus(host, affectedAgentId);
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_control",
@@ -1052,7 +1045,19 @@ test("a Moderator resolves an Obligation Stall only after controlling non-Owner 
 				{ stopReason: "toolUse" },
 			);
 		},
-		fauxAssistantMessage("The held Run was aborted after Resolution."),
+		fauxAssistantMessage(
+			fauxToolCall(
+				"moderator_control",
+				{
+					operation: "resolve",
+					summary: "The exact stalled Run was aborted.",
+					rationale: "The durable obligation remains for a successor Run.",
+				},
+				{ id: "resolve-after-abort" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The aborted attempt is resolved."),
 	]);
 
 	const ownerPrompt = host.session.prompt("Create a Moderator supervision case.");
@@ -1094,11 +1099,6 @@ test("a Moderator resolves an Obligation Stall only after controlling non-Owner 
 		(controlled.message.details as { disposition: string }).disposition,
 		"held",
 	);
-	const affected = await observeStatus(host, affectedAgentId);
-	assert.equal(
-		affected.run.retentionReasons.some(({ reason }) => reason === "interruption_hold"),
-		true,
-	);
 
 	const ownerControl = await waitForTranscriptEntry(
 		moderator.path,
@@ -1107,17 +1107,15 @@ test("a Moderator resolves an Obligation Stall only after controlling non-Owner 
 	);
 	assert.ok(ownerControl.type === "message" && ownerControl.message.role === "toolResult");
 	assert.equal(ownerControl.message.isError, true);
-	const resolution = await waitForTranscriptEntry(
-		moderator.path,
-		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
-			entry.message.toolCallId === "resolve-after-restoring-progress",
-	);
-	assert.ok(resolution.type === "message" && resolution.message.role === "toolResult");
-	assert.deepEqual(resolution.message.details, { disposition: "resolved" }, "the Hold restores progress for Resolution");
 	const abortEntry = await waitForTranscriptEntry(
 		moderator.path,
 		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
 			entry.message.toolCallId === "abort-stalled-run",
+	);
+	assert.equal(
+		heldAffectedStatus?.run.retentionReasons.some(({ reason }) => reason === "interruption_hold"),
+		true,
+		"the interrupted affected Run retains its Hold before the abort",
 	);
 	assert.ok(abortEntry.type === "message" && abortEntry.message.role === "toolResult");
 	assert.deepEqual(abortEntry.message.details, {
@@ -1126,6 +1124,13 @@ test("a Moderator resolves an Obligation Stall only after controlling non-Owner 
 		residualRequests: { incoming: 1, outgoing: 0 },
 		callerOutstandingRequests: [],
 	}, "aborting the affected Run does not erase its durable Answer obligation");
+	const resolution = await waitForTranscriptEntry(
+		moderator.path,
+		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "resolve-after-abort",
+	);
+	assert.ok(resolution.type === "message" && resolution.message.role === "toolResult");
+	assert.deepEqual(resolution.message.details, { disposition: "resolved" }, "Resolution succeeds after aborting the stalled Run");
 	assert.deepEqual(
 		(await findModerators(host)).map(({ path }) => moderatorTriggerKind(path)),
 		["obligation_stall"],
