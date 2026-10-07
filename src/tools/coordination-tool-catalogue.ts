@@ -766,8 +766,7 @@ export const moderatorControlEntry = defineCoordinationTool({
 	promptSnippet:
 		"Renew an exact reviewed call deliberately, or resolve immediately when the original condition clears.",
 	guidance: [
-		"When recovery is not possible, send the Workflow Owner an ordinary Request naming each stuck Request ID and its requester, with your evidence, and ask whether to abandon that work. Only the Owner decides.",
-		"If the Owner approves, steer each named requester to cancel its Request and continue without it. Only a requester can cancel; its Cancellation clears the incident, including work orphaned beneath that Request. Resolve once the condition clears.",
+		"If recovery is impossible, Request the Owner's decision to abandon the work, naming each stuck Request ID, its requester, and your evidence. If approved, steer each requester to cancel its Request and continue without it, then resolve once the condition clears.",
 	],
 	parameters: moderatorControlParameters,
 	roles: ["moderator"],
