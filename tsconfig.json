@@ -9,5 +9,5 @@
     "target": "ES2023",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "docs/**/*.ts"]
 }
