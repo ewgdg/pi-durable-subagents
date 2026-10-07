@@ -8,7 +8,28 @@ permissions:
   contents: read
 
 jobs:
+  check:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 is the engines floor; 24 is current LTS.
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          # Release builds must not restore a cache another workflow could have written.
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      # The process suite launches real Pi processes and PTYs; it stays a local gate.
+      - run: npm run test:ci
+
   publish:
+    needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the GitHub Release
@@ -20,7 +41,6 @@ jobs:
           # Trusted Publishing needs npm >= 11.5.1, which Node 24 bundles.
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-          # Release builds must not restore a cache another workflow could have written.
           package-manager-cache: false
       - name: Check tag matches package version
         run: |
@@ -29,9 +49,6 @@ jobs:
             echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${package_version}"
             exit 1
           fi
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run test:ci
       # Skip a version already on npm: the first release is published by hand
       # (Trusted Publishing needs an existing package), and reruns stay safe.
       - name: Publish to npm
