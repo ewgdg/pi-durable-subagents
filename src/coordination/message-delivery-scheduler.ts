@@ -817,6 +817,10 @@ export class MessageDeliveryScheduler {
 		try {
 			await this.#advanceDeliveryInLane(record, bypassDeliveryDispatchHook);
 		} catch (error) {
+			// Held ordinary input never depended on this drain: Hold release drains it
+			// again. A failed Supervisory Resume attempt keeps its Hold and must not
+			// fail the backlog queued behind it.
+			if (record.host.blocksOrdinaryDelivery()) throw error;
 			// Only scheduling still owned by this drain lost its continuation.
 			// A different dispatched Message keeps its existing Pi continuation.
 			for (const delivery of this.#pendingByAgent.get(record.identity.agentId)?.values() ?? []) {
