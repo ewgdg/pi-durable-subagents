@@ -51,13 +51,11 @@ function modelError(errorMessage: string) {
 	return fauxAssistantMessage([], { stopReason: "error", errorMessage });
 }
 
-const QUOTA_DIAGNOSTIC = '{"error":{"code":"usage_limit_reached"}}';
-
 const runEndRows: ReadonlyArray<Readonly<{
 	name: string;
 	retry?: boolean;
 	respond(host: TestOwnerHost): Parameters<TestOwnerHost["model"]["setResponses"]>[0];
-	expected: Readonly<{ outcome: string; willRetry: boolean; failure?: unknown; quotaDiagnostic?: string }>;
+	expected: Readonly<{ outcome: string; willRetry: boolean; failure?: unknown }>;
 }>> = [
 	{
 		name: "completed",
@@ -88,15 +86,6 @@ const runEndRows: ReadonlyArray<Readonly<{
 		},
 	},
 	{
-		name: "quota error",
-		respond: () => [modelError(QUOTA_DIAGNOSTIC)],
-		expected: {
-			outcome: "error", willRetry: false,
-			failure: { stage: "model", error: QUOTA_DIAGNOSTIC, provenance: "native-session-driver" },
-			quotaDiagnostic: QUOTA_DIAGNOSTIC,
-		},
-	},
-	{
 		name: "error that Pi will retry",
 		retry: true,
 		respond: () => [modelError("429 Too Many Requests"), fauxAssistantMessage("Recovered.")],
@@ -121,14 +110,12 @@ for (const row of runEndRows) {
 			outcome: ended.outcome,
 			willRetry: ended.willRetry,
 			...(ended.failure ? { failure: ended.failure } : {}),
-			...(ended.quota ? { quotaDiagnostic: ended.quota.diagnostic } : {}),
 		}, row.expected);
 	});
 }
 
 const queueCaptureRows = [
 	{ name: "error", captured: true, responses: [modelError("400 upstream provider exploded")] },
-	{ name: "quota error", captured: true, responses: [modelError(QUOTA_DIAGNOSTIC)] },
 	{ name: "aborted stop reason", captured: false, responses: [fauxAssistantMessage([], { stopReason: "aborted", errorMessage: "Request was aborted" })] },
 	{ name: "error that Pi will retry", captured: false, retry: true, responses: [modelError("429 Too Many Requests"), fauxAssistantMessage("Recovered.")] },
 ] as const;

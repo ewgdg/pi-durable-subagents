@@ -16,7 +16,7 @@ const images: NonNullable<InputEvent["images"]> = [{
 }];
 
 for (const route of ["interactive", "rpc", "extension", "sdk-default"] as const) {
-	test(`native quota input provenance: ${route}`, { timeout: 5_000 }, async t => {
+	test(`native human input provenance: ${route}`, { timeout: 5_000 }, async t => {
 		const submissions: ParticipantHumanInput[] = [];
 		const nativeInputs: InputEvent[] = [];
 		const handlers: ParticipantLifecycleHandlers = {
@@ -33,7 +33,7 @@ for (const route of ["interactive", "rpc", "extension", "sdk-default"] as const)
 			pi.on("input", event => { nativeInputs.push(event); });
 			registerParticipantInputLifecycle(pi, handlers);
 			// Stop rejected provenance before generation: this test owns routing,
-			// not the coordinator's separate quota admission policy.
+			// not the coordinator's separate suspension admission policy.
 			pi.on("input", () => ({ action: "handled" }));
 		});
 		if (route === "extension") {

@@ -8,14 +8,10 @@ import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host
 import { createProcessModelBroker } from "./support/process-model-broker.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { discoverColdWorkflow } from "../src/bootstrap/cold-host-discovery.ts";
-import type { AgentRunState } from "../src/runtime/agent-runtime-host.ts";
 
-function quotaSuspension(run: AgentRunState) {
-	if (run.phase === "dormant" || run.suspension?.reason !== "provider_quota") return undefined;
-	return run.suspension;
-}
+const PROVIDER_FAILURE = "400 provider rejected the account";
 
-test("host loss drops a quota stop: the Agent recovers dormant and resumes as ordinary work", { timeout: 30_000 }, async t => {
+test("host loss drops a Run stop: the Agent recovers dormant and resumes as ordinary work", { timeout: 30_000 }, async t => {
 	const broker = await createProcessModelBroker();
 	t.after(() => broker.close());
 	const first = await createUnboundTestOwnerHost(t, () => undefined, {
@@ -26,20 +22,20 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	const identity = adoptOrValidateOwnerIdentity(first.runtime);
 	const initial = await createTestWorkflowCoordinator(first, identity, { entryModulePath: "<inline:pi-durable-subagents>" });
 	const initialView = initial.forAgent(identity.agentId);
-	const spawn = { title: "Cold quota", request: "Keep this original obligation." };
-	first.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", spawn, { id: "spawn-cold-quota" }), { stopReason: "toolUse" }));
-	broker.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: '{"error":{"code":"usage_limit_reached"}}' })]);
-	const receipt = await initialView.spawn("spawn-cold-quota", spawn);
-	first.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_spawn", toolCallId: "spawn-cold-quota", details: receipt, content: [{ type: "text", text: JSON.stringify(receipt) }], isError: false, timestamp: Date.now() });
+	const spawn = { title: "Cold suspension", request: "Keep this original obligation." };
+	first.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", spawn, { id: "spawn-cold-suspension" }), { stopReason: "toolUse" }));
+	broker.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: PROVIDER_FAILURE })]);
+	const receipt = await initialView.spawn("spawn-cold-suspension", spawn);
+	first.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_spawn", toolCallId: "spawn-cold-suspension", details: receipt, content: [{ type: "text", text: JSON.stringify(receipt) }], isError: false, timestamp: Date.now() });
 	assert.ok("agentId" in receipt);
 	const agentId = receipt.agentId;
 	await until(() => Boolean(initialView.status(agentId).run.suspension));
 	const originalStatus = initialView.status(agentId);
 	const originalObligations = initial.forAgent(agentId).obligationFrames();
 	const queued = { operation: "send" as const, targetAgent: agentId, content: "PRESERVED_QUEUE", deliveryMode: "steer" as const };
-	first.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", queued, { id: "queue-cold-quota" }), { stopReason: "toolUse" }));
-	const queuedReceipt = await initialView.message("queue-cold-quota", queued);
-	first.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: "queue-cold-quota", details: queuedReceipt, content: [{ type: "text", text: JSON.stringify(queuedReceipt) }], isError: false, timestamp: Date.now() });
+	first.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", queued, { id: "queue-cold-suspension" }), { stopReason: "toolUse" }));
+	const queuedReceipt = await initialView.message("queue-cold-suspension", queued);
+	first.session.sessionManager.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId: "queue-cold-suspension", details: queuedReceipt, content: [{ type: "text", text: JSON.stringify(queuedReceipt) }], isError: false, timestamp: Date.now() });
 	const sessionFile = first.session.sessionManager.getSessionFile()!;
 	await initial.shutdown(() => first.runtime.dispose());
 	let unexpectedGenerations = 0;
@@ -67,9 +63,9 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	assert.equal(unexpectedGenerations, 0, "cold recovery and passive preparation generate nothing");
 	// The explicit resume re-admits captured undelivered work. The previously stopped
 	// child is ordinary dormant work now, so its queued steer Message starts a successor
-	// Run instead of staying suppressed. Quota is still exhausted, so that attempt stops
+	// Run instead of staying suppressed. The provider still fails, so that attempt stops
 	// again on the same evidence without producing model output.
-	broker.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: '{"error":{"code":"usage_limit_reached"}}' })]);
+	broker.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: PROVIDER_FAILURE })]);
 	reopened.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("workflow_resume", {}, { id: "cold-recovery" }), { stopReason: "toolUse" }));
 	await view.resumeWorkflow("cold-recovery");
 	for (let index = 0; index < 3; index++) {
@@ -78,7 +74,7 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	}
 	const childEntries = () => JSON.stringify(SessionManager.open(originalStatus.primaryEvidence.transcriptPath!).getEntries());
 	assert.equal(childEntries().includes("PRESERVED_QUEUE"), true, "explicit recovery re-admits the captured Message");
-	assert.equal(quotaSuspension(view.status(agentId).run)?.evidence.diagnostic, '{"error":{"code":"usage_limit_reached"}}', "a re-attempt on exhausted quota stops again");
+	assert.equal(view.status(agentId).run.suspension?.evidence.error, PROVIDER_FAILURE, "a re-attempt on the failing provider stops again");
 	assert.equal(childEntries().includes("UNEXPECTED_AUTOMATIC_WAKE"), false, "recovery itself never generates");
 	// A human message in the resumed Agent's editor is the deliberate retry.
 	broker.setResponses([
@@ -104,7 +100,7 @@ test("host loss drops a quota stop: the Agent recovers dormant and resumes as or
 	assert.deepEqual(coordinator.forAgent(agentId).obligationFrames(), originalObligations);
 });
 
-async function until(predicate: () => boolean, description = "quota lifecycle condition"): Promise<void> {
+async function until(predicate: () => boolean, description = "suspension lifecycle condition"): Promise<void> {
 	const deadline = Date.now() + 10_000;
 	while (!predicate()) {
 		assert.ok(Date.now() < deadline, `${description} timed out`);

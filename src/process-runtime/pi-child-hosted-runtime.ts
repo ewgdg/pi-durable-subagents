@@ -365,12 +365,11 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		}
 		if (event.event === "agent.end") {
 			// The child's Native Session Driver classified this Run end; adopt it unchanged.
-			const { outcome, willRetry, failure, quota } = event.payload;
+			const { outcome, willRetry, failure } = event.payload;
 			if (outcome === "aborted") this.#cancellation.abort();
 			this.#emit({
 				type: "agent_end", outcome, willRetry,
 				...(failure ? { failure } : {}),
-				...(quota ? { quota } : {}),
 			});
 			return;
 		}

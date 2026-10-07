@@ -145,7 +145,7 @@ for (const [name, run, held] of [
 	["settled but retained", { phase: "live", work: "settled", attention: "none", retentionReasons: [] }, false],
 	["suspended", {
 		phase: "live", work: "settled", attention: "none", retentionReasons: [],
-		suspension: { reason: "runtime_error", evidence: { stage: "turn", error: "quota", provenance: "test" } },
+		suspension: { reason: "runtime_error", evidence: { stage: "turn", error: "400 provider stopped", provenance: "test" } },
 	}, false],
 	["under an Interruption Hold", { phase: "live", work: "active", attention: "none", retentionReasons: [] }, true],
 ] as const satisfies readonly (readonly [string, AgentRunState, boolean])[]) {

@@ -18,10 +18,7 @@ import {
 const identity = { protocolVersion: 12, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control observe and presentation rosters preserve a retained Run stop", () => {
-	const suspension = { reason: "provider_quota", evidence: {
-		diagnostic: "Codex error: usage_limit_reached", provider: "openai-codex", model: "model", resetAt: "2030-01-01T00:00:00.000Z",
-	} };
-	const runtimeError = { reason: "runtime_error", evidence: {
+	const suspension = { reason: "runtime_error", evidence: {
 		stage: "model", error: "400 unrelated terminal failure", provenance: "native-session-driver",
 	} };
 	const status = { agentId: "child", workflowId: "workflow", label: "Child", directSpawnerAgentId: "workflow",
@@ -31,9 +28,6 @@ test("Control observe and presentation rosters preserve a retained Run stop", ()
 	const roster = { ...status, model: { provider: "openai-codex", modelId: "model" }, thinking: "off", compacting: false, queuedInputCount: 0 };
 	const snapshot = { live: [roster], dormant: [], selectedAgentId: "child", humanAttention: [], operationalAttention: [], reports: [] };
 	assert.ok(Check(agentControlProtocol.childToOwner.methods["coordination.observe"].response, status));
-	assert.ok(Check(agentControlProtocol.childToOwner.methods["coordination.observe"].response, {
-		...status, run: { ...status.run, suspension: runtimeError },
-	}));
 	assert.ok(Check(agentControlProtocol.childToOwner.methods["coordination.observe"].response, { matches: [status], hasMore: false }));
 	assert.ok(Check(agentControlProtocol.childToOwner.methods["coordination.observe"].response, {
 		...status, run: { phase: "dormant", retentionReasons: [], queued: true },
@@ -42,7 +36,6 @@ test("Control observe and presentation rosters preserve a retained Run stop", ()
 	assert.ok(Check(agentControlProtocol.ownerToChild.events["presentation.agents.changed"].payload, snapshot));
 	for (const run of [
 		{ ...status.run, suspension: { reason: "unknown", evidence: suspension.evidence } },
-		{ ...status.run, suspension: { reason: "provider_quota", evidence: { provider: "openai-codex" } } },
 		{ ...status.run, suspension: { reason: "runtime_error", evidence: { diagnostic: "wrong evidence shape" } } },
 		{ ...status.run, suspension: { reason: "runtime_error", evidence: { stage: "model", error: "missing provenance" } } },
 		{ phase: "dormant", retentionReasons: [], suspension },

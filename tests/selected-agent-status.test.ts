@@ -20,19 +20,11 @@ const identity = {
 };
 
 test("a retained Run stop stays visible despite pending work or compaction", () => {
-	const quota = { reason: "provider_quota" as const, evidence: { diagnostic: "Codex error: The usage limit has been reached", provider: "openai-codex", model: "gpt-5" } };
-	const quotaStatus = selectedAgentWorkStatus({
-		phase: "live", work: "active", attention: "none", retentionReasons: [],
-		suspension: quota,
-	}, false, true);
-	assert.deepEqual(quotaStatus, { kind: "suspended", suspension: quota });
-	assert.match(formatSelectedAgentIdentity({ ...identity, status: quotaStatus }, theme), /<warning>Suspended · Usage limit reached<\/warning>/);
-
 	const runtimeError = { reason: "runtime_error" as const, evidence: { stage: "model", error: "400 unrelated terminal failure", provenance: "native-session-driver" } };
 	const errorStatus = selectedAgentWorkStatus({
-		phase: "live", work: "settled", attention: "none", retentionReasons: [],
+		phase: "live", work: "active", attention: "none", retentionReasons: [],
 		suspension: runtimeError,
-	}, false);
+	}, false, true);
 	assert.deepEqual(errorStatus, { kind: "suspended", suspension: runtimeError });
 	assert.match(formatSelectedAgentIdentity({ ...identity, status: errorStatus }, theme), /<warning>Suspended · Runtime error<\/warning>/);
 });
