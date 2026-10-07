@@ -8,7 +8,7 @@ Durable Pi agents that collaborate asynchronously under explicit Owner and Spawn
 
 Run `/agents` from the Owner or any Agent to open the Agent switcher. Use `/agents owner` to return directly to the exact mounted Workflow Owner presentation without opening the switcher:
 
-![The Agent switcher overlay with Live and Dormant tabs](docs/images/agent-switcher.png)
+![The Agent switcher overlay with an Attention Inbox Human Request above the Live Agent tree](docs/images/agent-switcher.png)
 
 Select a subagent to enter its complete Pi session and interact with it directly—read its transcript, type into its editor, or use its commands and tools. In fullscreen mode, a primary click on the activity dock above the editor opens the same switcher.
 
