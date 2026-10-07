@@ -178,7 +178,7 @@ test("successful resume before confirmation releases held input once after confi
 });
 
 test("a renewed terminal error before resume confirmation replaces the stop with its own evidence", async () => {
-	const { host, emit } = fixture();
+	const { host, emit, delivered } = fixture({ queued: { steering: ["held steer"], followUp: ["held followup"] } });
 	await host.startInLane();
 	suspend(emit);
 	await host.prepareSuspensionResumptionInLane();
@@ -203,6 +203,8 @@ test("a renewed terminal error before resume confirmation replaces the stop with
 	assert.equal(host.blocksOrdinaryDelivery(), true);
 	assert.deepEqual(settlements, ["settled"]);
 	assert.deepEqual(ended, []);
+	assert.equal(delivered.length, 1, "held input cannot start another attempt after a renewed stop");
+	assert.equal(host.queuedInputCount(), 2);
 });
 
 test("aborted resume before confirmation retains the original stop and queued input", async () => {

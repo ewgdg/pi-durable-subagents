@@ -66,8 +66,9 @@ The suspension contract is identical for both reasons: hold, resume, and the inc
   - "an unrelated terminal failure suspends the exact Run instead of reporting it" was folded into the converted native Owner test (exact evidence, no report).
   - Unit: "quota suspension precedes Run failure…" was folded into "a terminal error from a live Runtime retains the exact Run…". "an immediate renewed quota before resume transcript confirmation…" was merged with "ordinary terminal error before resume confirmation…".
   - Child bridge: `nonquota-terminal-queue` and `nonquota-native-retry` became the only `terminal-queue` and `native-retry` scenarios.
-- The process "exact Codex diagnostic" test was the only process-level check that a renewed stop survives resume commitment. That behavior stays covered by the unit test "a renewed terminal error before resume confirmation replaces the stop with its own evidence".
+- The process "exact Codex diagnostic" test was the only process-level check that a renewed stop survives resume commitment. That behavior stays covered by the unit test "a renewed terminal error before resume confirmation replaces the stop with its own evidence". Review found that test had no queued input. It now also asserts that held native input stays queued after the renewed stop, so it covers the deleted test's "queued input must not start another model call".
 - The fixture extension now registers its own `terminal-error-fixture` provider instead of impersonating `openai-codex`. The process integration harness no longer loads it.
+- Quota errors now pass the `runtime_error` branch's guards, which the old quota branch skipped: the interruption guard, the already-failed guard, and the usable-Runtime guard. In practice only one case changes. A quota error from a Runtime that is already unavailable now ends as a terminal Run Failure, as the documented "still-usable Runtime" contract says. Before, it became a suspension that could never resume.
 - `docs/adr/0005` and `docs/workflow-policy.md` say Run Suspension covers quota. That is still true, so both were left unchanged.
 
 ## Outcomes & Retrospective
