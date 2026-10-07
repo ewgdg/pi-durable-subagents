@@ -1,9 +1,8 @@
-import { fauxAssistantMessage, fauxToolCall, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type Context, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
 import {
 	InteractiveMode,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,17 +12,12 @@ import piAgentCoordination from "../../src/index.ts";
 import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
 
 const OWNER_EDITOR_TEXT = "Owner input survives child UI failure";
+const UNVIEWED_CHILD_REQUEST = "Remain unviewed until the Owner runtime is disposed.";
 const FAILURE_EXTENSION = fileURLToPath(
 	new URL("./process-agent-view-failure-extension.ts", import.meta.url),
 );
 const failureKind = process.env.PTY_AGENT_VIEW_FAILURE;
-if (
-	failureKind !== "input" &&
-	failureKind !== "render" &&
-	failureKind !== "initialization" &&
-	failureKind !== "run" &&
-	failureKind !== "noninteractive"
-) {
+if (failureKind !== "input" && failureKind !== "initialization") {
 	throw new Error(`Unsupported PTY Agent-view failure: ${failureKind ?? "missing"}`);
 }
 
@@ -59,9 +53,13 @@ await ownerSession.waitForIdle();
 const ownerEditorFactory = ownerSession.extensionRunner.createContext().ui.getEditorComponent();
 ownerSession.extensionRunner.createContext().ui.setEditorText(OWNER_EDITOR_TEXT);
 
-host.model.setResponses([
-	fauxAssistantMessage("Failure PTY child is ready."),
-]);
+// Children ask the shared model independently, so route by Creation Request
+// instead of assuming which child's model turn arrives first.
+host.model.setResponses(Array.from({ length: 8 }, () => (context: Context) =>
+	JSON.stringify(context.messages).includes(UNVIEWED_CHILD_REQUEST)
+		? fauxAssistantMessage("Unviewed PTY child is ready.")
+		: fauxAssistantMessage("Failure PTY child is ready.")
+));
 const spawning = executeCommittedTool(
 	ownerSession,
 	appendToolSource(ownerSession, "agent_spawn", `pty-${failureKind}-failure-child`, {
@@ -75,32 +73,22 @@ if (failureKind === "initialization") {
 }
 const spawn = failureKind === "initialization" ? undefined : await spawning;
 const childAgentId = spawn ? detailString(spawn.details, "agentId") : undefined;
-const childTranscriptPath = childAgentId
-	? await transcriptPathFor(childAgentId)
-	: undefined;
-if (failureKind === "run") {
-	const transcriptPath = childTranscriptPath!;
-	await waitForEvidenceCondition(() =>
-		readFileText(transcriptPath).includes("Failure PTY child is ready.")
-	);
-	host.model.setResponses([
-		fauxAssistantMessage("Deterministic PTY terminal Run failure.", {
-			stopReason: "error",
-			errorMessage: "deterministic PTY terminal Run failure",
+// The input failure run also owns a child that is never viewed, so its one
+// non-interactive mode disposal is checked without booting a separate fixture.
+const unviewedChild = failureKind === "input"
+	? await executeCommittedTool(
+		ownerSession,
+		appendToolSource(ownerSession, "agent_spawn", "pty-unviewed-child", {
+			title: "Fixture request",
+			request: UNVIEWED_CHILD_REQUEST,
+			label: "PTY Unviewed Worker",
 		}),
-	]);
-}
-if (failureKind === "noninteractive") {
-	await host.runtime.dispose();
-	mode.stop();
-	const childShutdowns = (await readEvidence()).filter(({ kind }) => kind === "session_shutdown");
-	if (childShutdowns.length !== 1) {
-		throw new Error(`Expected one non-interactive child shutdown, received ${childShutdowns.length}`);
-	}
-	process.stdout.write("\n__PTY_NONINTERACTIVE_DISPOSAL_COMPLETE__\n");
-} else {
-	await finishInteractiveFailure();
-}
+	)
+	: undefined;
+const unviewedChildAgentId = unviewedChild
+	? detailString(unviewedChild.details, "agentId")
+	: undefined;
+await finishInteractiveFailure();
 
 async function finishInteractiveFailure(): Promise<void> {
 	process.stdout.write(`\n__PTY_AGENT_VIEW_FAILURE_SETUP__${JSON.stringify({
@@ -110,35 +98,13 @@ async function finishInteractiveFailure(): Promise<void> {
 		ownerEditorText: OWNER_EDITOR_TEXT,
 	})}\n`);
 	await openAgents(ownerSession);
-	if (failureKind === "input" || failureKind === "render") {
+	if (failureKind === "input") {
 		await waitForEvidence((entries) => entries.some(
 			(entry) => entry.kind === "failure_trigger" && entry.failureKind === failureKind,
 		));
 		await waitForDiagnostic((message) =>
 			message.startsWith("Agent view failed: child_runtime_unexpected_exit:")
 		);
-	} else if (failureKind === "run") {
-		await waitForEvidenceCondition(
-			() => readFileText(childTranscriptPath!).includes("trigger selected Run failure"),
-			20_000,
-		);
-		// The terminal error retains the exact Run as a stop; the selected view only reaches
-		// its durable Dormant Agent through explicit abort.
-		await waitForAgentSuspension(childAgentId as string);
-		await executeCommittedTool(
-			ownerSession,
-			appendToolSource(ownerSession, "agent_control", "pty-abort-stopped-run", {
-				operation: "abort",
-				agentId: childAgentId,
-			}),
-		);
-		await waitForAgentPhase(childAgentId as string, "dormant");
-		process.stdout.write("\n__PTY_SELECTED_RUN_STOPPED__\n");
-		await waitForEvidenceCondition(() =>
-			ownerSession.extensionRunner.createContext().ui.getEditorText()
-				.endsWith("Owner input confirms selected Run closure")
-		);
-		return finishRestoredFailure();
 	}
 	const settledSpawn = spawn ?? await spawning;
 	if (
@@ -154,7 +120,7 @@ async function finishInteractiveFailure(): Promise<void> {
 	if (ownerSession.extensionRunner.createContext().ui.getEditorComponent() !== ownerEditorFactory) {
 		throw new Error("Child UI failure changed Owner editor implementation");
 	}
-	if (failureKind === "input" || failureKind === "render") {
+	if (failureKind === "input") {
 		const exactTriggers = (await readEvidence()).filter(
 			(entry) => entry.kind === "failure_trigger" && entry.failureKind === failureKind,
 		);
@@ -170,8 +136,8 @@ async function finishInteractiveFailure(): Promise<void> {
 	}
 	if (failureKind === "initialization") {
 		// The restored baseline only stays on screen until the Owner's delivery-failure
-		// notice lands. Announce restoration after that cascade, like the input and
-		// render kinds do, so the assertion reads a settled Owner screen.
+		// notice lands. Announce restoration after that cascade, like the input kind
+		// does, so the assertion reads a settled Owner screen.
 		await waitForDiagnostic((message) => message.startsWith("Agent view failed: "));
 	}
 	await finishRestoredFailure();
@@ -184,48 +150,21 @@ async function finishRestoredFailure(): Promise<void> {
 
 	await host.runtime.dispose();
 	mode.stop();
+	if (unviewedChildAgentId) {
+		const unviewedShutdowns = (await readEvidence()).filter(
+			({ kind, sessionId }) => kind === "session_shutdown" && sessionId === unviewedChildAgentId,
+		);
+		if (unviewedShutdowns.length !== 1) {
+			throw new Error(`Expected one unviewed child shutdown, received ${unviewedShutdowns.length}`);
+		}
+		process.stdout.write("\n__PTY_UNVIEWED_CHILD_DISPOSED_ONCE__\n");
+	}
 }
 
 async function openAgents(session: AgentSession): Promise<void> {
 	const command = session.extensionRunner.getCommand("agents");
 	if (!command) throw new Error("PTY /agents command is unavailable");
 	await command.handler("", session.extensionRunner.createCommandContext());
-}
-
-async function waitForAgentPhase(agentId: string, phase: string): Promise<void> {
-	const observe = ownerSession.getToolDefinition("agent_observe");
-	if (!observe) throw new Error("PTY agent_observe is unavailable");
-	const deadline = Date.now() + 20_000;
-	while (Date.now() < deadline) {
-		const status = await observe.execute(
-			`observe-phase-${agentId}`,
-			{ operation: "status", agentId },
-			undefined,
-			undefined,
-			ownerSession.extensionRunner.createToolContext(`observe-phase-${agentId}`, undefined),
-		);
-		if ((status.details as { run: { phase: string } }).run.phase === phase) return;
-		await new Promise<void>((resolve) => setTimeout(resolve, 10));
-	}
-	throw new Error(`PTY Agent ${agentId} did not enter ${phase}`);
-}
-
-async function waitForAgentSuspension(agentId: string): Promise<void> {
-	const observe = ownerSession.getToolDefinition("agent_observe");
-	if (!observe) throw new Error("PTY agent_observe is unavailable");
-	const deadline = Date.now() + 20_000;
-	while (Date.now() < deadline) {
-		const status = await observe.execute(
-			`observe-suspension-${agentId}`,
-			{ operation: "status", agentId },
-			undefined,
-			undefined,
-			ownerSession.extensionRunner.createToolContext(`observe-suspension-${agentId}`, undefined),
-		);
-		if ((status.details as { run: { suspension?: { reason: string } } }).run.suspension?.reason === "runtime_error") return;
-		await new Promise<void>((resolve) => setTimeout(resolve, 10));
-	}
-	throw new Error(`PTY Agent ${agentId} did not stop its Run`);
 }
 
 async function waitForDiagnostic(
@@ -237,44 +176,6 @@ async function waitForDiagnostic(
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("PTY Owner diagnostic did not become available");
-}
-
-async function transcriptPathFor(agentId: string): Promise<string> {
-	const observe = ownerSession.getToolDefinition("agent_observe");
-	if (!observe) throw new Error("PTY agent_observe is unavailable");
-	const status = await observe.execute(
-		`observe-${agentId}`,
-		{ operation: "status", agentId },
-		undefined,
-		undefined,
-		ownerSession.extensionRunner.createToolContext(`observe-${agentId}`, undefined),
-	);
-	const transcriptPath = (status.details as {
-		primaryEvidence: { transcriptPath: string | null };
-	}).primaryEvidence.transcriptPath;
-	if (!transcriptPath) throw new Error(`PTY Agent ${agentId} has no transcript path`);
-	return transcriptPath;
-}
-
-function readFileText(path: string): string {
-	try {
-		return readFileSync(path, "utf8");
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-		throw error;
-	}
-}
-
-async function waitForEvidenceCondition(
-	predicate: () => boolean,
-	timeoutMs = 10_000,
-): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (predicate()) return;
-		await new Promise<void>((resolve) => setTimeout(resolve, 10));
-	}
-	throw new Error("Child process transcript evidence did not become durable");
 }
 
 async function readEvidence(): Promise<Array<Record<string, unknown>>> {

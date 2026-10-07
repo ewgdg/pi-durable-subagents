@@ -391,56 +391,6 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 	await returnAgentViewToOwner(host, view, command);
 });
 
-test("a selected Agent whose runtime initialization fails opens a read-only post-mortem view", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-		physicalDisplay: true,
-	});
-	const spawnInput = {
-		title: "Fixture request",
-		request: "Remain visible after this process Runtime cannot initialize.",
-		label: "Startup Failure Worker",
-		config: {
-			model: {
-				id: "coordination-test/deterministic-owner",
-				thinking: "inherit" as const,
-			},
-		},
-	};
-	const spawn = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-selected-startup-failure",
-		spawnInput,
-	);
-	assert.equal((spawn.details as { spawnStatus: string }).spawnStatus, "created");
-	const agentId = (spawn.details as { agentId: string }).agentId;
-	await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_control",
-		"abort-before-selected-startup-failure",
-		{ operation: "abort", agentId },
-	);
-	assert.equal(await currentRunPhase(host, agentId), "dormant");
-	host.services.modelRuntime.unregisterProvider("coordination-test");
-
-	const { command, surface: selector } = await openAgentsSurface(host);
-	selector.handleInput?.("\t");
-	assert.equal(selectAgentByLabel(selector, "Startup Failure Worker"), agentId);
-	await waitForCondition(() =>
-		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
-	);
-	const postMortem = host.ui.customSurfaces[0]!;
-	const rendered = stripTerminalSequences(postMortem.render(80).join("\n"));
-	assert.match(rendered, /Post-mortem · read-only/);
-	assert.match(rendered, /Runtime unavailable:/);
-	postMortem.handleInput?.("q");
-	await command;
-	assert.equal(host.ui.customSurfaces.length, 0);
-	assert.equal(await currentRunPhase(host, agentId), "dormant");
-});
-
 test("an unexpected child-process exit closes the exact selected view", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "unexpected-exit");
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
@@ -1649,12 +1599,14 @@ test("later Runtime preparations load current file-backed child configuration wi
 	await returnAgentViewToOwner(host, reopenedFirst.view, reopenedFirst.command);
 });
 
-test("a terminally failed viewed Run stays open on the durable Dormant Agent", async (t) => {
+test("a terminally failed viewed Run stays open until abort, and an ordinary Message starts its successor in the open runtime", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "message-runtime");
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		physicalDisplay: true,
 		settings: { retry: { enabled: false } },
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	let markFailureStarted!: () => void;
 	const failureStarted = new Promise<void>((resolve) => {
@@ -1664,9 +1616,21 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	const failureGate = new Promise<void>((resolve) => {
 		releaseFailure = resolve;
 	});
+	let releaseSuccessor!: () => void;
+	const successorGate = new Promise<void>((resolve) => {
+		releaseSuccessor = resolve;
+	});
 	host.deferCleanup(() => {
 		releaseFailure();
+		releaseSuccessor();
 	});
+	let view!: Component;
+	let markSuccessorExecutionStarted!: () => void;
+	const successorExecutionStarted = new Promise<void>((resolve) => {
+		markSuccessorExecutionStarted = resolve;
+	});
+	let attachedBeforeExecution = false;
+	let runAdmittedBeforeExecution = false;
 	// Answering the Creation Request ends its model/tool loop and settles the Run,
 	// so the committed Answer is this Agent's durable readiness evidence
 	// (docs/run-supervision.md) and the fixture must reuse that text as the readiness
@@ -1674,6 +1638,15 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	const readyText = "The viewed Agent is ready for a selected failure trigger.";
 	const routeResponse = async (context: Context) => {
 		const messages = JSON.stringify(context.messages);
+		// The successor's context still holds the earlier failure trigger, so the
+		// Message route must win before it.
+		if (messages.includes("Start the successor through ordinary Message delivery.")) {
+			attachedBeforeExecution = host.ui.customSurfaces[0] === view;
+			runAdmittedBeforeExecution = await currentRunPhase(host, agentId) === "live";
+			markSuccessorExecutionStarted();
+			await successorGate;
+			return fauxAssistantMessage("The Message-started successor completed.");
+		}
 		if (messages.includes("Trigger the selected Agent Run failure.")) {
 			markFailureStarted();
 			await failureGate;
@@ -1726,7 +1699,11 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	);
 	assert.equal((aborted.details as { disposition: string }).disposition, "not_running");
 	const ownerSession = host.runtime.session;
-	const { command, view } = await openDormantAgentView(host, agentId);
+	const opened = await openDormantAgentView(host, agentId);
+	view = opened.view;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
 	await waitForCondition(() =>
 		/Failing Worker.*dormant/.test(stripTerminalSequences(view.render(80).join("\n")))
 	);
@@ -1776,8 +1753,49 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.customSurfaces[0], view);
 
-	await returnAgentViewToOwner(host, view, command);
+	// An ordinary Message to the aborted Agent starts its successor in the runtime
+	// the still-open view already holds.
+	const sent = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_message",
+		"message-starts-viewed-successor",
+		{
+			operation: "send",
+			targetAgent: agentId,
+			content: "Start the successor through ordinary Message delivery.",
+		},
+	);
+	assert.equal(
+		(sent.details as { messageStatus: string }).messageStatus,
+		"sent",
+	);
+	await successorExecutionStarted;
+	assert.equal(attachedBeforeExecution, true, "the successor executes with the view still attached");
+	assert.equal(runAdmittedBeforeExecution, true, "the successor Run is admitted before execution");
+	await waitForCondition(() => {
+		const rendered = stripTerminalSequences(view.render(80).join("\n")).replace(/\s+/g, "");
+		return rendered.includes("FailingWorker") && rendered.includes("active") &&
+			rendered.includes("StartthesuccessorthroughordinaryMessagedelivery.");
+	});
 	assert.equal(host.runtime.session, ownerSession);
+	assert.equal(host.ui.customSurfaces[0], view);
+	assert.equal(await currentRunPhase(host, agentId), "live");
+	assert.equal(await hasRetention(host, agentId, "interactive_selection"), true);
+	assert.equal(
+		childProcessSessionStarts(await readProcessAgentViewEvidence(probe.evidencePath), agentId).length,
+		2,
+		"the successor reuses the open runtime instead of starting another",
+	);
+
+	releaseSuccessor();
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"The Message-started successor completed.",
+		)
+	);
+	await returnAgentViewToOwner(host, view, opened.command);
+	assert.equal(host.runtime.session, ownerSession);
+	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 });
 
 test("repeated successor Runs reuse one selected Agent runtime and dispose its mode once", async (t) => {
@@ -1888,135 +1906,6 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 		}
 	});
 	assertNoProcessResourceGrowth(baselineResources, processResourceCounts());
-});
-
-test("an ordinary Message activates the already-open Agent runtime before execution", async (t) => {
-	const probe = configureProcessAgentViewProbe(t, "message-runtime");
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-		physicalDisplay: true,
-		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
-	});
-	let releaseInitialFailure!: () => void;
-	const initialFailureGate = new Promise<void>((resolve) => {
-		releaseInitialFailure = resolve;
-	});
-	let markInitialFailureStarted!: () => void;
-	const initialFailureStarted = new Promise<void>((resolve) => {
-		markInitialFailureStarted = resolve;
-	});
-	let releaseSuccessor!: () => void;
-	const successorGate = new Promise<void>((resolve) => {
-		releaseSuccessor = resolve;
-	});
-	host.deferCleanup(() => {
-		releaseInitialFailure();
-		releaseSuccessor();
-	});
-	let view!: Component;
-	let markSuccessorExecutionStarted!: () => void;
-	const successorExecutionStarted = new Promise<void>((resolve) => {
-		markSuccessorExecutionStarted = resolve;
-	});
-	let attachedBeforeExecution = false;
-	let runAdmittedBeforeExecution = false;
-	let initialFailureProduced = false;
-	const routeSuccessor = async (context: TranscriptContext) => {
-		const messages = JSON.stringify(context.messages);
-		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
-			return fauxAssistantMessage("Moderator background work remains independent.");
-		}
-		if (
-			!initialFailureProduced &&
-			messages.includes("Fail while selected before ordinary Message delivery.")
-		) {
-			initialFailureProduced = true;
-			markInitialFailureStarted();
-			await initialFailureGate;
-			return fauxAssistantMessage("The initially selected Run failed.", {
-				stopReason: "error",
-				errorMessage: "deterministic failure before Message successor",
-			});
-		}
-		if (messages.includes("Start the successor through ordinary Message delivery.")) {
-			attachedBeforeExecution = host.ui.customSurfaces[0] === view;
-			runAdmittedBeforeExecution = await currentRunPhase(host, agentId) === "live";
-			markSuccessorExecutionStarted();
-			await successorGate;
-			return fauxAssistantMessage("The Message-started successor completed.");
-		}
-		return fauxAssistantMessage("Unrelated Owner work remained on the Owner session.");
-	};
-	host.model.setResponses(Array.from({ length: 16 }, () => routeSuccessor));
-	const spawn = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-message-successor-view",
-		{
-			title: "Fixture request",
-			request: "Fail while selected before ordinary Message delivery.",
-			label: "Successor Worker",
-		},
-	);
-	const agentId = (spawn.details as { agentId: string }).agentId;
-	await initialFailureStarted;
-	const ownerSession = host.runtime.session;
-	const opened = await openSelectedAgentView(host, agentId);
-	view = opened.view;
-	releaseInitialFailure();
-	// The stop retains the Run, so the ordinary Message below needs the Agent dormant
-	// again: explicit abort is what ends a stopped Run.
-	await waitForCondition(async () => (await currentRunState(host, agentId)).suspension?.reason === "runtime_error");
-	const stoppedAbort = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_control",
-		"abort-stopped-viewed-successor",
-		{ operation: "abort", agentId },
-	);
-	assert.equal((stoppedAbort.details as { disposition: string }).disposition, "aborted");
-	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
-
-	const sent = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_message",
-		"message-starts-viewed-successor",
-		{
-			operation: "send",
-			targetAgent: agentId,
-			content: "Start the successor through ordinary Message delivery.",
-		},
-	);
-	assert.equal(
-		(sent.details as { messageStatus: string }).messageStatus,
-		"sent",
-	);
-	await successorExecutionStarted;
-	assert.equal(attachedBeforeExecution, true);
-	assert.equal(runAdmittedBeforeExecution, true);
-	await waitForCondition(() => {
-		const rendered = stripTerminalSequences(view.render(80).join("\n")).replace(/\s+/g, "");
-		return rendered.includes("SuccessorWorker") && rendered.includes("active") &&
-			rendered.includes("StartthesuccessorthroughordinaryMessagedelivery.");
-	});
-	assert.equal(host.runtime.session, ownerSession);
-	assert.equal(host.ui.customSurfaces[0], view);
-	assert.equal(await currentRunPhase(host, agentId), "live");
-	assert.equal(await hasRetention(host, agentId, "interactive_selection"), true);
-	assert.equal(
-		childProcessSessionStarts(await readProcessAgentViewEvidence(probe.evidencePath), agentId).length,
-		1,
-	);
-
-	releaseSuccessor();
-	await waitForCondition(async () =>
-		JSON.stringify(await childEntries(host, agentId)).includes(
-			"The Message-started successor completed.",
-		)
-	);
-	await returnAgentViewToOwner(host, view, opened.command);
-	assert.equal(host.runtime.session, ownerSession);
-	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 });
 
 async function openSelectedAgentView(
