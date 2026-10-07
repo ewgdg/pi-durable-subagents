@@ -57,7 +57,7 @@ The generation regression failed before the production change with one reminder 
 
 Validation:
 - `node --test --test-concurrency=1 tests/moderator-startup-progress.test.ts tests/stale-moderator-reminder-delivery.test.ts`: 6 passed.
-- `node --test --test-name-pattern 'post-commit Moderator startup failure|terminal Moderator Run failure|two committed Moderator failures|a settled Moderator receives one handling reminder|clearing the incident before native reminder' tests/operational-incidents.test.ts`: 5 passed, including failure replacement, handling clearance and dormant release.
+- `node --test --test-name-pattern 'post-commit Moderator startup failure|terminal Moderator Run failure|two committed Moderator failures|a settled Moderator receives one handling reminder|clearing the incident before native reminder' tests/operational-incidents.test.ts`: 5 passed, including failure replacement, handling clearance and dormant release (`post-commit Moderator startup failure` and `two committed Moderator failures` since merged into `two committed Moderator startup failures link the replacement and publish bounded Owner Attention until clearance`).
 - `npm run typecheck` and whitespace check: passed.
 - New real-process test is classified in the process suite. It uses a native first-start hook gate and actual operational reconciliation; observing generation does not alter admission or Runtime state. The native gate's file publication is atomic, and polling/operation waits are bounded.
 
