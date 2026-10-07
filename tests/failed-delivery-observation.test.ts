@@ -46,3 +46,41 @@ test("a failed Request remains blocked throughout unrelated recipient activity",
 	assert.deepEqual(scheduler.blockedDeliveries(), [], "Delivery proof clears the condition");
 	scheduler.shutdownProgress();
 });
+
+test("a suppression check that observes blocked deliveries does not recurse", () => {
+	const run: AgentRunState = { phase: "live", work: "settled", attention: "none", retentionReasons: [] };
+	const recordFor = (agentId: string) => ({
+		identity: { agentId },
+		host: {
+			observe: () => run,
+			hasRetentionReason: () => false,
+			blocksOrdinaryDelivery: () => false,
+			currentWorkState: () => "settled",
+		} as unknown as AgentRuntimeHost,
+	} as AgentRecord);
+	const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: new WorkflowPolicyStore() });
+	const deliveryFor = (messageId: string) => ({
+		messageId,
+		deliveryMode: "deferred" as const,
+		deliveryItem: {
+			source: { agentId: "sender", entryId: messageId, toolCallId: messageId },
+			projection: { kind: "message" as const, messageId, fromAgentId: "sender", content: "Work" },
+		},
+	});
+	let stalledProof: { agentId: string; entryId: string } | undefined;
+	scheduler.recordAdmissionFailure(recordFor("recipient"), {
+		...deliveryFor("stalled"),
+		inspectProof: () => stalledProof,
+	}, new Error("Recipient Run ended before Delivery proof"));
+	// A Moderator reminder stays relevant only while the Delivery Stall it reports remains.
+	scheduler.recordAdmissionFailure(recordFor("moderator"), {
+		...deliveryFor("reminder"),
+		inspectProof: () => undefined,
+		isSuppressed: () => !scheduler.blockedDeliveries().some(({ messageId }) => messageId === "stalled"),
+	}, new Error("Recipient Run ended before Delivery proof"));
+
+	assert.deepEqual(scheduler.blockedDeliveries().map(({ messageId }) => messageId), ["stalled", "reminder"]);
+	stalledProof = { agentId: "recipient", entryId: "delivery" };
+	assert.deepEqual(scheduler.blockedDeliveries(), [], "proof of the stalled Delivery suppresses its reminder");
+	scheduler.shutdownProgress();
+});

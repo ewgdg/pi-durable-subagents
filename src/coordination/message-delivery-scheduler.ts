@@ -181,6 +181,8 @@ export class MessageDeliveryScheduler {
 	readonly #deferredBoots = new Set<string>();
 	/** Deferred boots started by `startDeferredBoots` that have not yet dispatched. */
 	readonly #bootsInFlight = new Set<string>();
+	/** Set while `blockedDeliveries` evaluates suppression predicates. */
+	#checkingSuppression = false;
 
 	constructor(options: {
 		agents: ReadonlyMap<string, AgentRecord>;
@@ -224,7 +226,7 @@ export class MessageDeliveryScheduler {
 		const blocked: BlockedDelivery[] = [];
 		for (const [messageId, item] of this.#progress) {
 			const { record, delivery, watcher } = item;
-			if (delivery.inspectProof() || delivery.isSuppressed?.()) {
+			if (delivery.inspectProof() || this.#isSuppressedForBlockedSweep(delivery)) {
 				watcher.dispose();
 				this.#progress.delete(messageId);
 				continue;
@@ -233,6 +235,19 @@ export class MessageDeliveryScheduler {
 			if (reason) blocked.push({ messageId, recipientAgentId: record.identity.agentId, reason });
 		}
 		return blocked;
+	}
+
+	// A suppression predicate may itself read blocked deliveries: a Moderator
+	// reminder rechecks the Delivery Stall it reports. That nested read observes
+	// without evaluating suppression again, which would recurse without bound.
+	#isSuppressedForBlockedSweep(delivery: ScheduledDelivery): boolean {
+		if (this.#checkingSuppression || !delivery.isSuppressed) return false;
+		this.#checkingSuppression = true;
+		try {
+			return delivery.isSuppressed();
+		} finally {
+			this.#checkingSuppression = false;
+		}
 	}
 
 	hasAutonomousProgress(): boolean {
