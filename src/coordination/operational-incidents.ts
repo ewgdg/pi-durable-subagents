@@ -848,8 +848,10 @@ export class OperationalIncidentCoordinator {
 		}, inspections);
 		for (const snapshot of toRecover) {
 			// The cleared condition still owes its Moderator the successor-start notice.
-			// Admit that delivery while handling retention is live, then release as usual.
-			await this.#notifyRunFailureRecovery(snapshot);
+			// Queue it before release: the Moderator lane admits it ahead of the release
+			// request, so retention cannot lapse first. Never await that lane here: an
+			// interruption can hold it while the Moderator's turn waits on this pass.
+			this.#notifyRunFailureRecovery(snapshot);
 			this.#releaseHandling(snapshot.key);
 		}
 		for (const handling of toAttemptCreation) {
@@ -1391,7 +1393,7 @@ export class OperationalIncidentCoordinator {
 		}
 	}
 
-	async #notifyRunFailureRecovery(snapshot: RunFailureSnapshot): Promise<void> {
+	#notifyRunFailureRecovery(snapshot: RunFailureSnapshot): void {
 		const handling = this.#handlingByKey.get(snapshot.key);
 		if (!handling?.moderatorAgentId) return;
 		const affected = this.#agents.get(snapshot.agentId);
@@ -1418,7 +1420,7 @@ export class OperationalIncidentCoordinator {
 			requiredAction: "resolve",
 			guidance: RUN_FAILURE_RECOVERY_DIRECTIVE,
 		};
-		const admission = await this.#messages.admitCustomDelivery(moderator, {
+		void this.#messages.admitCustomDelivery(moderator, {
 			messageId: runFailureRecoveryDeliveryId(recovery),
 			deliveryMode: "deferred",
 			customMessage: createModelVisibleRunFailureRecovery(recovery),
@@ -1427,10 +1429,11 @@ export class OperationalIncidentCoordinator {
 				transcript: moderator.transcript.inspect(),
 				recovery,
 			}),
-		});
-		if (admission !== "pending") {
-			throw new Error(`Run Failure Recovery delivery rejected: ${admission}`);
-		}
+		}).then((admission) => {
+			if (admission !== "pending") {
+				throw new Error(`Run Failure Recovery delivery rejected: ${admission}`);
+			}
+		}).catch((error: unknown) => this.#reportError(error));
 	}
 
 	#scheduleReconciliation(): Promise<void> {
@@ -1448,7 +1451,7 @@ export class OperationalIncidentCoordinator {
 
 	#scheduleReconciliationAfterHostLane(record: AgentRecord): void {
 		// Enter the lane only to order the pass after work already queued there.
-		// Holding it through the pass deadlocks any pass that admits to this Agent.
+		// Holding it through the pass would deadlock any pass that awaits this lane.
 		void record.host.lane
 			.run(() => { void this.#scheduleReconciliation(); })
 			.catch((error: unknown) => this.#reportError(error));
