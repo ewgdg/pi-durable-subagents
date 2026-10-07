@@ -187,10 +187,13 @@ if (firstAgentViewCommandReturnedPath) {
 	if (!firstAgentViewCommandReleasePath) {
 		throw new Error("PTY command-return gate has no release path");
 	}
+	// The test writes the release only after it has driven the whole Agent view
+	// session (scrolling, streamed input, both child switches, and the Owner
+	// return), so this wait spans those steps rather than one gate hand-off.
 	await waitFor(
 		() => readFileIfExists(firstAgentViewCommandReleasePath) === "release\n",
 		20_000,
-		"command-return release",
+		"command-return release after the test drives every Agent view step",
 	);
 }
 await waitForAsync(async () => {
