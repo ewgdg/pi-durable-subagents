@@ -831,15 +831,18 @@ test("an unexpectedly ended answer-obligated Owner Run suspends until explicit h
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
-	let ownerRequestAuthored = false;
+	const hasToolResult = (context: Context, toolCallId: string) =>
+		context.messages.some((message) => message.role === "toolResult" && message.toolCallId === toolCallId);
+	// The faux model is shared, so route by transcript: only the requester asks, then
+	// it parks in Agent Wait. A requester that settles instead is a real Obligation
+	// Stall whose reminder turn would race the Owner for the failure responses below.
 	const routeOwnerRequest = (context: Context) => {
-		if (
-			!ownerRequestAuthored &&
+		const isRequester = !hasToolResult(context, "spawn-owner-requester") &&
 			JSON.stringify(context.messages).includes(
 				"Ask the Owner one question, then wait for its Answer.",
-			)
-		) {
-			ownerRequestAuthored = true;
+			);
+		if (!isRequester) return fauxAssistantMessage("The requester is waiting for my Answer.");
+		if (!hasToolResult(context, "request-owner-outcome")) {
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_message",
@@ -854,7 +857,10 @@ test("an unexpectedly ended answer-obligated Owner Run suspends until explicit h
 				{ stopReason: "toolUse" },
 			);
 		}
-		return fauxAssistantMessage("I will wait for the Owner Answer.");
+		return fauxAssistantMessage(
+			fauxToolCall("agent_wait", {}, { id: "wait-owner-outcome" }),
+			{ stopReason: "toolUse" },
+		);
 	};
 	host.model.setResponses([
 		fauxAssistantMessage(
