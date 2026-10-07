@@ -69,6 +69,7 @@ import {
 	type OperationReviewSnapshot,
 } from "./operation-review.ts";
 import { assessProgress, type AgentProgressFacts, type ProgressAssessment, type ProgressSnapshot } from "./progress-verdict.ts";
+import { demandedRequestIds } from "./owner-demand.ts";
 import { awaitsCanonicalAnswer } from "./answer-arbitration.ts";
 
 export const MAX_AUTOMATIC_MODERATOR_ATTEMPTS = 2;
@@ -604,12 +605,11 @@ export class OperationalIncidentCoordinator {
 		if (!attempt) return { disposition: "already_cleared" };
 		if (handling) this.#releaseHandling(handling.snapshot.key);
 		this.#attemptByModeratorAgentId.delete(moderatorAgentId);
+		const demanded = this.#ownerDemand();
 		const originalObligationRemains = attempt.affectedAgentIds.some((agentId) => {
 			const affected = this.#agents.get(agentId);
-			return affected !== undefined && this.#requestRelationships.hasUnsettledAnswerObligation(
-				affected,
-				attempt.requestIds,
-			);
+			return affected !== undefined && this.#demandedAnswerOwedRequestIds(affected, demanded)
+				.some((requestId) => attempt.requestIds.includes(requestId));
 		});
 		return {
 			disposition: originalObligationRemains ? "resolved" : "already_cleared",
@@ -776,13 +776,14 @@ export class OperationalIncidentCoordinator {
 				this.#reportedRunFailures.delete(key);
 			}
 			for (const [key, snapshot] of this.#runFailureByKey) {
-				if (!this.#conditionRemains(snapshot)) {
+				if (!this.#runFailureRemains(snapshot)) {
 					toRecover.push(snapshot);
 					recoveringKeys.add(key);
 					this.#runFailureByKey.delete(key);
 					continue;
 				}
-			snapshots.push(snapshot);
+				// Undemanded failures stay tracked: a later Request can demand them again.
+				if (this.#conditionRemains(snapshot)) snapshots.push(snapshot);
 			}
 			const blockedDeliveries = this.#messages.blockedDeliveries();
 			const assessment = this.#assessOrdinary(blockedDeliveries);
@@ -805,13 +806,14 @@ export class OperationalIncidentCoordinator {
 			const deliveryStallStalledAgentIds = new Set(
 				deliveryStalls.flatMap(({ stalledAgentIds }) => stalledAgentIds),
 			);
+			const demanded = this.#ownerDemand();
 			for (const record of [...this.#agents.values()]) {
 				if (
 					this.#isModerator(record) ||
 					deadlockNormalizedAgentIds.has(record.identity.agentId) ||
 					deliveryStallStalledAgentIds.has(record.identity.agentId)
 				) continue;
-				const snapshot = this.#observeObligationStall(record, assessment);
+				const snapshot = this.#observeObligationStall(record, assessment, demanded);
 				if (snapshot) snapshots.push(snapshot);
 			}
 			const currentKeys = new Set(snapshots.map(({ key }) => key));
@@ -886,7 +888,9 @@ export class OperationalIncidentCoordinator {
 	#scheduleObligationReminder(
 		snapshot: ObligationStallSnapshot,
 	): boolean {
-		const requestId = this.#requestRelationships.foregroundRequestId(this.#requireAgent(snapshot.agentId));
+		// The newest obligation may be undemanded; remind the newest one this Stall is about.
+		const requestId = this.#requestRelationships.obligationFrames(this.#requireAgent(snapshot.agentId))
+			.findLast((frame) => snapshot.requestIds.includes(frame.requestId))?.requestId;
 		if (!requestId) {
 			throw new Error(
 				`invariant_violation: Agent ${snapshot.agentId} has an invalid Answer obligation set`,
@@ -937,10 +941,8 @@ export class OperationalIncidentCoordinator {
 			}),
 			inspectProof,
 			isSuppressed: () => !recipient.host.isCurrent(stalledRun) ||
-				this.#isWaiting(recipient, this.#assessOrdinary()) || !this.#requestRelationships.hasUnsettledAnswerObligation(
-					recipient,
-					[requestId],
-				),
+				this.#isWaiting(recipient, this.#assessOrdinary()) ||
+				!this.#demandedAnswerOwedRequestIds(recipient).includes(requestId),
 		}).then((admission) => {
 			if (admission !== "pending") {
 				throw new Error(`Obligation Reminder delivery rejected: ${admission}`);
@@ -1175,16 +1177,20 @@ export class OperationalIncidentCoordinator {
 
 	/** Ordinary incident detection excludes Moderators from the dependency graph. */
 	#assessOrdinary(blockedDeliveries: readonly BlockedDelivery[] = []): ProgressAssessment {
-		return this.#assess([...this.#agents.values()].filter((record) => !this.#isModerator(record)), blockedDeliveries);
+		return this.#assess([...this.#agents.values()].filter((record) => !this.#isModerator(record)), blockedDeliveries, true);
 	}
 
-	#assess(records: readonly AgentRecord[], blockedDeliveries: readonly BlockedDelivery[] = []): ProgressAssessment {
+	#assess(records: readonly AgentRecord[], blockedDeliveries: readonly BlockedDelivery[] = [], scopeToOwnerDemand = false): ProgressAssessment {
 		return assessProgress(withAgentTranscriptObservations(this.#agents.values(),
-			() => this.#progressSnapshot(records, blockedDeliveries)));
+			() => this.#progressSnapshot(records, blockedDeliveries, scopeToOwnerDemand ? this.#ownerDemand() : undefined)));
 	}
 
 	/** The one place host observations become Progress Verdict facts. */
-	#progressSnapshot(records: readonly AgentRecord[], blockedDeliveries: readonly BlockedDelivery[]): ProgressSnapshot {
+	#progressSnapshot(
+		records: readonly AgentRecord[],
+		blockedDeliveries: readonly BlockedDelivery[],
+		demanded: ReadonlySet<string> | undefined,
+	): ProgressSnapshot {
 		return {
 			agents: records.map((record) => {
 				const agentId = record.identity.agentId;
@@ -1197,7 +1203,10 @@ export class OperationalIncidentCoordinator {
 					retentionReasons: run.retentionReasons.map(({ reason }) => reason),
 					unresolvedOperationReview: this.#operationReviews.hasUnresolvedCall(agentId),
 					deliveryProgress: this.#messages.hasDeliveryProgress(record),
-					answerObligationRequestIds: this.#requestRelationships.answerOwedRequestIds(record),
+					// Only Delivery Stall tracing reads obligations; other assessments skip demand.
+					answerObligationRequestIds: demanded
+						? this.#demandedAnswerOwedRequestIds(record, demanded)
+						: this.#requestRelationships.answerOwedRequestIds(record),
 					// A committed Answer removes its dependency edge even while requester-side
 					// Answer Delivery remains outstanding for Wait.
 					unansweredRequests: this.#unansweredRequests(record),
@@ -1252,10 +1261,10 @@ export class OperationalIncidentCoordinator {
 	#observeObligationStall(
 		record: AgentRecord,
 		assessment: ProgressAssessment,
+		demanded = this.#ownerDemand(),
 	): ObligationStallSnapshot | undefined {
-		const requestIds = [
-			...record.host.requestRelationshipIds("answer_owed"),
-		].sort();
+		const requestIds = record.host.requestRelationshipIds("answer_owed")
+			.filter((requestId) => demanded.has(requestId)).sort();
 		if (requestIds.length === 0 || !this.#isStalledWithoutAttention(record, assessment)) return undefined;
 		const inspectedThrough = statusOf(record).primaryEvidence.inspectedThrough;
 		return {
@@ -1286,12 +1295,9 @@ export class OperationalIncidentCoordinator {
 		}
 			if (snapshot.kind === "run_failure") {
 				const affected = this.#agents.get(snapshot.agentId);
-				if (!affected) return false;
-				if (affected.host.latestStartedRunSequence() > snapshot.run.sequence) return false;
-				return this.#requestRelationships.hasUnsettledAnswerObligation(
-				affected,
-				snapshot.requestIds,
-			);
+				if (!affected || !this.#runFailureRemains(snapshot)) return false;
+				const demanded = new Set(this.#demandedAnswerOwedRequestIds(affected));
+				return snapshot.requestIds.some((requestId) => demanded.has(requestId));
 		}
 		return this.#observeDependencyDeadlocks(this.#assessOrdinary()).some(({ key }) => key === snapshot.key);
 	}
@@ -1318,7 +1324,7 @@ export class OperationalIncidentCoordinator {
 		return this.#operationReviews.expiredReviews().flatMap((review) => {
 			const record = this.#agents.get(review.toolCall.agentId);
 			if (!record || record.host.observe().suspension) return [];
-			const requestIds = [...this.#requestRelationships.answerOwedRequestIds(record)].sort();
+			const requestIds = [...this.#demandedAnswerOwedRequestIds(record)].sort();
 			if (requestIds.length === 0) return [];
 			return [{
 				kind: "operation_review" as const,
@@ -1332,7 +1338,10 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#observeDependencyDeadlocks(assessment: ProgressAssessment): readonly DependencyDeadlockSnapshot[] {
-		return assessment.deadlocks.map((component) => ({
+		const demanded = this.#ownerDemand();
+		return assessment.deadlocks.filter(({ requestIds }) =>
+			requestIds.some((requestId) => demanded.has(requestId))
+		).map((component) => ({
 			kind: "dependency_deadlock",
 			key: JSON.stringify([
 				"dependency_deadlock",
@@ -1346,6 +1355,30 @@ export class OperationalIncidentCoordinator {
 				(agentId) => statusOf(this.#requireAgent(agentId)).primaryEvidence.inspectedThrough,
 			),
 		}));
+	}
+
+	/** No successor started and an original obligation is still owed, demanded or not. */
+	#runFailureRemains(snapshot: RunFailureSnapshot): boolean {
+		const affected = this.#agents.get(snapshot.agentId);
+		return affected !== undefined && affected.host.latestStartedRunSequence() <= snapshot.run.sequence &&
+			this.#requestRelationships.hasUnsettledAnswerObligation(affected, snapshot.requestIds);
+	}
+
+	/** Incident detection considers only obligations someone upstream still awaits. */
+	#demandedAnswerOwedRequestIds(record: AgentRecord, demanded = this.#ownerDemand()): readonly string[] {
+		return this.#requestRelationships.answerOwedRequestIds(record).filter((requestId) => demanded.has(requestId));
+	}
+
+	#ownerDemand(): ReadonlySet<string> {
+		const records = [...this.#agents.values()];
+		return demandedRequestIds(
+			[this.#ownerIdentity.agentId, ...records.filter((record) => this.#isModerator(record)).map(({ identity }) => identity.agentId)],
+			records.flatMap((record) => this.#unansweredRequests(record).map(({ requestId, targetAgentId }) => ({
+				requestId,
+				requesterAgentId: record.identity.agentId,
+				targetAgentId,
+			}))),
+		);
 	}
 
 	#isModerator(record: AgentRecord): boolean {

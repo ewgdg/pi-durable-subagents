@@ -765,6 +765,9 @@ export const moderatorControlEntry = defineCoordinationTool({
 		"Renew an exact Operation Review interval or resolve handling after every mechanically checkable predicate clears. A Run Failure clears as soon as a successor Run starts; any remaining Answer Obligation is ordinary Workflow work.",
 	promptSnippet:
 		"Renew an exact reviewed call deliberately, or resolve immediately when the original condition clears.",
+	guidance: [
+		"If recovery is impossible, Request the Owner's decision to abandon the work, naming each stuck Request ID, its requester, and your evidence. If approved, steer each requester to cancel its Request and continue without it, then resolve once the condition clears.",
+	],
 	parameters: moderatorControlParameters,
 	roles: ["moderator"],
 	execute: (
