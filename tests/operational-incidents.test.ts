@@ -2452,6 +2452,105 @@ test("an unselected child's native quit remains Run Failure rather than Workflow
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
+test("a Run Failure Moderator that settles as its failed Agent resumes still receives the recovery notice", { timeout: 30_000 }, async (t) => {
+	let wakeFailedAgentOnceModeratorSettled: (() => Promise<void>) | undefined;
+	// A real deadlock also wedges Workflow shutdown, so bound harness cleanup to let
+	// the runner report this test's failure instead of hanging until its deadline.
+	const boundedCleanup: TestCleanupRegistrar = {
+		after: (cleanup, options) => t.after(cleanup, { ...options, timeout: 10_000 }),
+	};
+	const harness = await createIncidentBoundaryHarness(boundedCleanup, {
+		// The Moderator's settle hook holds its lane until the inspection it schedules
+		// finishes. A successor Run first observed by that inspection makes the
+		// inspection await the same lane for the recovery notice. Waking the failed
+		// Agent from that inspection lands the successor start in this window.
+		beforeEvidenceInspection: () => wakeFailedAgentOnceModeratorSettled?.(),
+	});
+	let markModeratorIdentified!: () => void;
+	const moderatorIdentified = new Promise<void>((resolve) => { markModeratorIdentified = resolve; });
+	// Several Agents share the faux model, so route each request by its context.
+	const routeResponse = async (context: Context) => {
+		const serialized = JSON.stringify(context.messages);
+		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
+			if (serialized.includes("successor_run_started")) {
+				return fauxAssistantMessage("The failed Agent resumed in a successor Run.");
+			}
+			// Settle only once the test can recognize this Moderator's settlement.
+			await moderatorIdentified;
+			return fauxAssistantMessage("I will watch whether the failed Agent resumes.");
+		}
+		if (serialized.includes("OWNER_WAKE_UP")) {
+			return fauxAssistantMessage("I resumed after the Owner's message.");
+		}
+		return fauxAssistantMessage(fauxToolCall("ask_user", {
+			question: "Keep the child obligated.",
+		}, { id: "resumed-quitter-human-request" }), { stopReason: "toolUse" });
+	};
+	harness.host.model.setResponses(Array.from({ length: 12 }, () => routeResponse));
+	const child = await spawnFromView(
+		harness.host.session, harness.owner, "spawn-resumed-quitter", "Wait for human direction.",
+	);
+	const view = await harness.owner.openAgentView(child.agentId);
+	assert.ok(view);
+	await waitForCondition(() => harness.coordinator.forAgent(child.agentId).obligationFrames().length > 0);
+	const projection = view.projection();
+	await view.close();
+	projection.dispatchInput("/quit\r");
+	const moderator = await waitForModeratorKind(harness.host, "run_failure");
+	let ownerWake: Promise<void> | undefined;
+	// A booted Moderator is idle before its input arrives, so only a settlement
+	// after observed work is the one whose settle hook holds the Moderator lane.
+	let moderatorWorked = false;
+	wakeFailedAgentOnceModeratorSettled = async () => {
+		const run = harness.owner.status(moderator.id).run;
+		if (run.phase !== "live") return;
+		if (run.work === "active") moderatorWorked = true;
+		if (run.work !== "settled" || !moderatorWorked) return;
+		wakeFailedAgentOnceModeratorSettled = undefined;
+		ownerWake = sendMessageFromView(
+			harness.host.session, harness.owner, "owner-wakes-failed-child", child.agentId,
+			"OWNER_WAKE_UP: resume your work.",
+		);
+		ownerWake.catch(() => undefined);
+		// The successor Run sequence is taken when its start is admitted.
+		await waitForCondition(() => harness.owner.status(child.agentId).run.phase !== "dormant");
+	};
+	markModeratorIdentified();
+
+	const recoveryDeadline = Date.now() + 5_000;
+	while (!SessionManager.open(moderator.path).getEntries().some((entry) =>
+		entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.run-failure-recovery")) {
+		assert.ok(
+			Date.now() < recoveryDeadline,
+			"Moderator never received the Run Failure recovery notice after the failed Agent resumed",
+		);
+		await waitForConditionPoll();
+	}
+	assert.ok(ownerWake, "the failed Agent was never woken after the Moderator settled");
+	await withinDeadline(ownerWake, 5_000, "the Owner's wake-up message never finished admission");
+	await withinDeadline(
+		harness.owner.reachSafeBoundary(),
+		5_000,
+		"Operational Incident reconciliation stopped reaching a safe boundary",
+	);
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+async function withinDeadline<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			work,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 test("orderly shutdown closes exhausted Operational Attention", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorRunStart: () => "confirmed_failure",
