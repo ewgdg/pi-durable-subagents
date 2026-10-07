@@ -518,6 +518,15 @@ test("a failed native human resume keeps its exact Hold, and the retry clears it
 		true,
 		"a failed human resume leaves the exact Hold in place",
 	);
+	assert.equal(
+		child.entries().some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				String(entry.content).includes("Deliver this only after the human-resumed turn"),
+		),
+		false,
+		"a failed human resume does not release the held backlog",
+	);
 
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The isolated native human turn completed."),
