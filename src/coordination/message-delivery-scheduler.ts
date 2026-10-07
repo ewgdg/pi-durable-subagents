@@ -181,6 +181,8 @@ export class MessageDeliveryScheduler {
 	readonly #deferredBoots = new Set<string>();
 	/** Deferred boots started by `startDeferredBoots` that have not yet dispatched. */
 	readonly #bootsInFlight = new Set<string>();
+	/** Suppression verdicts of the outermost `blockedDeliveries` sweep. */
+	#sweepSuppression: Map<ScheduledDelivery, boolean | "checking"> | undefined;
 
 	constructor(options: {
 		agents: ReadonlyMap<string, AgentRecord>;
@@ -221,18 +223,40 @@ export class MessageDeliveryScheduler {
 	}
 
 	blockedDeliveries(): readonly BlockedDelivery[] {
-		const blocked: BlockedDelivery[] = [];
-		for (const [messageId, item] of this.#progress) {
-			const { record, delivery, watcher } = item;
-			if (delivery.inspectProof() || delivery.isSuppressed?.()) {
-				watcher.dispose();
-				this.#progress.delete(messageId);
-				continue;
+		const outermost = this.#sweepSuppression === undefined;
+		this.#sweepSuppression ??= new Map();
+		try {
+			const blocked: BlockedDelivery[] = [];
+			for (const [messageId, item] of this.#progress) {
+				const { record, delivery, watcher } = item;
+				if (delivery.inspectProof() || this.#isSuppressedInSweep(delivery, this.#sweepSuppression)) {
+					watcher.dispose();
+					this.#progress.delete(messageId);
+					continue;
+				}
+				const reason = watcher.observe(this.#deliveryWaitIsLegitimate(item));
+				if (reason) blocked.push({ messageId, recipientAgentId: record.identity.agentId, reason });
 			}
-			const reason = watcher.observe(this.#deliveryWaitIsLegitimate(item));
-			if (reason) blocked.push({ messageId, recipientAgentId: record.identity.agentId, reason });
+			return blocked;
+		} finally {
+			if (outermost) this.#sweepSuppression = undefined;
 		}
-		return blocked;
+	}
+
+	// A suppression predicate may itself read blocked deliveries: a Moderator
+	// reminder rechecks the Delivery Stall it reports. Nested reads share one
+	// verdict per Delivery per sweep, so each predicate runs once; a predicate
+	// still running reads its own Delivery as pending instead of recursing.
+	#isSuppressedInSweep(
+		delivery: ScheduledDelivery,
+		verdicts: Map<ScheduledDelivery, boolean | "checking">,
+	): boolean {
+		const known = verdicts.get(delivery);
+		if (known !== undefined) return known === true;
+		verdicts.set(delivery, "checking");
+		const suppressed = delivery.isSuppressed?.() === true;
+		verdicts.set(delivery, suppressed);
+		return suppressed;
 	}
 
 	hasAutonomousProgress(): boolean {
@@ -800,6 +824,10 @@ export class MessageDeliveryScheduler {
 		try {
 			await this.#advanceDeliveryInLane(record, bypassDeliveryDispatchHook);
 		} catch (error) {
+			// Held ordinary input never depended on this drain: Hold release drains it
+			// again. A failed Supervisory Resume attempt keeps its Hold and must not
+			// fail the backlog queued behind it.
+			if (record.host.blocksOrdinaryDelivery()) throw error;
 			// Only scheduling still owned by this drain lost its continuation.
 			// A different dispatched Message keeps its existing Pi continuation.
 			for (const delivery of this.#pendingByAgent.get(record.identity.agentId)?.values() ?? []) {

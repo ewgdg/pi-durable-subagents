@@ -317,7 +317,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	await harness.shutdown();
 });
 
-test("a Supervisory Resume uses the reserved slot at ordinary capacity and commits alone before held backlog", async (t) => {
+test("a Supervisory Resume uses the reserved slot at ordinary capacity, survives a failed dispatch, and commits alone before held backlog", async (t) => {
 	const harness = await createRunSupervisionHarness(t, {
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy('{"maxPendingDeliveriesPerAgent": 1}'),
@@ -349,6 +349,26 @@ test("a Supervisory Resume uses the reserved slot at ordinary capacity and commi
 		reason: "capacity_exhausted",
 	});
 
+	await chmod(child.transcriptPath, 0o400);
+	try {
+		await assert.rejects(
+			() => harness.control("failed-supervisory-resume", {
+				operation: "resume",
+				agentId: child.agentId,
+				content: "This dispatch fails before transcript commitment.",
+			}),
+		);
+	} finally {
+		await chmod(child.transcriptPath, 0o600);
+	}
+	assert.equal(
+		harness.ownerView.status(child.agentId).run.retentionReasons.some(
+			({ reason }) => reason === "interruption_hold",
+		),
+		true,
+		"a failed resume dispatch leaves the exact Hold in place",
+	);
+
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The isolated supervisory resume turn completed."),
 		fauxAssistantMessage("The ordinary held backlog followed settlement."),
@@ -360,7 +380,7 @@ test("a Supervisory Resume uses the reserved slot at ordinary capacity and commi
 	});
 	assert.equal(resumed.agentId, child.agentId);
 	assert.ok("messageStatus" in resumed && "messageId" in resumed);
-	assert.equal(resumed.messageStatus, "sent", "the resume uses the reserved slot despite ordinary exhaustion");
+	assert.equal(resumed.messageStatus, "sent", "the retried resume uses the reserved slot despite ordinary exhaustion");
 	assert.equal(typeof resumed.messageId, "string");
 	await child.waitForIdle();
 	await waitForCondition(() =>
@@ -406,56 +426,16 @@ test("a Supervisory Resume uses the reserved slot at ordinary capacity and commi
 			({ reason }) => reason === "interruption_hold",
 		),
 		false,
-		"the resume clears the exact Hold",
+		"the retried resume clears the exact Hold",
 	);
-
-	await harness.shutdown();
-});
-
-test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", async (t) => {
-	const harness = await createRunSupervisionHarness(t);
-	const child = await harness.spawnChild("spawn-failed-supervisory-resume-child");
-	await child.waitForIdle();
-	await harness.control("interrupt-before-failed-supervisory-resume", {
-		operation: "interrupt",
-		agentId: child.agentId,
-	});
-
-	await chmod(child.transcriptPath, 0o400);
-	try {
-		await assert.rejects(
-			() => harness.control("failed-supervisory-resume", {
-				operation: "resume",
-				agentId: child.agentId,
-				content: "This dispatch fails before transcript commitment.",
-			}),
-		);
-	} finally {
-		await chmod(child.transcriptPath, 0o600);
-	}
 	assert.equal(
-		harness.ownerView.status(child.agentId).run.retentionReasons.some(
-			({ reason }) => reason === "interruption_hold",
-		),
-		true,
-	);
-
-	harness.host.model.setResponses([
-		fauxAssistantMessage("The retry resumed the still-held exact Run."),
-	]);
-	const retried = await harness.control("retry-supervisory-resume", {
-		operation: "resume",
-		agentId: child.agentId,
-		content: "Retry the exact Hold after dispatch recovery.",
-	});
-	assert.ok("messageStatus" in retried);
-	assert.equal(retried.messageStatus, "sent");
-	await child.waitForIdle();
-	assert.equal(
-		harness.ownerView.status(child.agentId).run.retentionReasons.some(
-			({ reason }) => reason === "interruption_hold",
+		harness.host.session.sessionManager.getEntries().some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.delivery-failure",
 		),
 		false,
+		"the failed resume attempt never fails the held backlog",
 	);
 
 	await harness.shutdown();
