@@ -181,8 +181,8 @@ export class MessageDeliveryScheduler {
 	readonly #deferredBoots = new Set<string>();
 	/** Deferred boots started by `startDeferredBoots` that have not yet dispatched. */
 	readonly #bootsInFlight = new Set<string>();
-	/** Set while `blockedDeliveries` evaluates suppression predicates. */
-	#checkingSuppression = false;
+	/** Suppression verdicts of the outermost `blockedDeliveries` sweep. */
+	#sweepSuppression: Map<ScheduledDelivery, boolean | "checking"> | undefined;
 
 	constructor(options: {
 		agents: ReadonlyMap<string, AgentRecord>;
@@ -223,31 +223,40 @@ export class MessageDeliveryScheduler {
 	}
 
 	blockedDeliveries(): readonly BlockedDelivery[] {
-		const blocked: BlockedDelivery[] = [];
-		for (const [messageId, item] of this.#progress) {
-			const { record, delivery, watcher } = item;
-			if (delivery.inspectProof() || this.#isSuppressedForBlockedSweep(delivery)) {
-				watcher.dispose();
-				this.#progress.delete(messageId);
-				continue;
+		const outermost = this.#sweepSuppression === undefined;
+		this.#sweepSuppression ??= new Map();
+		try {
+			const blocked: BlockedDelivery[] = [];
+			for (const [messageId, item] of this.#progress) {
+				const { record, delivery, watcher } = item;
+				if (delivery.inspectProof() || this.#isSuppressedInSweep(delivery, this.#sweepSuppression)) {
+					watcher.dispose();
+					this.#progress.delete(messageId);
+					continue;
+				}
+				const reason = watcher.observe(this.#deliveryWaitIsLegitimate(item));
+				if (reason) blocked.push({ messageId, recipientAgentId: record.identity.agentId, reason });
 			}
-			const reason = watcher.observe(this.#deliveryWaitIsLegitimate(item));
-			if (reason) blocked.push({ messageId, recipientAgentId: record.identity.agentId, reason });
+			return blocked;
+		} finally {
+			if (outermost) this.#sweepSuppression = undefined;
 		}
-		return blocked;
 	}
 
 	// A suppression predicate may itself read blocked deliveries: a Moderator
-	// reminder rechecks the Delivery Stall it reports. That nested read observes
-	// without evaluating suppression again, which would recurse without bound.
-	#isSuppressedForBlockedSweep(delivery: ScheduledDelivery): boolean {
-		if (this.#checkingSuppression || !delivery.isSuppressed) return false;
-		this.#checkingSuppression = true;
-		try {
-			return delivery.isSuppressed();
-		} finally {
-			this.#checkingSuppression = false;
-		}
+	// reminder rechecks the Delivery Stall it reports. Nested reads share one
+	// verdict per Delivery per sweep, so each predicate runs once; a predicate
+	// still running reads its own Delivery as pending instead of recursing.
+	#isSuppressedInSweep(
+		delivery: ScheduledDelivery,
+		verdicts: Map<ScheduledDelivery, boolean | "checking">,
+	): boolean {
+		const known = verdicts.get(delivery);
+		if (known !== undefined) return known === true;
+		verdicts.set(delivery, "checking");
+		const suppressed = delivery.isSuppressed?.() === true;
+		verdicts.set(delivery, suppressed);
+		return suppressed;
 	}
 
 	hasAutonomousProgress(): boolean {

@@ -84,3 +84,47 @@ test("a suppression check that observes blocked deliveries does not recurse", ()
 	assert.deepEqual(scheduler.blockedDeliveries(), [], "proof of the stalled Delivery suppresses its reminder");
 	scheduler.shutdownProgress();
 });
+
+test("a nested blocked-delivery read still honours suppression of deliveries tracked later", () => {
+	const run: AgentRunState = { phase: "live", work: "settled", attention: "none", retentionReasons: [] };
+	const recordFor = (agentId: string) => ({
+		identity: { agentId },
+		host: {
+			observe: () => run,
+			hasRetentionReason: () => false,
+			blocksOrdinaryDelivery: () => false,
+			currentWorkState: () => "settled",
+		} as unknown as AgentRuntimeHost,
+	} as AgentRecord);
+	const scheduler = new MessageDeliveryScheduler({ agents: new Map(), workflowPolicy: new WorkflowPolicyStore() });
+	const deliveryFor = (messageId: string) => ({
+		messageId,
+		deliveryMode: "deferred" as const,
+		deliveryItem: {
+			source: { agentId: "sender", entryId: messageId, toolCallId: messageId },
+			projection: { kind: "message" as const, messageId, fromAgentId: "sender", content: "Work" },
+		},
+		inspectProof: () => undefined,
+	});
+	let stalledWithdrawn = false;
+	let stalledChecks = 0;
+	// The reminder is tracked first, so its check runs before the sweep reaches the stalled Delivery.
+	scheduler.recordAdmissionFailure(recordFor("moderator"), {
+		...deliveryFor("reminder"),
+		isSuppressed: () => !scheduler.blockedDeliveries().some(({ messageId }) => messageId === "stalled"),
+	}, new Error("Recipient Run ended before Delivery proof"));
+	scheduler.recordAdmissionFailure(recordFor("recipient"), {
+		...deliveryFor("stalled"),
+		isSuppressed: () => {
+			stalledChecks += 1;
+			return stalledWithdrawn;
+		},
+	}, new Error("Recipient Run ended before Delivery proof"));
+
+	assert.deepEqual(scheduler.blockedDeliveries().map(({ messageId }) => messageId), ["reminder", "stalled"]);
+	stalledWithdrawn = true;
+	stalledChecks = 0;
+	assert.deepEqual(scheduler.blockedDeliveries(), [], "the withdrawn stall suppresses its reminder in the same sweep");
+	assert.equal(stalledChecks, 1, "one sweep evaluates each suppression predicate once");
+	scheduler.shutdownProgress();
+});
