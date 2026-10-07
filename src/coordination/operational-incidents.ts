@@ -848,8 +848,12 @@ export class OperationalIncidentCoordinator {
 		}, inspections);
 		for (const snapshot of toRecover) {
 			// The cleared condition still owes its Moderator the successor-start notice.
-			// Admit that delivery while handling retention is live, then release as usual.
-			await this.#notifyRunFailureRecovery(snapshot);
+			// Queue it before release: the Moderator lane admits it ahead of this release
+			// request. Lane work queued earlier may still release the Moderator first;
+			// the admission then boots it, so the notice is late, not lost. Never await
+			// that lane here: an interruption can hold it while the Moderator's turn
+			// waits on this pass.
+			this.#notifyRunFailureRecovery(snapshot);
 			this.#releaseHandling(snapshot.key);
 		}
 		for (const handling of toAttemptCreation) {
@@ -922,9 +926,8 @@ export class OperationalIncidentCoordinator {
 			return entryId === undefined ? undefined : { agentId: snapshot.agentId, entryId };
 		};
 		if (inspectProof()) return false;
-		// Settlement reconciliation can run while the affected Agent lane is held.
-		// Schedule admission without awaiting that lane so the reminder cannot
-		// deadlock behind the reconciliation that requested it.
+		// Schedule admission without awaiting the recipient lane: a reminder must not
+		// stall the reconciliation pass behind that Agent's queued work.
 		void this.#messages.admitCustomDelivery(recipient, {
 			messageId: obligationReminderDeliveryId(requestId, freeReminderIndex),
 			deliveryMode: "deferred",
@@ -1220,8 +1223,7 @@ export class OperationalIncidentCoordinator {
 			transcript: recipient.transcript.inspect(),
 		});
 		if (inspectProof()) return;
-		// Do not await the recipient lane from reconciliation: settlement can hold
-		// that lane while waiting for this inspection, just as for ordinary reminders.
+		// Do not await the recipient lane from reconciliation, as for ordinary reminders.
 		void this.#messages.admitCustomDelivery(recipient, {
 			messageId: moderatorObligationReminderDeliveryId(recipient.identity.agentId),
 			commitIfCurrent: commit => this.#reconciliationLane.run(async () => {
@@ -1393,7 +1395,7 @@ export class OperationalIncidentCoordinator {
 		}
 	}
 
-	async #notifyRunFailureRecovery(snapshot: RunFailureSnapshot): Promise<void> {
+	#notifyRunFailureRecovery(snapshot: RunFailureSnapshot): void {
 		const handling = this.#handlingByKey.get(snapshot.key);
 		if (!handling?.moderatorAgentId) return;
 		const affected = this.#agents.get(snapshot.agentId);
@@ -1420,7 +1422,7 @@ export class OperationalIncidentCoordinator {
 			requiredAction: "resolve",
 			guidance: RUN_FAILURE_RECOVERY_DIRECTIVE,
 		};
-		const admission = await this.#messages.admitCustomDelivery(moderator, {
+		void this.#messages.admitCustomDelivery(moderator, {
 			messageId: runFailureRecoveryDeliveryId(recovery),
 			deliveryMode: "deferred",
 			customMessage: createModelVisibleRunFailureRecovery(recovery),
@@ -1429,10 +1431,11 @@ export class OperationalIncidentCoordinator {
 				transcript: moderator.transcript.inspect(),
 				recovery,
 			}),
-		});
-		if (admission !== "pending") {
-			throw new Error(`Run Failure Recovery delivery rejected: ${admission}`);
-		}
+		}).then((admission) => {
+			if (admission !== "pending") {
+				throw new Error(`Run Failure Recovery delivery rejected: ${admission}`);
+			}
+		}).catch((error: unknown) => this.#reportError(error));
 	}
 
 	#scheduleReconciliation(): Promise<void> {
@@ -1449,8 +1452,10 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#scheduleReconciliationAfterHostLane(record: AgentRecord): void {
+		// Enter the lane only to order the pass after work already queued there.
+		// Holding it through the pass would deadlock any pass that awaits this lane.
 		void record.host.lane
-			.run(() => this.#scheduleReconciliation())
+			.run(() => { void this.#scheduleReconciliation(); })
 			.catch((error: unknown) => this.#reportError(error));
 	}
 
