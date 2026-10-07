@@ -36,16 +36,16 @@ test("a successor after obligation clearance appends to the retained failed Run 
 	let deliveryProgressChanged = (): void => assert.fail("Operational Incident detection must subscribe to Delivery progress");
 	const messages = {
 		subscribeDeliveryProgress(handler: () => void) { deliveryProgressChanged = handler; },
-		blockedDeliveries: () => [], answerArbitration: { inspect: () => [] }, hasDeliveryProgress: () => false,
+		blockedDeliveries: () => [], answerArbitration: { inspect: (_requester: unknown, requestIds: readonly string[]) => requestIds.map(() => ({ state: "unanswered" })) }, hasDeliveryProgress: () => false,
 		shutdownDeliveryProgress() {},
 	} as unknown as MessageCoordinator;
 	const requestRelationships = {
 		refresh: async () => undefined,
-		answerOwedRequestIds: () => ["request"], outstandingRequestIds: () => [],
+		answerOwedRequestIds: () => ["request"], outstandingRequestIds: (record: typeof owner.record) => record === owner.record ? ["request"] : [],
 		hasUnsettledAnswerObligation: () => obligationRemains,
 	} as unknown as RequestRelationships;
 	const requestEvidence = {
-		requestMetadata: () => ({ source: { agentId: "requester", entryId: "request-entry", toolCallId: "request-call" } }),
+		requestMetadata: () => ({ targetAgentId: "child", source: { agentId: "requester", entryId: "request-entry", toolCallId: "request-call" } }),
 	} as unknown as RequestEvidence;
 	const incidents = new OperationalIncidentCoordinator({
 		agents: new Map([["requester", owner.record], ["child", child.record]]),

@@ -32,7 +32,7 @@ test("an Obligation Reminder is suppressed once the stalled Run it was evaluated
 	const reminders: ScheduledCustomDelivery[] = [];
 	const messages = {
 		subscribeDeliveryProgress() {},
-		blockedDeliveries: () => [], answerArbitration: { inspect: () => [] }, hasDeliveryProgress: () => false,
+		blockedDeliveries: () => [], answerArbitration: { inspect: (_requester: unknown, requestIds: readonly string[]) => requestIds.map(() => ({ state: "unanswered" })) }, hasDeliveryProgress: () => false,
 		shutdownDeliveryProgress() {},
 		admitCustomDelivery: async (_recipient: unknown, delivery: ScheduledCustomDelivery) => {
 			reminders.push(delivery);
@@ -42,8 +42,8 @@ test("an Obligation Reminder is suppressed once the stalled Run it was evaluated
 	const requestRelationships = {
 		refresh: async () => undefined,
 		answerOwedRequestIds: (record: typeof child.record) => record === child.record ? ["request"] : [],
-		outstandingRequestIds: () => [],
-		foregroundRequestId: () => "request",
+		outstandingRequestIds: (record: typeof owner.record) => record === owner.record ? ["request"] : [],
+		obligationFrames: () => [{ requestId: "request" }],
 		hasUnsettledAnswerObligation: () => true,
 	} as unknown as RequestRelationships;
 	const requestEvidence = {
