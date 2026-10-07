@@ -848,9 +848,11 @@ export class OperationalIncidentCoordinator {
 		}, inspections);
 		for (const snapshot of toRecover) {
 			// The cleared condition still owes its Moderator the successor-start notice.
-			// Queue it before release: the Moderator lane admits it ahead of the release
-			// request, so retention cannot lapse first. Never await that lane here: an
-			// interruption can hold it while the Moderator's turn waits on this pass.
+			// Queue it before release: the Moderator lane admits it ahead of this release
+			// request. Lane work queued earlier may still release the Moderator first;
+			// the admission then boots it, so the notice is late, not lost. Never await
+			// that lane here: an interruption can hold it while the Moderator's turn
+			// waits on this pass.
 			this.#notifyRunFailureRecovery(snapshot);
 			this.#releaseHandling(snapshot.key);
 		}
