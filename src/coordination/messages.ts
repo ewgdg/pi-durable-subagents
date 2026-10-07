@@ -614,14 +614,13 @@ export class MessageCoordinator {
 		await this.#requestRelationships.refresh();
 		if (this.#isShuttingDown()) return Promise.resolve();
 		const record = this.#requireAgent(agentId);
-		// Confirmed Run disposal already owns this Agent lane and fences its volatile
-		// scheduling. Re-entering the lane from Pi's awaited turn_end would deadlock
-		// disposal while it waits for the same turn to settle.
-		if (record.host.observe().phase === "ending" || record.host.isInterrupting()) {
-			return Promise.resolve();
-		}
-		await record.host.lane.run(() => this.#syncRequestRelationshipsInLane(record));
-		return this.#deliveryScheduler.reachSafeBoundary(record);
+		// Run disposal and interruption own this Agent lane while they wait for the
+		// turn to settle, and Pi settles it only after this awaited boundary returns.
+		// The host skips the boundary once either stop begins, even while queued.
+		return record.host.runAtSafeBoundary(async () => {
+			await this.#syncRequestRelationshipsInLane(record);
+			this.#deliveryScheduler.reachSafeBoundaryInLane(record);
+		});
 	}
 
 	/**

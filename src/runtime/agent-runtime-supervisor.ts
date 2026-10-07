@@ -121,6 +121,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	#runStartsClosed = false;
 	#ending = false;
 	#interrupting = false;
+	readonly #queuedSafeBoundaryReleases = new Set<() => void>();
 	#runSequence = 0;
 	#holdSequence = 0;
 	readonly #settledHandlers = new Set<SettledHandler>();
@@ -414,8 +415,38 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		return this.#runSuspension !== undefined || this.#interruptionHold !== undefined || this.#isolatedResumption !== undefined;
 	}
 
-	isInterrupting(): boolean {
-		return this.#interrupting;
+	/**
+	 * Runs safe-boundary work in this Agent's lane. A Run end or interruption holds
+	 * the lane while it waits for the native turn to settle, and the turn settles
+	 * only after its safe boundary returns. A boundary still queued when either
+	 * stop begins therefore returns without its work instead of waiting behind the
+	 * stop; the stop owns the Run from then on. Checking the state only before
+	 * queueing is not enough: a stop already queued in the lane begins later.
+	 */
+	async runAtSafeBoundary(work: () => Promise<void> | void): Promise<void> {
+		if (this.#ending || this.#interrupting) return;
+		let started = false;
+		let abandoned = false;
+		let abandon!: () => void;
+		const abandonedBeforeStart = new Promise<void>((resolve) => { abandon = resolve; });
+		const releaseIfQueued = () => {
+			if (started) return;
+			abandoned = true;
+			abandon();
+		};
+		this.#queuedSafeBoundaryReleases.add(releaseIfQueued);
+		try {
+			await Promise.race([
+				this.lane.run(() => {
+					if (abandoned) return;
+					started = true;
+					return work();
+				}),
+				abandonedBeforeStart,
+			]);
+		} finally {
+			this.#queuedSafeBoundaryReleases.delete(releaseIfQueued);
+		}
 	}
 
 	currentInterruptionHold(): RunResumptionHandle | undefined {
@@ -530,6 +561,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#isolatedResumption = undefined;
 		run.expectedInterruption = true;
 		this.#interrupting = true;
+		this.#releaseQueuedSafeBoundaries();
 		try {
 			const cleared = await run.runtime.clearQueue();
 			if (
@@ -1001,6 +1033,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			return "retained";
 		}
 		this.#ending = true;
+		this.#releaseQueuedSafeBoundaries();
 		this.#notifyStateChanged();
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
@@ -1059,6 +1092,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			return "retained";
 		}
 		this.#ending = true;
+		this.#releaseQueuedSafeBoundaries();
 		this.#notifyStateChanged();
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
@@ -1123,6 +1157,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			}
 		};
 		this.#ending = true;
+		this.#releaseQueuedSafeBoundaries();
 		this.#notifyStateChanged();
 		if (run.admitted) this.#runFenceHandler?.(run.handle);
 		try {
@@ -1375,6 +1410,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 
 	#notifySettled(run: BoundAgentRuntime): void {
 		for (const handler of this.#settledHandlers) handler(run.handle, run.failed ? "failed" : "settled");
+	}
+
+	#releaseQueuedSafeBoundaries(): void {
+		for (const release of [...this.#queuedSafeBoundaryReleases]) release();
 	}
 
 	#notifyStateChanged(): void {

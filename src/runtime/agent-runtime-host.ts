@@ -194,7 +194,11 @@ export interface AgentRuntimeHost {
 	currentRunFailed(): boolean;
 	isCurrent(handle: AgentRunHandle): boolean;
 	blocksOrdinaryDelivery(): boolean;
-	isInterrupting(): boolean;
+	/**
+	 * Run safe-boundary work in the Agent lane, or skip it once a Run end or
+	 * interruption that holds the lane until the turn settles has begun.
+	 */
+	runAtSafeBoundary(work: () => Promise<void> | void): Promise<void>;
 	currentInterruptionHold(): RunResumptionHandle | undefined;
 	currentResumptionHold(): RunResumptionHandle | undefined;
 	currentRunSuspension(): AgentRunSuspension | undefined;

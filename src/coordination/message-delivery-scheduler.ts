@@ -527,12 +527,14 @@ export class MessageDeliveryScheduler {
 	}
 
 	reachSafeBoundary(record: AgentRecord): Promise<void> {
-		return record.host.lane.run(() => {
-			if (!record.host.currentHandle()) return;
-			this.#removeProvenDeliveriesInLane(record);
-			if (record.host.blocksOrdinaryDelivery()) return;
-			this.#freezeSteerInLane(record);
-		});
+		return record.host.lane.run(() => this.reachSafeBoundaryInLane(record));
+	}
+
+	reachSafeBoundaryInLane(record: AgentRecord): void {
+		if (!record.host.currentHandle()) return;
+		this.#removeProvenDeliveriesInLane(record);
+		if (record.host.blocksOrdinaryDelivery()) return;
+		this.#freezeSteerInLane(record);
 	}
 
 	requestQueueAdvanced(record: AgentRecord): Promise<void> {
