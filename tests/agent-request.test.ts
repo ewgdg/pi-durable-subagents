@@ -3286,33 +3286,16 @@ test("a delivered Request's Cancellation is announced and wins the responder lan
 		harness.host,
 		harness.childId,
 	);
-	const entries = await waitForEntry(
-		childSessionFile,
-		(entry) =>
-			entry.type === "message" &&
-			entry.message.role === "toolResult" &&
-			entry.message.toolCallId === losingAnswerCallId,
-	);
-	const losingAnswer = entries.find(
-		(entry) =>
-			entry.type === "message" &&
-			entry.message.role === "toolResult" &&
-			entry.message.toolCallId === losingAnswerCallId,
-	);
-	if (
-		!losingAnswer ||
-		losingAnswer.type !== "message" ||
-		losingAnswer.message.role !== "toolResult"
-	) {
-		throw new Error("Losing Answer result did not commit");
-	}
-	const cancellationDelivery = entries.find(
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === "agent-coordination.message-delivery" &&
-			JSON.stringify(entry.details) ===
-				JSON.stringify({ messages: [cancellationSource] }),
-	);
+	const isCancellationDelivery = (
+		entry: ReturnType<SessionManager["getEntries"]>[number],
+	) =>
+		entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.message-delivery" &&
+		JSON.stringify(entry.details) ===
+			JSON.stringify({ messages: [cancellationSource] });
+	const cancellationDelivery = (
+		await waitForEntry(childSessionFile, isCancellationDelivery)
+	).find(isCancellationDelivery);
 	assert.ok(
 		cancellationDelivery && cancellationDelivery.type === "custom_message",
 		"the Cancellation of a delivered Request is announced to the responder",
@@ -3328,10 +3311,32 @@ test("a delivered Request's Cancellation is announced and wins the responder lan
 			},
 		],
 	}, "the announced Cancellation names its Request and reason");
-	assert.equal(losingAnswer.message.isError, true);
+
+	const isLosingAnswerResult = (
+		entry: ReturnType<SessionManager["getEntries"]>[number],
+	) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === losingAnswerCallId;
+	const losingAnswer = (
+		await waitForEntry(childSessionFile, isLosingAnswerResult)
+	).find(isLosingAnswerResult);
+	if (
+		!losingAnswer ||
+		losingAnswer.type !== "message" ||
+		losingAnswer.message.role !== "toolResult"
+	) {
+		throw new Error("Losing Answer result did not commit");
+	}
+	assert.equal(
+		losingAnswer.message.isError,
+		true,
+		"the Answer authored after the Cancellation is rejected",
+	);
 	assert.match(
 		JSON.stringify(losingAnswer.message.content),
 		/was cancelled/,
+		"the rejected Answer names the Cancellation that won the responder lane",
 	);
 	await waitForCondition(
 		() => harness.view.status(harness.childId).run.phase === "dormant",
