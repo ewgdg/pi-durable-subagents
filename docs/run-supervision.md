@@ -50,7 +50,7 @@ Each status contains the durable Agent identity and structural relationship, the
 
 - `primaryEvidence.transcriptPath` is the authorized Pi transcript location, or `null` for a non-file-backed session.
 - `primaryEvidence.inspectedThrough` identifies the last physical transcript entry included in the observation.
-- `run.phase` is `starting`, `live`, `ending`, or `dormant`. A live Run also reports `work`, `attention`, and counted `retentionReasons`. `run.suspension` identifies a quota-suspended Run and contains its retained provider evidence.
+- `run.phase` is `starting`, `live`, `ending`, or `dormant`. A live Run also reports `work`, `attention`, and counted `retentionReasons`. `run.suspension` identifies a suspended Run and contains its retained failure evidence.
 
 Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, `interruption_hold`, and `moderator_handling`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
 
@@ -62,11 +62,11 @@ Coordination preserves Pi's user-configured compaction, retry, provider-retry, a
 
 If Pi's configured native behavior ultimately ends the exact Run unexpectedly while its Runtime is still usable, the runtime retains that exact Run as a [Run suspension](#run-suspension): the observed error and stage stay visible in the Agent status, and no Runtime Report or Moderator is produced. If the Runtime is already unavailable — a child process quit or transport loss — the exact Run cannot continue in place, so it ends as a terminal Run Failure and keeps the existing report and bounded moderation path. Startup errors observed by the host likewise remain terminal Run Failures and do not require a child-side error transcript entry. Successfully recovered transient errors, ongoing provider recovery, and deliberate termination are neither. A terminal Run Failure captures the observed error and stage, exact Agent and Run, affected work, and recovery findings or explicit uncertainty.
 
-One Native Session Driver (`src/pi-integration/native-session-driver.ts`) classifies every Run end, for the Owner in process and for each child in its own process. The outcome is `completed`, `aborted`, or `error`; an error carries the model-stage failure with provenance `native-session-driver` and any quota evidence, and Pi's `willRetry` passes through. Child Control carries this exact outcome and failure, so the Owner-side child proxy adopts it without translation.
+One Native Session Driver (`src/pi-integration/native-session-driver.ts`) classifies every Run end, for the Owner in process and for each child in its own process. The outcome is `completed`, `aborted`, or `error`; an error carries the model-stage failure with provenance `native-session-driver`, and Pi's `willRetry` passes through. Child Control carries this exact outcome and failure, so the Owner-side child proxy adopts it without translation.
 
 The Run's own cancellation signal owns classification. Pi reports a request setup that its abort signal abandoned as a model error message carrying the abort reason, so an Owner or child Run stopped through native abort — Escape, Ctrl+C, or an extension `ctx.abort()` — can end on a `stopReason: "error"` assistant message. The driver classifies any such message as `aborted` once that exact native Run's signal is aborted: a Run whose cancellation is requested is a deliberate stop, never an unexpected terminal failure, and a successor Run is admitted by ordinary input.
 
-On every non-retrying `error` end, the driver synchronously captures native queued input before any Run-end listener runs, for the Owner and children alike. This applies to ordinary runtime errors as well as quota errors: a listener that awaits first, such as the child's Control publication, would otherwise let Pi consume a queued follow-up before the Run Suspension takes hold. Captured input remains available through the existing queue-clear contract; deliberate cancellation and configured retries do not capture it at this boundary.
+On every non-retrying `error` end, the driver synchronously captures native queued input before any Run-end listener runs, for the Owner and children alike. A listener that awaits first, such as the child's Control publication, would otherwise let Pi consume a queued follow-up before the Run Suspension takes hold. Captured input remains available through the existing queue-clear contract; deliberate cancellation and configured retries do not capture it at this boundary.
 
 Required upstream improvement: Pi's `lazyStream` request-setup failure path publishes `stopReason: "error"` for a setup abandoned by its own abort signal. It should classify that stop from the signal it already receives, so the terminal message is `aborted` before any consumer reads it.
 
@@ -76,10 +76,7 @@ An unresolved Answer Obligation still determines eligibility for ordinary Run Fa
 
 An unexpected terminal error stops the exact Run as a suspension after Pi's configured native retry/fallback has finished. Suspension retains the Run instead of failing it or starting a Moderator, and it publishes no Runtime Report: the Agent status carries `run.suspension`, shown in the agent dock and selector and detailed in the selector's Run detail. Observing that status does not resume execution.
 
-Two reasons share this contract:
-
-- **`provider_quota`** — evidence-backed exhausted quota, displayed as **Suspended · Usage limit reached**, with the retained provider/model evidence and the provider-supplied reset time when available.
-- **`runtime_error`** — any other terminal error from a still-usable Runtime, displayed as **Suspended · Runtime error**, with the observed failure stage, error, and provenance.
+Its one reason is **`runtime_error`**: any terminal error from a still-usable Runtime, displayed as **Suspended · Runtime error**, with the observed failure stage, error, and provenance.
 
 The exception itself stays visible in the Agent transcript; the suspension adds the stop, not a second copy of the error. A Runtime that was already unavailable is not suspended; it ends as a terminal Run Failure instead.
 
@@ -94,17 +91,13 @@ Human intent uses Pi's trusted `interactive` input provenance, and `rpc` provena
 
 Changing the model/account alone is not resumption. No new paid fallback, provider-wide suspension, guessed retry deadline, or automatic quota probe is introduced. Suspension is not a human-issued Interruption Hold. Request cancellation retains its normal one-hop semantics; it neither resumes the Run nor cancels descendants. An explicit abort ends the suspended Run without resolving its Requests, following the normal residual-Request contract.
 
-If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, renewed quota or another terminal error establishes a new suspension of the matching reason, and a non-error end follows ordinary settlement. An aborted attempt before confirmation retains the original stop rather than inventing a human Interruption Hold.
+If a resumed attempt ends before its input's transcript confirmation, its observed outcome is applied after confirmation: success releases retained input once, another terminal error establishes a new suspension with its own evidence, and a non-error end follows ordinary settlement. An aborted attempt before confirmation retains the original stop rather than inventing a human Interruption Hold.
 
 A stop is process-local. It is not a durable Run state: when the host process ends, the stop ends with it and the Agent recovers as ordinary dormant work. The suppression described above belongs to the live stop, so after host loss reminder, heartbeat, and deadlock or stall moderation treat the affected path as ordinary unfinished work again. Recovery itself does not resume work, and a later explicit admission may start a successor Run; while the underlying condition persists, that attempt stops again on the same evidence without producing model output. See [cold recovery](cold-host-recovery.md) for the limits of reconstructing volatile queues and interrupted tools.
 
-### Provider quota evidence and upstream limitation
+### Terminal errors are not classified by provider
 
-The classifier accepts retained `usage_limit_reached` / `insufficient_quota` JSON error codes or types, including Pi's bare HTTP-status and OpenAI/Azure formatter envelopes. It also recognizes the exact observed Codex diagnostic `Codex error: The usage limit has been reached` and Codex's exact code-only variants. An explicit unrelated code takes precedence over prose. Generic HTTP 429, `rate_limit_exceeded`, arbitrary text containing “limit”, and ambiguous friendly usage-limit wording are not quota evidence. Temporary throttling stays on Pi's native recovery path; unrecognized terminal errors stop as `runtime_error` suspensions instead of being guessed as quota.
-
-The installed Pi provider exposes `AssistantMessage.errorMessage`, not the original structured provider error. Codex streaming errors construct a `CodexApiError` with code/payload, but error formatting discards those fields. The HTTP formatter also conflates quota, temporary throttling, and other 429 responses into friendly text. This package cannot recover facts already discarded upstream.
-
-Required upstream improvement: preserve provider code/type and provider-supplied absolute reset time through both HTTP and streaming error mapping into `AssistantMessage` and lifecycle events, independently of human-readable formatting. Until then, classification is intentionally limited to retained exact/JSON evidence. Installed provider packages are not patched.
+Exhausted quota, a rejected account, and any other terminal provider error suspend the same way, and the provider's error text is the evidence: it stays in the transcript and in `run.suspension.evidence.error`. Temporary throttling stays on Pi's native retry. See [ADR 0008](adr/0008-no-provider-quota-classification.md).
 
 ## Child execution and Delivery
 
