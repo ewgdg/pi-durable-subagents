@@ -206,12 +206,6 @@ const RetentionReasonSchema = Type.Union([
 	Type.Literal("interactive_selection"),
 ]);
 const RetentionSchema = closed({ reason: RetentionReasonSchema, count: Type.Integer({ minimum: 1 }) });
-const QuotaEvidenceSchema = closed({
-	diagnostic: Type.String(),
-	provider: Type.Optional(Type.String()),
-	model: Type.Optional(Type.String()),
-	resetAt: Type.Optional(Type.String()),
-});
 const RunFailureEvidenceSchema = closed({
 	stage: Type.String(),
 	error: Type.String(),
@@ -224,12 +218,11 @@ const RunEndSchema = bindEquivalent<NativeRunEnd & Readonly<{ runId: string; que
 	willRetry: Type.Boolean(),
 	queuedInputCount: QueuedInputCountSchema,
 	failure: Type.Optional(RunFailureEvidenceSchema),
-	quota: Type.Optional(QuotaEvidenceSchema),
 }));
-const AgentRunSuspensionSchema = Type.Union([
-	closed({ reason: Type.Literal("provider_quota"), evidence: QuotaEvidenceSchema }),
-	closed({ reason: Type.Literal("runtime_error"), evidence: RunFailureEvidenceSchema }),
-]);
+const AgentRunSuspensionSchema = closed({
+	reason: Type.Literal("runtime_error"),
+	evidence: RunFailureEvidenceSchema,
+});
 const AgentRunStateSchema = Type.Union([
 	closed({
 		phase: Type.Literal("dormant"),

@@ -44,7 +44,7 @@ import {
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
 import {
 	formatAgentWorkStatus,
-	formatSuspensionLabel,
+	SUSPENSION_LABEL,
 	selectedAgentWorkStatus,
 } from "./selected-agent-status.ts";
 
@@ -927,17 +927,6 @@ function capitalize(value: string): string {
 
 /** Retained stop evidence; showing it never implies recovery or resumption. */
 function formatSuspensionDetail(suspension: AgentRunSuspension): string {
-	const label = formatSuspensionLabel(suspension.reason);
-	if (suspension.reason === "provider_quota") {
-		const { evidence } = suspension;
-		return [
-			label,
-			evidence.provider,
-			evidence.model,
-			evidence.diagnostic,
-			evidence.resetAt === undefined ? undefined : `Reset: ${evidence.resetAt}`,
-		].filter(Boolean).join(" · ");
-	}
 	const { evidence } = suspension;
-	return [label, `Stage: ${evidence.stage}`, evidence.error, `Provenance: ${evidence.provenance}`].join(" · ");
+	return [SUSPENSION_LABEL, `Stage: ${evidence.stage}`, evidence.error, `Provenance: ${evidence.provenance}`].join(" · ");
 }

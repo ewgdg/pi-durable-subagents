@@ -11,14 +11,16 @@ import type { ProcessChildSessionFactory } from "../src/runtime/process-child-se
 import { participant, requestHistory } from "./support/request-history.ts";
 import { requestCoordination } from "./support/request-coordination.ts";
 
+const SUSPENSION = { reason: "runtime_error", evidence: { stage: "model", error: "400 provider stopped", provenance: "test" } } as const;
+
 for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [false, true]) {
-	test(`a quota-suspended dependency keeps its requester Waiting (unrelated branch: ${unrelated}, cycle: ${cycle})`, async (t) => {
+	test(`a suspended dependency keeps its requester Waiting (unrelated branch: ${unrelated}, cycle: ${cycle})`, async (t) => {
 		const history = requestHistory();
-		const leaf = participant("quota-leaf");
-		history.agents.set("quota-leaf", leaf.record);
+		const leaf = participant("suspended-leaf");
+		history.agents.set("suspended-leaf", leaf.record);
 		const rootRequest = history.request();
 		const leafRequest = history.request(history.responder, leaf);
-		const incoming = new Map([["responder", [rootRequest]], ["quota-leaf", [leafRequest]]]);
+		const incoming = new Map([["responder", [rootRequest]], ["suspended-leaf", [leafRequest]]]);
 		if (cycle === "suspended") incoming.get("responder")!.push(history.request(leaf, history.responder));
 		if (cycle === "upstream") {
 			const bridge = participant("bridge");
@@ -40,8 +42,8 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 				currentHandle: () => liveRun,
 				isCurrent: (handle: unknown) => handle === liveRun,
 				observe: () => ({ phase: "live", work: "settled", attention: agentId === "requester" ? "agent_wait" : "none", retentionReasons: [{ reason: "answer_owed", count: 1 }],
-					suspension: agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined }),
-				currentRunSuspension: () => agentId === "quota-leaf" && suspended ? { reason: "provider_quota", evidence: {} } : undefined,
+					suspension: agentId === "suspended-leaf" && suspended ? SUSPENSION : undefined }),
+				currentRunSuspension: () => agentId === "suspended-leaf" && suspended ? SUSPENSION : undefined,
 				currentRunFailed: () => false,
 				blocksOrdinaryDelivery: () => false,
 				hasRetentionReason: () => false,
@@ -52,9 +54,9 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 		const coordination = requestCoordination(history.agents);
 		const messages = new MessageCoordinator({ agents: history.agents, ...coordination, workflowPolicy: policy, isShuttingDown: () => false });
 		// Exercise incident filtering even if a previously expired delivery watcher
-		// still reports the recipient when its quota suspension arrives.
+		// still reports the recipient when its suspension arrives.
 		messages.blockedDeliveries = () => suspended ? [{
-			messageId: leafRequest, recipientAgentId: "quota-leaf",
+			messageId: leafRequest, recipientAgentId: "suspended-leaf",
 			reason: { kind: "scheduling_failure", diagnostic: "Previously failed admission" },
 		}] : [];
 		const reminded: string[] = [];
@@ -85,7 +87,7 @@ for (const cycle of ["none", "suspended", "upstream"]) for (const unrelated of [
 		reminded.length = 0;
 		incidents.reconcileCommittedToolResults("requester");
 		await incidents.reachSafeBoundary();
-		assert.ok(reminded.includes("quota-leaf"));
+		assert.ok(reminded.includes("suspended-leaf"));
 		assert.deepEqual(errors, []);
 	});
 }

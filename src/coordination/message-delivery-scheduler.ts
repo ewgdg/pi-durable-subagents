@@ -708,9 +708,10 @@ export class MessageDeliveryScheduler {
 			observed.suspension ||
 			observed.retentionReasons.some(({ reason }) => reason === "interruption_hold")
 		) {
-			// Quota or an explicit human interruption ended this delivery turn, not the
-			// admitted Messages. Keep unproven work queued: a held Run is resumable, so
-			// discarding its scheduling would lose work the Hold never released.
+			// A Run Suspension or an explicit human interruption ended this delivery
+			// turn, not the admitted Messages. Keep unproven work queued: a held Run
+			// is resumable, so discarding its scheduling would lose work the Hold never
+			// released.
 			this.#removeProvenDeliveriesInLane(record);
 			this.#activeDeferredByAgent.delete(record.identity.agentId);
 			this.#activeWaitPreemptionByAgent.delete(record.identity.agentId);

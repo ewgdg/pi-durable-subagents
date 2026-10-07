@@ -74,19 +74,19 @@ test("a headless Owner learns once that its child suspended and cannot wait on i
 		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "rpc");
-	const ownerPrompt = "Delegate the quota work.";
-	const spawnCallId = "spawn-quota-child";
-	const waitCallId = "wait-for-quota-child";
-	const rewaitCallId = "wait-again-for-quota-child";
+	const ownerPrompt = "Delegate the failing work.";
+	const spawnCallId = "spawn-failing-child";
+	const waitCallId = "wait-for-failing-child";
+	const rewaitCallId = "wait-again-for-failing-child";
 	let ownerSawSuspension = false;
 	const route = (context: Context) => {
 		const serialized = JSON.stringify(context.messages);
 		if (!serialized.includes(ownerPrompt)) {
-			return fauxAssistantMessage([], { stopReason: "error", errorMessage: '{"error":{"code":"usage_limit_reached"}}' });
+			return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 child provider failure" });
 		}
 		if (!serialized.includes(spawnCallId)) {
 			return fauxAssistantMessage(
-				fauxToolCall("agent_spawn", { title: "Quota work", request: "Do the work." }, { id: spawnCallId }),
+				fauxToolCall("agent_spawn", { title: "Failing work", request: "Do the work." }, { id: spawnCallId }),
 				{ stopReason: "toolUse" },
 			);
 		}
@@ -94,7 +94,7 @@ test("a headless Owner learns once that its child suspended and cannot wait on i
 			return fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: waitCallId }), { stopReason: "toolUse" });
 		}
 		if (!serialized.includes(rewaitCallId)) {
-			ownerSawSuspension = serialized.includes('\\"reason\\":\\"provider_quota\\"') &&
+			ownerSawSuspension = serialized.includes('\\"reason\\":\\"runtime_error\\"') &&
 				serialized.includes('\\"disposition\\":\\"preempted\\"');
 			// A model that ignores the notice must not park forever on the same stop.
 			return fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: rewaitCallId }), { stopReason: "toolUse" });

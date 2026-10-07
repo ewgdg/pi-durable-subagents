@@ -18,17 +18,11 @@ import type {
 	RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import type { SerialLane } from "./serial-lane.ts";
-import type { QuotaEvidence } from "./quota-evidence.ts";
 
-export type AgentRunSuspension =
-	| Readonly<{
-		reason: "provider_quota";
-		evidence: QuotaEvidence;
-	}>
-	| Readonly<{
-		reason: "runtime_error";
-		evidence: AgentRunFailure;
-	}>;
+export type AgentRunSuspension = Readonly<{
+	reason: "runtime_error";
+	evidence: AgentRunFailure;
+}>;
 export type SuspendedNativeInput = Readonly<{ steering: readonly string[]; followUp: readonly string[] }>;
 
 /** Exact Request-keyed reasons, written only as a whole set by Request Relationships. */

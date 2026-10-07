@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRunFailure, AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
-import { classifyQuotaEvidence, type QuotaEvidence } from "../runtime/quota-evidence.ts";
 import { RetainedRuntimeQueue, type RuntimeQueue } from "../runtime/retained-runtime-queue.ts";
 import {
 	bindSessionStartup,
@@ -22,7 +21,6 @@ export type NativeRunEnd = Readonly<{
 	outcome: NativeRunOutcome;
 	willRetry: boolean;
 	failure?: AgentRunFailure;
-	quota?: QuotaEvidence;
 }>;
 
 export type NativeSessionEvent =
@@ -317,14 +315,12 @@ export class NativeSessionDriver {
 		// error carrying the abort reason. Agent-core keeps the exact Run's controller
 		// until its listeners settle, so this reads that Run's own cancellation.
 		if (this.#session.agent.signal?.aborted === true) return { outcome: "aborted", willRetry: event.willRetry };
-		const quota = classifyQuotaEvidence(assistant);
 		return {
 			outcome: "error",
 			willRetry: event.willRetry,
 			...(assistant.errorMessage === undefined
 				? {}
 				: { failure: { stage: "model", error: assistant.errorMessage, provenance: MODEL_FAILURE_PROVENANCE } }),
-			...(quota ? { quota } : {}),
 		};
 	}
 

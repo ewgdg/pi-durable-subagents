@@ -85,11 +85,11 @@ test("a Stalled Agent takes the best verdict among its unanswered Request target
 			agent("busy", { phase: "starting", work: undefined }),
 		], { parent: "progressing", held: "waiting", busy: "progressing" }],
 		["Run Suspension and human input are the same Waiting", [
-			agent("on-quota", { unansweredRequests: [request("r1", "suspended")] }),
+			agent("on-suspended", { unansweredRequests: [request("r1", "suspended")] }),
 			agent("suspended", { suspended: true }),
 			agent("on-human", { unansweredRequests: [request("r2", "asking")] }),
 			agent("asking", { attention: "input_required" }),
-		], { "on-quota": "waiting", suspended: "waiting", "on-human": "waiting", asking: "waiting" }],
+		], { "on-suspended": "waiting", suspended: "waiting", "on-human": "waiting", asking: "waiting" }],
 		["the verdict propagates through settled intermediates", [
 			agent("root", { attention: "agent_wait", unansweredRequests: [request("r1", "middle")] }),
 			agent("middle", { unansweredRequests: [request("r2", "leaf")] }),
@@ -271,20 +271,20 @@ test("one snapshot classifies each Agent the same way for every detector", () =>
 		agents: [
 			waiter("alpha", [request("alpha-bravo", "bravo")]),
 			waiter("bravo", [request("bravo-alpha", "alpha")]),
-			waiter("quota-parent", [request("to-suspended", "suspended")]),
-			agent("suspended", { suspended: true, answerObligationRequestIds: ["owed-suspended"], unansweredRequests: [request("from-suspended", "quota-leaf")] }),
-			agent("quota-leaf", { phase: "dormant", work: undefined, attention: undefined }),
+			waiter("suspended-parent", [request("to-suspended", "suspended")]),
+			agent("suspended", { suspended: true, answerObligationRequestIds: ["owed-suspended"], unansweredRequests: [request("from-suspended", "suspended-leaf")] }),
+			agent("suspended-leaf", { phase: "dormant", work: undefined, attention: undefined }),
 			waiter("stalled-parent", [request("to-leaf", "leaf")]),
 			agent("leaf", { phase: "dormant", work: undefined, attention: undefined }),
 		],
-		blockedDeliveries: [{ messageId: "to-leaf", recipientAgentId: "leaf" }, { messageId: "from-suspended", recipientAgentId: "quota-leaf" }],
+		blockedDeliveries: [{ messageId: "to-leaf", recipientAgentId: "leaf" }, { messageId: "from-suspended", recipientAgentId: "suspended-leaf" }],
 	});
 	assert.deepEqual(Object.fromEntries(assessment.verdicts), {
 		alpha: "stalled",
 		bravo: "stalled",
-		"quota-parent": "waiting",
+		"suspended-parent": "waiting",
 		suspended: "waiting",
-		"quota-leaf": "inactive",
+		"suspended-leaf": "inactive",
 		"stalled-parent": "stalled",
 		leaf: "inactive",
 	});

@@ -64,7 +64,7 @@ export function formatAgentWorkStatus(
 	theme: Theme,
 ): string {
 	const label = status.kind === "suspended"
-		? formatSuspensionLabel(status.suspension.reason)
+		? SUSPENSION_LABEL
 		: status.kind === "waiting"
 		? `waiting (${status.reason})`
 		: status.kind;
@@ -82,7 +82,4 @@ export function agentWorkStatusRole(status: AgentWorkStatus): "success" | "warni
 	return "dim";
 }
 
-/** One wording per stop reason; both stay visibly "Suspended". */
-export function formatSuspensionLabel(reason: AgentRunSuspension["reason"]): string {
-	return reason === "provider_quota" ? "Suspended · Usage limit reached" : "Suspended · Runtime error";
-}
+export const SUSPENSION_LABEL = "Suspended · Runtime error";

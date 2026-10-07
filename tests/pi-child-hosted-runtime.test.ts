@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { QUOTA_DIAGNOSTICS } from "./fixtures/quota-evidence-extension.ts";
+import { TERMINAL_ERROR_FIXTURE_MODEL, TERMINAL_ERROR_FIXTURE_PROVIDER } from "./fixtures/terminal-error-extension.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 
 import {
@@ -37,29 +37,26 @@ const CHILD_EXTENSION = fileURLToPath(
 	new URL("./fixtures/process-runtime-child-extension.ts", import.meta.url),
 );
 
-for (const scenario of [
-	"evidence", "terminal-queue", "native-retry", "error-signal-live", "error-signal-aborted",
-	"nonquota-terminal-queue", "nonquota-native-retry",
-]) {
+for (const scenario of ["terminal-queue", "native-retry", "error-signal-live", "error-signal-aborted"]) {
 test(`real child bridge terminal handling: ${scenario}`, {
 	timeout: TEST_TIMEOUT_MS, skip: process.platform === "win32",
 }, async () => {
-	const root = await mkdtemp(join(tmpdir(), "quota-evidence-child-"));
+	const root = await mkdtemp(join(tmpdir(), "terminal-error-child-"));
 	const cwd = join(root, "work");
 	const agentDir = join(root, "agent");
 	await Promise.all([mkdir(cwd), mkdir(agentDir)]);
-	const retryEnabled = scenario === "native-retry" || scenario === "nonquota-native-retry";
+	const retryEnabled = scenario === "native-retry";
 	await writeFile(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: retryEnabled, maxRetries: 1, baseDelayMs: 1 } }));
 	const sessionPath = join(root, "child.jsonl");
 	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000137";
 	await writeFile(sessionPath, JSON.stringify({ type: "session", version: 3, id: expectedSessionId, timestamp: new Date().toISOString(), cwd }) + "\n");
 	const launch = await PiChildProcessRuntime.launch({
-		workflowId: "quota-evidence", agentId: "quota-evidence-child", role: "ordinary", expectedSessionId,
+		workflowId: "terminal-error", agentId: "terminal-error-child", role: "ordinary", expectedSessionId,
 		sessionPath, agentDir, runtimeDirectory: root, skillPaths: [], projectTrusted: true,
-		configuration: { cwd, model: { provider: "openai-codex", modelId: "quota-fixture" }, thinking: "off", excludeTools: [], skills: [],
+		configuration: { cwd, model: { provider: TERMINAL_ERROR_FIXTURE_PROVIDER, modelId: TERMINAL_ERROR_FIXTURE_MODEL }, thinking: "off", excludeTools: [], skills: [],
 		excludeSkills: [],
-			extensions: [fileURLToPath(new URL("./fixtures/quota-evidence-extension.ts", import.meta.url))], loadContextFiles: false },
-		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1", QUOTA_FIXTURE_SCENARIO: scenario },
+			extensions: [fileURLToPath(new URL("./fixtures/terminal-error-extension.ts", import.meta.url))], loadContextFiles: false },
+		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1", TERMINAL_ERROR_FIXTURE_SCENARIO: scenario },
 	});
 	const runtime = new PiChildHostedRuntime({ link: launch, createProjection: () => createPiChildProcessProjection(launch) });
 	const ends: Extract<HostedRuntimeEvent, { type: "agent_end" }>[] = [];
@@ -70,56 +67,30 @@ test(`real child bridge terminal handling: ${scenario}`, {
 	});
 	try {
 		await runtime.ready;
-		if (scenario !== "evidence") {
-			await runtime.deliver({ kind: "user", content: "Exercise native failure continuation." }).completion;
-			await waitUntil(() => settlements === 1);
-			if (scenario === "error-signal-live" || scenario === "error-signal-aborted") {
-				assert.equal(ends.length, 1);
-				assert.equal(ends[0]!.outcome, scenario === "error-signal-aborted" ? "aborted" : "error",
-					"the exact native signal, not error text, distinguishes cancellation from failure");
-				assert.equal(runtime.cancellationSignal().aborted, scenario === "error-signal-aborted");
-				assert.equal(ends[0]!.quota, undefined);
-				assert.equal(ends[0]!.failure?.error, scenario === "error-signal-aborted" ? undefined : "This operation was aborted");
-			} else if (scenario === "native-retry") {
-				assert.equal(ends.length, 2, "configured Pi retry must complete before suspension");
-				assert.equal(ends[0]!.willRetry, true);
-				assert.ok(ends[0]!.quota);
-				assert.equal(ends[1]!.outcome, "completed");
-			} else if (scenario === "nonquota-native-retry") {
-				assert.ok(ends.length >= 2, "configured retry and native follow-up must finish normally");
-				assert.equal(ends[0]!.willRetry, true);
-				assert.equal(ends[0]!.quota, undefined);
-				assert.equal(ends.at(-1)!.outcome, "completed");
-				assert.ok(SessionManager.open(sessionPath).getEntries().some(entry =>
-					entry.type === "message" && entry.message.role === "user" &&
-					JSON.stringify(entry.message.content).includes("Retain this follow-up until explicit resume.")),
-				"retry must not capture or discard the queued native input");
-				assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
-			} else {
-				assert.equal(ends.length, 1, "terminal failure must not start queued follow-up generation");
-				assert.equal(ends[0]!.outcome, "error");
-				assert.equal(ends[0]!.willRetry, false);
-				if (scenario === "terminal-queue") assert.ok(ends[0]!.quota);
-				else {
-					assert.equal(ends[0]!.quota, undefined);
-					assert.equal(ends[0]!.failure?.error, "ordinary terminal provider failure");
-				}
-				assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: ["Retain this follow-up until explicit resume."] });
-				assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
-			}
-			return;
-		}
-		for (const [index, diagnostic] of QUOTA_DIAGNOSTICS.entries()) {
-			await runtime.deliver({ kind: "user", content: `Failure case ${index}` }).completion;
-			await waitUntil(() => settlements === index + 1);
-			assert.equal(ends.length, index + 1);
-			const event = ends[index]!;
-			assert.equal(event.willRetry, false);
-			assert.equal(event.failure?.error, diagnostic);
-			assert.deepEqual(event.quota, index < 3 ? {
-				diagnostic, provider: "openai-codex", model: "quota-fixture",
-				...(index === 1 ? { resetAt: "2030-01-01T00:00:00.000Z" } : {}),
-			} : undefined);
+		await runtime.deliver({ kind: "user", content: "Exercise native failure continuation." }).completion;
+		await waitUntil(() => settlements === 1);
+		if (scenario === "error-signal-live" || scenario === "error-signal-aborted") {
+			assert.equal(ends.length, 1);
+			assert.equal(ends[0]!.outcome, scenario === "error-signal-aborted" ? "aborted" : "error",
+				"the exact native signal, not error text, distinguishes cancellation from failure");
+			assert.equal(runtime.cancellationSignal().aborted, scenario === "error-signal-aborted");
+			assert.equal(ends[0]!.failure?.error, scenario === "error-signal-aborted" ? undefined : "This operation was aborted");
+		} else if (scenario === "native-retry") {
+			assert.ok(ends.length >= 2, "configured retry and native follow-up must finish normally");
+			assert.equal(ends[0]!.willRetry, true);
+			assert.equal(ends.at(-1)!.outcome, "completed");
+			assert.ok(SessionManager.open(sessionPath).getEntries().some(entry =>
+				entry.type === "message" && entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes("Retain this follow-up until explicit resume.")),
+			"retry must not capture or discard the queued native input");
+			assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
+		} else {
+			assert.equal(ends.length, 1, "terminal failure must not start queued follow-up generation");
+			assert.equal(ends[0]!.outcome, "error");
+			assert.equal(ends[0]!.willRetry, false);
+			assert.equal(ends[0]!.failure?.error, "ordinary terminal provider failure");
+			assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: ["Retain this follow-up until explicit resume."] });
+			assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
 		}
 	} finally { await runtime.dispose(); }
 });

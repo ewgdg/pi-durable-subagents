@@ -1333,9 +1333,6 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	#processRunEnd(run: BoundAgentRuntime, { event, expectedInterruption }: CapturedRunEnd): void {
-		if (event.quota && !event.willRetry && !this.#ending && !expectedInterruption && !this.#runSuspension) {
-			this.#establishRunSuspension(run, { reason: "provider_quota", evidence: event.quota });
-		}
 		// Pi may report error for a tool rejection racing an explicit interruption;
 		// that interruption, not Run Failure, owns the pending Hold transition.
 		if (event.outcome === "error" && !this.#runSuspension && !event.willRetry && !this.#ending &&
