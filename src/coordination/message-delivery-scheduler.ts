@@ -526,10 +526,6 @@ export class MessageDeliveryScheduler {
 		return "pending";
 	}
 
-	reachSafeBoundary(record: AgentRecord): Promise<void> {
-		return record.host.lane.run(() => this.reachSafeBoundaryInLane(record));
-	}
-
 	reachSafeBoundaryInLane(record: AgentRecord): void {
 		if (!record.host.currentHandle()) return;
 		this.#removeProvenDeliveriesInLane(record);

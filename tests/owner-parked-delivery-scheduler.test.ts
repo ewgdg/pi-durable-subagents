@@ -68,7 +68,7 @@ test("park entry does not await the idle Deferred prompt Promise after Delivery 
 	), false);
 	proof = { agentId: "owner", entryId: "delivery-proof" };
 	assert.equal(scheduler.hasAutonomousProgress(), false, "native prompt duration after proof is not delivery progress");
-	await scheduler.reachSafeBoundary(record);
+	await record.host.lane.run(() => scheduler.reachSafeBoundaryInLane(record));
 	assert.equal(scheduler.hasProgress(record), false, "a committed custom Delivery retained through a native prompt is not pending delivery work");
 	assert.equal(await withTimeout(
 		lane.run(() => scheduler.beginParkingInLane(record, handle)),
@@ -186,7 +186,7 @@ for (const scenario of ["safe boundary", "replaced reservation", "replaced reser
 		await new Promise<void>((resolve) => setImmediate(resolve));
 
 		// Real Pi turn_end awaits this callback before native prompt completion.
-		await withTimeout(scheduler.reachSafeBoundary(record), 100);
+		await withTimeout(record.host.lane.run(() => scheduler.reachSafeBoundaryInLane(record)), 100);
 		if (scenario.startsWith("replaced")) {
 			await lane.run(() => scheduler.discardInLane(record));
 			if (scenario === "replaced Run") handle = Object.freeze({ sequence: 2 });
@@ -266,7 +266,7 @@ for (const scenario of [
 		if (scenario === "queued drop") resolvePrompt();
 		settled(handle, scenario.startsWith("failed settlement") ? "failed" : "settled");
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		await withTimeout(scheduler.reachSafeBoundary(record), 100);
+		await withTimeout(record.host.lane.run(() => scheduler.reachSafeBoundaryInLane(record)), 100);
 		if (scenario === "queued drop" || scenario === "frozen before dispatch") {
 			assert.deepEqual(failures, ["failure"], "unproven terminal input must still fail");
 			return;

@@ -177,9 +177,9 @@ export function registerParticipantLifecycle(
 	// the next model context, making this the Steer freeze boundary. Only a turn
 	// with tool results continues to another model turn; a final turn leaves Steer
 	// to agent_before_settle, and awaiting the Owner there would keep the native
-	// session busy after the Owner already observes it settled. Run disposal
-	// cannot deadlock here: the host skips a safe boundary once a Run end or
-	// interruption begins, even one already queued in the lane
+	// session busy after the Owner already observes it settled. Run disposal and
+	// interruption hold this Agent's lane until the turn settles, so the host skips
+	// a safe boundary's lane work once either begins, even while it is queued
 	// (see AgentRuntimeSupervisor.runAtSafeBoundary).
 	pi.on("turn_end", async (event, ctx) => {
 		if (event.toolResults.some(deliveredAnswer)) answerDelivered = true;

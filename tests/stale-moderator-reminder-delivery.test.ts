@@ -59,7 +59,7 @@ test("an active native Run cannot queue a reminder that clears before commitment
 		};
 		await scheduler.admitCustom(record, delivery);
 		cleared = true;
-		await scheduler.reachSafeBoundary(record);
+		await record.host.lane.run(() => scheduler.reachSafeBoundaryInLane(record));
 		await host.session.followUp("Unrelated ordinary input");
 		finishModel.resolve();
 		await initial;
