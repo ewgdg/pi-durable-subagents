@@ -26,7 +26,7 @@ Select a subagent to enter its complete Pi session and interact with it directly
 
 Coordination does not override Pi's compaction, retry, or transport settings.
 
-### Obligations outlive Runs
+### Durable obligations
 
 ![A Request becomes an Answer obligation delivered to the Responder; only an Answer or the requester's Cancellation closes it. A Host watcher reminds a stalled Responder, then starts a Moderator that can intervene or escalate to the Workflow Owner.](docs/images/request-obligation.svg)
 
