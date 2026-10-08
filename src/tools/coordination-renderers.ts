@@ -317,12 +317,13 @@ export function renderAgentControlResult(
 export function renderHumanRequestCall(
 	args: HumanRequestInput,
 	theme: Theme,
-	context: Readonly<{ isPartial: boolean }>,
+	context: Readonly<{ isPartial: boolean; outputPad: number }>,
 ): Component {
 	return transcriptBlock({
 		label: context.isPartial ? "[Ask User]  waiting" : "[Ask User]",
 		markdown: typeof args.question === "string" ? args.question : "",
 		theme,
+		outputPad: context.outputPad,
 		background: "customMessageBg",
 		textColor: "customMessageText",
 	});
@@ -333,11 +334,13 @@ export function renderHumanRequestError(
 	result: AgentToolResult<unknown>,
 	_options: ToolRenderResultOptions,
 	theme: Theme,
+	context: Readonly<{ outputPad: number }>,
 ): Component {
 	return transcriptBlock({
 		label: "[Interrupted]",
 		markdown: toolResultText(result),
 		theme,
+		outputPad: context.outputPad,
 		background: "toolErrorBg",
 		textColor: "error",
 	});
@@ -347,11 +350,13 @@ export function renderHumanRequestResult(
 	result: AgentToolResult<HumanAnswer | undefined>,
 	_options: ToolRenderResultOptions,
 	theme: Theme,
+	context: Readonly<{ outputPad: number }>,
 ): Component {
 	return transcriptBlock({
 		label: "[Answer]",
 		markdown: result.details?.answer ?? toolResultText(result),
 		theme,
+		outputPad: context.outputPad,
 		background: "userMessageBg",
 		textColor: "userMessageText",
 	});
@@ -487,11 +492,13 @@ function transcriptBlock(options: {
 	label: string;
 	markdown: string;
 	theme: Theme;
+	/** Pi's outputPad setting; Ask User renders its own shell, so Pi does not pad it. */
+	outputPad: number;
 	background: "customMessageBg" | "toolErrorBg" | "userMessageBg";
 	textColor: "customMessageText" | "error" | "userMessageText";
 }): Component {
 	const box = new Box(
-		1,
+		options.outputPad,
 		1,
 		(content) => options.theme.bg(options.background, content),
 	);

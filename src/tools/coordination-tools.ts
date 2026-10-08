@@ -89,7 +89,12 @@ export type CoordinationToolEntry<
 		| Readonly<{ pendingLabel: string }>
 		| Readonly<{ renderProgress: ResultRenderer<unknown, Params> }>;
 	/** Replaces the shared error rendering of a final native error. */
-	renderError?(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme): Component;
+	renderError?(
+		result: AgentToolResult<unknown>,
+		options: ToolRenderResultOptions,
+		theme: Theme,
+		context: RenderContext<TSchema>,
+	): Component;
 }>;
 
 type AnyCoordinationToolEntry = CoordinationToolEntry<string, readonly CoordinationRole[], any, TSchema, any>;
@@ -245,7 +250,7 @@ function renderResultLifecycle(
 	presentation: CoordinationToolPresentation,
 ): Component {
 	if (!options.isPartial && context.isError) {
-		return entry.renderError?.(result, options, theme) ?? renderToolError(result, options, theme);
+		return entry.renderError?.(result, options, theme, context) ?? renderToolError(result, options, theme);
 	}
 	if (options.isPartial) {
 		return "pendingLabel" in entry.inFlight

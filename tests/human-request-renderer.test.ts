@@ -17,6 +17,7 @@ const plainTheme = {
 } as unknown as Theme;
 
 const options = { expanded: false, isPartial: false };
+const context = { outputPad: 1 };
 
 test("the human question block packs its label with the question", () => {
 	initTheme("dark");
@@ -24,7 +25,7 @@ test("the human question block packs its label with the question", () => {
 	const rows = (isPartial: boolean) => renderHumanRequestCall(
 		{ question },
 		plainTheme,
-		{ isPartial },
+		{ isPartial, ...context },
 	).render(60).map((line) => line.trim());
 	assert.deepEqual(rows(false), ["", "[Ask User]", question, ""]);
 	assert.deepEqual(rows(true), ["", "[Ask User]  waiting", question, ""]);
@@ -39,6 +40,7 @@ test("the human Answer block packs its label with the Answer", () => {
 		},
 		options,
 		plainTheme,
+		context,
 	).render(60).map((line) => line.trim());
 	assert.deepEqual(rendered, ["", "[Answer]", "Keep native Pi.", ""]);
 });
@@ -52,6 +54,7 @@ test("an interrupted Human Request reports the failure without a body gap", () =
 		},
 		options,
 		plainTheme,
+		context,
 	).render(60).map((line) => line.trim());
 	assert.deepEqual(rendered, [
 		"",
@@ -59,4 +62,21 @@ test("an interrupted Human Request reports the failure without a body gap", () =
 		"Input was interrupted before an Answer arrived.",
 		"",
 	]);
+});
+
+test("Human Request blocks indent by Pi's outputPad setting", () => {
+	initTheme("dark");
+	const answer = { content: [], details: { requestId: "human-request", answer: "Keep native Pi." } };
+	const interruption = { content: [{ type: "text" as const, text: "Interrupted." }], details: undefined };
+	for (const outputPad of [0, 1]) {
+		const blocks = [
+			renderHumanRequestCall({ question: "Which boundary?" }, plainTheme, { isPartial: false, outputPad }),
+			renderHumanRequestResult(answer, options, plainTheme, { outputPad }),
+			renderHumanRequestError(interruption, options, plainTheme, { outputPad }),
+		];
+		for (const block of blocks) {
+			const labelLine = block.render(60).find((line) => line.includes("["));
+			assert.equal(labelLine?.indexOf("["), outputPad, `outputPad ${outputPad}: ${labelLine}`);
+		}
+	}
 });

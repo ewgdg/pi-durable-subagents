@@ -730,7 +730,7 @@ export const askUserEntry = defineCoordinationTool({
 		}
 	},
 	renderCall: (args, theme, context) => renderHumanRequestCall(args, theme, context),
-	renderReceipt: (result, options, theme) => renderHumanRequestResult(result, options, theme),
+	renderReceipt: (result, options, theme, context) => renderHumanRequestResult(result, options, theme, context),
 	// The call block already shows the waiting question.
 	inFlight: { renderProgress: () => new Container() },
 	renderError: renderHumanRequestError,
