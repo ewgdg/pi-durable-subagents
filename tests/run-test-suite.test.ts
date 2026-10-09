@@ -1,8 +1,8 @@
 import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -169,6 +169,231 @@ test("a test file fails when its tests leave a handle open, naming where it was 
 	assert.match(leaking.output, /TCPServerWrap created at:\n\s+at .*leaks\.test\.mjs:6:\d+/i, leaking.output);
 	assert.equal(clean.code, 0, clean.output);
 });
+
+for (const scenario of [
+	{
+		name: "a test that abandons its temporary directories",
+		withDescendant: false,
+		ending: "return",
+		expectedExitCode: 0,
+	},
+	{
+		name: "a surviving descendant that keeps recreating its temporary directories",
+		withDescendant: true,
+		ending: "return",
+		expectedExitCode: 0,
+	},
+	{
+		name: "a run that hits the supervisor deadline",
+		withDescendant: true,
+		ending: "deadline",
+		expectedExitCode: 124,
+	},
+	{
+		name: "a run interrupted with SIGTERM",
+		withDescendant: true,
+		ending: "interrupt",
+		expectedExitCode: undefined,
+	},
+] as const) {
+	test(`a supervised run leaves no temporary directories after ${scenario.name}`, {
+		timeout: SUPERVISOR_TEST_TIMEOUT_MS,
+		skip: process.platform === "linux"
+			? false
+			: "temporary runtime directories and process containment are Linux-specific",
+	}, async (t) => {
+		const outcome = await runTemporaryDirectoryFixture(t, scenario);
+
+		if (scenario.expectedExitCode === undefined) {
+			assert.notEqual(outcome.exitCode, 0, outcome.output);
+		} else {
+			assert.equal(outcome.exitCode, scenario.expectedExitCode, outcome.output);
+		}
+		const expectedWriters = scenario.withDescendant ? ["descendant", "test"] : ["test"];
+		assert.deepEqual(outcome.evidence.map(({ writer }) => writer).sort(), expectedWriters);
+		// Give a descendant that escaped containment time to recreate its directories.
+		await new Promise<void>((resolve) => setTimeout(resolve, 200));
+		const createdDirectories = outcome.evidence.flatMap(({ directories }) => directories);
+		assert.equal(createdDirectories.length, expectedWriters.length * 2);
+		assert.deepEqual(createdDirectories.filter((path) => existsSync(path)), [],
+			`directories created during the run remain:\n${outcome.output}`);
+		assert.deepEqual(await readdir(outcome.temporaryRoot), [],
+			`the run left entries in its temporary directory:\n${outcome.output}`);
+		assert.deepEqual(await readdir(outcome.runtimeRoot), [],
+			`the run left entries in its runtime directory:\n${outcome.output}`);
+	});
+}
+
+type TemporaryDirectoryEvidence = Readonly<{
+	writer: "test" | "descendant";
+	pid: number;
+	directories: readonly string[];
+}>;
+
+async function runTemporaryDirectoryFixture(
+	t: TestContext,
+	scenario: Readonly<{ withDescendant: boolean; ending: "return" | "deadline" | "interrupt" }>,
+): Promise<Readonly<{
+	exitCode: number | null;
+	output: string;
+	evidence: readonly TemporaryDirectoryEvidence[];
+	temporaryRoot: string;
+	runtimeRoot: string;
+}>> {
+	const fixtureDirectory = await mkdtemp(join(tmpdir(), "pi-test-temporary-directories-"));
+	// The run's temporary and runtime roots are private and start empty, so any
+	// entry left in them afterwards is a net leak, whatever created it.
+	const temporaryRoot = join(fixtureDirectory, "tmp");
+	const runtimeRoot = join(fixtureDirectory, "runtime");
+	const evidenceDirectory = join(fixtureDirectory, "evidence");
+	const fixturePath = join(fixtureDirectory, "leaks-temporary-directories.test.mjs");
+	const descendantPath = join(fixtureDirectory, "temporary-directory-writer.mjs");
+	const launcherPath = join(fixtureDirectory, "supervisor-launcher.mjs");
+	await Promise.all([temporaryRoot, runtimeRoot, evidenceDirectory]
+		.map((path) => mkdir(path, { mode: 0o700 })));
+	const deadlineMs = scenario.ending === "deadline" ? 1_500 : 5_000;
+	await Promise.all([
+		writeFile(fixturePath, temporaryDirectoryFixture(scenario, descendantPath), "utf8"),
+		writeFile(descendantPath, temporaryDirectoryDescendant(), "utf8"),
+		writeFile(launcherPath, testSupervisorLauncher(
+			new URL("./support/test-process-supervisor.ts", import.meta.url).href,
+			fixturePath,
+			scenario.ending === "return" ? "complete" : "hang",
+			deadlineMs,
+		), "utf8"),
+	]);
+
+	const environment: NodeJS.ProcessEnv = {
+		...process.env,
+		TMPDIR: temporaryRoot,
+		TMP: temporaryRoot,
+		TEMP: temporaryRoot,
+		XDG_RUNTIME_DIR: runtimeRoot,
+		EVIDENCE_DIRECTORY: evidenceDirectory,
+	};
+	// Keep the user's session bus reachable even though the runtime root moved.
+	if (process.env.XDG_RUNTIME_DIR && !environment.DBUS_SESSION_BUS_ADDRESS) {
+		environment.DBUS_SESSION_BUS_ADDRESS = `unix:path=${join(process.env.XDG_RUNTIME_DIR, "bus")}`;
+	}
+	delete environment.NODE_TEST_CONTEXT;
+	const runner = spawn(process.execPath, [launcherPath], {
+		cwd: fixtureDirectory,
+		detached: true,
+		env: environment,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let output = "";
+	runner.stdout!.on("data", (chunk) => output += String(chunk));
+	runner.stderr!.on("data", (chunk) => output += String(chunk));
+	const exited = new Promise<number | null>((resolve, reject) => {
+		runner.once("error", reject);
+		runner.once("exit", (code) => resolve(code));
+	});
+	// This watchdog lives outside the fixture supervisor, so a run that never
+	// ends still fails within the test timeout instead of hanging it.
+	const watchdog = setTimeout(() => signalIfAlive(-runner.pid!, "SIGKILL"), deadlineMs + 2_500);
+	t.after(async () => {
+		clearTimeout(watchdog);
+		for (const { pid } of await readTemporaryDirectoryEvidence(evidenceDirectory)) {
+			signalIfAlive(pid, "SIGKILL");
+		}
+		if (runner.pid) signalIfAlive(-runner.pid, "SIGKILL");
+		await rm(fixtureDirectory, { recursive: true, force: true });
+	});
+
+	if (scenario.ending === "interrupt") {
+		const expectedWriters = scenario.withDescendant ? 2 : 1;
+		const deadline = Date.now() + FEEDBACK_TIMEOUT_MS;
+		while ((await readTemporaryDirectoryEvidence(evidenceDirectory)).length < expectedWriters) {
+			if (Date.now() > deadline) throw new Error(`fixture never recorded its directories:\n${output}`);
+			await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+		}
+		process.kill(-runner.pid!, "SIGTERM");
+	}
+	const exitCode = await exited;
+	clearTimeout(watchdog);
+	return {
+		exitCode,
+		output,
+		evidence: await readTemporaryDirectoryEvidence(evidenceDirectory),
+		temporaryRoot,
+		runtimeRoot,
+	};
+}
+
+async function readTemporaryDirectoryEvidence(
+	evidenceDirectory: string,
+): Promise<readonly TemporaryDirectoryEvidence[]> {
+	const names = (await readdir(evidenceDirectory)).filter((name) => name.endsWith(".json"));
+	return Promise.all(names.map(async (name) =>
+		JSON.parse(await readFile(join(evidenceDirectory, name), "utf8")) as TemporaryDirectoryEvidence));
+}
+
+// Shared by the test worker and its descendant: create nested directories in
+// both the temporary and runtime roots, then record them for the outer test.
+const TEMPORARY_DIRECTORY_FIXTURE_HELPERS = `
+import { mkdirSync, mkdtempSync, renameSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+function createAbandonedDirectories(writer) {
+	const directories = [tmpdir(), process.env.XDG_RUNTIME_DIR].map((root) => {
+		const directory = mkdtempSync(join(root, writer + "-"));
+		mkdirSync(join(directory, "nested", "deeper"), { recursive: true });
+		writeFileSync(join(directory, "nested", "deeper", "file.txt"), "left behind");
+		return directory;
+	});
+	const evidencePath = join(process.env.EVIDENCE_DIRECTORY, writer + ".json");
+	writeFileSync(evidencePath + ".tmp", JSON.stringify({ writer, pid: process.pid, directories }));
+	renameSync(evidencePath + ".tmp", evidencePath);
+	return directories;
+}
+`;
+
+function temporaryDirectoryDescendant(): string {
+	return `${TEMPORARY_DIRECTORY_FIXTURE_HELPERS}
+process.on("SIGTERM", () => {});
+process.on("SIGHUP", () => {});
+const directories = createAbandonedDirectories("descendant");
+let sequence = 0;
+// Keep writing, and recreate the directories if they disappear, so removal
+// that races a still-running descendant is observable as a leftover.
+setInterval(() => {
+	for (const directory of directories) {
+		try {
+			mkdirSync(join(directory, "churn"), { recursive: true });
+			writeFileSync(join(directory, "churn", String(sequence++)), "x");
+		} catch {}
+	}
+}, 2);
+`;
+}
+
+function temporaryDirectoryFixture(
+	scenario: Readonly<{ withDescendant: boolean; ending: "return" | "deadline" | "interrupt" }>,
+	descendantPath: string,
+): string {
+	return `${TEMPORARY_DIRECTORY_FIXTURE_HELPERS}
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import test from "node:test";
+
+test("abandons temporary directories", async () => {
+	createAbandonedDirectories("test");
+	${scenario.withDescendant ? `
+	const descendant = spawn(process.execPath, [${JSON.stringify(descendantPath)}], {
+		detached: true,
+		stdio: "ignore",
+	});
+	descendant.unref();
+	const descendantEvidence = join(process.env.EVIDENCE_DIRECTORY, "descendant.json");
+	while (!existsSync(descendantEvidence)) {
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}` : ""}
+	${scenario.ending === "return" ? "" : "setInterval(() => {}, 1000); await new Promise(() => {});"}
+});
+`;
+}
 
 async function assertPiSettingsRemainUnchanged(
 	t: TestContext,
