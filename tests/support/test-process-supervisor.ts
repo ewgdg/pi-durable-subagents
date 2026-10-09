@@ -2,12 +2,14 @@ import { spawn, type ChildProcess } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmdirSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { constants as osConstants } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -21,6 +23,12 @@ export async function runTestProcess(arguments_: readonly string[], deadlineMs: 
 	if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 2_147_483_647) {
 		throw new Error("Test deadline must be an integer between 1 and 2147483647 milliseconds");
 	}
+	// Test fixtures, Pi hosts, and child processes create temporary directories
+	// that many tests never remove, and a timed-out or killed test cannot. Give
+	// the whole run one scratch root and remove it once the process tree is gone.
+	// The prefix stays short: Control sockets live below it, sometimes in a nested
+	// supervised run, and Unix socket paths are limited to about 100 bytes.
+	const scratchDirectory = mkdtempSync(join(tmpdir(), "pt-"));
 	let requestTermination!: (signal: NodeJS.Signals) => void;
 	const terminationRequested = new Promise<NodeJS.Signals>((resolve) => {
 		requestTermination = resolve;
@@ -32,17 +40,56 @@ export async function runTestProcess(arguments_: readonly string[], deadlineMs: 
 		process.on(signal, handler);
 	}
 
+	// Handlers stay installed during removal so a second interrupt cannot kill
+	// the supervisor halfway through it.
 	try {
-		return await runOwnedTestProcess(arguments_, terminationRequested, deadlineMs);
+		const outcome = await runOwnedTestProcess(
+			arguments_,
+			terminationRequested,
+			deadlineMs,
+			scratchEnvironment(scratchDirectory),
+		).then((exitCode) => ({ exitCode }), (error: unknown) => ({ error }));
+		return settleWithScratchRemoval(outcome, scratchDirectory);
 	} finally {
 		for (const [signal, handler] of handlers) process.off(signal, handler);
 	}
+}
+
+// A cleanup failure must not replace the run's own exit code or error.
+function settleWithScratchRemoval(
+	outcome: Readonly<{ exitCode: number } | { error: unknown }>,
+	scratchDirectory: string,
+): number {
+	try {
+		// Retries cover descendants that still hold files open (Windows only kills the root).
+		rmSync(scratchDirectory, { recursive: true, force: true, maxRetries: 5 });
+	} catch (cleanupError) {
+		if ("error" in outcome) {
+			throw new AggregateError([outcome.error, cleanupError], "test_run_scratch_cleanup_failed");
+		}
+		console.error("Failed to remove the test run scratch directory:", cleanupError);
+		return outcome.exitCode || 1;
+	}
+	if ("error" in outcome) throw outcome.error;
+	return outcome.exitCode;
+}
+
+// os.tmpdir() reads TMPDIR on Unix and TEMP/TMP on Windows. Child runtimes put
+// control sockets and runtime artifacts under XDG_RUNTIME_DIR before tmpdir().
+function scratchEnvironment(scratchDirectory: string): NodeJS.ProcessEnv {
+	return {
+		TMPDIR: scratchDirectory,
+		TEMP: scratchDirectory,
+		TMP: scratchDirectory,
+		XDG_RUNTIME_DIR: scratchDirectory,
+	};
 }
 
 async function runOwnedTestProcess(
 	arguments_: readonly string[],
 	terminationRequested: Promise<NodeJS.Signals>,
 	deadlineMs: number,
+	scratchVariables: NodeJS.ProcessEnv,
 ): Promise<number> {
 	const cgroup = LinuxCgroupOwner.tryCreate();
 	try {
@@ -51,7 +98,11 @@ async function runOwnedTestProcess(
 		await cgroup?.dispose();
 		throw error;
 	}
-	const childEnvironment = { ...(cgroup?.testEnvironment() ?? process.env), [SUPERVISED_RUN_VARIABLE]: "1" };
+	const childEnvironment = {
+		...(cgroup?.testEnvironment() ?? process.env),
+		...scratchVariables,
+		[SUPERVISED_RUN_VARIABLE]: "1",
+	};
 	// Isolate the test runner from terminal/CI group signals. The supervisor must
 	// remain alive long enough to clean descendants in separate PTY process groups.
 	const child = cgroup
