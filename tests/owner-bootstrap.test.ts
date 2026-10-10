@@ -603,7 +603,7 @@ test("/agents models toggles durable model exclusions from the Owner session", {
 	].join("\n"), "utf8");
 	await bindTestOwnerHost(host, "tui");
 	const spawnGuidance = () => host.session.getToolDefinition("agent_spawn")?.promptGuidelines?.join("\n") ?? "";
-	assert.match(spawnGuidance(), /model: coordination-test\/deterministic-owner/);
+	assert.match(spawnGuidance(), /- name: owner-model-delegate/);
 	const command = host.session.extensionRunner.getCommand("agents");
 	assert.ok(command);
 	const handled = command.handler(

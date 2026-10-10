@@ -155,7 +155,7 @@ test("refreshing Spawn guidance lists the new Templates without re-activating fi
 	const systemPrompt = await systemPromptForNextTurn();
 	assert.equal(host.session.getActiveToolNames().includes("ask_user"), false);
 	assert.match(systemPrompt, /## Available Agent Templates Snapshot/);
-	assert.match(systemPrompt, /- name: second-delegate\n  useWhen: "Use second-delegate\."\n  model: anthropic\/claude-sonnet-4-5\n  thinking: high/);
+	assert.match(systemPrompt, /- name: second-delegate\n  useWhen: "Use second-delegate\."$/m);
 	assert.doesNotMatch(systemPrompt, /first-delegate/);
 	for (const tag of ["agent_spawn", "agent_delegation"]) {
 		assert.equal(systemPrompt.match(new RegExp(`<${tag}>`, "g"))?.length, 1, tag);
