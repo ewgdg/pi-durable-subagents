@@ -273,7 +273,8 @@ const agentSpawnConfigurationParameters = Type.Object(
 					thinking: Type.Union([
 						RuntimeThinkingSchema,
 						Type.Literal("inherit"),
-					], { description: 'The child thinking level, or "inherit" for the parent thinking level. Pi resolves a level the selected model cannot run to its nearest supported level.' }),
+						Type.Literal("preset"),
+					], { description: 'The child thinking level, "inherit" for the parent thinking level, or "preset" (only with a virtual/<name> id) to use each virtual model entry\'s own level. Pi resolves a level the selected model cannot run to its nearest supported level.' }),
 				},
 				{
 					additionalProperties: false,

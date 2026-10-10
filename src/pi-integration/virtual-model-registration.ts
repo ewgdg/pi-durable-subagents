@@ -20,6 +20,16 @@ import {
 import { RUNTIME_THINKING_LEVELS, type ModelReference } from "../protocol/runtime-configuration.ts";
 
 /**
+ * `explicit` routes every entry on the selected level; `preset` routes each entry
+ * on its own level. A spawned child may start in `preset`; everything else starts
+ * in `explicit`.
+ */
+export type VirtualModelThinkingMode = "preset" | "explicit";
+
+/** Router state Pi stores on the session branch, so a resumed Runtime keeps a switch. */
+type VirtualModelRouterState = Readonly<{ thinking: VirtualModelThinkingMode }>;
+
+/**
  * Registers the user's Virtual Models with Pi in one process and routes their
  * requests. Pi resolves `--model` and restores a session's model selection right
  * after extension factories run, so the first sync must finish inside the factory.
@@ -34,16 +44,33 @@ export class VirtualModelRegistrar {
 	#policy: WorkflowPolicySnapshot = DEFAULT_WORKFLOW_POLICY;
 	#registered = new Set<string>();
 	#reportedInvalidPolicy: string | undefined;
+	#thinkingMode: VirtualModelThinkingMode;
+	#explicitSwitchPending = false;
 
-	private constructor(pi: ExtensionAPI, agentDir: string) {
+	private constructor(pi: ExtensionAPI, agentDir: string, thinkingMode: VirtualModelThinkingMode) {
 		this.#pi = pi;
 		this.#agentDir = agentDir;
+		this.#thinkingMode = thinkingMode;
 	}
 
-	static async create(pi: ExtensionAPI, agentDir: string): Promise<VirtualModelRegistrar> {
-		const registrar = new VirtualModelRegistrar(pi, agentDir);
+	static async create(
+		pi: ExtensionAPI,
+		agentDir: string,
+		thinkingMode: VirtualModelThinkingMode = "explicit",
+	): Promise<VirtualModelRegistrar> {
+		const registrar = new VirtualModelRegistrar(pi, agentDir, thinkingMode);
 		await registrar.sync(agentDir);
 		return registrar;
+	}
+
+	/**
+	 * A manual thinking change leaves preset mode for the rest of the session branch.
+	 * The next routed request stores the switch as router state.
+	 */
+	switchToExplicitThinking(): void {
+		if (this.#thinkingMode === "explicit") return;
+		this.#thinkingMode = "explicit";
+		this.#explicitSwitchPending = true;
 	}
 
 	/** Re-reads the policy and makes the registered names match its definitions. */
@@ -75,7 +102,7 @@ export class VirtualModelRegistrar {
 		name: string,
 		request: ModelRouteRequest,
 		ctx: ExtensionContext,
-	): Promise<ModelRoute> {
+	): Promise<ModelRoute<VirtualModelRouterState>> {
 		await this.#refreshPolicy(ctx);
 		const { excludedModels, virtualModels } = this.#policy;
 		const entries = requireVirtualModelDefinition(virtualModels, name);
@@ -98,7 +125,27 @@ export class VirtualModelRegistrar {
 		const model = available.find((candidate) =>
 			candidate.provider === entry.model.provider && candidate.id === entry.model.modelId);
 		if (model === undefined) throw new Error(`Virtual model routing lost ${entry.model.provider}/${entry.model.modelId}`);
-		return { model, thinkingLevel: request.thinkingLevel };
+		const state = this.#resolveThinkingState(request);
+		return {
+			model,
+			thinkingLevel: this.#thinkingMode === "preset" ? entry.thinking : request.thinkingLevel,
+			...(state === undefined ? {} : { state }),
+		};
+	}
+
+	/**
+	 * A stored state wins over the launch mode, so a resumed Runtime keeps an earlier
+	 * switch. Returns the state to store, if it changed. Pi passes no state to
+	 * `direct` requests and ignores their result, so those keep the current mode.
+	 */
+	#resolveThinkingState(request: ModelRouteRequest): VirtualModelRouterState | undefined {
+		if (request.reason === "direct") return undefined;
+		if (this.#explicitSwitchPending) {
+			this.#explicitSwitchPending = false;
+			return { thinking: "explicit" };
+		}
+		if (isRouterState(request.state)) this.#thinkingMode = request.state.thinking;
+		return undefined;
 	}
 
 	/**
@@ -119,4 +166,9 @@ export class VirtualModelRegistrar {
 		if (ctx?.hasUI) ctx.ui.notify(notice, "warning");
 		else process.stderr.write(`${notice}\n`);
 	}
+}
+
+function isRouterState(value: unknown): value is VirtualModelRouterState {
+	return typeof value === "object" && value !== null &&
+		"thinking" in value && (value.thinking === "preset" || value.thinking === "explicit");
 }

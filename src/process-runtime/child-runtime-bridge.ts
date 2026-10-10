@@ -77,13 +77,22 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	let connection: ChildControlConnection | undefined;
 	registerSessionStartup(pi);
 	registerChildBindingHooks(pi, () => connection);
-	// The Owner launches children with PI_CODING_AGENT_DIR set to its own agent
-	// directory, and only this bridge is loaded, so the child registers its own.
-	await VirtualModelRegistrar.create(pi, hostPi.getAgentDir());
 	const resolveAgentLabel = (agentId: string) =>
 		connection?.currentBinding?.activity.agentLabel(agentId);
 	registerMessageDeliveryRenderer(pi, resolveAgentLabel);
 	const bootstrap = await readBootstrapDescriptor();
+	// The Owner launches children with PI_CODING_AGENT_DIR set to its own agent
+	// directory, and only this bridge is loaded, so the child registers its own.
+	const virtualModels = await VirtualModelRegistrar.create(
+		pi,
+		hostPi.getAgentDir(),
+		bootstrap.presetThinking ? "preset" : "explicit",
+	);
+	// Pi applies the launch level before session_start binds the connection, and this
+	// extension never sets a level, so a later change is the user's (or an extension's).
+	pi.on("thinking_level_select", () => {
+		if (connection) virtualModels.switchToExplicitThinking();
+	});
 	let boundRuntime: AgentSessionRuntime | undefined;
 	const resolveAnswerTargetAgent = (toolCallId: string) => boundRuntime === undefined
 		? undefined

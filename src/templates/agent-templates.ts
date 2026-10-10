@@ -1,13 +1,13 @@
 import type {
+	CandidateThinking,
 	ModelReference,
-	RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 
 export type SystemPromptMode = "append" | "replace";
 
 export type AgentTemplateModelCandidate = Readonly<{
 	model: ModelReference;
-	thinking: RuntimeThinkingLevel;
+	thinking: CandidateThinking;
 }>;
 
 /** Agent-owned rules; no discovery metadata or resolved parent configuration. */

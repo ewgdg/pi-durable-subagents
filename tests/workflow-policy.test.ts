@@ -38,6 +38,7 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
 		excludedModels: ["openai-codex/*", "openrouter/anthropic/claude-sonnet-4"],
+		virtualModels: {},
 	});
 	assert.equal(Object.isFrozen(configured.excludedModels), true);
 	assert.equal(Object.isFrozen(configured), true);

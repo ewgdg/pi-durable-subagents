@@ -32,11 +32,12 @@ test("the package declares exactly the Pi host modules imported by production", 
 		dependencies?: Record<string, string>;
 		peerDependencies?: Record<string, string>;
 	};
+	// 0.99.0 is the first Pi release with registerVirtualModel.
 	const expectedHostPeers = {
-		"@earendil-works/pi-agent-core": "*",
-		"@earendil-works/pi-ai": "*",
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*",
+		"@earendil-works/pi-agent-core": ">=0.99.0",
+		"@earendil-works/pi-ai": ">=0.99.0",
+		"@earendil-works/pi-coding-agent": ">=0.99.0",
+		"@earendil-works/pi-tui": ">=0.99.0",
 		typebox: "*",
 	};
 

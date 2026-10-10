@@ -2,9 +2,11 @@ import { CoordinationRecordValidationError } from "./record-validation.ts";
 import type { AgentSpawnConfigurationInput } from "../templates/agent-configuration.ts";
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
 import {
-	isRuntimeThinkingLevel,
-	type RuntimeThinkingLevel,
+	isCandidateThinking,
+	PRESET_THINKING,
+	type CandidateThinking,
 } from "./runtime-configuration.ts";
+import { VIRTUAL_MODEL_PROVIDER } from "../policy/virtual-models.ts";
 
 
 export type AgentSpawnInput = Readonly<{
@@ -137,6 +139,11 @@ function validateModel(value: unknown): NonNullable<AgentSpawnConfigurationInput
 	const thinking = value.thinking === undefined || value.thinking === "inherit"
 		? value.thinking
 		: validateThinking(value.thinking);
+	if (thinking === PRESET_THINKING && (typeof id !== "string" || !id.startsWith(`${VIRTUAL_MODEL_PROVIDER}/`))) {
+		throw new CoordinationRecordValidationError(
+			'invalid_input: Agent Spawn config.thinking "preset" requires a virtual/<name> config.model.id',
+		);
+	}
 	return {
 		...(id === undefined ? {} : { id }),
 		...(thinking === undefined ? {} : { thinking }),
@@ -152,8 +159,8 @@ function validateModelId(value: unknown): string {
 	return id;
 }
 
-function validateThinking(value: unknown): RuntimeThinkingLevel {
-	if (!isRuntimeThinkingLevel(value)) {
+function validateThinking(value: unknown): CandidateThinking {
+	if (!isCandidateThinking(value)) {
 		throw new CoordinationRecordValidationError("invalid_input: Agent Spawn config.thinking is invalid");
 	}
 	return value;

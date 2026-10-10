@@ -1,10 +1,13 @@
 import { resolve } from "node:path";
 
-import type {
-	InheritableRuntimeConfiguration,
-	ModelReference,
-	RuntimeThinkingLevel,
+import {
+	PRESET_THINKING,
+	type CandidateThinking,
+	type InheritableRuntimeConfiguration,
+	type ModelReference,
+	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
+import { isVirtualModel } from "../policy/virtual-models.ts";
 import type {
 	AgentTemplate,
 	AgentCreationPreset,
@@ -14,7 +17,7 @@ import type {
 export type AgentSpawnConfigurationInput = Readonly<{
 	model?: Readonly<{
 		id?: string | "inherit";
-		thinking?: RuntimeThinkingLevel | "inherit";
+		thinking?: CandidateThinking | "inherit";
 	}>;
 	cwd?: string;
 	excludeTools?: readonly string[];
@@ -40,15 +43,21 @@ export type EffectiveAgentRunConfiguration = Readonly<{
 	loadContextFiles: boolean;
 }>;
 
+/**
+ * Set when a Virtual Model selection uses each entry's own thinking level. `thinking`
+ * then names the first usable entry's level, so the selection matches the primary entry.
+ */
+type PresetThinkingMarker = Readonly<{ presetThinking?: true }>;
+
 /** Launch input may delegate thinking selection to Pi while all other values stay explicit. */
 export type AgentRunLaunchConfiguration = Readonly<
 	Omit<EffectiveAgentRunConfiguration, "thinking"> & {
 		thinking?: RuntimeThinkingLevel;
 	}
->;
+> & PresetThinkingMarker;
 
 /** Prepared rules before the child-owned skill discovery contributes the loaded set. */
-export type ResolvedAgentRunConfiguration = Omit<EffectiveAgentRunConfiguration, "skills">;
+export type ResolvedAgentRunConfiguration = Omit<EffectiveAgentRunConfiguration, "skills"> & PresetThinkingMarker;
 
 export function resolveAgentRunConfiguration(options: {
 	inherited: InheritableRuntimeConfiguration;
@@ -59,6 +68,8 @@ export function resolveAgentRunConfiguration(options: {
 	isModelExcluded?(model: ModelReference): boolean;
 	/** Pi clamps a level its selected model cannot run; the host resolves that same level. */
 	clampThinking?(model: ModelReference, level: RuntimeThinkingLevel): RuntimeThinkingLevel;
+	/** The level of a Virtual Model's first usable entry, which a preset selection starts on. */
+	presetThinking?(model: ModelReference): RuntimeThinkingLevel;
 }): ResolvedAgentRunConfiguration {
 	const { inherited, template, overrides } = options;
 	// Exclusions accumulate: a Spawn config restricts further, it does not lift a
@@ -102,7 +113,7 @@ export function resolveAgentRunConfiguration(options: {
 			options.isModelExcluded,
 		)
 		: inherited;
-	const modelConfiguration = {
+	const modelConfiguration: Readonly<{ model: ModelReference; thinking: CandidateThinking }> = {
 		model: overrides?.model?.id === "inherit"
 			? inherited.model
 			: explicitlySelectedModel ?? defaults.model,
@@ -110,10 +121,17 @@ export function resolveAgentRunConfiguration(options: {
 			? inherited.thinking
 			: overrides?.model?.thinking ?? defaults.thinking,
 	};
+	const presetThinking = modelConfiguration.thinking === PRESET_THINKING;
+	if (presetThinking && !isVirtualModel(modelConfiguration.model)) {
+		throw new Error(`Thinking "preset" requires a virtual model, not ${modelConfiguration.model.provider}/${modelConfiguration.model.modelId}`);
+	}
+	const selectedThinking = presetThinking
+		? requirePresetThinking(options.presetThinking, modelConfiguration.model)
+		: modelConfiguration.thinking as RuntimeThinkingLevel;
 	// The child clamps an unsupported level when it starts, so the launch specification
 	// and the recorded configuration must both name the level it will really run.
-	const thinking = options.clampThinking?.(modelConfiguration.model, modelConfiguration.thinking)
-		?? modelConfiguration.thinking;
+	const thinking = options.clampThinking?.(modelConfiguration.model, selectedThinking)
+		?? selectedThinking;
 
 	return {
 		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),
@@ -124,7 +142,16 @@ export function resolveAgentRunConfiguration(options: {
 		extensions: [...configuredExtensions],
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		loadContextFiles,
+		...(presetThinking ? { presetThinking: true } : {}),
 	};
+}
+
+function requirePresetThinking(
+	presetThinking: ((model: ModelReference) => RuntimeThinkingLevel) | undefined,
+	model: ModelReference,
+): RuntimeThinkingLevel {
+	if (!presetThinking) throw new Error("Thinking \"preset\" is not supported by this Runtime preparation");
+	return presetThinking(model);
 }
 
 function parseModelId(id: string): ModelReference {
@@ -137,7 +164,7 @@ function resolveTemplateModelConfiguration(
 	templateModels: AgentTemplate["models"],
 	isModelAvailable: (model: ModelReference) => boolean,
 	isModelExcluded: ((model: ModelReference) => boolean) | undefined,
-): Readonly<{ model: ModelReference; thinking: RuntimeThinkingLevel }> {
+): Readonly<{ model: ModelReference; thinking: CandidateThinking }> {
 	if (!templateModels) return { model: inherited.model, thinking: inherited.thinking };
 	const selected = templateModels.find(({ model }) => isModelAvailable(model));
 	if (selected) return selected;

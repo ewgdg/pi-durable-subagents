@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
-import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
+import { CandidateThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
 	ChildProcessBootstrapSchema,
@@ -32,7 +32,7 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 			provider: NonEmptyStringSchema,
 			modelId: NonEmptyStringSchema,
 		}, { additionalProperties: false }),
-		thinking: RuntimeThinkingSchema,
+		thinking: CandidateThinkingSchema,
 	}, { additionalProperties: false }), { minItems: 1, uniqueItems: true })),
 	excludeTools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	excludeSkills: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),

@@ -205,6 +205,7 @@ export class ProcessChildSessionFactory {
 			isModelAvailable: (model) => this.#isModelAvailable(model),
 			isModelExcluded: (model) => this.#modelExcluded(model),
 			clampThinking: (model, level) => this.#clampThinking(model, level),
+			presetThinking: (model) => this.#presetThinking(model),
 			...(template === undefined ? {} : { template }),
 		});
 	}
@@ -403,6 +404,7 @@ export class ProcessChildSessionFactory {
 			isModelAvailable: (model) => this.#isModelAvailable(model),
 			isModelExcluded: (model) => this.#modelExcluded(model),
 			clampThinking: (model, level) => this.#clampThinking(model, level),
+			presetThinking: (model) => this.#presetThinking(model),
 			...(template === undefined ? {} : { template }),
 			// Rejected spawn arguments provide no runtime overrides; the Identity retains its preset.
 			...(options.spawnInput?.config === undefined
@@ -580,6 +582,16 @@ export class ProcessChildSessionFactory {
 		const definitions = this.#virtualModels?.() ?? {};
 		return Object.hasOwn(definitions, model.modelId)
 			&& definitions[model.modelId]!.some((entry) => this.#isModelAvailable(entry.model));
+	}
+
+	/** A preset selection starts on the level of the entry its first request will use. */
+	#presetThinking(model: Readonly<{ provider: string; modelId: string }>): RuntimeThinkingLevel {
+		const definitions = this.#virtualModels?.() ?? {};
+		const entries = Object.hasOwn(definitions, model.modelId) ? definitions[model.modelId]! : [];
+		const entry = entries.find((candidate) => this.#isModelAvailable(candidate.model));
+		// Availability already passed for this virtual model, so an entry exists.
+		if (entry === undefined) throw new Error(`Virtual model ${model.provider}/${model.modelId} has no usable entry`);
+		return entry.thinking;
 	}
 
 	#clampThinking(

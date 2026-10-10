@@ -63,6 +63,7 @@ type PrepareChildRuntimeOptions = {
 	isModelAvailable?(model: ModelReference): boolean;
 	isModelExcluded?(model: ModelReference): boolean;
 	clampThinking?(model: ModelReference, level: RuntimeThinkingLevel): RuntimeThinkingLevel;
+	presetThinking?(model: ModelReference): RuntimeThinkingLevel;
 };
 
 export function prepareChildRuntime(
@@ -90,6 +91,7 @@ export async function prepareChildRuntime(
 		isModelAvailable: options.isModelAvailable ?? (() => true),
 		...(options.isModelExcluded === undefined ? {} : { isModelExcluded: options.isModelExcluded }),
 		...(options.clampThinking === undefined ? {} : { clampThinking: options.clampThinking }),
+		...(options.presetThinking === undefined ? {} : { presetThinking: options.presetThinking }),
 	});
 	// Pi owns its shared default and model-capability clamp. Keep an absent
 	// Moderator selection unresolved until Pi starts instead of copying the Owner.
