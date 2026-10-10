@@ -102,4 +102,6 @@ Grow in layers. Each layer works on its own.
 
 ## Outcomes & Retrospective
 
-(Filled at completion.)
+- Shipped in #225: the Config tab lists, adds, edits, reorders, renames, and deletes Virtual Models with per-action saves, and the Owner's `/model` list, template snapshots, and spawn guidance follow each save.
+- Missed before merge: the panel had only top and bottom rules and unpadded lines, so chat text showed through. Fixed by sharing the selector's box frame (`src/presentation/overlay-frame.ts`). Lesson: check a new overlay over a busy chat, not only in a blank render script.
+- `/agents models` had the same bleed and now uses the same frame.

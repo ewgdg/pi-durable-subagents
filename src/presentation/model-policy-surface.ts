@@ -1,5 +1,4 @@
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
 	Input,
 	Key,
@@ -17,6 +16,7 @@ import {
 	providerExclusionEntry,
 	type ModelPolicyModel,
 } from "../policy/model-exclusion.ts";
+import { framePanel } from "./overlay-frame.ts";
 
 const MAXIMUM_VISIBLE_ROWS = 8;
 
@@ -164,26 +164,28 @@ class ModelPolicySurface implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
+		// A boxed, fully padded panel: unframed short lines let the chat behind show through.
+		return framePanel((contentWidth) => this.#renderContent(contentWidth), Math.max(1, Math.floor(width)),
+			(text) => this.#theme.fg("border", text));
+	}
+
+	#renderContent(width: number): string[] {
 		const theme = this.#theme;
 		const rows = this.#rows();
-		const boundedWidth = Math.max(1, Math.floor(width));
-		const lines = [
-			...this.#border().render(boundedWidth),
+		return [
 			theme.fg("accent", theme.bold("Agent spawn model policy")),
 			theme.fg("muted", "Banned models cannot be used by Agent Templates or agent_spawn."),
 			"",
-			...this.#search.render(boundedWidth),
+			...this.#search.render(width),
 			"",
-			...this.#renderRows(rows, boundedWidth),
+			...this.#renderRows(rows, width),
 			"",
 			...(this.#status === undefined
 				? []
-				: [theme.fg("warning", truncateToWidth(this.#status, boundedWidth, ""))]),
-			...this.#renderDetail(rows, boundedWidth),
-			theme.fg("dim", truncateToWidth(this.#footer(rows), boundedWidth, "")),
-			...this.#border().render(boundedWidth),
+				: [theme.fg("warning", truncateToWidth(this.#status, width, ""))]),
+			...this.#renderDetail(rows, width),
+			theme.fg("dim", truncateToWidth(this.#footer(rows), width, "")),
 		];
-		return lines;
 	}
 
 	invalidate(): void {
@@ -280,10 +282,6 @@ class ModelPolicySurface implements Component, Focusable {
 			"  Enter toggle · Ctrl+A allow all · Ctrl+X ban all · Esc done",
 			`  ${banned} banned · ${unavailable} unavailable`,
 		].join("   ");
-	}
-
-	#border(): DynamicBorder {
-		return new DynamicBorder((text) => this.#theme.fg("border", text));
 	}
 
 	#moveSelection(delta: number): void {

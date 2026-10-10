@@ -1,5 +1,4 @@
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
 	Input,
 	Key,
@@ -28,6 +27,7 @@ import {
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
+import { framePanel } from "./overlay-frame.ts";
 
 const MAXIMUM_NAME_COLUMNS = 20;
 const MAXIMUM_ID_COLUMNS = 44;
@@ -138,13 +138,17 @@ class VirtualModelConfigSurface implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
+		// A boxed, fully padded panel: unframed short lines let the chat behind show through.
+		return framePanel((contentWidth) => this.#renderContent(contentWidth), Math.max(1, Math.floor(width)),
+			(text) => this.#theme.fg("border", text));
+	}
+
+	#renderContent(width: number): string[] {
 		const theme = this.#theme;
-		const boundedWidth = Math.max(1, Math.floor(width));
-		const line = (text: string) => truncateToWidth(text, boundedWidth, "");
+		const line = (text: string) => truncateToWidth(text, width, "");
 		const { invalidReason } = this.#config;
 		const status = this.#status;
 		return [
-			...this.#border().render(boundedWidth),
 			line(theme.fg("accent", theme.bold(this.#title()))),
 			line(theme.fg("muted", `Named model lists, usable as ${VIRTUAL_MODEL_PROVIDER}/<name>.`)),
 			...(invalidReason === undefined ? [] : [
@@ -152,11 +156,10 @@ class VirtualModelConfigSurface implements Component, Focusable {
 				line(theme.fg("error", invalidReason)),
 			]),
 			"",
-			...this.#renderScreen(boundedWidth).map(line),
+			...this.#renderScreen(width).map(line),
 			"",
 			...(status === undefined ? [] : [line(theme.fg(status.tone, status.text))]),
 			line(theme.fg("dim", `  ${this.#help()}`)),
-			...this.#border().render(boundedWidth),
 		];
 	}
 
@@ -634,10 +637,6 @@ class VirtualModelConfigSurface implements Component, Focusable {
 			scrollInfo: (text) => this.#theme.fg("muted", text),
 			noMatch: (text) => this.#theme.fg("muted", text),
 		};
-	}
-
-	#border(): DynamicBorder {
-		return new DynamicBorder((text) => this.#theme.fg("border", text));
 	}
 }
 

@@ -42,6 +42,7 @@ import {
 	type AgentSelectorView,
 } from "./agent-selector-projection.ts";
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
+import { frameLine } from "./overlay-frame.ts";
 import {
 	formatAgentWorkStatus,
 	SUSPENSION_LABEL,
@@ -898,19 +899,6 @@ function samePointerAction(left: PointerAction | undefined, right: PointerAction
 		case "ancestor": return right.kind === "ancestor" &&
 			left.agentId === right.agentId && left.childId === right.childId;
 	}
-}
-
-function frameLine(
-	line: string,
-	blockWidth: number,
-	leftMargin: number,
-	rightMargin: number,
-	border: (text: string) => string,
-): string {
-	// Compositing may end on a styled cell; frame padding must never inherit it.
-	const content = truncateToWidth(line, blockWidth, "") + "\x1b[0m";
-	const contentPadding = " ".repeat(Math.max(0, blockWidth - visibleWidth(content)));
-	return `${border("│")}${" ".repeat(leftMargin)}${content}${contentPadding}${" ".repeat(rightMargin)}${border("│")}`;
 }
 
 function formatRun(status: AgentRosterStatus, theme: Theme): string {
