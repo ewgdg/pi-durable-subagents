@@ -32,8 +32,8 @@ This is the first section of the #213 Config tab. It ships only Virtual Models. 
   - An invalid policy file makes the whole tab read-only with the parse error shown, as `/agents models` refuses to rewrite an invalid file. The list still shows the Owner's last valid definitions, dimmed.
 - **Saving** (user decision: per action). Every completed action writes immediately, like the `/agents models` toggles. Each action is shaped so the file is valid after it (a new name always has one entry, the last entry cannot be deleted). Running Agents see each step on their next routed request. While a write runs, input is blocked and the status line shows `Saving…` or the error, as in `/agents models`.
 - **Write path**:
-  - Generalize `writeExcludedModels` (`src/policy/workflow-policy.ts`) into one field writer used by both settings: re-read the file, refuse an invalid file, set or delete one field, re-parse the result, write a temp file and rename. Remove the field-specific writer.
-  - `WorkflowCoordinator.setVirtualModels(definitions)` mirrors `setModelExclusions`: parse, write, publish the policy snapshot, then sync the Owner's `VirtualModelRegistrar`, so the Owner's `/model` list follows at once instead of after reload. Child processes keep their registrations and follow through `route()`, which rereads the file on every request.
+  - One private field rewrite in `src/policy/workflow-policy.ts` (re-read the file, refuse an invalid file, set or delete one field, re-parse the result, write a temp file and rename), behind two typed writers: `writeExcludedModels` and `writeVirtualModels`.
+  - `WorkflowCoordinator.setVirtualModels(definitions)` writes and publishes the policy snapshot. The `/agents` command then syncs the Owner's `VirtualModelRegistrar` (passed in as `syncVirtualModels`), so the Owner's `/model` list follows at once instead of after reload. Child processes keep their registrations and follow through `route()`, which rereads the file on every request.
   - Template catalogues need no refresh: Runtime Preparation rereads Virtual Models before every prepare.
 - **Deleting a name in use** needs no special code:
   - A spawn that names it fails with the existing unavailable-model error.
@@ -63,7 +63,7 @@ Grow in layers. Each layer works on its own.
 
 ### Layer 3: model picker and new names
 
-- Model picker (extract the fuzzy model list shared with `model-policy-surface.ts` rather than copying it).
+- Model picker: pi-tui `SelectList` rebuilt from `fuzzyFilter` on each keystroke (its own filter is prefix-only), so no list code is copied from `model-policy-surface.ts`.
 - Add entry, change an entry's model, new name, rename.
 
 ### Layer 4: docs
@@ -80,8 +80,7 @@ Grow in layers. Each layer works on its own.
 - [x] Investigation and design (user chose per-action saves, structured TUI, `c` key, no block on deleting a name in use, excluded models selectable with a marker, lists kept, inline `| Config [c]`).
 - [x] HTML mockup of all views reviewed with the user.
 - [x] Layer 1: Config label, `c`, click, and the read-only list (typecheck and existing selector tests pass).
-- [ ] Layer 2
-- [ ] Layer 3
+- [x] Layer 2 and Layer 3, landed together: every edit flow walked through in a throwaway render script (new name, invalid and duplicate names, picker search and `[in list]` refusal, thinking, append, move, rename, delete with confirmation, last-entry refusal, failed save, read-only file). Typecheck and focused policy, virtual-model, command, and selector tests pass.
 - [ ] Layer 4
 - [ ] Independent tests and review
 
@@ -95,6 +94,9 @@ Grow in layers. Each layer works on its own.
 - Change an entry's model in place (`Enter` runs both pickers) instead of making the user add, move, and delete.
 
 ## Surprises & Discoveries
+
+- `Input.setValue` keeps the cursor at the start, so a rename typed before the old name. The surface inserts the current name as a bracketed paste instead, which leaves the cursor at the end.
+- `SelectList` cuts labels at 32 columns by default; the picker widens its primary column for long OpenRouter ids.
 
 - Pi on unregister (`agent-session.js` `_refreshCurrentModelFromRegistry`, `model-runtime.js` `resolveModel`): a session whose current model is an unregistered virtual model keeps the stale model object, and its next request fails with "Virtual model <provider>/<id> is not registered." No crash. On resume, Pi falls back to the physical model that answered last.
 

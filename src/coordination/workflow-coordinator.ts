@@ -83,8 +83,17 @@ import type {
 	AgentTemplateCatalogueSnapshot,
 	AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
-import { readWorkflowPolicy, WorkflowPolicyStore, writeExcludedModels } from "../policy/workflow-policy.ts";
-import { VIRTUAL_MODEL_PROVIDER, type VirtualModelConfigSnapshot } from "../policy/virtual-models.ts";
+import {
+	readWorkflowPolicy,
+	WorkflowPolicyStore,
+	writeExcludedModels,
+	writeVirtualModels,
+} from "../policy/workflow-policy.ts";
+import {
+	VIRTUAL_MODEL_PROVIDER,
+	type VirtualModelConfigSnapshot,
+	type VirtualModelDefinitions,
+} from "../policy/virtual-models.ts";
 import { parseExcludedModels, type ModelPolicySnapshot } from "../policy/model-exclusion.ts";
 import type { ColdWorkflowRecovery } from "../bootstrap/cold-host-discovery.ts";
 import { piSessionRecency } from "../pi-integration/session-recency.ts";
@@ -160,6 +169,7 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	setModelExclusions(entries: readonly string[]): Promise<ModelPolicySnapshot>;
 	/** Virtual Model definitions as the Config tab shows them. */
 	virtualModelConfig(): Promise<VirtualModelConfigSnapshot>;
+	setVirtualModels(definitions: VirtualModelDefinitions): Promise<VirtualModelConfigSnapshot>;
 	refreshTranscriptFacts(): Promise<void>;
 	resumeFromHuman(
 		text: string,
@@ -590,6 +600,19 @@ export class WorkflowCoordinator {
 		};
 	}
 
+	/**
+	 * Persists the complete definitions, then publishes them. Template catalogues need
+	 * no refresh: Runtime Preparation and routing reread the file for every use.
+	 */
+	async setVirtualModels(definitions: VirtualModelDefinitions): Promise<VirtualModelConfigSnapshot> {
+		await writeVirtualModels(this.#ownerRuntime.services.agentDir, definitions);
+		this.#workflowPolicy.publish(Object.freeze({
+			...this.#workflowPolicy.current(),
+			virtualModels: definitions,
+		}));
+		return this.virtualModelConfig();
+	}
+
 	async refreshAgentTemplateSnapshot(agentId: string): Promise<AgentTemplateCatalogueSnapshot> {
 		return this.#sessionFactory.captureTemplateSnapshotFor(this.#requireAgent(agentId));
 	}
@@ -693,6 +716,7 @@ export class WorkflowCoordinator {
 			modelPolicy: () => this.modelPolicy(),
 			setModelExclusions: (entries) => this.setModelExclusions(entries),
 			virtualModelConfig: () => this.virtualModelConfig(),
+			setVirtualModels: (definitions) => this.setVirtualModels(definitions),
 			agentLabel: (targetAgentId) =>
 				this.#agents.get(targetAgentId)?.identity.metadata.label,
 			answerTargetAgent: (toolCallId) => answerCallTargetAgentId({

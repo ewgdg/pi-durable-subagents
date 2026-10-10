@@ -69,7 +69,7 @@ function recordingRoles() {
 	};
 	const roles = {
 		participant: { kind: "participant", presentation },
-		admitted_owner: { kind: "admitted_owner", view, tools: { refreshSpawnGuidance() {} } },
+		admitted_owner: { kind: "admitted_owner", view, tools: { refreshSpawnGuidance() {} }, syncVirtualModels: async () => {} },
 		blocked_owner: { kind: "blocked_owner", failure: new OwnerRecoveryError("admission", "owner", undefined, new Error("admission failed")) },
 	} as const satisfies Record<string, AgentsCommandRole>;
 	return { effects, roles };

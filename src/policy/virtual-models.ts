@@ -91,6 +91,16 @@ export function selectVirtualModelEntry(options: Readonly<{
 	);
 }
 
+/** The policy file shape `parseVirtualModels` reads back. */
+export function serializeVirtualModels(
+	definitions: VirtualModelDefinitions,
+): Record<string, Array<{ id: string; thinking: RuntimeThinkingLevel }>> {
+	return Object.fromEntries(Object.entries(definitions).map(([name, entries]) => [
+		name,
+		entries.map((entry) => ({ id: modelIdentity(entry.model), thinking: entry.thinking })),
+	]));
+}
+
 function parseEntries(name: string, value: unknown): readonly VirtualModelEntry[] {
 	if (!Array.isArray(value) || value.length === 0) {
 		throw new Error(`Workflow Policy virtual model ${name} must be a nonempty sequence of entries`);

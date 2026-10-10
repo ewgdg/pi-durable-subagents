@@ -25,6 +25,8 @@ export type AgentsCommandRole =
 		view: () => OrdinaryAgentCoordinatorView;
 		/** Spawn guidance that `/agents models` refreshes. */
 		tools: SpawnGuidanceRefresh;
+		/** Re-registers the Owner's Virtual Models after the Config tab edits them. */
+		syncVirtualModels(): Promise<void>;
 	}>
 	| Readonly<{ kind: "blocked_owner"; failure: OwnerRecoveryError }>;
 
@@ -104,7 +106,17 @@ async function openConfig(
 	ctx: ExtensionCommandContext,
 	role: Extract<AgentsCommandRole, { kind: "admitted_owner" }>,
 ): Promise<void> {
-	await openVirtualModelConfigSurface(ctx.ui, await role.view().virtualModelConfig());
+	const view = role.view();
+	await openVirtualModelConfigSurface(ctx.ui, {
+		...await view.virtualModelConfig(),
+		async persist(definitions) {
+			const config = await view.setVirtualModels(definitions);
+			// Without a sync, an added or removed name reaches the Owner's own /model
+			// list only after reload; children reread the file on every request.
+			await role.syncVirtualModels();
+			return config;
+		},
+	});
 }
 
 async function openModels(
