@@ -15,11 +15,11 @@ This is the first section of the #213 Config tab. It ships only Virtual Models. 
 ## Design
 
 - **Entry point** (user decision: `c`).
-  - The admitted Owner's selector shows a `Config` tab label after the cycled tabs. It is not part of the Tab / Shift-Tab cycle.
+  - The admitted Owner's selector shows `| Config [c]` right after the last visible cycled tab (`Live  Dormant  Reports | Config [c]`), as in the #213 sketch. It is not part of the Tab / Shift-Tab cycle; the `|` marks that.
   - `c` or a click on the label opens Config. The selector's letter keys (`m`, `o`, `h`, `l`, `j`, `k`) would break text input inside the selector, so Config is a separate overlay. The selector closes with an "open config" result, the command opens the Config surface, and `Esc` from its top view reopens the selector.
   - Child Agents and a blocked Owner show no Config label, as with `/agents models`. A child's selector reads the Owner over Control, and Config has no reason to cross it.
 - **Views** (user decision: structured TUI, not JSON in an editor). One `ui.custom` overlay component with a small view state machine:
-  - **List**: one row per name with its entries inline (`fast  gpt-6.1-luna • high → deepseek-flash • max`), then `+ New virtual model`. `Enter` opens a name, `d` deletes it after an inline `d` again / `Esc` confirmation.
+  - **List**: one row per name with its entries inline as short ids without the provider (`fast  gpt-6.1-luna • high → deepseek-flash • max`), ending in `+N` when the row is full, then `+ New virtual model`. A name with unusable entries carries one `[N unusable]` marker. Detail lines under the list show the focused name's full ids. `Enter` opens a name, `d` deletes it after an inline `d` again / `Esc` confirmation.
   - **Definition**: entries in order, then `+ Add entry`. Unusable entries carry a marker (`[excluded]`, `[unavailable]`), using the same usability rule as routing.
     - `Enter` edits an entry: model picker with the current model focused, then thinking picker with the current level focused.
     - `a` (or `Enter` on `+ Add entry`) appends an entry through the same two pickers.
@@ -28,8 +28,8 @@ This is the first section of the #213 Config tab. It ships only Virtual Models. 
     - `r` renames through a name input. A rename is a delete plus an add, so users of the old name see an unavailable model.
   - **Name input** (pi-tui `Input`, focus passed through per Pi's `docs/tui.md`): validates kebab-case and uniqueness while typing, before it can submit. A new name goes on to the pickers and is written only with its first entry.
   - **Model picker**: fuzzy list over the Owner's available models, the same source and filter as `/agents models`. Excluded models are dimmed with `[excluded]` but selectable. Models already in the list are marked `[in list]` and refused, since ids must be unique.
-  - **Thinking picker**: `RUNTIME_THINKING_LEVELS`. Pi clamps the level to the routed model at request time, so no per-model filtering.
-  - An invalid policy file makes the whole tab read-only with the parse error shown, as `/agents models` refuses to rewrite an invalid file.
+  - **Thinking picker**: all of `RUNTIME_THINKING_LEVELS`, current level focused. Pi clamps the level to the routed model at request time, so no per-model filtering.
+  - An invalid policy file makes the whole tab read-only with the parse error shown, as `/agents models` refuses to rewrite an invalid file. The list still shows the Owner's last valid definitions, dimmed.
 - **Saving** (user decision: per action). Every completed action writes immediately, like the `/agents models` toggles. Each action is shaped so the file is valid after it (a new name always has one entry, the last entry cannot be deleted). Running Agents see each step on their next routed request. While a write runs, input is blocked and the status line shows `Saving…` or the error, as in `/agents models`.
 - **Write path**:
   - Generalize `writeExcludedModels` (`src/policy/workflow-policy.ts`) into one field writer used by both settings: re-read the file, refuse an invalid file, set or delete one field, re-parse the result, write a temp file and rename. Remove the field-specific writer.
@@ -77,7 +77,8 @@ Grow in layers. Each layer works on its own.
 
 ## Progress
 
-- [x] Investigation and design (user chose per-action saves, structured TUI, `c` key, no block on deleting a name in use, excluded models selectable with a marker).
+- [x] Investigation and design (user chose per-action saves, structured TUI, `c` key, no block on deleting a name in use, excluded models selectable with a marker, lists kept, inline `| Config [c]`).
+- [x] HTML mockup of all views reviewed with the user.
 - [ ] Layer 1
 - [ ] Layer 2
 - [ ] Layer 3
@@ -89,6 +90,8 @@ Grow in layers. Each layer works on its own.
 - Per-action saves over draft + save: matches `/agents models`, and every step can be kept valid. Cost: Agents may route through intermediate lists during a multi-step edit, which is harmless because each step is a valid definition.
 - Structured TUI over JSON in an editor: picking ids from the catalogue prevents typos. Weighted score 3.75 vs 3.4 (typo safety 35%, simplicity 30%, fit for later Config sections 20%, testability 15%).
 - Separate overlay instead of rendering inside the selector: keeps the selector's letter keys and the text inputs apart, and keeps the selector projection unchanged apart from the label.
+- Keep ordered lists rather than one-to-one aliases: #218 (fallback on provider failure) needs the list, and the file format already has lists, so a one-entry editor would leave file-defined lists uneditable.
+- Config label inline after the tabs with a `|` separator (user's #213 sketch) rather than right-aligned. Its position shifts when Reports or Quarantined appear; the click region follows it.
 - Change an entry's model in place (`Enter` runs both pickers) instead of making the user add, move, and delete.
 
 ## Surprises & Discoveries
