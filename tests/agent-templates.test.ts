@@ -767,3 +767,159 @@ test("a Template whose candidates are all excluded names the model policy", () =
 		isModelExcluded: () => true,
 	}), /excluded by model policy/);
 });
+
+test("Template model candidates may name virtual models with ordinary or preset thinking", () => {
+	const template = parseAgentTemplate(
+		[
+			"---",
+			"name: virtual-delegate",
+			"models:",
+			"  - id: virtual/fast",
+			"    thinking: preset",
+			"  - id: virtual/deep-review",
+			"    thinking: high",
+			"  - id: deepseek/deepseek-flash",
+			"    thinking: max",
+			"---",
+		].join("\n"),
+		"/templates/virtual-delegate.md",
+	);
+	assert.deepEqual(template.models, [
+		{ model: { provider: "virtual", modelId: "fast" }, thinking: "preset" },
+		{ model: { provider: "virtual", modelId: "deep-review" }, thinking: "high" },
+		{ model: { provider: "deepseek", modelId: "deepseek-flash" }, thinking: "max" },
+	]);
+});
+
+test("Template preset thinking is a parse error without a virtual model id", () => {
+	for (const id of ["deepseek/deepseek-flash", "virtual-lab/fast", "inherit"]) {
+		assert.throws(
+			() => parseAgentTemplate(
+				["---", "name: invalid-agent", "models:", `  - id: ${id}`, "    thinking: preset", "---"].join("\n"),
+				"/templates/invalid-agent.md",
+			),
+			/Invalid Agent Template/,
+			id,
+		);
+	}
+});
+
+const VIRTUAL_INHERITED = {
+	cwd: "/project",
+	model: { provider: "parent", modelId: "model" },
+	thinking: "low" as const,
+	extensions: [],
+};
+const FAST = { provider: "virtual", modelId: "fast" };
+
+test("preset thinking on a resolved virtual model launches at the preset level and is marked", () => {
+	const asked: string[] = [];
+	const presetThinking = (model: { provider: string; modelId: string }) => {
+		asked.push(`${model.provider}/${model.modelId}`);
+		return "max" as const;
+	};
+	const fromSpawn = resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		overrides: { model: { id: "virtual/fast", thinking: "preset" } },
+		isModelAvailable: () => true,
+		presetThinking,
+	});
+	assert.deepEqual(fromSpawn.model, FAST);
+	assert.equal(fromSpawn.thinking, "max");
+	assert.equal(fromSpawn.presetThinking, true);
+
+	const fromTemplate = resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		template: {
+			models: [{ model: FAST, thinking: "preset" }],
+			systemPromptMode: "append", loadContextFiles: true, systemPrompt: "",
+		},
+		isModelAvailable: () => true,
+		presetThinking,
+	});
+	assert.deepEqual(fromTemplate.model, FAST);
+	assert.equal(fromTemplate.thinking, "max");
+	assert.equal(fromTemplate.presetThinking, true);
+	assert.deepEqual(asked, ["virtual/fast", "virtual/fast"]);
+});
+
+test("ordinary thinking on a virtual model is explicit and not marked preset", () => {
+	const resolved = resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		overrides: { model: { id: "virtual/fast", thinking: "high" } },
+		isModelAvailable: () => true,
+		presetThinking: () => { throw new Error("explicit thinking must not consult the preset"); },
+	});
+	assert.deepEqual(resolved.model, FAST);
+	assert.equal(resolved.thinking, "high");
+	assert.notEqual(resolved.presetThinking, true);
+
+	const inherited = resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		overrides: { model: { id: "virtual/fast", thinking: "inherit" } },
+		isModelAvailable: () => true,
+		presetThinking: () => { throw new Error("inherited thinking must not consult the preset"); },
+	});
+	assert.equal(inherited.thinking, "low");
+	assert.notEqual(inherited.presetThinking, true);
+});
+
+test("an unavailable preset virtual candidate falls back to the next candidate's own thinking", () => {
+	const resolved = resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		template: {
+			models: [
+				{ model: FAST, thinking: "preset" },
+				{ model: { provider: "deepseek", modelId: "deepseek-flash" }, thinking: "medium" },
+			],
+			systemPromptMode: "append", loadContextFiles: true, systemPrompt: "",
+		},
+		isModelAvailable: (model) => model.provider !== "virtual",
+		presetThinking: () => "max",
+	});
+	assert.deepEqual(resolved.model, { provider: "deepseek", modelId: "deepseek-flash" });
+	assert.equal(resolved.thinking, "medium");
+	assert.notEqual(resolved.presetThinking, true);
+});
+
+test("a spawn model id discards a Template candidate's preset thinking", () => {
+	const resolved = resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		template: {
+			models: [{ model: FAST, thinking: "preset" }],
+			systemPromptMode: "append", loadContextFiles: true, systemPrompt: "",
+		},
+		// A half-pair recorded before the pair rule still resolves.
+		overrides: { model: { id: "explicit/model" } },
+		isModelAvailable: () => true,
+		presetThinking: () => "max",
+	});
+	assert.deepEqual(resolved.model, { provider: "explicit", modelId: "model" });
+	assert.equal(resolved.thinking, "low");
+	assert.notEqual(resolved.presetThinking, true);
+});
+
+test("preset thinking on a non-virtual resolved model is refused", () => {
+	assert.throws(() => resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		overrides: { model: { id: "explicit/model", thinking: "preset" } },
+		isModelAvailable: () => true,
+		presetThinking: () => "max",
+	}), /preset/);
+	// A recorded half-pair with preset thinking would pair it with the inherited real model.
+	assert.throws(() => resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		overrides: { model: { thinking: "preset" } },
+		isModelAvailable: () => true,
+		presetThinking: () => "max",
+	}), /preset/);
+});
+
+test("an unavailable explicit virtual model is refused like any unavailable model", () => {
+	assert.throws(() => resolveAgentRunConfiguration({
+		inherited: VIRTUAL_INHERITED,
+		overrides: { model: { id: "virtual/fast", thinking: "preset" } },
+		isModelAvailable: () => false,
+		presetThinking: () => "max",
+	}), /virtual\/fast/);
+});

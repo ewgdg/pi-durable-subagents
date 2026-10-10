@@ -2,7 +2,8 @@ import "./support/supervised-run.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -27,7 +28,7 @@ import {
 } from "../src/coordination/workflow-coordinator.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
-import { DEFAULT_WORKFLOW_POLICY, readWorkflowPolicy, WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
+import { DEFAULT_WORKFLOW_POLICY, parseWorkflowPolicy, readWorkflowPolicy, WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import {
 	deriveMessageIdentity,
 	ProtocolInvariantError,
@@ -617,6 +618,126 @@ test("Owner-authored model exclusions refuse an explicit spawn model", async (t)
 	assert.deepEqual(policy.snapshot.excludedModels, [`${available.provider}/*`]);
 
 	await harness.shutdown();
+});
+
+test("a virtual model is spawnable only while defined with at least one usable entry", async (t) => {
+	const workflowPolicy = new WorkflowPolicyStore();
+	const harness = await createCoordinatorHarness(t, {}, undefined, {}, workflowPolicy);
+	const available = harness.host.services.modelRuntime.getAvailableSnapshot()[0];
+	assert.ok(available, "expected an available model in the test catalogue");
+	const unconfigured = harness.host.services.modelRuntime.getModels("openai-codex")[0];
+	assert.ok(unconfigured, "expected an OpenAI Codex model in Pi's catalogue");
+	assert.equal(harness.host.services.modelRuntime.hasConfiguredAuth("openai-codex"), false);
+	const availableId = `${available.provider}/${available.id}`;
+	workflowPolicy.publish(parseWorkflowPolicy(JSON.stringify({
+		excludedModels: [availableId],
+		virtualModels: {
+			fast: [
+				{ id: `openai-codex/${unconfigured.id}`, thinking: "high" },
+				{ id: availableId, thinking: "low" },
+			],
+		},
+	})));
+
+	const refused = async (toolCallId: string, model: { id: string; thinking: string }) => {
+		const receipt = await harness.spawn(toolCallId, {
+			title: "Fixture request",
+			request: "This request must never acquire a child.",
+			config: { model },
+		} as AgentSpawnInput);
+		assert.equal(receipt.spawnStatus, "not_created", JSON.stringify(receipt));
+		assert.equal((receipt as { failedStage?: string }).failedStage, "configuration");
+		return (receipt as { reason: string }).reason;
+	};
+
+	// One entry has no credentials and the other is excluded by policy.
+	assert.match(await refused("spawn-virtual-unusable-preset", { id: "virtual/fast", thinking: "preset" }), /virtual\/fast/);
+	assert.match(await refused("spawn-virtual-unusable-explicit", { id: "virtual/fast", thinking: "high" }), /virtual\/fast/);
+	// An undefined name, including a prototype key, is never available.
+	assert.match(await refused("spawn-virtual-undefined", { id: "virtual/missing", thinking: "preset" }), /virtual\/missing/);
+	assert.match(await refused("spawn-virtual-prototype-key", { id: "virtual/constructor", thinking: "high" }), /virtual\/constructor/);
+	assert.deepEqual(harness.view.children(), []);
+
+	await harness.shutdown();
+});
+
+test("a preset virtual spawn routes the child to its first usable entry and records the real model", { timeout: 45_000 }, async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-durable-subagents-virtual-"));
+	const agentDir = join(cwd, ".pi-agent");
+	await mkdir(join(agentDir, "config"), { recursive: true });
+	await writeFile(join(agentDir, "config", "pi-durable-subagents.json"), JSON.stringify({
+		virtualModels: {
+			fast: [
+				// A retired model no longer in any catalogue is skipped.
+				{ id: "coordination-test/retired-model", thinking: "high" },
+				{ id: "coordination-test/deterministic-owner", thinking: "low" },
+			],
+		},
+	}), "utf8");
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		cwd,
+		agentDir,
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_spawn",
+				{
+					title: "Fixture request",
+					request: "Report which model you run on.",
+					config: { model: { id: "virtual/fast", thinking: "preset" } },
+				},
+				{ id: "spawn-virtual-child" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The child has been created."),
+		(context) => fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
+					answer: "Answered through a virtual model.",
+				},
+				{ id: "answer-virtual-creation-request" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The Creation Request Answer was committed."),
+		fauxAssistantMessage("The child Answer reached the Owner."),
+	]);
+
+	await host.session.prompt("Delegate to a virtual model child.");
+	await host.session.waitForIdle();
+
+	const spawnResult = host.session.sessionManager.getEntries().find((entry) =>
+		entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "agent_spawn");
+	assert.ok(spawnResult && spawnResult.type === "message" && spawnResult.message.role === "toolResult");
+	const details = spawnResult.message.details as {
+		spawnStatus: string;
+		agentId: string;
+		effectiveConfiguration: { model: unknown };
+	};
+	assert.equal(details.spawnStatus, "created", JSON.stringify(details));
+	// The selection stays virtual so a later edit to the list applies on the next request.
+	assert.deepEqual(details.effectiveConfiguration.model, { provider: "virtual", modelId: "fast" });
+
+	const workflowDirectory = join(host.session.sessionManager.getSessionDir(), "pi-durable-subagents", host.session.sessionId);
+	const childSessionFile = await waitForChildSessionFile(host.cwd, workflowDirectory, details.agentId);
+	const childEntries = await waitForEntry(childSessionFile, (entry) =>
+		entry.type === "message" && entry.message.role === "assistant" &&
+		entry.message.content.some((part) => part.type === "toolCall" && part.id === "answer-virtual-creation-request"));
+	const answer = childEntries.find((entry) =>
+		entry.type === "message" && entry.message.role === "assistant" &&
+		entry.message.content.some((part) => part.type === "toolCall" && part.id === "answer-virtual-creation-request"));
+	assert.ok(answer && answer.type === "message" && answer.message.role === "assistant");
+	// Session history records the physical model that answered, never the virtual one.
+	assert.equal(answer.message.provider, "coordination-test");
+	assert.equal(answer.message.model, "deterministic-owner");
+
+	await host.runtime.dispose();
 });
 
 test("invalid default-child metadata fails before Agent Identity", async (t) => {

@@ -199,3 +199,103 @@ test("an invalid exclusion entry or unreadable policy refuses the write", async 
 	);
 	assert.equal(await readFile(policyPath, "utf8"), "{not json");
 });
+
+test("Workflow Policy parses virtual models into frozen model and thinking entries", () => {
+	const policy = parseWorkflowPolicy(JSON.stringify({
+		excludedModels: ["openai-codex/*"],
+		virtualModels: {
+			fast: [
+				{ id: "openai-codex/gpt-6.1-luna", thinking: "high" },
+				{ id: "deepseek/deepseek-flash", thinking: "max" },
+			],
+			"deep-review": [{ id: "openrouter/anthropic/claude-sonnet-4", thinking: "off" }],
+		},
+	}));
+	assert.deepEqual(policy.virtualModels, {
+		fast: [
+			{ model: { provider: "openai-codex", modelId: "gpt-6.1-luna" }, thinking: "high" },
+			{ model: { provider: "deepseek", modelId: "deepseek-flash" }, thinking: "max" },
+		],
+		"deep-review": [
+			{ model: { provider: "openrouter", modelId: "anthropic/claude-sonnet-4" }, thinking: "off" },
+		],
+	});
+	// A virtual entry may name an excluded model; exclusion applies at routing time.
+	assert.deepEqual(policy.excludedModels, ["openai-codex/*"]);
+	assert.equal(Object.isFrozen(policy.virtualModels), true);
+	assert.equal(Object.isFrozen(policy.virtualModels.fast), true);
+	assert.equal(Object.isFrozen(DEFAULT_WORKFLOW_POLICY.virtualModels), true);
+	assert.deepEqual(DEFAULT_WORKFLOW_POLICY.virtualModels, {});
+});
+
+test("an invalid virtual model definition rejects the complete Workflow Policy", () => {
+	const ok = { id: "openai-codex/gpt-6.1-luna", thinking: "high" };
+	const invalidPolicies: Array<[string, string]> = [
+		["null virtual models", '{"virtualModels": null}'],
+		["array virtual models", `{"virtualModels": [${JSON.stringify(ok)}]}`],
+		["uppercase name", JSON.stringify({ virtualModels: { Fast: [ok] } })],
+		["empty list", JSON.stringify({ virtualModels: { fast: [] } })],
+		["extra entry field", JSON.stringify({ virtualModels: { fast: [{ ...ok, note: "x" }] } })],
+		["missing thinking", JSON.stringify({ virtualModels: { fast: [{ id: ok.id }] } })],
+		["preset thinking", JSON.stringify({ virtualModels: { fast: [{ id: ok.id, thinking: "preset" }] } })],
+		["inherit thinking", JSON.stringify({ virtualModels: { fast: [{ id: ok.id, thinking: "inherit" }] } })],
+		["virtual entry", JSON.stringify({ virtualModels: { fast: [{ id: "virtual/slow", thinking: "high" }] } })],
+		["id without provider", JSON.stringify({ virtualModels: { fast: [{ id: "luna", thinking: "high" }] } })],
+		["duplicate entry ids", JSON.stringify({ virtualModels: { fast: [ok, { ...ok, thinking: "low" }] } })],
+		["duplicate names", `{"virtualModels": {"fast": [${JSON.stringify(ok)}], "fast": [${JSON.stringify(ok)}]}}`],
+		["valid virtual models next to an invalid field", JSON.stringify({ virtualModels: { fast: [ok] }, excludedModels: ["*"] })],
+	];
+	for (const [name, source] of invalidPolicies) {
+		assert.throws(() => parseWorkflowPolicy(source), Error, name);
+	}
+});
+
+test("writing excluded models preserves the user's virtual models", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		processVisibleModel: false,
+	});
+	const policyDirectory = join(host.services.agentDir, "config");
+	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
+	const virtualModels = {
+		fast: [
+			{ id: "openai-codex/gpt-6.1-luna", thinking: "high" },
+			{ id: "deepseek/deepseek-flash", thinking: "max" },
+		],
+	};
+	await mkdir(policyDirectory, { recursive: true });
+	await writeFile(policyPath, JSON.stringify({ virtualModels }), "utf8");
+
+	await writeExcludedModels(host.services.agentDir, ["openai-codex/*"]);
+	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), {
+		virtualModels,
+		excludedModels: ["openai-codex/*"],
+	});
+	await writeExcludedModels(host.services.agentDir, []);
+	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), { virtualModels });
+
+	const loaded = await readWorkflowPolicy(host.services.agentDir);
+	assert.equal(loaded.ok, true);
+	if (!loaded.ok) throw new Error("Expected the written policy to load");
+	assert.deepEqual(loaded.snapshot.virtualModels, {
+		fast: [
+			{ model: { provider: "openai-codex", modelId: "gpt-6.1-luna" }, thinking: "high" },
+			{ model: { provider: "deepseek", modelId: "deepseek-flash" }, thinking: "max" },
+		],
+	});
+});
+
+test("an invalid virtual model definition on disk makes the policy read fail and refuses exclusion writes", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		processVisibleModel: false,
+	});
+	const policyDirectory = join(host.services.agentDir, "config");
+	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
+	const invalid = JSON.stringify({ virtualModels: { fast: [] } });
+	await mkdir(policyDirectory, { recursive: true });
+	await writeFile(policyPath, invalid, "utf8");
+
+	const loaded = await readWorkflowPolicy(host.services.agentDir);
+	assert.equal(loaded.ok, false);
+	await assert.rejects(() => writeExcludedModels(host.services.agentDir, ["openai-codex/*"]));
+	assert.equal(await readFile(policyPath, "utf8"), invalid);
+});
