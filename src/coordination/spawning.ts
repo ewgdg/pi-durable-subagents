@@ -30,6 +30,7 @@ import {
 	materializeNewAgentTranscript,
 	transcriptFromSessionFile,
 } from "../pi-integration/session-manager-transcript.ts";
+import { recordModelSelection } from "../pi-integration/recorded-model-selection.ts";
 
 export type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 
@@ -185,6 +186,9 @@ export class DefaultChildSpawner {
 		};
 		try {
 			commitChildAgentIdentity(sessionManager, identity);
+			// Pi records a new session's first selection, but a child session already
+			// holds its Identity when Pi opens it. Later Runtimes resume this selection.
+			recordModelSelection(sessionManager, prepared.configuration);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
 			return {

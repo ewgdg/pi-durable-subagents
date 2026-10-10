@@ -8,6 +8,7 @@ import {
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { isVirtualModel } from "../policy/virtual-models.ts";
+import type { RecordedModelSelection } from "../pi-integration/recorded-model-selection.ts";
 import type {
 	AgentTemplate,
 	AgentCreationPreset,
@@ -69,6 +70,8 @@ export function resolveAgentRunConfiguration(options: {
 	clampThinking?(model: ModelReference, level: RuntimeThinkingLevel): RuntimeThinkingLevel;
 	/** The level of a Virtual Model's first usable entry, which a preset selection starts on. */
 	presetThinking?(model: ModelReference): RuntimeThinkingLevel;
+	/** The Agent's usable recorded selection, which replaces the initial values. */
+	recorded?: RecordedModelSelection;
 }): ResolvedAgentRunConfiguration {
 	const { inherited, template, overrides } = options;
 	// Exclusions accumulate: a Spawn config restricts further, it does not lift a
@@ -91,35 +94,15 @@ export function resolveAgentRunConfiguration(options: {
 	const loadContextFiles = overrides?.loadContextFiles
 		?? template?.loadContextFiles
 		?? true;
-	const explicitlySelectedModel = overrides?.model?.id !== undefined && overrides.model.id !== "inherit"
-		? parseModelId(overrides.model.id)
-		: undefined;
-	if (explicitlySelectedModel && !options.isModelAvailable(explicitlySelectedModel)) {
-		const selectedIdentity = `${explicitlySelectedModel.provider}/${explicitlySelectedModel.modelId}`;
-		throw new Error(options.isModelExcluded?.(explicitlySelectedModel)
-			? `Configured Agent model is excluded by model policy: ${selectedIdentity}`
-			: `Configured Agent model is unavailable: ${selectedIdentity}`);
-	}
-	// A Template candidate is one (model, thinking) pair: its thinking level describes
-	// that candidate model, so an explicit model id discards it rather than pairing it
-	// with a model the caller chose. The current parent Runtime is then the only
-	// remaining default, and such a selection needs no available Template candidate.
-	const defaults = overrides?.model?.id === undefined
-		? resolveTemplateModelConfiguration(
-			inherited,
-			template?.models,
-			options.isModelAvailable,
-			options.isModelExcluded,
-		)
-		: inherited;
-	const modelConfiguration: Readonly<{ model: ModelReference; thinking: CandidateThinking }> = {
-		model: overrides?.model?.id === "inherit"
-			? inherited.model
-			: explicitlySelectedModel ?? defaults.model,
-		thinking: overrides?.model?.thinking === "inherit"
-			? inherited.thinking
-			: overrides?.model?.thinking ?? defaults.thinking,
-	};
+	// A recorded selection is the Agent's current one; Spawn and Template values only
+	// supply the first selection, so they are not consulted at all once one exists.
+	const modelConfiguration = options.recorded === undefined
+		? resolveInitialModelConfiguration(inherited, template, overrides, options)
+		: {
+			model: options.recorded.model,
+			// A Moderator left on Pi's default records no level; its preparation drops this one.
+			thinking: options.recorded.presetThinking ? PRESET_THINKING : options.recorded.thinking ?? inherited.thinking,
+		};
 	const presetThinking = modelConfiguration.thinking === PRESET_THINKING;
 	if (presetThinking && !isVirtualModel(modelConfiguration.model)) {
 		throw new Error(`Thinking "preset" requires a virtual model, not ${modelConfiguration.model.provider}/${modelConfiguration.model.modelId}`);
@@ -142,6 +125,46 @@ export function resolveAgentRunConfiguration(options: {
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		loadContextFiles,
 		...(presetThinking ? { presetThinking: true } : {}),
+	};
+}
+
+function resolveInitialModelConfiguration(
+	inherited: InheritableRuntimeConfiguration,
+	template: Exclude<AgentCreationPreset, null> | undefined,
+	overrides: AgentSpawnConfigurationInput | undefined,
+	options: Readonly<{
+		isModelAvailable(model: ModelReference): boolean;
+		isModelExcluded?(model: ModelReference): boolean;
+	}>,
+): Readonly<{ model: ModelReference; thinking: CandidateThinking }> {
+	const explicitlySelectedModel = overrides?.model?.id !== undefined && overrides.model.id !== "inherit"
+		? parseModelId(overrides.model.id)
+		: undefined;
+	if (explicitlySelectedModel && !options.isModelAvailable(explicitlySelectedModel)) {
+		const selectedIdentity = `${explicitlySelectedModel.provider}/${explicitlySelectedModel.modelId}`;
+		throw new Error(options.isModelExcluded?.(explicitlySelectedModel)
+			? `Configured Agent model is excluded by model policy: ${selectedIdentity}`
+			: `Configured Agent model is unavailable: ${selectedIdentity}`);
+	}
+	// A Template candidate is one (model, thinking) pair: its thinking level describes
+	// that candidate model, so an explicit model id discards it rather than pairing it
+	// with a model the caller chose. The current parent Runtime is then the only
+	// remaining default, and such a selection needs no available Template candidate.
+	const defaults = overrides?.model?.id === undefined
+		? resolveTemplateModelConfiguration(
+			inherited,
+			template?.models,
+			options.isModelAvailable,
+			options.isModelExcluded,
+		)
+		: inherited;
+	return {
+		model: overrides?.model?.id === "inherit"
+			? inherited.model
+			: explicitlySelectedModel ?? defaults.model,
+		thinking: overrides?.model?.thinking === "inherit"
+			? inherited.thinking
+			: overrides?.model?.thinking ?? defaults.thinking,
 	};
 }
 

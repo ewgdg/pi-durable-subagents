@@ -25,6 +25,7 @@ import type {
 	AgentTemplateCatalogueSnapshot,
 } from "../templates/agent-templates.ts";
 import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
+import type { RecordedModelSelection } from "../pi-integration/recorded-model-selection.ts";
 
 export type AgentRuntimeRole = "ordinary" | "moderator";
 
@@ -64,6 +65,8 @@ type PrepareChildRuntimeOptions = {
 	isModelExcluded?(model: ModelReference): boolean;
 	clampThinking?(model: ModelReference, level: RuntimeThinkingLevel): RuntimeThinkingLevel;
 	presetThinking?(model: ModelReference): RuntimeThinkingLevel;
+	/** The Agent's recorded selection; an unusable one falls back to the initial values. */
+	recorded?: RecordedModelSelection;
 };
 
 export function prepareChildRuntime(
@@ -81,6 +84,7 @@ export async function prepareChildRuntime(
 	)
 		? await canonicalFileExtensions(options.parentRuntime.configuration.extensions)
 		: [];
+	const recorded = usableRecordedSelection(options);
 	const resolvedConfiguration = resolveAgentRunConfiguration({
 		inherited: {
 			...options.parentRuntime.configuration,
@@ -92,10 +96,11 @@ export async function prepareChildRuntime(
 		...(options.isModelExcluded === undefined ? {} : { isModelExcluded: options.isModelExcluded }),
 		...(options.clampThinking === undefined ? {} : { clampThinking: options.clampThinking }),
 		...(options.presetThinking === undefined ? {} : { presetThinking: options.presetThinking }),
+		...(recorded === undefined ? {} : { recorded }),
 	});
 	// Pi owns its shared default and model-capability clamp. Keep an absent
 	// Moderator selection unresolved until Pi starts instead of copying the Owner.
-	const launchConfiguration = usesPiDefaultThinking(options)
+	const launchConfiguration = usesPiDefaultThinking({ ...options, recorded })
 		? withoutThinking(resolvedConfiguration)
 		: resolvedConfiguration;
 	const effectiveCwd = launchConfiguration.cwd;
@@ -167,13 +172,33 @@ export async function prepareChildRuntime(
 	};
 }
 
+function usableRecordedSelection(options: Readonly<{
+	role: AgentRuntimeRole;
+	recorded?: RecordedModelSelection;
+	isModelAvailable?(model: ModelReference): boolean;
+}>): RecordedModelSelection | undefined {
+	const { recorded } = options;
+	if (recorded === undefined) return undefined;
+	if (!(options.isModelAvailable?.(recorded.model) ?? true)) return undefined;
+	// Only a Moderator may run on Pi's default level; an ordinary Agent always
+	// records one, so a missing level means the selection is incomplete.
+	if (options.role === "ordinary" && recorded.thinking === undefined && !recorded.presetThinking) {
+		return undefined;
+	}
+	return recorded;
+}
+
 function usesPiDefaultThinking(options: Readonly<{
 	role: AgentRuntimeRole;
 	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
+	recorded: RecordedModelSelection | undefined;
 }>): boolean {
-	return options.role === "moderator" &&
-		options.template?.models === undefined &&
+	if (options.role !== "moderator") return false;
+	if (options.recorded !== undefined) {
+		return options.recorded.thinking === undefined && !options.recorded.presetThinking;
+	}
+	return options.template?.models === undefined &&
 		options.overrides?.model === undefined;
 }
 

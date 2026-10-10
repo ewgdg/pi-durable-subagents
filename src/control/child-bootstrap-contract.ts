@@ -5,7 +5,8 @@
 // keeps its own runtime default surface plus its role coordination tools.
 // Version 11 adds the required Workflow interaction, which withholds ask_user headless.
 // Version 13 adds Virtual Model preset thinking to the bootstrap and catalogue candidates.
-export const AGENT_CONTROL_PROTOCOL_VERSION = 13 as const;
+// Version 14 removes preset thinking from the bootstrap: the child's session records it.
+export const AGENT_CONTROL_PROTOCOL_VERSION = 14 as const;
 
 const NonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 
@@ -53,8 +54,6 @@ export const ChildProcessBootstrapSchema = {
 		// coordination tools always stay active, and absent names are ignored.
 		excludedTools: { type: "array", items: NonEmptyStringSchema, uniqueItems: true },
 		expectedSessionId: NonEmptyStringSchema,
-		// The Virtual Model name the child launched in preset thinking mode, if any.
-		presetVirtualModel: NonEmptyStringSchema,
 	},
 	additionalProperties: false,
 } as const;

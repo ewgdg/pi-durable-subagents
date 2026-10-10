@@ -21,6 +21,7 @@ import { installInteractiveHostBridge } from "../pi-integration/interactive-host
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { registerSessionStartup } from "../pi-integration/session-startup.ts";
 import { VirtualModelRegistrar } from "../pi-integration/virtual-model-registration.ts";
+import { isPresetThinking, thinkingModeState } from "../pi-integration/recorded-model-selection.ts";
 import { installAgentActivityDock } from "../presentation/agent-activity-surface.ts";
 import {
 	type ParticipantLifecycleHandlers,
@@ -62,13 +63,6 @@ const CHILD_CONTROL_REGISTRY_KEY = "__piAgentCoordinationChildControls";
 const globalChildControlRegistry = globalThis as typeof globalThis & {
 	[CHILD_CONTROL_REGISTRY_KEY]?: WeakMap<AgentSession, ChildControlConnection>;
 };
-// A manual thinking change ends a preset launch selection for the rest of the
-// Runtime. Pi re-evaluates this module on /reload, so the switch lives here.
-const EXPLICIT_THINKING_REGISTRY_KEY = "__piAgentCoordinationExplicitThinkingSessions";
-const globalExplicitThinking = globalThis as typeof globalThis & {
-	[EXPLICIT_THINKING_REGISTRY_KEY]?: Set<string>;
-};
-const explicitThinkingSessions = (globalExplicitThinking[EXPLICIT_THINKING_REGISTRY_KEY] ??= new Set());
 // Pi retains the exact AgentSession across /reload. Preserve its authenticated
 // Control connection; every extension generation binds a fresh Runtime binding.
 const childControls = (
@@ -90,19 +84,21 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	const bootstrap = await readBootstrapDescriptor();
 	// The Owner launches children with PI_CODING_AGENT_DIR set to its own agent
 	// directory, and only this bridge is loaded, so the child registers its own.
-	await VirtualModelRegistrar.create(
-		pi,
-		hostPi.getAgentDir(),
-		bootstrap.presetVirtualModel === undefined ? undefined : {
-			virtualModel: bootstrap.presetVirtualModel,
-			switchedToExplicit: () => explicitThinkingSessions.has(bootstrap.expectedSessionId),
-		},
-	);
-	// Pi applies the launch level before session_start binds the connection, and this
-	// extension never sets a level, so a later change is the user's (or an extension's).
-	pi.on("thinking_level_select", () => {
-		if (connection) explicitThinkingSessions.add(bootstrap.expectedSessionId);
-	});
+	await VirtualModelRegistrar.create(pi, hostPi.getAgentDir());
+	// Pi applies the launch selection before session_start binds the connection, and this
+	// extension never selects, so a later change is the user's (or an extension's). It
+	// ends preset mode, and the session records that so later Runtimes keep it. Leaving
+	// the model ends it too, so selecting the same name again through /model is explicit.
+	const endPresetThinking = (
+		model: Readonly<{ provider: string; id: string }> | undefined,
+		ctx: hostPi.ExtensionContext,
+	) => {
+		const reference = model && { provider: model.provider, modelId: model.id };
+		if (!connection || !reference || !isPresetThinking(ctx.sessionManager.getBranch(), reference)) return;
+		pi.appendEntry(hostPi.VIRTUAL_MODEL_STATE_ENTRY, thinkingModeState(reference, "explicit"));
+	};
+	pi.on("thinking_level_select", (_event, ctx) => endPresetThinking(ctx.model, ctx));
+	pi.on("model_select", (event, ctx) => endPresetThinking(event.previousModel, ctx));
 	let boundRuntime: AgentSessionRuntime | undefined;
 	const resolveAnswerTargetAgent = (toolCallId: string) => boundRuntime === undefined
 		? undefined
