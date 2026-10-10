@@ -4,7 +4,7 @@ import test from "node:test";
 
 import type { ExtensionUIContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import {
 	entryUsability,
@@ -101,7 +101,10 @@ async function openSurface(options: OpenOptions = {}) {
 		opened,
 		persisted,
 		get closed() { return closed; },
-		render: () => component().render(100).map(stripTerminalSequences).join("\n"),
+		/** The panel content, without its box frame. */
+		render: () => component().render(100).map(stripTerminalSequences)
+			.map((line) => line.replace(/^│ /u, "").replace(/\s*│$/u, "")).join("\n"),
+		renderFrame: () => component().render(100),
 		async press(...keys: string[]) {
 			for (const key of keys) {
 				component().handleInput?.(key);
@@ -467,6 +470,16 @@ test("an invalid config file shows its error and the last valid definitions read
 	await surface.press(ENTER, ENTER, ENTER);
 	assert.deepEqual(surface.persisted, []);
 	assert.match(surface.render(), /Editing is disabled/);
+});
+
+test("every panel row is boxed at the full width so text behind never shows through", { timeout: 5_000 }, async () => {
+	const surface = await openSurface({ definitions: { fast: [entry("openai-codex/gpt-5.6-luna", "high")] } });
+	const lines = surface.renderFrame();
+	assert.ok(lines.every((line) => visibleWidth(line) === 100), lines.join("\n"));
+	const plain = lines.map(stripTerminalSequences);
+	assert.match(plain[0] ?? "", /^┌─+┐$/u);
+	assert.match(plain.at(-1) ?? "", /^└─+┘$/u);
+	assert.ok(plain.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│")), plain.join("\n"));
 });
 
 test("Escape on the list closes Config", { timeout: 5_000 }, async () => {
