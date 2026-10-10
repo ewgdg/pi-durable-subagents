@@ -27,7 +27,17 @@ import {
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
-import { fitRows, framePanel, maximumPanelRows, PANEL_FRAME_ROWS, PANEL_OVERLAY_OPTIONS, scrollWindow } from "./overlay-frame.ts";
+import {
+	fitPanelContent,
+	fitRows,
+	framePanel,
+	isBlankLine,
+	maximumPanelRows,
+	PANEL_FRAME_ROWS,
+	PANEL_OVERLAY_OPTIONS,
+	SCROLL_INDICATOR_ROWS,
+	scrollWindow,
+} from "./overlay-frame.ts";
 
 const MAXIMUM_NAME_COLUMNS = 20;
 const MAXIMUM_ID_COLUMNS = 44;
@@ -37,9 +47,15 @@ const MINIMUM_PICKER_ID_COLUMNS = 24;
 const MAXIMUM_PICKER_ID_COLUMNS = 64;
 /** The search input and the gap below it. */
 const PICKER_SEARCH_ROWS = 2;
-const SCROLL_INDICATOR_ROWS = 1;
 /** The tallest screen, the model picker, sets the body height of every screen. */
 const MAXIMUM_BODY_ROWS = PICKER_SEARCH_ROWS + MAXIMUM_PICKER_ROWS + SCROLL_INDICATOR_ROWS;
+/**
+ * Keeps at least one picker row under the search input; on terminals too short
+ * for it, blank lines go first and the help line stays (see fitPanelContent).
+ */
+const MINIMUM_BODY_ROWS = PICKER_SEARCH_ROWS + 1 + SCROLL_INDICATOR_ROWS;
+/** The status row and help stay visible when a short terminal clips the body. */
+const FOOTER_ROWS = 2;
 /** Title, subtitle, the gaps around the body, the reserved status row, and help. */
 const CHROME_ROWS = 2 + 2 + 1 + 1;
 const INVALID_NOTICE_ROWS = 2;
@@ -156,7 +172,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		const bodyRows = this.#bodyRows();
 		// Resize changes the pickers' visible rows as well as the body.
 		this.#fitPickerToBody(bodyRows);
-		return [
+		return fitPanelContent([
 			line(theme.fg("accent", theme.bold(this.#title()))),
 			line(theme.fg("muted", `Named model lists, usable as ${VIRTUAL_MODEL_PROVIDER}/<name>.`)),
 			...(invalidReason === undefined ? [] : [
@@ -170,7 +186,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 			"",
 			status === undefined ? "" : line(theme.fg(status.tone, status.text)),
 			line(theme.fg("dim", `  ${this.#help()}`)),
-		];
+		], maximumPanelRows(this.#tui.terminal.rows) - PANEL_FRAME_ROWS, FOOTER_ROWS, isBlankLine);
 	}
 
 	invalidate(): void {
@@ -661,7 +677,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 
 	#bodyRows(): number {
 		const chromeRows = CHROME_ROWS + (this.#config.invalidReason === undefined ? 0 : INVALID_NOTICE_ROWS);
-		return Math.max(1, Math.min(
+		return Math.max(MINIMUM_BODY_ROWS, Math.min(
 			MAXIMUM_BODY_ROWS,
 			maximumPanelRows(this.#tui.terminal.rows) - PANEL_FRAME_ROWS - chromeRows,
 		));

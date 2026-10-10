@@ -42,7 +42,15 @@ import {
 	type AgentSelectorView,
 } from "./agent-selector-projection.ts";
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
-import { frameLine, maximumPanelRows, PANEL_FRAME_ROWS, PANEL_OVERLAY_OPTIONS } from "./overlay-frame.ts";
+import {
+	fitPanelContent,
+	frameLine,
+	isBlankLine,
+	maximumPanelRows,
+	PANEL_FRAME_ROWS,
+	PANEL_OVERLAY_OPTIONS,
+	SCROLL_INDICATOR_ROWS,
+} from "./overlay-frame.ts";
 import {
 	formatAgentWorkStatus,
 	SUSPENSION_LABEL,
@@ -61,7 +69,6 @@ const EMPTY_LIVE_AGENT_ROWS = 1;
 const FIXED_OVERLAY_ROWS =
 	PANEL_FRAME_ROWS + TAB_ROWS + CONTENT_GAP_ROWS + HELP_ROWS + OWNER_FOOTER_ROWS +
 	MAX_LIVE_SECTION_HEADER_ROWS + EMPTY_LIVE_AGENT_ROWS + FOCUSED_DETAIL_ROWS;
-const SCROLL_INDICATOR_ROWS = 1;
 const SELECTION_SPINNER_FRAMES = [
 	"⠋",
 	"⠙",
@@ -324,9 +331,12 @@ class AgentSelectorSurface implements Component {
 				"Tab views · ↑/k ↓/j · →/l children · ←/h parent · Enter · Esc",
 			) },
 		];
-		const visibleContentLines = fitOverlayContent(
+		// Keep the session action and help visible even when detail rows must be clipped.
+		const visibleContentLines = fitPanelContent(
 			contentLines,
 			Math.max(0, this.#maximumOverlayRows() - PANEL_FRAME_ROWS),
+			OWNER_FOOTER_ROWS + HELP_ROWS,
+			(line) => isBlankLine(line.text),
 		);
 		const leftMargin = Math.min(1, innerWidth);
 		const rightMargin = Math.max(0, innerWidth - contentWidth - leftMargin);
@@ -860,18 +870,6 @@ function safeReportLine(text: string): string {
 
 function plural(count: number): string {
 	return count === 1 ? "" : "s";
-}
-
-function fitOverlayContent(lines: SelectorLine[], maximumRows: number): SelectorLine[] {
-	const content = [...lines];
-	while (content.length > maximumRows) {
-		const emptyLine = content.findLastIndex((line) => visibleWidth(line.text) === 0);
-		if (emptyLine < 0) break;
-		content.splice(emptyLine, 1);
-	}
-	// Keep the session action and help visible even when detail rows must be clipped.
-	const footer = content.splice(-OWNER_FOOTER_ROWS - HELP_ROWS);
-	return [...content.slice(0, Math.max(0, maximumRows - footer.length)), ...footer].slice(0, maximumRows);
 }
 
 function samePointerAction(left: PointerAction | undefined, right: PointerAction | undefined): boolean {

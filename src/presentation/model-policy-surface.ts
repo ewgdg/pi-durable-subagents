@@ -16,12 +16,23 @@ import {
 	providerExclusionEntry,
 	type ModelPolicyModel,
 } from "../policy/model-exclusion.ts";
-import { fitRows, framePanel, maximumPanelRows, PANEL_FRAME_ROWS, PANEL_OVERLAY_OPTIONS, scrollWindow } from "./overlay-frame.ts";
+import {
+	fitPanelContent,
+	fitRows,
+	framePanel,
+	isBlankLine,
+	maximumPanelRows,
+	PANEL_FRAME_ROWS,
+	PANEL_OVERLAY_OPTIONS,
+	SCROLL_INDICATOR_ROWS,
+	scrollWindow,
+} from "./overlay-frame.ts";
 
 const MAXIMUM_VISIBLE_ROWS = 8;
-const SCROLL_INDICATOR_ROWS = 1;
 /** Title, subtitle, search, the gaps around it and the rows, the reserved status and model-name rows, and help. */
-const CHROME_ROWS = 10;
+const CHROME_ROWS = 9;
+/** The status, model-name, and help rows stay visible when a short terminal clips the rows. */
+const FOOTER_ROWS = 3;
 
 export type { ModelPolicyModel } from "../policy/model-exclusion.ts";
 
@@ -170,7 +181,7 @@ class ModelPolicySurface implements Component, Focusable {
 	#renderContent(width: number): string[] {
 		const theme = this.#theme;
 		const rows = this.#rows();
-		return [
+		return fitPanelContent([
 			theme.fg("accent", theme.bold("Agent spawn model policy")),
 			theme.fg("muted", "Banned models cannot be used by Agent Templates or agent_spawn."),
 			"",
@@ -182,7 +193,7 @@ class ModelPolicySurface implements Component, Focusable {
 			this.#status === undefined ? "" : theme.fg("warning", truncateToWidth(this.#status, width, "")),
 			this.#renderDetail(rows, width),
 			theme.fg("dim", truncateToWidth(this.#footer(rows), width, "")),
-		];
+		], maximumPanelRows(this.#tui.terminal.rows) - PANEL_FRAME_ROWS, FOOTER_ROWS, isBlankLine);
 	}
 
 	invalidate(): void {

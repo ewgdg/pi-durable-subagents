@@ -39,7 +39,7 @@ const PANEL_OVERLAY_MARGIN = 1;
 const PANEL_OVERLAY_MAX_HEIGHT_PERCENT = 90;
 /** The top and bottom frame borders. */
 export const PANEL_FRAME_ROWS = 2;
-const SCROLL_INDICATOR_ROWS = 1;
+export const SCROLL_INDICATOR_ROWS = 1;
 
 /** Centered, bounded overlay shared by the `/agents` selector and its panels. */
 export const PANEL_OVERLAY_OPTIONS = {
@@ -79,4 +79,29 @@ export function scrollWindow(
 		...lines.slice(start, start + visible),
 		indicator(`  (${focusNumber}/${lines.length})`),
 	].slice(0, Math.max(0, maximumRows));
+}
+
+/**
+ * Fits content into `maximumRows` when the terminal is too short for the fixed
+ * layout: drops blank lines from the bottom up first, then clips the body while
+ * keeping the last `footerRows` lines, such as help, visible.
+ */
+export function fitPanelContent<Line>(
+	lines: readonly Line[],
+	maximumRows: number,
+	footerRows: number,
+	isBlank: (line: Line) => boolean,
+): Line[] {
+	const content = [...lines];
+	while (content.length > maximumRows) {
+		const blankLine = content.findLastIndex(isBlank);
+		if (blankLine < 0) break;
+		content.splice(blankLine, 1);
+	}
+	const footer = content.splice(-footerRows);
+	return [...content.slice(0, Math.max(0, maximumRows - footer.length)), ...footer].slice(0, maximumRows);
+}
+
+export function isBlankLine(line: string): boolean {
+	return visibleWidth(line) === 0;
 }
