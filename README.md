@@ -23,6 +23,7 @@ Select a subagent to enter its complete Pi session and interact with it directly
 - **Incident handling:** a runtime reminder recovers forgotten Answers; isolated Moderators handle persistent stalls, deadlocks, and failures under policy bounds. See [Operational Incident moderation](docs/operational-incident-moderation.md).
 - **Durable recovery:** a fresh host rebuilds authority and pending Requests from Pi transcripts. See [Cold host recovery](docs/cold-host-recovery.md).
 - **Model policy:** `/agents models` maintains a durable deny list of models children may not use. See [Workflow Policy](docs/workflow-policy.md).
+- **Virtual models:** name an ordered fallback list of models once and use `virtual/<name>` in Templates and spawns; fixing the list updates every Agent. See [Virtual Models](docs/workflow-policy.md#virtual-models).
 
 Coordination does not override Pi's compaction, retry, or transport settings.
 
@@ -115,7 +116,7 @@ models:
 
 ## Compatibility
 
-Pi supplies the package's Pi peer modules; compatibility is checked structurally against the running host, not by Pi version. See [Development](docs/development.md) for the conformance gate and supervised test runs.
+Pi supplies the package's Pi peer modules; compatibility is checked structurally against the running host. Pi 0.99.0 or newer is required, the first release with native virtual models. See [Development](docs/development.md) for the conformance gate and supervised test runs.
 
 ## Trust and persistence
 
@@ -130,7 +131,7 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 - [Transcript repair design](docs/workflow-transcript-repair-design.md) — proposed Workflow-owned repair Moderator and validated replacement; not implemented
 - [Operational Incident moderation](docs/operational-incident-moderation.md) — trigger detection, bounded handling, Moderator authority, Resolution, and recovery
 - [Cold host recovery](docs/cold-host-recovery.md) — transcript discovery, quarantine, dormant rosters, and residual Requests
-- [Workflow Policy](docs/workflow-policy.md) — reloadable execution, delivery, review limits, and the `/agents models` exclusion list
+- [Workflow Policy](docs/workflow-policy.md) — reloadable execution, delivery, review limits, the `/agents models` exclusion list, and Virtual Models
 - [Agent spawning](docs/agent-spawning.md) — child creation and receipt semantics
 - [Agent messaging](docs/agent-messaging.md) — delivery modes and Agent Requests
 - [Human Requests](docs/human-requests.md) — transcript-native questions, Answer mode, and commitment

@@ -34,15 +34,15 @@ Pi 1.1 already ships native virtual models (`pi.registerVirtualModel()`, `node_m
   - `continuation` and `retry` stay on `request.previous` / `request.failed` when that model is still a usable entry of the definition, keeping prompt caches and thinking signatures valid (Pi's documented guidance).
   - Otherwise (`user`, `direct`, or the sticky model is no longer usable), pick the first usable entry.
   - No usable entry: throw with a message naming the virtual model and why each entry is unusable. Pi turns that into an error response.
-  - Definitions used by `route()` are the latest valid read of the policy file, re-read when its mtime changes. An invalid file keeps the last valid definitions and reports a diagnostic, mirroring the Owner's existing policy reload behavior.
+  - Definitions used by `route()` are the latest valid read of the policy file, re-read on every routed request. An invalid file keeps the last valid definitions and reports a diagnostic, mirroring the Owner's existing policy reload behavior.
 - **Thinking**:
   - **Explicit mode**: the selected level is used for every entry. Pi clamps it to the routed model.
   - **Preset mode**: each entry's own `thinking` is used, and the selected level is ignored.
   - Templates and `agent_spawn.config.model` accept `thinking: preset`, valid only on `virtual/*` ids. Any other id with `preset` is a parse/validation error.
   - A spawned child starts in the mode its resolved configuration names. In preset mode the launch passes `--thinking <first usable entry's level>`, so the footer selection matches the primary entry.
   - A virtual model registered for ordinary selection (`/model`, the Owner, inherited by a child from its parent) is in explicit mode.
-  - A virtual model offers every thinking level supported by any of its entries (`thinkingLevels`), so a spawn does not clamp the level before routing.
-- **Catalogue metadata**: `contextWindow` and `maxTokens` come from the first entry. Pi only shows them before the first response and then uses the routed model's limits. `input` stays Pi's default (text and image; models without image support receive placeholders).
+  - A virtual model offers every Pi thinking level (`thinkingLevels`), so a spawn does not clamp the level before routing. Pi clamps the routed level to the real model.
+- **Catalogue metadata**: no `contextWindow` or `maxTokens`. Pi only shows them before the first response and then uses the routed model's limits. `input` stays Pi's default (text and image; models without image support receive placeholders).
 - **Registration** happens in every process that may run a virtual selection:
   - The Owner extension (`src/index.ts`) registers at factory time and re-registers on `session_start` (which includes reload) from the Owner policy read.
   - The child bridge (`src/process-runtime/child-runtime-bridge.ts`) registers at factory time from its own read of the policy file, before Pi resolves `--model`. Children run with `--no-extensions --extension <bridge>`, so the Owner's registration does not reach them.
@@ -91,9 +91,11 @@ Pi emits `thinking_level_select` for every level change, including Pi's own star
 ## Progress
 
 - [x] Plan reviewed by the user (Layer 3 approved, provider-error fallback moved to #218)
-- [ ] Layer 1
-- [ ] Layer 2
-- [ ] Layer 3
+- [x] Layer 1 (71f13ce)
+- [x] Layer 2 and Layer 3 (76a1008); child control protocol moves to version 13
+- [x] Docs
+- [ ] Independent tests
+- [ ] Independent review
 
 ## Surprises & Discoveries
 
@@ -106,7 +108,9 @@ Pi emits `thinking_level_select` for every level change, including Pi's own star
 - **Session history records the real model.** Pi does this natively. Rejected recording the virtual id: pi-ai only replays reasoning signatures when the message's provider/api/model match the target model.
 - **Thinking is a preset in the definition, overridable by the Template.** Rejected: thinking only in Templates (loses per-model tuning inside one chain), and thinking only in definitions (no override).
 - **Definitions live in the Workflow Policy file.** Rejected a new file: one user config file already holds model policy and has a strict parser and atomic writer.
-- **Metadata from the first entry, Pi's default input types.** Rejected the earlier "smallest context window across entries" plan: Pi already switches to the routed model's limits after the first response and compacts per routed request.
+- **No catalogue limits, Pi's default input types.** Rejected "smallest context window across entries" and "first entry's limits": Pi already switches to the routed model's limits after the first response and compacts per routed request, and a definition edit would leave registered limits stale.
+- **Every thinking level is offered.** Rejected the union of entry levels: the registered list would go stale after an edit, and Pi clamps the routed level anyway.
+- **The manual-switch boundary is the bridge's session_start binding.** Pi applies `--thinking` before `bindExtensions` emits `session_start`, and the extension never sets a level, so any later `thinking_level_select` is manual.
 - **Routing sticks to the previous model for continuations and retries.** Rejected always taking the first usable entry: it would switch models mid-turn and break prompt caches and thinking signatures.
 - **Definitions bind late.** Rejected expanding the list into the `creationPreset` at spawn: dormant Agents would keep retired models, which is the problem this solves.
 

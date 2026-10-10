@@ -110,8 +110,12 @@ The volatile resolution performed immediately before one new Agent Runtime start
 The working directory obtained during Runtime Preparation by resolving the canonical per-spawn `cwd` against the current parent Runtime working directory. It anchors that Agent's project-scoped Template discovery for descendants and Pi's ordinary Project Context and cwd-scoped resource discovery for the prepared Runtime.
 
 **Workflow Policy**:
-The Owner-scoped configuration snapshot governing new host admissions, limits, operation review, and delivery progress. Owner resource reload may replace the Policy prospectively without making it transcript state or changing already-admitted work.
+The Owner-scoped configuration snapshot governing new host admissions, limits, operation review, delivery progress, model exclusions, and Virtual Model definitions. Owner resource reload may replace the Policy prospectively without making it transcript state or changing already-admitted work.
 _Avoid_: Workflow state, Workflow configuration lifecycle
+
+**Virtual Model**:
+A named, ordered list of real model and thinking pairs in the Workflow Policy, selectable as `virtual/<name>`. Pi routes each request to the first usable entry, or keeps the previous entry for a continuation or retry. In preset mode each entry runs on its own thinking level; in explicit mode the selected level applies. The name binds late, so captured presets follow definition edits.
+_Avoid_: model alias, model group
 
 **Agent Request**:
 A Request targeting a known Agent in the same Workflow, with a required immutable sender-authored title, full instructions, and one stable Request Message identity for Answer, Cancellation, retry, and retrieval. The title identifies the work for navigation, not identity or complete instructions. Definitive initial admission failure creates no Agent Request or outstanding dependency; uncertain admission preserves the Request, and later Delivery or retry failure never withdraws an admitted Request. Deferred brings queued Requests to attention one at a time in live admission order when the recipient waits or settles, irrespective of Request ancestry. Steer retains priority at safe boundaries.
