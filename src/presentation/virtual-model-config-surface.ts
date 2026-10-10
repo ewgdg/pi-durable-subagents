@@ -604,7 +604,14 @@ class VirtualModelConfigSurface implements Component, Focusable {
 			case "list": return this.#renderList(width);
 			case "definition": return this.#renderDefinition(screen.name);
 			case "name": return this.#renderName(screen, width);
-			case "model": return [...screen.search.render(width), "", ...screen.list.render(width)];
+			case "model": return [
+				...screen.search.render(width),
+				"",
+				// SelectList's own empty state is hard-coded to "No matching commands".
+				...(screen.list.getSelectedItem() === null
+					? [this.#theme.fg("muted", "  No matching models")]
+					: screen.list.render(width)),
+			];
 			case "thinking": return screen.list.render(width);
 		}
 	}

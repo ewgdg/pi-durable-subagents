@@ -285,6 +285,16 @@ test("appending refuses a model already in the list and accepts an excluded one 
 	assert.match(surface.render(), /3\s+deepseek\/deepseek-v4-flash\s+\S+\s+\[excluded\]/);
 });
 
+test("a model search with no match says so and saves nothing", { timeout: 5_000 }, async () => {
+	const surface = await openSurface();
+	await surface.press(ENTER, "a");
+	await surface.type("zzzz");
+	assert.match(surface.render(), /No matching models/);
+	assert.doesNotMatch(surface.render(), /commands/);
+	await surface.press(ENTER);
+	assert.deepEqual(surface.persisted, []);
+});
+
 test("Enter on an entry replaces its model or only its thinking, never duplicating another entry", { timeout: 5_000 }, async () => {
 	const surface = await openSurface();
 	// Same model, new thinking: the entry's own model is not "in list" for itself.
