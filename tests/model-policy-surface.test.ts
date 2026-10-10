@@ -256,8 +256,9 @@ test("every panel row is boxed at the full width so text behind never shows thro
 
 function surfaceHarness(rows = 30) {
 	let surface: Component | undefined;
+	const terminal = { rows };
 	const tui = {
-		terminal: { rows },
+		terminal,
 		requestRender() {},
 	} as unknown as TUI;
 	const theme = {
@@ -283,6 +284,7 @@ function surfaceHarness(rows = 30) {
 	} as unknown as ExtensionUIContext;
 	return {
 		ui,
+		resize(rows: number) { terminal.rows = rows; },
 		get component(): Component {
 			assert.ok(surface);
 			return surface;
@@ -305,3 +307,130 @@ function lineWith(component: Component, needle: string): string {
 async function settle(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 }
+
+const pad = (index: number) => String(index).padStart(2, "0");
+/** Three providers interleaved, so each provider block is long. */
+const MANY_MODELS: readonly ModelPolicyModel[] = Array.from({ length: 30 }, (_, index) => ({
+	provider: `p${index % 3}`,
+	modelId: `m${pad(index)}`,
+	name: `Model ${index}`,
+}));
+
+/** Pi's overlay height for `maxHeight: "90%"` with 1-row top and bottom margins (pi-tui `resolveOverlayLayout`). */
+function overlayRowBound(terminalRows: number): number {
+	return Math.max(1, Math.min(Math.floor(terminalRows * 0.9), terminalRows - 2));
+}
+
+/** The overlay would cut anything past its bound, so the frame must fit and end with help then the border. */
+function assertFitsOverlay(lines: readonly string[], terminalRows: number, label: string): void {
+	const plain = lines.map(stripTerminalSequences);
+	const bound = overlayRowBound(terminalRows);
+	assert.ok(plain.length <= bound, `${label}: ${plain.length} rows exceed the ${bound}-row overlay of a ${terminalRows}-row terminal\n${plain.join("\n")}`);
+	assert.match(plain.at(-1) ?? "", /^└─+┘$/u, `${label}\n${plain.join("\n")}`);
+	assert.match(plain.at(-2) ?? "", /Esc done/u, `${label}: help is not the last content row\n${plain.join("\n")}`);
+}
+
+function rowLabel(row: ModelPolicyRow): string {
+	return row.kind === "provider" ? `${row.provider}/*` : `${row.modelId} [${row.provider}]`;
+}
+
+function assertFocused(component: Component, row: ModelPolicyRow, label: string): void {
+	const text = render(component);
+	const focused = text.split("\n").filter((line) => /^│ → /u.test(line));
+	assert.equal(focused.length, 1, `${label}: exactly one focused row should be visible\n${text}`);
+	assert.ok(focused[0]!.includes(rowLabel(row)), `${label}: ${rowLabel(row)} should be focused\n${text}`);
+}
+
+/** Walks searches and messages with the focus on provider and model rows; returns each state's height. */
+async function visitEveryState(catalogue: readonly ModelPolicyModel[], rows: number) {
+	const harness = surfaceHarness(rows);
+	const provider = catalogue.at(-1)!.provider;
+	const excludedModels = [`${provider}/*`];
+	const opened = openModelPolicySurface(harness.ui, {
+		availableModels: catalogue,
+		excludedModels,
+		async persist() { throw new Error("Workflow Policy could not be written: EACCES"); },
+	});
+	await Promise.resolve();
+	const press = async (...keys: string[]) => {
+		for (const key of keys) harness.component.handleInput?.(key);
+		await settle();
+	};
+	const heights: Array<readonly [string, number]> = [];
+	const record = (state: string) => {
+		const lines = harness.component.render(100);
+		assertFitsOverlay(lines, rows, `${rows} rows, ${state}`);
+		heights.push([state, lines.length]);
+	};
+	const menuRows = modelPolicyRows(catalogue, excludedModels);
+	const lockedIndex = menuRows.findIndex((row) => row.kind === "model" && row.locked);
+	assert.ok(lockedIndex > 0, "the catalogue needs a model locked by its provider row");
+	const DOWN = "\x1b[B";
+	const UP = "\x1b[A";
+
+	record("provider row focused, no model name");
+	await press(DOWN);
+	record("model row focused, model name shown");
+	await press(UP, ...Array.from({ length: lockedIndex }, () => DOWN), "\r");
+	assert.match(render(harness.component), /bans this model/u);
+	record("locked-model status");
+	await press(UP, "\r");
+	assert.match(render(harness.component), /could not be written/u);
+	record("write error");
+	await press(...provider);
+	record("searching");
+	await press(..."zzz");
+	assert.match(render(harness.component), /No matching/u);
+	record("no matches");
+	await press("\x7f", "\x7f", "\x7f");
+	record("search narrowed back");
+
+	harness.component.handleInput?.("\x1b");
+	await opened;
+	return heights;
+}
+
+test("the models menu keeps one height that fits the overlay through searches and messages", { timeout: 5_000 }, async (t) => {
+	for (const rows of [30, 20, 16, 13, 12, 11, 10, 8]) {
+		await t.test(`${rows}-row terminal`, async () => {
+			const heights: Array<readonly [string, number]> = [];
+			for (const [variant, catalogue] of [["short catalogue", MODELS], ["long catalogue", MANY_MODELS]] as const) {
+				for (const [state, height] of await visitEveryState(catalogue, rows)) heights.push([`${variant}: ${state}`, height]);
+			}
+			const expected = heights[0]![1];
+			assert.deepEqual(heights.filter(([, height]) => height !== expected), [], `states differ from ${expected} rows`);
+		});
+	}
+});
+
+test("the models menu scrolls to the end and back and keeps the focus across resizes", { timeout: 5_000 }, async () => {
+	const harness = surfaceHarness(16);
+	const opened = openModelPolicySurface(harness.ui, {
+		availableModels: MANY_MODELS,
+		excludedModels: [],
+		async persist(entries) { return entries; },
+	});
+	await Promise.resolve();
+	const menuRows = modelPolicyRows(MANY_MODELS, []);
+	const height = harness.component.render(100).length;
+	const path = [...menuRows.keys(), ...[...menuRows.keys()].reverse().slice(1)];
+	for (const [step, index] of path.entries()) {
+		if (step > 0) harness.component.handleInput?.(index > path[step - 1]! ? "\x1b[B" : "\x1b[A");
+		assertFocused(harness.component, menuRows[index]!, `row ${index + 1} of ${menuRows.length}`);
+		assert.equal(harness.component.render(100).length, height, "scrolling must not change the height");
+	}
+
+	const middle = 17;
+	for (let step = 0; step < middle; step++) harness.component.handleInput?.("\x1b[B");
+	const heights = new Map<number, number>();
+	for (const rows of [30, 12, 20, 16]) {
+		harness.resize(rows);
+		assertFitsOverlay(harness.component.render(100), rows, `resized to ${rows} rows`);
+		assertFocused(harness.component, menuRows[middle]!, `resized to ${rows} rows`);
+		heights.set(rows, harness.component.render(100).length);
+	}
+	assert.notEqual(heights.get(30), heights.get(12), "a resize must change the height");
+
+	harness.component.handleInput?.("\x1b");
+	await opened;
+});
