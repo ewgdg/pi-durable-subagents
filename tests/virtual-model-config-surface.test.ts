@@ -7,6 +7,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import {
+	entryUsability,
 	parseVirtualModels,
 	serializeVirtualModels,
 	type VirtualModelConfigSnapshot,
@@ -15,7 +16,6 @@ import {
 } from "../src/policy/virtual-models.ts";
 import { RUNTIME_THINKING_LEVELS, type RuntimeThinkingLevel } from "../src/protocol/runtime-configuration.ts";
 import {
-	entryUsability,
 	openVirtualModelConfigSurface,
 	summarizeEntries,
 } from "../src/presentation/virtual-model-config-surface.ts";

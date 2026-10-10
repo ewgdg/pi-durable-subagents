@@ -5,8 +5,8 @@ import type {
 	ModelRouteRequest,
 } from "@earendil-works/pi-coding-agent";
 
-import { isModelExcluded } from "../policy/model-exclusion.ts";
 import {
+	entryUsability,
 	requireVirtualModelDefinition,
 	selectVirtualModelEntry,
 	VIRTUAL_MODEL_PROVIDER,
@@ -89,10 +89,9 @@ export class VirtualModelRegistrar {
 		const available = ctx.modelRegistry.getAvailable();
 		const findAvailable = (model: ModelReference) =>
 			available.find((candidate) => candidate.provider === model.provider && candidate.id === model.modelId);
-		const usability = (model: ModelReference): EntryUsability => {
-			if (isModelExcluded(excludedModels, model)) return "excluded";
-			return findAvailable(model) === undefined ? "unavailable" : "usable";
-		};
+		const availableModels = available.map((model) => ({ provider: model.provider, modelId: model.id, name: model.name }));
+		const usability = (model: ModelReference): EntryUsability =>
+			entryUsability({ availableModels, excludedModels }, model);
 		const stickyModel = request.reason === "retry"
 			? request.failed?.model ?? request.previous?.model
 			: request.reason === "continuation" ? request.previous?.model : undefined;

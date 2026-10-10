@@ -7,7 +7,7 @@
 import type { ModelReference, RuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { isRuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
-import { modelIdentity, type ModelPolicySnapshot } from "./model-exclusion.ts";
+import { isModelExcluded, modelIdentity, type ModelPolicySnapshot } from "./model-exclusion.ts";
 
 /** Pi lists a virtual model under an unused provider id as always available. */
 export const VIRTUAL_MODEL_PROVIDER = "virtual";
@@ -34,6 +34,18 @@ export type EntryUsability = "usable" | "excluded" | "unavailable";
 
 const ENTRY_RULE =
 	"Workflow Policy virtualModels entries must contain only id (a real \"<provider>/<modelId>\") and thinking";
+
+/** Excluded wins over availability, for routing and for the Config tab alike. */
+export function entryUsability(
+	policy: Pick<ModelPolicySnapshot, "availableModels" | "excludedModels">,
+	model: ModelReference,
+): EntryUsability {
+	if (isModelExcluded(policy.excludedModels, model)) return "excluded";
+	return policy.availableModels.some((candidate) =>
+		candidate.provider === model.provider && candidate.modelId === model.modelId)
+		? "usable"
+		: "unavailable";
+}
 
 export function isVirtualModel(model: ModelReference): boolean {
 	return model.provider === VIRTUAL_MODEL_PROVIDER;

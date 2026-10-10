@@ -16,8 +16,8 @@ import {
 
 import { isModelExcluded, modelIdentity, type ModelPolicyModel } from "../policy/model-exclusion.ts";
 import {
+	entryUsability,
 	VIRTUAL_MODEL_PROVIDER,
-	type EntryUsability,
 	type VirtualModelConfigSnapshot,
 	type VirtualModelDefinitions,
 	type VirtualModelEntry,
@@ -46,18 +46,6 @@ export type VirtualModelConfigOptions = VirtualModelConfigSnapshot & Readonly<{
 	/** Writes the complete next definitions and returns what the Config tab shows now. */
 	persist(definitions: VirtualModelDefinitions): Promise<VirtualModelConfigSnapshot>;
 }>;
-
-/** The same rule routing applies: excluded wins, then the Owner's available models. */
-export function entryUsability(
-	config: Pick<VirtualModelConfigSnapshot, "availableModels" | "excludedModels">,
-	model: ModelReference,
-): EntryUsability {
-	if (isModelExcluded(config.excludedModels, model)) return "excluded";
-	return config.availableModels.some((candidate) =>
-		candidate.provider === model.provider && candidate.modelId === model.modelId)
-		? "usable"
-		: "unavailable";
-}
 
 /**
  * One list row's entries as `modelId • thinking`, in routing order. Entries that do
@@ -332,7 +320,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 				return;
 			}
 			this.#saveEntries(name, entries.filter((_entry, position) => position !== index), () => {
-				this.#entryFocus = clampIndex(index, this.#definitionRowCount(name));
+				this.#entryFocus = clampIndex(index, this.#entries(name).length);
 			});
 		}
 	}
