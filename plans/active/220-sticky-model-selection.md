@@ -59,7 +59,9 @@ Pi saves a new session's starting model and thinking into the session and restor
 
 ## Surprises & Discoveries
 
-- Pi never records `model_change` for a child's first launch (session already has Identity custom messages, so `hasExistingSession` is true).
+- Pi records `model_change` on an ordinary child's first start (Identity is a `custom` entry, not a message), but not for a Moderator, whose input is a `custom_message`, and never the Virtual Model thinking mode. Recording at Identity commit covers both.
+- Children spawned in preset mode between #219 and this change have no router-state entry, so their next fresh Runtime resumes in explicit mode. #219 is unreleased, so this is accepted.
+- Review: the protocol bump broke six version-13 fixtures; a fallback that lands on the same (inherited, excluded) model kept dropping the manual thinking level; an unknown recorded level blocked startup. All fixed.
 
 ## Outcomes & Retrospective
 
