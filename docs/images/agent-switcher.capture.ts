@@ -85,6 +85,7 @@ async function renderSelector(): Promise<string[]> {
 		live: [owner, architecture, schemaReview, implementation],
 		dormant: [],
 		selectedAgentId: owner.agentId,
+		configAvailable: true,
 		humanAttention: [{
 			requestId: "human-request-2f9c",
 			agentId: implementation.agentId,

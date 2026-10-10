@@ -38,7 +38,7 @@ path.
 
 Pi's public fullscreen mouse routing supplies parsed events and component-local cell coordinates. The selector uses that API (verified with Pi 0.85.1), not terminal escape decoding or private overlay geometry. Regular terminal mode remains keyboard-only.
 
-- Primary-click **Live**, **Dormant**, or **Reports** to switch tabs.
+- Primary-click **Live**, **Dormant**, or **Reports** to switch tabs, or **Config** to open Config.
 - Text buttons use unbracketed labels, with the Owner shortcut shown as `[o]`; spacing separates neighboring actions, and brackets in participant-provided labels remain unchanged.
 - Click **Go to Owner [o]** to return to Owner and close. Click the Live **Agents** heading to return to the top-level list inside the menu; at root, this heading is a no-op.
 - Click anywhere in an Agent summary's content area outside the trailing child control to open the Agent. The complete **N children ›** control browses children instead.
@@ -110,6 +110,7 @@ An absent description leaves its line empty, keeping the overlay height stable a
 
 - Tab or Shift-Tab: cycle Live, Dormant, and Reports
 - `o`: return to Owner
+- `c`: open [Config](workflow-policy.md#editing-in-the-config-tab), shown as `| Config [c]` after the tabs in the admitted Workflow Owner only. Tab never lands on it; Escape from Config reopens the selector.
 - Up/Down or `k`/`j`: move linearly through Attention, Agent bodies, and the Owner footer; stop at both boundaries. Rebound Pi list navigation keys behave the same.
 - Right or `l`: activate the focused Agent's trailing child control
 - Left or `h`: return to the parent Live scope and refocus the previous path

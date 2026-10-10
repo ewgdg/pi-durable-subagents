@@ -23,7 +23,7 @@ Select a subagent to enter its complete Pi session and interact with it directly
 - **Incident handling:** a runtime reminder recovers forgotten Answers; isolated Moderators handle persistent stalls, deadlocks, and failures under policy bounds. See [Operational Incident moderation](docs/operational-incident-moderation.md).
 - **Durable recovery:** a fresh host rebuilds authority and pending Requests from Pi transcripts. See [Cold host recovery](docs/cold-host-recovery.md).
 - **Model policy:** `/agents models` maintains a durable deny list of models children may not use. See [Workflow Policy](docs/workflow-policy.md).
-- **Virtual models:** name an ordered fallback list of models once and use `virtual/<name>` in Templates and spawns; fixing the list updates every Agent. See [Virtual Models](docs/workflow-policy.md#virtual-models).
+- **Virtual models:** name an ordered fallback list of models once and use `virtual/<name>` in Templates and spawns; fixing the list updates every Agent. Edit them in the `/agents` Config tab (`c`). See [Virtual Models](docs/workflow-policy.md#virtual-models).
 
 Coordination does not override Pi's compaction, retry, or transport settings.
 

@@ -27,7 +27,7 @@ import { isPresetThinking } from "./recorded-model-selection.ts";
  *
  * Every routed request re-reads the policy file, so an edited entry list applies on
  * the next request in every process. Only adding or removing a name waits for the
- * next sync (a new process, or an Owner session_start).
+ * next sync (a new process, an Owner session_start, or an Owner Config tab edit).
  */
 export class VirtualModelRegistrar {
 	readonly #pi: ExtensionAPI;

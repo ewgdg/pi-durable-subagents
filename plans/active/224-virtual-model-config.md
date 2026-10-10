@@ -81,7 +81,7 @@ Grow in layers. Each layer works on its own.
 - [x] HTML mockup of all views reviewed with the user.
 - [x] Layer 1: Config label, `c`, click, and the read-only list (typecheck and existing selector tests pass).
 - [x] Layer 2 and Layer 3, landed together: every edit flow walked through in a throwaway render script (new name, invalid and duplicate names, picker search and `[in list]` refusal, thinking, append, move, rename, delete with confirmation, last-entry refusal, failed save, read-only file). Typecheck and focused policy, virtual-model, command, and selector tests pass.
-- [ ] Layer 4
+- [x] Layer 4: selector and Workflow Policy docs, README line, registrar comment, regenerated screenshot.
 - [ ] Independent tests and review
 
 ## Decisions
