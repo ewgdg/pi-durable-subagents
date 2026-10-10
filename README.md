@@ -73,6 +73,19 @@ In a headless Workflow, Agents cannot use `ask_user`; they escalate through thei
 
 Templates are creation presets: edits apply to future spawns only. See [Agent Templates](docs/agent-spawning.md#agent-templates) for configuration details.
 
+Both templates below use one [Virtual Model](docs/workflow-policy.md#virtual-models), so a retired or banned model is fixed in one place. `thinking: preset` runs each entry on its own level. Add it in the `/agents` Config tab (`c`), or in `~/.pi/agent/config/pi-durable-subagents.json`:
+
+```json
+{
+  "virtualModels": {
+    "cheap": [
+      { "id": "openai-codex/gpt-5.6-luna", "thinking": "high" },
+      { "id": "deepseek/deepseek-v4-flash", "thinking": "high" }
+    ]
+  }
+}
+```
+
 ### `cheap-delegate`
 
 A cost-efficient default for bounded implementation, routine execution, and targeted fact-finding.
@@ -91,8 +104,8 @@ useWhen: >-
   If its results remain inadequate after several iterations and show no obvious
   improvement, stop assigning that task to this template.
 models:
-  - id: openai-codex/gpt-5.6-luna
-    thinking: high
+  - id: virtual/cheap
+    thinking: preset
 ---
 ```
 
@@ -107,10 +120,8 @@ Save as `~/.agents/agents/moderator.md`:
 name: moderator
 useWhen: Use for moderation and incident response.
 models:
-  - id: openai-codex/gpt-5.6-luna
-    thinking: high
-  - id: deepseek/deepseek-v4-flash
-    thinking: high
+  - id: virtual/cheap
+    thinking: preset
 ---
 ```
 
