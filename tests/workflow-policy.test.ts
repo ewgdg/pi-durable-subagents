@@ -230,17 +230,34 @@ test("Workflow Policy parses virtual models into frozen model and thinking entri
 
 test("an invalid virtual model definition rejects the complete Workflow Policy", () => {
 	const ok = { id: "openai-codex/gpt-6.1-luna", thinking: "high" };
+	const withFast = (entry: unknown) => JSON.stringify({ virtualModels: { fast: [entry] } });
 	const invalidPolicies: Array<[string, string]> = [
 		["null virtual models", '{"virtualModels": null}'],
 		["array virtual models", `{"virtualModels": [${JSON.stringify(ok)}]}`],
+		["string virtual models", '{"virtualModels": "fast"}'],
 		["uppercase name", JSON.stringify({ virtualModels: { Fast: [ok] } })],
+		["underscore name", JSON.stringify({ virtualModels: { fast_model: [ok] } })],
+		["slash name", JSON.stringify({ virtualModels: { "virtual/fast": [ok] } })],
+		["empty name", JSON.stringify({ virtualModels: { "": [ok] } })],
 		["empty list", JSON.stringify({ virtualModels: { fast: [] } })],
-		["extra entry field", JSON.stringify({ virtualModels: { fast: [{ ...ok, note: "x" }] } })],
-		["missing thinking", JSON.stringify({ virtualModels: { fast: [{ id: ok.id }] } })],
-		["preset thinking", JSON.stringify({ virtualModels: { fast: [{ id: ok.id, thinking: "preset" }] } })],
-		["inherit thinking", JSON.stringify({ virtualModels: { fast: [{ id: ok.id, thinking: "inherit" }] } })],
-		["virtual entry", JSON.stringify({ virtualModels: { fast: [{ id: "virtual/slow", thinking: "high" }] } })],
-		["id without provider", JSON.stringify({ virtualModels: { fast: [{ id: "luna", thinking: "high" }] } })],
+		["non-array list", JSON.stringify({ virtualModels: { fast: ok } })],
+		["one bad list among good", JSON.stringify({ virtualModels: { fast: [ok], slow: [] } })],
+		["null entry", withFast(null)],
+		["string entry", withFast(ok.id)],
+		["extra entry field", withFast({ ...ok, note: "x" })],
+		["model field instead of id", withFast({ model: ok.id, thinking: "high" })],
+		["missing thinking", withFast({ id: ok.id })],
+		["missing id", withFast({ thinking: "high" })],
+		["preset thinking", withFast({ id: ok.id, thinking: "preset" })],
+		["inherit thinking", withFast({ id: ok.id, thinking: "inherit" })],
+		["unknown thinking", withFast({ id: ok.id, thinking: "extreme" })],
+		["numeric thinking", withFast({ id: ok.id, thinking: 3 })],
+		["virtual entry", withFast({ id: "virtual/slow", thinking: "high" })],
+		["self-referencing entry", withFast({ id: "virtual/fast", thinking: "high" })],
+		["inherit id", withFast({ id: "inherit", thinking: "high" })],
+		["id without provider", withFast({ id: "luna", thinking: "high" })],
+		["empty provider", withFast({ id: "/luna", thinking: "high" })],
+		["empty model id", withFast({ id: "openai-codex/", thinking: "high" })],
 		["duplicate entry ids", JSON.stringify({ virtualModels: { fast: [ok, { ...ok, thinking: "low" }] } })],
 		["duplicate names", `{"virtualModels": {"fast": [${JSON.stringify(ok)}], "fast": [${JSON.stringify(ok)}]}}`],
 		["valid virtual models next to an invalid field", JSON.stringify({ virtualModels: { fast: [ok] }, excludedModels: ["*"] })],
@@ -248,9 +265,12 @@ test("an invalid virtual model definition rejects the complete Workflow Policy",
 	for (const [name, source] of invalidPolicies) {
 		assert.throws(() => parseWorkflowPolicy(source), Error, name);
 	}
+	for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+		assert.doesNotThrow(() => parseWorkflowPolicy(withFast({ id: ok.id, thinking: level })), level);
+	}
 });
 
-test("writing excluded models preserves the user's virtual models", async (t) => {
+test("writing excluded models preserves valid virtual models and refuses an invalid definition", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		processVisibleModel: false,
 	});
@@ -282,20 +302,11 @@ test("writing excluded models preserves the user's virtual models", async (t) =>
 			{ model: { provider: "deepseek", modelId: "deepseek-flash" }, thinking: "max" },
 		],
 	});
-});
 
-test("an invalid virtual model definition on disk makes the policy read fail and refuses exclusion writes", async (t) => {
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
-		processVisibleModel: false,
-	});
-	const policyDirectory = join(host.services.agentDir, "config");
-	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
+	// An invalid definition on disk fails the read and refuses the write untouched.
 	const invalid = JSON.stringify({ virtualModels: { fast: [] } });
-	await mkdir(policyDirectory, { recursive: true });
 	await writeFile(policyPath, invalid, "utf8");
-
-	const loaded = await readWorkflowPolicy(host.services.agentDir);
-	assert.equal(loaded.ok, false);
+	assert.equal((await readWorkflowPolicy(host.services.agentDir)).ok, false);
 	await assert.rejects(() => writeExcludedModels(host.services.agentDir, ["openai-codex/*"]));
 	assert.equal(await readFile(policyPath, "utf8"), invalid);
 });

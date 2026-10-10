@@ -2,8 +2,8 @@ import "./support/supervised-run.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -28,7 +28,7 @@ import {
 } from "../src/coordination/workflow-coordinator.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
-import { DEFAULT_WORKFLOW_POLICY, parseWorkflowPolicy, readWorkflowPolicy, WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
+import { DEFAULT_WORKFLOW_POLICY, readWorkflowPolicy, WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import {
 	deriveMessageIdentity,
 	ProtocolInvariantError,
@@ -620,124 +620,186 @@ test("Owner-authored model exclusions refuse an explicit spawn model", async (t)
 	await harness.shutdown();
 });
 
-test("a virtual model is spawnable only while defined with at least one usable entry", async (t) => {
-	const workflowPolicy = new WorkflowPolicyStore();
-	const harness = await createCoordinatorHarness(t, {}, undefined, {}, workflowPolicy);
+function writePolicyFile(agentDir: string, policy: unknown): void {
+	mkdirSync(join(agentDir, "config"), { recursive: true });
+	writeFileSync(
+		join(agentDir, "config", "pi-durable-subagents.json"),
+		typeof policy === "string" ? policy : JSON.stringify(policy),
+		"utf8",
+	);
+}
+
+function virtualSpawnInput(model: { id: string; thinking: string }, request = "Use a virtual model."): AgentSpawnInput {
+	return { title: "Fixture request", request, config: { model } } as AgentSpawnInput;
+}
+
+function availableTestModels(harness: Awaited<ReturnType<typeof createCoordinatorHarness>>) {
 	const available = harness.host.services.modelRuntime.getAvailableSnapshot()[0];
 	assert.ok(available, "expected an available model in the test catalogue");
 	const unconfigured = harness.host.services.modelRuntime.getModels("openai-codex")[0];
 	assert.ok(unconfigured, "expected an OpenAI Codex model in Pi's catalogue");
 	assert.equal(harness.host.services.modelRuntime.hasConfiguredAuth("openai-codex"), false);
-	const availableId = `${available.provider}/${available.id}`;
-	workflowPolicy.publish(parseWorkflowPolicy(JSON.stringify({
-		excludedModels: [availableId],
+	return {
+		availableId: `${available.provider}/${available.id}`,
+		unconfiguredId: `openai-codex/${unconfigured.id}`,
+	};
+}
+
+async function expectConfigurationRefusal(
+	harness: Awaited<ReturnType<typeof createCoordinatorHarness>>,
+	toolCallId: string,
+	model: { id: string; thinking: string },
+): Promise<string> {
+	const receipt = await harness.spawn(toolCallId, virtualSpawnInput(model, "This request must never acquire a child."));
+	assert.equal(receipt.spawnStatus, "not_created", `${toolCallId}: ${JSON.stringify(receipt)}`);
+	assert.equal((receipt as { failedStage?: string }).failedStage, "configuration", toolCallId);
+	return (receipt as { reason: string }).reason;
+}
+
+test("a virtual model spawn is refused unless the valid policy file defines it with a usable entry", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
+	const { availableId, unconfiguredId } = availableTestModels(harness);
+	writePolicyFile(harness.host.services.agentDir, {
 		virtualModels: {
 			fast: [
-				{ id: `openai-codex/${unconfigured.id}`, thinking: "high" },
+				{ id: unconfiguredId, thinking: "high" },
 				{ id: availableId, thinking: "low" },
 			],
 		},
-	})));
-
-	const refused = async (toolCallId: string, model: { id: string; thinking: string }) => {
-		const receipt = await harness.spawn(toolCallId, {
-			title: "Fixture request",
-			request: "This request must never acquire a child.",
-			config: { model },
-		} as AgentSpawnInput);
-		assert.equal(receipt.spawnStatus, "not_created", JSON.stringify(receipt));
-		assert.equal((receipt as { failedStage?: string }).failedStage, "configuration");
-		return (receipt as { reason: string }).reason;
-	};
+	});
+	await harness.view.setModelExclusions([availableId]);
 
 	// One entry has no credentials and the other is excluded by policy.
-	assert.match(await refused("spawn-virtual-unusable-preset", { id: "virtual/fast", thinking: "preset" }), /virtual\/fast/);
-	assert.match(await refused("spawn-virtual-unusable-explicit", { id: "virtual/fast", thinking: "high" }), /virtual\/fast/);
+	for (const thinking of ["preset", "high"]) {
+		assert.match(await expectConfigurationRefusal(harness, `spawn-virtual-unusable-${thinking}`, { id: "virtual/fast", thinking }), /virtual\/fast/);
+	}
 	// An undefined name, including a prototype key, is never available.
-	assert.match(await refused("spawn-virtual-undefined", { id: "virtual/missing", thinking: "preset" }), /virtual\/missing/);
-	assert.match(await refused("spawn-virtual-prototype-key", { id: "virtual/constructor", thinking: "high" }), /virtual\/constructor/);
+	for (const name of ["missing", "constructor"]) {
+		assert.match(await expectConfigurationRefusal(harness, `spawn-virtual-${name}`, { id: `virtual/${name}`, thinking: "high" }), new RegExp(`virtual/${name}`));
+	}
+
+	// An invalid file refuses every virtual id, even one whose entry would be usable.
+	await harness.view.setModelExclusions([]);
+	writePolicyFile(harness.host.services.agentDir, JSON.stringify({
+		virtualModels: { solo: [{ id: availableId, thinking: "low" }] },
+		unknownField: true,
+	}));
+	assert.match(await expectConfigurationRefusal(harness, "spawn-virtual-invalid-policy", { id: "virtual/solo", thinking: "preset" }), /virtual\/solo/);
 	assert.deepEqual(harness.view.children(), []);
 
 	await harness.shutdown();
 });
 
-test("a preset virtual spawn routes the child to its first usable entry and records the real model", { timeout: 45_000 }, async (t) => {
-	const cwd = await mkdtemp(join(tmpdir(), "pi-durable-subagents-virtual-"));
-	const agentDir = join(cwd, ".pi-agent");
-	await mkdir(join(agentDir, "config"), { recursive: true });
-	await writeFile(join(agentDir, "config", "pi-durable-subagents.json"), JSON.stringify({
+test("Owner virtual model availability follows policy file edits without a reload", { timeout: 45_000 }, async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
+	const { availableId, unconfiguredId } = availableTestModels(harness);
+	writePolicyFile(harness.host.services.agentDir, { virtualModels: {} });
+	await expectConfigurationRefusal(harness, "spawn-late-before-definition", { id: "virtual/late", thinking: "high" });
+
+	// A name added mid-session is spawnable at once.
+	writePolicyFile(harness.host.services.agentDir, { virtualModels: { late: [{ id: availableId, thinking: "low" }] } });
+	const created = await harness.spawn("spawn-late-after-definition", virtualSpawnInput({ id: "virtual/late", thinking: "high" }));
+	assert.equal(created.spawnStatus, "created", JSON.stringify(created));
+	assert.deepEqual(
+		(created as { effectiveConfiguration: { model: unknown } }).effectiveConfiguration.model,
+		{ provider: "virtual", modelId: "late" },
+	);
+
+	// Repointing the name at an unusable model makes it unavailable again.
+	writePolicyFile(harness.host.services.agentDir, { virtualModels: { late: [{ id: unconfiguredId, thinking: "low" }] } });
+	await expectConfigurationRefusal(harness, "spawn-late-after-repoint", { id: "virtual/late", thinking: "high" });
+
+	await harness.shutdown();
+});
+
+test("a preset virtual spawn routes each request at the serving entry's level and records the real model", { timeout: 45_000 }, async (t) => {
+	let agentDir = "";
+	const fastPolicy = (servingLevel: string) => ({
 		virtualModels: {
 			fast: [
 				// A retired model no longer in any catalogue is skipped.
-				{ id: "coordination-test/retired-model", thinking: "high" },
-				{ id: "coordination-test/deterministic-owner", thinking: "low" },
+				{ id: "coordination-test/retired-model", thinking: "minimal" },
+				{ id: availableId, thinking: servingLevel },
 			],
 		},
-	}), "utf8");
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-		cwd,
-		agentDir,
 	});
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall(
-				"agent_spawn",
-				{
-					title: "Fixture request",
-					request: "Report which model you run on.",
-					config: { model: { id: "virtual/fast", thinking: "preset" } },
-				},
-				{ id: "spawn-virtual-child" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The child has been created."),
-		(context) => fauxAssistantMessage(
-			fauxToolCall(
-				"agent_message",
-				{
-					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
-					answer: "Answered through a virtual model.",
-				},
-				{ id: "answer-virtual-creation-request" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The Creation Request Answer was committed."),
-		fauxAssistantMessage("The child Answer reached the Owner."),
-	]);
+	let availableId = "";
+	let edited = false;
+	const harness = await createCoordinatorHarness(t, {
+		// Runs after preparation fixed the launch level and before the child's first
+		// request, so the selected level and the serving entry's level now differ.
+		afterIdentityCommit() {
+			if (edited) return;
+			edited = true;
+			writePolicyFile(agentDir, fastPolicy("high"));
+		},
+	});
+	agentDir = harness.host.services.agentDir;
+	availableId = availableTestModels(harness).availableId;
+	writePolicyFile(agentDir, fastPolicy("low"));
+	harness.host.model.setResponses([fauxAssistantMessage("Routed through a virtual model.")]);
 
-	await host.session.prompt("Delegate to a virtual model child.");
-	await host.session.waitForIdle();
-
-	const spawnResult = host.session.sessionManager.getEntries().find((entry) =>
-		entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "agent_spawn");
-	assert.ok(spawnResult && spawnResult.type === "message" && spawnResult.message.role === "toolResult");
-	const details = spawnResult.message.details as {
-		spawnStatus: string;
-		agentId: string;
-		effectiveConfiguration: { model: unknown };
-	};
-	assert.equal(details.spawnStatus, "created", JSON.stringify(details));
-	// The selection stays virtual so a later edit to the list applies on the next request.
+	const receipt = await harness.spawn("spawn-virtual-preset-child", virtualSpawnInput({ id: "virtual/fast", thinking: "preset" }));
+	assert.equal(receipt.spawnStatus, "created", JSON.stringify(receipt));
+	assert.ok(edited);
+	const details = receipt as { agentId: string; effectiveConfiguration: Record<string, unknown> };
+	// The selection stays virtual; the launch level is the serving entry's level at preparation.
 	assert.deepEqual(details.effectiveConfiguration.model, { provider: "virtual", modelId: "fast" });
+	assert.equal(details.effectiveConfiguration.thinking, "low");
+	assert.equal(details.effectiveConfiguration.presetThinking, true);
 
-	const workflowDirectory = join(host.session.sessionManager.getSessionDir(), "pi-durable-subagents", host.session.sessionId);
-	const childSessionFile = await waitForChildSessionFile(host.cwd, workflowDirectory, details.agentId);
-	const childEntries = await waitForEntry(childSessionFile, (entry) =>
+	const workflowDirectory = join(harness.host.session.sessionManager.getSessionDir(), "pi-durable-subagents", harness.host.session.sessionId);
+	const childSessionFile = await waitForChildSessionFile(harness.host.cwd, workflowDirectory, details.agentId);
+	const isRoutedAnswer = (entry: ReturnType<SessionManager["getEntries"]>[number]) =>
 		entry.type === "message" && entry.message.role === "assistant" &&
-		entry.message.content.some((part) => part.type === "toolCall" && part.id === "answer-virtual-creation-request"));
-	const answer = childEntries.find((entry) =>
-		entry.type === "message" && entry.message.role === "assistant" &&
-		entry.message.content.some((part) => part.type === "toolCall" && part.id === "answer-virtual-creation-request"));
+		entry.message.content.some((part) => part.type === "text" && part.text === "Routed through a virtual model.");
+	const answer = (await waitForEntry(childSessionFile, isRoutedAnswer)).find(isRoutedAnswer);
 	assert.ok(answer && answer.type === "message" && answer.message.role === "assistant");
-	// Session history records the physical model that answered, never the virtual one.
-	assert.equal(answer.message.provider, "coordination-test");
-	assert.equal(answer.message.model, "deterministic-owner");
+	// Session history records the physical model, at the entry's level rather than the
+	// selected "low" an explicit-mode child would have used.
+	assert.equal(`${answer.message.provider}/${answer.message.model}`, availableId);
+	assert.equal(answer.message.thinkingLevel, "high");
 
-	await host.runtime.dispose();
+	await harness.shutdown();
+});
+
+test("a child Agent spawns a grandchild on a preset virtual model", { timeout: 45_000 }, async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
+	const { availableId } = availableTestModels(harness);
+	writePolicyFile(harness.host.services.agentDir, { virtualModels: { fast: [{ id: availableId, thinking: "low" }] } });
+	// Child and grandchild requests may interleave, so each step answers by context.
+	const respond = (context: Context) => {
+		const transcript = JSON.stringify(context.messages);
+		if (transcript.includes('"toolName":"agent_spawn"')) return fauxAssistantMessage("The grandchild was spawned.");
+		if (transcript.includes("Spawn a virtual grandchild.")) {
+			return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+				title: "Grandchild request",
+				request: "Grandchild work.",
+				config: { model: { id: "virtual/fast", thinking: "preset" } },
+			}, { id: "spawn-virtual-grandchild" }), { stopReason: "toolUse" });
+		}
+		return fauxAssistantMessage("Idle.");
+	};
+	harness.host.model.setResponses(Array.from({ length: 8 }, () => respond));
+
+	const parent = await harness.spawn("spawn-virtual-parent", {
+		title: "Fixture request",
+		request: "Spawn a virtual grandchild.",
+	});
+	assert.ok("agentId" in parent, JSON.stringify(parent));
+	const workflowDirectory = join(harness.host.session.sessionManager.getSessionDir(), "pi-durable-subagents", harness.host.session.sessionId);
+	const parentSessionFile = await waitForChildSessionFile(harness.host.cwd, workflowDirectory, parent.agentId);
+	const isSpawnResult = (entry: ReturnType<SessionManager["getEntries"]>[number]) =>
+		entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === "spawn-virtual-grandchild";
+	const result = (await waitForEntry(parentSessionFile, isSpawnResult)).find(isSpawnResult);
+	assert.ok(result && result.type === "message" && result.message.role === "toolResult");
+	assert.equal(result.message.isError, false, JSON.stringify(result.message.content));
+	const details = result.message.details as { spawnStatus: string; effectiveConfiguration: Record<string, unknown> };
+	assert.equal(details.spawnStatus, "created", JSON.stringify(details));
+	assert.deepEqual(details.effectiveConfiguration.model, { provider: "virtual", modelId: "fast" });
+	assert.equal(details.effectiveConfiguration.presetThinking, true);
+
+	await harness.shutdown();
 });
 
 test("invalid default-child metadata fails before Agent Identity", async (t) => {

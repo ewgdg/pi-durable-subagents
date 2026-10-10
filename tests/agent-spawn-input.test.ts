@@ -163,7 +163,7 @@ test("Agent Spawn requires one atomic model pair while recorded half-pairs keep 
 	}
 });
 
-test("Agent Spawn accepts virtual model ids with ordinary or preset thinking", () => {
+test("Agent Spawn accepts preset thinking only with a virtual model id", () => {
 	for (const model of [
 		{ id: "virtual/fast", thinking: "preset" },
 		{ id: "virtual/fast", thinking: "high" },
@@ -173,9 +173,6 @@ test("Agent Spawn accepts virtual model ids with ordinary or preset thinking", (
 		assert.deepEqual(validateAgentSpawnInput(input), input);
 		assert.equal(Check(coordinationToolSchemas.agent_spawn, input), true, JSON.stringify(model));
 	}
-});
-
-test("Agent Spawn rejects preset thinking without a virtual model id", () => {
 	for (const model of [
 		{ id: "openai-codex/gpt-6.1-luna", thinking: "preset" },
 		{ id: "inherit", thinking: "preset" },

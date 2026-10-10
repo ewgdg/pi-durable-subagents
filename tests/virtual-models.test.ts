@@ -12,199 +12,24 @@ import type {
 	ExtensionVirtualModel,
 } from "@earendil-works/pi-coding-agent";
 
-import {
-	isVirtualModel,
-	parseVirtualModels,
-	requireVirtualModelDefinition,
-	selectVirtualModelEntry,
-	type EntryUsability,
-	type VirtualModelEntry,
-} from "../src/policy/virtual-models.ts";
 import { VirtualModelRegistrar } from "../src/pi-integration/virtual-model-registration.ts";
 import type { ModelReference } from "../src/protocol/runtime-configuration.ts";
 
 const LUNA: ModelReference = { provider: "openai-codex", modelId: "gpt-6.1-luna" };
 const FLASH: ModelReference = { provider: "deepseek", modelId: "deepseek-flash" };
 const PRO: ModelReference = { provider: "deepseek", modelId: "deepseek-pro" };
-
-const entry = (model: ModelReference, thinking: VirtualModelEntry["thinking"]): VirtualModelEntry => ({ model, thinking });
+const ALL = [LUNA, FLASH, PRO];
 const key = (model: ModelReference) => `${model.provider}/${model.modelId}`;
-const usabilityOf = (table: Record<string, EntryUsability>) =>
-	(model: ModelReference): EntryUsability => table[key(model)] ?? "usable";
 
-// --- Pure routing decision ---------------------------------------------------
-
-test("selection takes the first usable entry, skipping excluded and unavailable ones", () => {
-	const entries = [entry(LUNA, "high"), entry(FLASH, "max"), entry(PRO, "low")];
-	assert.deepEqual(
-		selectVirtualModelEntry({ name: "fast", entries, usability: () => "usable" }),
-		entries[0],
-	);
-	assert.deepEqual(
-		selectVirtualModelEntry({ name: "fast", entries, usability: usabilityOf({ [key(LUNA)]: "excluded" }) }),
-		entries[1],
-	);
-	assert.deepEqual(
-		selectVirtualModelEntry({
-			name: "fast",
-			entries,
-			usability: usabilityOf({ [key(LUNA)]: "unavailable", [key(FLASH)]: "excluded" }),
-		}),
-		entries[2],
-	);
-});
-
-test("a sticky model wins only while it is still a usable entry", () => {
-	const entries = [entry(LUNA, "high"), entry(FLASH, "max"), entry(PRO, "low")];
-	// Sticky later entry beats the first usable one.
-	assert.deepEqual(
-		selectVirtualModelEntry({ name: "fast", entries, usability: () => "usable", sticky: PRO }),
-		entries[2],
-	);
-	// Sticky but excluded now: falls back to the first usable entry.
-	assert.deepEqual(
-		selectVirtualModelEntry({
-			name: "fast", entries, sticky: PRO, usability: usabilityOf({ [key(PRO)]: "excluded" }),
-		}),
-		entries[0],
-	);
-	// Sticky but unavailable now.
-	assert.deepEqual(
-		selectVirtualModelEntry({
-			name: "fast", entries, sticky: FLASH, usability: usabilityOf({ [key(FLASH)]: "unavailable" }),
-		}),
-		entries[0],
-	);
-	// Sticky model that is no longer in the list (the list was edited).
-	assert.deepEqual(
-		selectVirtualModelEntry({
-			name: "fast",
-			entries,
-			sticky: { provider: "anthropic", modelId: "claude-retired" },
-			usability: () => "usable",
-		}),
-		entries[0],
-	);
-	// A sticky model with the same provider but a different id is not the same entry.
-	assert.deepEqual(
-		selectVirtualModelEntry({
-			name: "fast",
-			entries: [entry(LUNA, "high"), entry(FLASH, "max")],
-			sticky: PRO,
-			usability: () => "usable",
-		}),
-		entries[0],
-	);
-});
-
-test("selection with no usable entry names the virtual model and why each entry is unusable", () => {
-	const entries = [entry(LUNA, "high"), entry(FLASH, "max")];
-	assert.throws(
-		() => selectVirtualModelEntry({
-			name: "fast",
-			entries,
-			usability: usabilityOf({ [key(LUNA)]: "excluded", [key(FLASH)]: "unavailable" }),
-		}),
-		(error: unknown) => {
-			assert.ok(error instanceof Error);
-			assert.match(error.message, /virtual\/fast/);
-			assert.match(error.message, /openai-codex\/gpt-6\.1-luna[^]*excluded by model policy/);
-			assert.match(error.message, /deepseek\/deepseek-flash[^]*unavailable/);
-			return true;
-		},
-	);
-	// A usable sticky outside the list cannot rescue an all-unusable list.
-	assert.throws(
-		() => selectVirtualModelEntry({
-			name: "fast",
-			entries,
-			sticky: PRO,
-			usability: (model) => key(model) === key(PRO) ? "usable" : "unavailable",
-		}),
-		/virtual\/fast/,
-	);
-});
-
-test("isVirtualModel recognizes only the virtual provider", () => {
-	assert.equal(isVirtualModel({ provider: "virtual", modelId: "fast" }), true);
-	assert.equal(isVirtualModel({ provider: "openai-codex", modelId: "virtual" }), false);
-	assert.equal(isVirtualModel({ provider: "virtual-lab", modelId: "fast" }), false);
-});
-
-test("parseVirtualModels parses entries into model references and thinking", () => {
-	const parsed = parseVirtualModels({
+const FAST_POLICY = {
+	virtualModels: {
 		fast: [
-			{ id: "openai-codex/gpt-6.1-luna", thinking: "high" },
-			{ id: "deepseek/deepseek-flash", thinking: "max" },
+			{ id: key(LUNA), thinking: "high" },
+			{ id: key(FLASH), thinking: "max" },
 		],
-		"deep-review": [{ id: "openrouter/anthropic/claude-sonnet-4", thinking: "off" }],
-	});
-	assert.deepEqual(parsed, {
-		fast: [
-			{ model: LUNA, thinking: "high" },
-			{ model: FLASH, thinking: "max" },
-		],
-		"deep-review": [{ model: { provider: "openrouter", modelId: "anthropic/claude-sonnet-4" }, thinking: "off" }],
-	});
-	assert.deepEqual(parseVirtualModels({}), {});
-	for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
-		assert.doesNotThrow(() => parseVirtualModels({ fast: [{ id: "a/b", thinking: level }] }), level);
-	}
-});
-
-test("parseVirtualModels rejects every malformed definition", () => {
-	const ok = { id: "openai-codex/gpt-6.1-luna", thinking: "high" };
-	const invalid: Array<[string, unknown]> = [
-		["null", null],
-		["array", [ok]],
-		["string", "fast"],
-		["uppercase name", { Fast: [ok] }],
-		["underscore name", { fast_model: [ok] }],
-		["space name", { "fast model": [ok] }],
-		["slash name", { "virtual/fast": [ok] }],
-		["empty name", { "": [ok] }],
-		["empty list", { fast: [] }],
-		["non-array list", { fast: ok }],
-		["null entry", { fast: [null] }],
-		["string entry", { fast: ["openai-codex/gpt-6.1-luna"] }],
-		["extra entry field", { fast: [{ ...ok, extra: true }] }],
-		["model field instead of id", { fast: [{ model: ok.id, thinking: "high" }] }],
-		["missing thinking", { fast: [{ id: ok.id }] }],
-		["missing id", { fast: [{ thinking: "high" }] }],
-		["preset thinking", { fast: [{ id: ok.id, thinking: "preset" }] }],
-		["inherit thinking", { fast: [{ id: ok.id, thinking: "inherit" }] }],
-		["unknown thinking", { fast: [{ id: ok.id, thinking: "extreme" }] }],
-		["numeric thinking", { fast: [{ id: ok.id, thinking: 3 }] }],
-		["id without provider", { fast: [{ id: "gpt-6.1-luna", thinking: "high" }] }],
-		["empty provider", { fast: [{ id: "/gpt-6.1-luna", thinking: "high" }] }],
-		["empty model id", { fast: [{ id: "openai-codex/", thinking: "high" }] }],
-		["virtual entry", { fast: [{ id: "virtual/other", thinking: "high" }] }],
-		["self-referencing virtual entry", { fast: [{ id: "virtual/fast", thinking: "high" }] }],
-		["inherit id", { fast: [{ id: "inherit", thinking: "high" }] }],
-		["duplicate ids", { fast: [ok, { id: ok.id, thinking: "low" }] }],
-		["one bad list among good", { fast: [ok], slow: [] }],
-	];
-	for (const [name, value] of invalid) {
-		assert.throws(() => parseVirtualModels(value), Error, name);
-	}
-});
-
-test("requireVirtualModelDefinition returns defined lists and rejects undefined names, including prototype keys", () => {
-	const definitions = parseVirtualModels({ fast: [{ id: "deepseek/deepseek-flash", thinking: "max" }] });
-	assert.deepEqual(requireVirtualModelDefinition(definitions, "fast"), [{ model: FLASH, thinking: "max" }]);
-	for (const name of ["missing", "constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
-		assert.throws(
-			() => requireVirtualModelDefinition(definitions, name),
-			(error: unknown) => error instanceof Error && error.message.includes(`virtual/${name}`),
-			name,
-		);
-	}
-});
-
-// --- Pi registration and routing ---------------------------------------------
-
-type RouterState = { thinking: string } | undefined;
-type RouteResult = { model: Model<Api>; thinkingLevel: string; state?: RouterState };
+		careful: [{ id: key(PRO), thinking: "low" }],
+	},
+};
 
 function physicalModel(model: ModelReference): Model<Api> {
 	return {
@@ -221,47 +46,38 @@ function physicalModel(model: ModelReference): Model<Api> {
 	} as unknown as Model<Api>;
 }
 
-function virtualModel(name: string): Model<Api> {
-	return { ...physicalModel({ provider: "virtual", modelId: name }), api: "pi-virtual" } as unknown as Model<Api>;
-}
-
 function createFakePi() {
-	const registered = new Map<string, ExtensionVirtualModel<RouterState>>();
-	const calls: string[] = [];
+	const registered = new Map<string, ExtensionVirtualModel>();
 	const pi = {
-		registerVirtualModel(definition: ExtensionVirtualModel<RouterState>) {
-			calls.push(`register ${definition.provider}/${definition.id}`);
+		registerVirtualModel(definition: ExtensionVirtualModel) {
 			registered.set(`${definition.provider}/${definition.id}`, definition);
 		},
 		unregisterVirtualModel(provider: string, id: string) {
-			calls.push(`unregister ${provider}/${id}`);
 			registered.delete(`${provider}/${id}`);
 		},
 	};
-	return { pi: pi as unknown as ExtensionAPI, registered, calls };
+	return { pi: pi as unknown as ExtensionAPI, registered };
 }
 
-function createFakeContext(catalogue: readonly ModelReference[], available: readonly ModelReference[]) {
+function createFakeContext(
+	catalogue: readonly ModelReference[],
+	available: readonly ModelReference[],
+	notifications: string[] = [],
+	hasUI = false,
+) {
 	const all = catalogue.map(physicalModel);
 	const availableKeys = new Set(available.map(key));
-	const ctx = {
-		hasUI: false,
+	return {
+		hasUI,
 		cwd: "/project",
-		ui: { notify() {} },
+		ui: { notify: (message: string) => notifications.push(message) },
 		modelRegistry: {
 			getAll: () => all,
 			getAvailable: () => all.filter((model) => availableKeys.has(`${model.provider}/${model.id}`)),
 			find: (provider: string, id: string) => all.find((model) => model.provider === provider && model.id === id),
 			hasConfiguredAuth: (model: Model<Api>) => availableKeys.has(`${model.provider}/${model.id}`),
 		},
-	};
-	return ctx as unknown as ExtensionContext;
-}
-
-async function createAgentDir(policy: unknown): Promise<string> {
-	const agentDir = await mkdtemp(join(tmpdir(), "virtual-models-agent-"));
-	await writePolicy(agentDir, policy);
-	return agentDir;
+	} as unknown as ExtensionContext;
 }
 
 async function writePolicy(agentDir: string, policy: unknown): Promise<void> {
@@ -273,290 +89,219 @@ async function writePolicy(agentDir: string, policy: unknown): Promise<void> {
 	);
 }
 
-const FAST_POLICY = {
-	virtualModels: {
-		fast: [
-			{ id: "openai-codex/gpt-6.1-luna", thinking: "high" },
-			{ id: "deepseek/deepseek-flash", thinking: "max" },
-		],
-		careful: [{ id: "deepseek/deepseek-pro", thinking: "low" }],
-	},
-};
-const ALL = [LUNA, FLASH, PRO];
+async function createAgentDir(policy?: unknown): Promise<string> {
+	const agentDir = await mkdtemp(join(tmpdir(), "virtual-models-agent-"));
+	if (policy !== undefined) await writePolicy(agentDir, policy);
+	return agentDir;
+}
 
-type RouteRequestOverrides = {
+type RouteRequest = {
 	thinkingLevel?: string;
 	reason?: "user" | "continuation" | "retry" | "direct";
 	previous?: ModelReference;
 	failed?: ModelReference;
-	state?: RouterState;
 };
+type RouteResult = { model: Model<Api>; thinkingLevel: string };
 
 async function route(
 	fake: ReturnType<typeof createFakePi>,
 	name: string,
 	ctx: ExtensionContext,
-	overrides: RouteRequestOverrides = {},
+	request: RouteRequest = {},
 ): Promise<RouteResult> {
 	const definition = fake.registered.get(`virtual/${name}`);
 	assert.ok(definition, `expected virtual/${name} to be registered`);
-	const request = {
-		model: virtualModel(name),
-		thinkingLevel: overrides.thinkingLevel ?? "medium",
-		reason: overrides.reason ?? "user",
+	return await definition.route({
+		model: { ...physicalModel({ provider: "virtual", modelId: name }), api: "pi-virtual" },
+		thinkingLevel: request.thinkingLevel ?? "medium",
+		reason: request.reason ?? "user",
 		messages: [],
-		...(overrides.previous === undefined ? {} : {
-			previous: { model: physicalModel(overrides.previous), thinkingLevel: "minimal" },
+		...(request.previous === undefined ? {} : {
+			previous: { model: physicalModel(request.previous), thinkingLevel: "minimal" },
 		}),
-		...(overrides.failed === undefined ? {} : {
+		...(request.failed === undefined ? {} : {
 			failed: {
-				model: physicalModel(overrides.failed),
+				model: physicalModel(request.failed),
 				thinkingLevel: "minimal",
 				message: { role: "assistant", stopReason: "error", errorMessage: "overloaded", content: [] },
 			},
 		}),
-		...(overrides.state === undefined ? {} : { state: overrides.state }),
-	};
-	return await definition.route(request as never, ctx) as RouteResult;
+	} as never, ctx) as RouteResult;
 }
 
 const routedKey = (result: RouteResult) => `${result.model.provider}/${result.model.id}`;
 
-test("the registrar registers one virtual model per policy name under the virtual provider", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir);
-	assert.deepEqual([...fake.registered.keys()].sort(), ["virtual/careful", "virtual/fast"]);
-	const fast = fake.registered.get("virtual/fast");
-	assert.equal(fast?.provider, "virtual");
-	assert.equal(fast?.id, "fast");
-	assert.equal(fast?.name, "fast");
-	assert.ok(Array.isArray(fast?.thinkingLevels) && fast.thinkingLevels.length > 0);
-});
+test("the registrar registers each policy name under the virtual provider and follows syncs", { timeout: 5_000 }, async () => {
+	const empty = createFakePi();
+	await VirtualModelRegistrar.create(empty.pi, await createAgentDir());
+	assert.equal(empty.registered.size, 0, "a missing policy file registers nothing");
 
-test("a registrar with no policy file registers nothing", { timeout: 5_000 }, async () => {
-	const agentDir = await mkdtemp(join(tmpdir(), "virtual-models-empty-"));
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir);
-	assert.equal(fake.registered.size, 0);
-});
-
-test("sync registers added names and unregisters removed ones", { timeout: 5_000 }, async () => {
 	const agentDir = await createAgentDir(FAST_POLICY);
 	const fake = createFakePi();
 	const registrar = await VirtualModelRegistrar.create(fake.pi, agentDir);
-	await writePolicy(agentDir, {
-		virtualModels: { fast: FAST_POLICY.virtualModels.fast, cheap: [{ id: "deepseek/deepseek-flash", thinking: "low" }] },
+	assert.deepEqual([...fake.registered.keys()].sort(), ["virtual/careful", "virtual/fast"]);
+	const fast = fake.registered.get("virtual/fast");
+	assert.deepEqual({ provider: fast?.provider, id: fast?.id, name: fast?.name }, {
+		provider: "virtual", id: "fast", name: "fast",
 	});
+	assert.ok(Array.isArray(fast?.thinkingLevels) && fast.thinkingLevels.length > 0);
+
+	// A name removed from a valid file stops routing even before the next sync.
+	const cheap = [{ id: key(FLASH), thinking: "low" }];
+	await writePolicy(agentDir, { virtualModels: { fast: FAST_POLICY.virtualModels.fast, cheap } });
+	await assert.rejects(async () => route(fake, "careful", createFakeContext(ALL, ALL)), /virtual\/careful/);
+
 	await registrar.sync(agentDir);
 	assert.deepEqual([...fake.registered.keys()].sort(), ["virtual/cheap", "virtual/fast"]);
-	assert.ok(fake.calls.includes("unregister virtual/careful"));
-
 	await writePolicy(agentDir, {});
 	await registrar.sync(agentDir);
 	assert.deepEqual([...fake.registered.keys()], []);
 });
 
-test("explicit mode routes to the first usable entry with the selected thinking level", { timeout: 5_000 }, async () => {
+test("each request re-reads the policy and routes to the sticky or first usable entry", { timeout: 5_000 }, async () => {
 	const agentDir = await createAgentDir(FAST_POLICY);
 	const fake = createFakePi();
 	await VirtualModelRegistrar.create(fake.pi, agentDir);
-	const ctx = createFakeContext(ALL, ALL);
-	const result = await route(fake, "fast", ctx, { thinkingLevel: "low" });
-	assert.equal(routedKey(result), "openai-codex/gpt-6.1-luna");
-	assert.equal(result.thinkingLevel, "low");
-	// The returned model is a physical model, never the virtual one.
-	assert.notEqual(result.model.provider, "virtual");
-	assert.notEqual(result.model.api, "pi-virtual");
+	const excluding = (excludedModels: string[]) => ({ ...FAST_POLICY, excludedModels });
+	const cases: Array<{
+		name: string;
+		policy?: unknown;
+		catalogue?: ModelReference[];
+		available?: ModelReference[];
+		request?: RouteRequest;
+		expected: ModelReference;
+	}> = [
+		{ name: "first usable entry", expected: LUNA },
+		{ name: "provider glob exclusion", policy: excluding(["openai-codex/*"]), expected: FLASH },
+		{ name: "exact exclusion", policy: excluding([key(LUNA)]), expected: FLASH },
+		{ name: "catalogued without credentials", available: [FLASH, PRO], expected: FLASH },
+		{ name: "retired from the catalogue", catalogue: [FLASH, PRO], available: [FLASH, PRO], expected: FLASH },
+		{
+			name: "edited entry list applies without sync",
+			policy: { virtualModels: { ...FAST_POLICY.virtualModels, fast: [{ id: key(PRO), thinking: "low" }] } },
+			expected: PRO,
+		},
+		{ name: "continuation sticks to previous", request: { reason: "continuation", previous: FLASH }, expected: FLASH },
+		{ name: "retry sticks to failed over previous", request: { reason: "retry", failed: FLASH, previous: LUNA }, expected: FLASH },
+		{ name: "user request does not stick", request: { reason: "user", previous: FLASH }, expected: LUNA },
+		{ name: "previous outside the list does not stick", request: { reason: "continuation", previous: PRO }, expected: LUNA },
+		{
+			name: "previous without credentials does not stick",
+			available: [LUNA, PRO],
+			request: { reason: "continuation", previous: FLASH },
+			expected: LUNA,
+		},
+		{
+			name: "previous now excluded does not stick",
+			policy: excluding([key(FLASH)]),
+			request: { reason: "continuation", previous: FLASH },
+			expected: LUNA,
+		},
+	];
+	for (const routingCase of cases) {
+		await writePolicy(agentDir, routingCase.policy ?? FAST_POLICY);
+		const ctx = createFakeContext(routingCase.catalogue ?? ALL, routingCase.available ?? ALL);
+		const result = await route(fake, "fast", ctx, routingCase.request);
+		assert.equal(routedKey(result), key(routingCase.expected), routingCase.name);
+		// Routing returns a physical model, never the virtual one.
+		assert.notEqual(result.model.api, "pi-virtual", routingCase.name);
+	}
 });
 
-test("preset mode routes with the routed entry's own thinking level", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir, "preset");
-	const ctx = createFakeContext(ALL, ALL);
-	const first = await route(fake, "fast", ctx, { thinkingLevel: "low" });
-	assert.equal(routedKey(first), "openai-codex/gpt-6.1-luna");
-	assert.equal(first.thinkingLevel, "high");
-
-	// When the first entry is unavailable, the thinking follows the entry that serves.
-	const withoutLuna = createFakeContext(ALL, [FLASH, PRO]);
-	const second = await route(fake, "fast", withoutLuna, { thinkingLevel: "low" });
-	assert.equal(routedKey(second), "deepseek/deepseek-flash");
-	assert.equal(second.thinkingLevel, "max");
-});
-
-test("routing skips entries excluded by policy globs and entries without credentials or catalogue presence", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir({ ...FAST_POLICY, excludedModels: ["openai-codex/*"] });
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir);
-	const excluded = await route(fake, "fast", createFakeContext(ALL, ALL));
-	assert.equal(routedKey(excluded), "deepseek/deepseek-flash");
-
-	await writePolicy(agentDir, FAST_POLICY);
-	// Catalogued but no credentials.
-	const noAuth = await route(fake, "fast", createFakeContext(ALL, [FLASH]));
-	assert.equal(routedKey(noAuth), "deepseek/deepseek-flash");
-	// Not in the catalogue at all (a retired model).
-	const retired = await route(fake, "fast", createFakeContext([FLASH, PRO], [FLASH, PRO]));
-	assert.equal(routedKey(retired), "deepseek/deepseek-flash");
-});
-
-test("routing fails naming the virtual model when no entry is usable", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir({ ...FAST_POLICY, excludedModels: ["openai-codex/gpt-6.1-luna"] });
+test("routing fails naming the virtual model and why each entry is unusable", { timeout: 5_000 }, async () => {
+	const agentDir = await createAgentDir({ ...FAST_POLICY, excludedModels: [key(LUNA)] });
 	const fake = createFakePi();
 	await VirtualModelRegistrar.create(fake.pi, agentDir);
 	await assert.rejects(
-		async () => route(fake, "fast", createFakeContext(ALL, [PRO])),
+		// FLASH has no credentials; a usable model outside the list cannot rescue it.
+		async () => route(fake, "fast", createFakeContext(ALL, [PRO]), { reason: "continuation", previous: PRO }),
 		(error: unknown) => {
 			assert.ok(error instanceof Error);
 			assert.match(error.message, /virtual\/fast/);
-			assert.match(error.message, /excluded by model policy/);
-			assert.match(error.message, /unavailable/);
+			assert.match(error.message, /openai-codex\/gpt-6\.1-luna[^]*excluded by model policy/);
+			assert.match(error.message, /deepseek\/deepseek-flash[^]*unavailable/);
 			return true;
 		},
 	);
 });
 
-test("continuations stick to the previous model and retries to the failed model while still usable", { timeout: 5_000 }, async () => {
+test("preset thinking applies only to the named virtual model until the switch to explicit", { timeout: 5_000 }, async () => {
 	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir, "preset");
 	const ctx = createFakeContext(ALL, ALL);
+	const thinkingFor = async (
+		fake: ReturnType<typeof createFakePi>,
+		name: string,
+		context = ctx,
+		request: RouteRequest = {},
+	) => (await route(fake, name, context, { thinkingLevel: "minimal", ...request })).thinkingLevel;
 
-	const continuation = await route(fake, "fast", ctx, { reason: "continuation", previous: FLASH });
-	assert.equal(routedKey(continuation), "deepseek/deepseek-flash");
-	assert.equal(continuation.thinkingLevel, "max");
+	const explicit = createFakePi();
+	await VirtualModelRegistrar.create(explicit.pi, agentDir);
+	assert.equal(await thinkingFor(explicit, "fast"), "minimal", "no preset: the selected level");
 
-	const retry = await route(fake, "fast", ctx, { reason: "retry", failed: FLASH, previous: LUNA });
-	assert.equal(routedKey(retry), "deepseek/deepseek-flash");
-
-	// A previous model that is not an entry does not stick.
-	const foreign = await route(fake, "fast", ctx, { reason: "continuation", previous: PRO });
-	assert.equal(routedKey(foreign), "openai-codex/gpt-6.1-luna");
-
-	// A previous model that lost its credentials does not stick.
-	const lost = await route(fake, "fast", createFakeContext(ALL, [LUNA, PRO]), {
-		reason: "continuation", previous: FLASH,
+	let switched = false;
+	const preset = createFakePi();
+	await VirtualModelRegistrar.create(preset.pi, agentDir, {
+		virtualModel: "fast",
+		switchedToExplicit: () => switched,
 	});
-	assert.equal(routedKey(lost), "openai-codex/gpt-6.1-luna");
+	assert.equal(await thinkingFor(preset, "fast"), "high", "preset: the routed entry's level");
+	assert.equal(await thinkingFor(preset, "fast", createFakeContext(ALL, [FLASH, PRO])), "max", "preset follows the serving entry");
+	assert.equal(
+		await thinkingFor(preset, "fast", ctx, { reason: "continuation", previous: FLASH }),
+		"max",
+		"preset follows a sticky entry",
+	);
+	assert.equal(await thinkingFor(preset, "careful"), "minimal", "another virtual name routes explicitly");
+
+	switched = true;
+	assert.equal(await thinkingFor(preset, "fast"), "minimal", "after the switch: the selected level");
+	assert.equal(await thinkingFor(preset, "fast", ctx, { reason: "direct" }), "minimal");
 });
 
-test("a previous model that the policy now excludes no longer sticks", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir);
-	const ctx = createFakeContext(ALL, ALL);
-	await writePolicy(agentDir, { ...FAST_POLICY, excludedModels: ["deepseek/deepseek-flash"] });
-	const result = await route(fake, "fast", ctx, { reason: "continuation", previous: FLASH });
-	assert.equal(routedKey(result), "openai-codex/gpt-6.1-luna");
-});
-
-test("each route re-reads the policy file, so an edited entry list applies on the next request", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir, "preset");
-	const ctx = createFakeContext(ALL, ALL);
-	assert.equal(routedKey(await route(fake, "fast", ctx)), "openai-codex/gpt-6.1-luna");
-
-	// Retire Luna in one place; no sync is needed for existing names.
-	await writePolicy(agentDir, {
-		virtualModels: { ...FAST_POLICY.virtualModels, fast: [{ id: "deepseek/deepseek-pro", thinking: "minimal" }] },
-	});
-	const edited = await route(fake, "fast", ctx);
-	assert.equal(routedKey(edited), "deepseek/deepseek-pro");
-	assert.equal(edited.thinkingLevel, "minimal");
-
-	// Exclusions edited in the file also apply on the next request.
-	await writePolicy(agentDir, { ...FAST_POLICY, excludedModels: ["openai-codex/*"] });
-	assert.equal(routedKey(await route(fake, "fast", ctx)), "deepseek/deepseek-flash");
-});
-
-test("an invalid policy edit keeps the last valid definitions for routing", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir, "preset");
-	const ctx = createFakeContext(ALL, ALL);
-	assert.equal(routedKey(await route(fake, "fast", ctx)), "openai-codex/gpt-6.1-luna");
-
-	for (const invalid of [
+test("an invalid policy edit keeps the last valid definitions and is reported once per routing process", { timeout: 5_000 }, async (t) => {
+	const invalidEdits = [
 		"{not json",
 		JSON.stringify({ virtualModels: { fast: [] } }),
 		JSON.stringify({ virtualModels: { fast: [{ id: "virtual/fast", thinking: "high" }] } }),
-		JSON.stringify({ unknownField: true }),
-	]) {
-		await writePolicy(agentDir, invalid);
-		const result = await route(fake, "fast", ctx);
-		assert.equal(routedKey(result), "openai-codex/gpt-6.1-luna", invalid);
-		assert.equal(result.thinkingLevel, "high", invalid);
+	];
+	for (const hasUI of [true, false]) {
+		const agentDir = await createAgentDir(FAST_POLICY);
+		const fake = createFakePi();
+		const registrar = await VirtualModelRegistrar.create(fake.pi, agentDir, {
+			virtualModel: "fast",
+			switchedToExplicit: () => false,
+		});
+		const notifications: string[] = [];
+		const stderr: string[] = [];
+		const write = t.mock.method(process.stderr, "write", (chunk: string | Uint8Array) => {
+			stderr.push(String(chunk));
+			return true;
+		});
+		try {
+			// Sync is silent about an invalid file and keeps the registrations.
+			await writePolicy(agentDir, invalidEdits[0]);
+			await registrar.sync(agentDir);
+			assert.deepEqual([...fake.registered.keys()].sort(), ["virtual/careful", "virtual/fast"]);
+			assert.deepEqual({ notifications, stderr }, { notifications: [], stderr: [] }, `hasUI: ${hasUI}`);
+
+			const ctx = createFakeContext(ALL, ALL, notifications, hasUI);
+			for (const [index, invalid] of invalidEdits.entries()) {
+				await writePolicy(agentDir, invalid);
+				for (let request = 0; request < 2; request += 1) {
+					const result = await route(fake, "fast", ctx);
+					assert.equal(routedKey(result), key(LUNA), invalid);
+					assert.equal(result.thinkingLevel, "high", invalid);
+				}
+				if (index === 0) {
+					// Two requests against the same invalid file produce one report.
+					const reports = hasUI ? notifications : stderr;
+					assert.equal(reports.length, 1, `hasUI: ${hasUI}: ${JSON.stringify(reports)}`);
+					assert.deepEqual(hasUI ? stderr : notifications, [], `hasUI: ${hasUI}: reported on one channel`);
+				}
+			}
+		} finally {
+			write.mock.restore();
+		}
 	}
-});
-
-test("a manual thinking switch in preset mode persists explicit thinking as router state", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	const registrar = await VirtualModelRegistrar.create(fake.pi, agentDir, "preset");
-	const ctx = createFakeContext(ALL, ALL);
-	const before = await route(fake, "fast", ctx, { thinkingLevel: "low" });
-	assert.equal(before.thinkingLevel, "high");
-	assert.notDeepEqual(before.state, { thinking: "explicit" });
-
-	registrar.switchToExplicitThinking();
-	// A direct request (e.g. a compaction summary) cannot store state, so it must not
-	// consume the pending switch.
-	await route(fake, "fast", ctx, { reason: "direct", thinkingLevel: "low" });
-	const switched = await route(fake, "fast", ctx, { thinkingLevel: "low" });
-	assert.deepEqual(switched.state, { thinking: "explicit" });
-	assert.equal(switched.thinkingLevel, "low");
-
-	// Later requests on the branch carry the stored state and stay explicit.
-	const later = await route(fake, "fast", ctx, {
-		thinkingLevel: "minimal", reason: "continuation", previous: FLASH, state: { thinking: "explicit" },
-	});
-	assert.equal(routedKey(later), "deepseek/deepseek-flash");
-	assert.equal(later.thinkingLevel, "minimal");
-	const laterDirect = await route(fake, "fast", ctx, { reason: "direct", thinkingLevel: "medium" });
-	assert.equal(laterDirect.thinkingLevel, "medium");
-});
-
-test("a preset registrar resumed on a branch whose state says explicit routes explicitly thereafter", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir, "preset");
-	const ctx = createFakeContext(ALL, ALL);
-	const resumed = await route(fake, "fast", ctx, { thinkingLevel: "low", state: { thinking: "explicit" } });
-	assert.equal(routedKey(resumed), "openai-codex/gpt-6.1-luna");
-	assert.equal(resumed.thinkingLevel, "low");
-
-	// A direct request carries no state; the branch's explicit choice still holds.
-	const direct = await route(fake, "fast", ctx, { reason: "direct", thinkingLevel: "minimal" });
-	assert.equal(direct.thinkingLevel, "minimal");
-});
-
-test("an explicit registrar ignores the switch and keeps the selected thinking level", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	const registrar = await VirtualModelRegistrar.create(fake.pi, agentDir);
-	const ctx = createFakeContext(ALL, ALL);
-	registrar.switchToExplicitThinking();
-	const result = await route(fake, "fast", ctx, { thinkingLevel: "xhigh" });
-	assert.equal(result.thinkingLevel, "xhigh");
-});
-
-test("a user request starts from the first usable entry even after another entry answered", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir);
-	const ctx = createFakeContext(ALL, ALL);
-	const result = await route(fake, "fast", ctx, { reason: "user", previous: FLASH });
-	assert.equal(routedKey(result), "openai-codex/gpt-6.1-luna");
-});
-
-test("a name removed from a valid policy file stops routing before the next sync", { timeout: 5_000 }, async () => {
-	const agentDir = await createAgentDir(FAST_POLICY);
-	const fake = createFakePi();
-	await VirtualModelRegistrar.create(fake.pi, agentDir);
-	const ctx = createFakeContext(ALL, ALL);
-	await writePolicy(agentDir, { virtualModels: { fast: FAST_POLICY.virtualModels.fast } });
-	await assert.rejects(async () => route(fake, "careful", ctx), /virtual\/careful/);
 });

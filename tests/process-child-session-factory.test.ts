@@ -16,7 +16,6 @@ import {
 import {
 	initTheme,
 	SessionManager,
-	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
@@ -27,8 +26,6 @@ import { transcriptFromSessionManager } from "../src/pi-integration/session-mana
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
-import { parseWorkflowPolicy } from "../src/policy/workflow-policy.ts";
-import { VirtualModelRegistrar } from "../src/pi-integration/virtual-model-registration.ts";
 import { discoverColdWorkflow } from "../src/bootstrap/cold-host-discovery.ts";
 import { workflowSessionDirectory } from "../src/runtime/workflow-session-directory.ts";
 import {
@@ -150,97 +147,6 @@ test("a descendant inherits neither the Owner's active tools nor its skills", { 
 				);
 			}
 		}
-	} finally {
-		await host.runtime.dispose();
-	}
-});
-
-test("preparation resolves a preset virtual model to its first usable entry's thinking and reads current policy", { timeout: TEST_TIMEOUT_MS }, async (t) => {
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
-		persistent: true,
-		processVisibleModel: true,
-	});
-	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const owner: AgentRecord = {
-		identity,
-		host: AgentRuntimeSupervisor.bindOwner(host.runtime),
-		transcript: transcriptFromSessionManager(host.session.sessionManager),
-		children: [],
-	};
-	const available = host.services.modelRuntime.getAvailableSnapshot()[0];
-	assert.ok(available, "expected an available model in the test catalogue");
-	const availableId = `${available.provider}/${available.id}`;
-	const unconfigured = host.services.modelRuntime.getModels("openai-codex")[0];
-	assert.ok(unconfigured, "expected an OpenAI Codex model in Pi's catalogue");
-	let policy = parseWorkflowPolicy(JSON.stringify({
-		virtualModels: {
-			fast: [
-				{ id: `openai-codex/${unconfigured.id}`, thinking: "high" },
-				{ id: availableId, thinking: "medium" },
-			],
-		},
-	}));
-	// The Owner's extension registers the policy file's names with Pi; this bare host
-	// gets the same registration through the real registrar.
-	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
-	await writeFile(join(host.services.agentDir, "config", "pi-durable-subagents.json"), JSON.stringify({
-		virtualModels: { fast: [{ id: availableId, thinking: "medium" }] },
-	}), "utf8");
-	await VirtualModelRegistrar.create({
-		registerVirtualModel: (definition: Parameters<ExtensionAPI["registerVirtualModel"]>[0]) =>
-			host.services.modelRuntime.registerVirtualModel({
-				...definition,
-				route: () => { throw new Error("Preparation must not route a request"); },
-			}),
-		unregisterVirtualModel: (provider: string, id: string) =>
-			host.services.modelRuntime.unregisterVirtualModel(provider, id),
-	} as unknown as ExtensionAPI, host.services.agentDir);
-	const factory = new ProcessChildSessionFactory({
-		ownerRuntime: host.runtime,
-		ownerIdentity: identity,
-		entryModulePath: "<inline:pi-durable-subagents>",
-		templateRoots: () => [],
-		resolveAgent: (agentId) => agentId === identity.agentId ? owner : undefined,
-		modelExclusions: () => policy.excludedModels,
-		virtualModels: () => policy.virtualModels,
-		ownerRequestHandlers() { throw new Error("Preparation must not launch a child process"); },
-	});
-	const prepare = (thinking: string) => factory.prepareOrdinaryRun({
-		agentId: `virtual-${thinking}`, parent: owner,
-		spawnInput: {
-			title: "Use a virtual model",
-			request: "Use a virtual model.",
-			config: { model: { id: "virtual/fast", thinking } },
-		} as never,
-	});
-	try {
-		const preset = await prepare("preset");
-		assert.deepEqual(preset.configuration.model, { provider: "virtual", modelId: "fast" });
-		// The unavailable first entry is skipped; the launch level is the serving entry's.
-		assert.equal(preset.configuration.thinking, "medium");
-		assert.equal((preset.configuration as { presetThinking?: boolean }).presetThinking, true);
-
-		const explicit = await prepare("low");
-		assert.deepEqual(explicit.configuration.model, { provider: "virtual", modelId: "fast" });
-		assert.equal(explicit.configuration.thinking, "low");
-		assert.notEqual((explicit.configuration as { presetThinking?: boolean }).presetThinking, true);
-
-		// A policy reload that excludes the only usable entry makes the name unavailable.
-		policy = parseWorkflowPolicy(JSON.stringify({
-			excludedModels: [`${available.provider}/*`],
-			virtualModels: {
-				fast: [
-					{ id: `openai-codex/${unconfigured.id}`, thinking: "high" },
-					{ id: availableId, thinking: "medium" },
-				],
-			},
-		}));
-		await assert.rejects(() => prepare("preset"), /virtual\/fast/);
-
-		// A reload that drops the name makes it undefined.
-		policy = parseWorkflowPolicy("{}");
-		await assert.rejects(() => prepare("high"), /virtual\/fast/);
 	} finally {
 		await host.runtime.dispose();
 	}
