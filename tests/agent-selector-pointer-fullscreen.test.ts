@@ -635,3 +635,57 @@ test("text buttons are bracket-free and neighboring actions stay independent", {
 	await h.click("Owner", "Owner".length - 1);
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "owner" });
 });
+
+const configReport = {
+	report: {
+		reportId: "report-1", createdAt: "2026-01-01T00:00:00.000Z",
+		reporter: { agentId: "moderator", label: "Moderator" },
+		source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/sessions/moderator.jsonl" },
+		symptom: "Delivery stopped", suspectedDefect: "Continuation absent", uncertainty: "Cause unknown",
+		recoveryActions: "Retried delivery", recoveryOutcome: "Still blocked", evidence: ["agent/entry/call"],
+	},
+} as unknown as NonNullable<AgentSelectorOptions["reports"]>[number];
+
+test("Config shows right after the visible tabs only when offered and opens with c or a click", { timeout: 5_000 }, async (t) => {
+	for (const [options, tabs] of [
+		[{}, /Live\s+Dormant\s+\|\s*Config \[c\]/],
+		[{ reports: [configReport] }, /Live\s+Dormant\s+Reports\s+\|\s*Config \[c\]/],
+	] as const) {
+		const offered = await harness(t, { configAvailable: true, ...options });
+		const tabBar = (await offered.frame()).find((line) => line.includes("Live"));
+		assert.ok(tabBar);
+		assert.match(tabBar, tabs);
+		await offered.input("c");
+		assert.equal(offered.resolved, true);
+		assert.deepEqual(await offered.result, { kind: "open_config" });
+	}
+
+	const clicked = await harness(t, { configAvailable: true });
+	await clicked.click("Config");
+	assert.equal(clicked.resolved, true);
+	assert.deepEqual(await clicked.result, { kind: "open_config" });
+
+	for (const options of [{}, { configAvailable: false }]) {
+		const hidden = await harness(t, options);
+		assert.doesNotMatch((await hidden.frame()).join("\n"), /Config/);
+		await hidden.input("c");
+		assert.equal(hidden.resolved, false, "c must not open Config where it is not offered");
+	}
+});
+
+test("Tab and Shift-Tab never land on Config", { timeout: 5_000 }, async (t) => {
+	/** Steps until the frame repeats the starting tab; Config must not lengthen the cycle. */
+	async function cycleLength(options: Partial<AgentSelectorOptions>, key: string): Promise<number> {
+		const h = await harness(t, { reports: [configReport], ...options });
+		const start = (await h.frame()).join("\n");
+		for (let step = 1; step <= 6; step++) {
+			await h.input(key);
+			assert.equal(h.resolved, false);
+			if ((await h.frame()).join("\n") === start) return step;
+		}
+		assert.fail("the tab cycle never returned to its start");
+	}
+	for (const key of ["\t", "\x1b[Z"]) {
+		assert.equal(await cycleLength({ configAvailable: true }, key), 3);
+	}
+});

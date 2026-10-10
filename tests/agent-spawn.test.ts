@@ -1731,3 +1731,42 @@ async function createCoordinatorHarness(
 		shutdown: () => coordinator.shutdown(async () => host.runtime.dispose()),
 	};
 }
+
+test("Config edits of Virtual Models go through the Owner view and a deleted or renamed name is just unavailable", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
+	const { availableId } = availableTestModels(harness);
+	const separator = availableId.indexOf("/");
+	const available = { provider: availableId.slice(0, separator), modelId: availableId.slice(separator + 1) };
+	writePolicyFile(harness.host.services.agentDir, { maxPendingDeliveriesPerAgent: 4 });
+
+	const saved = await harness.view.setVirtualModels({ late: [{ model: available, thinking: "low" }] });
+	assert.deepEqual(saved.virtualModels, { late: [{ model: available, thinking: "low" }] });
+	assert.equal(saved.invalidReason, undefined);
+	// Entries are real models only, so a registered Virtual Model is never offered.
+	assert.ok(saved.availableModels.length > 0);
+	assert.ok(saved.availableModels.every(({ provider }) => provider !== "virtual"), JSON.stringify(saved.availableModels));
+	const written = await readWorkflowPolicy(harness.host.services.agentDir);
+	assert.equal(written.ok, true);
+	if (!written.ok) throw new Error("Expected the saved policy to load");
+	assert.equal(written.snapshot.maxPendingDeliveriesPerAgent, 4, "other fields survive the save");
+
+	// Renaming leaves the old name unavailable, without blocking the edit.
+	await harness.view.setVirtualModels({ renamed: [{ model: available, thinking: "low" }] });
+	assert.match(await expectConfigurationRefusal(harness, "spawn-after-rename", { id: "virtual/late", thinking: "high" }), /virtual\/late/);
+
+	// Deleting every name leaves each one unavailable.
+	const emptied = await harness.view.setVirtualModels({});
+	assert.deepEqual(emptied.virtualModels, {});
+	assert.match(await expectConfigurationRefusal(harness, "spawn-after-delete", { id: "virtual/renamed", thinking: "preset" }), /virtual\/renamed/);
+
+	// An invalid file is reported with the last valid definitions, and a save is refused.
+	await harness.view.setVirtualModels({ kept: [{ model: available, thinking: "high" }] });
+	writePolicyFile(harness.host.services.agentDir, "{not json");
+	const invalid = await harness.view.virtualModelConfig();
+	assert.ok(invalid.invalidReason, "an invalid file must be reported");
+	assert.deepEqual(invalid.virtualModels, { kept: [{ model: available, thinking: "high" }] });
+	await assert.rejects(() => harness.view.setVirtualModels({}));
+	assert.deepEqual(harness.view.children(), []);
+
+	await harness.shutdown();
+});
