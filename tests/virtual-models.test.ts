@@ -6,13 +6,16 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type {
-	ExtensionAPI,
-	ExtensionContext,
-	ExtensionVirtualModel,
+import {
+	VIRTUAL_MODEL_STATE_ENTRY,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type ExtensionVirtualModel,
+	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 
 import { VirtualModelRegistrar } from "../src/pi-integration/virtual-model-registration.ts";
+import { thinkingModeState } from "../src/pi-integration/recorded-model-selection.ts";
 import type { ModelReference } from "../src/protocol/runtime-configuration.ts";
 
 const LUNA: ModelReference = { provider: "openai-codex", modelId: "gpt-6.1-luna" };
@@ -64,6 +67,7 @@ function createFakeContext(
 	available: readonly ModelReference[],
 	notifications: string[] = [],
 	hasUI = false,
+	branch: readonly SessionEntry[] = [],
 ) {
 	const all = catalogue.map(physicalModel);
 	const availableKeys = new Set(available.map(key));
@@ -71,6 +75,7 @@ function createFakeContext(
 		hasUI,
 		cwd: "/project",
 		ui: { notify: (message: string) => notifications.push(message) },
+		sessionManager: { getBranch: () => [...branch] },
 		modelRegistry: {
 			getAll: () => all,
 			getAvailable: () => all.filter((model) => availableKeys.has(`${model.provider}/${model.id}`)),
@@ -78,6 +83,17 @@ function createFakeContext(
 			hasConfiguredAuth: (model: Model<Api>) => availableKeys.has(`${model.provider}/${model.id}`),
 		},
 	} as unknown as ExtensionContext;
+}
+
+function thinkingModeEntry(name: string, mode: "preset" | "explicit"): SessionEntry {
+	return {
+		type: "custom",
+		id: `${name}-${mode}`,
+		parentId: null,
+		timestamp: new Date(0).toISOString(),
+		customType: VIRTUAL_MODEL_STATE_ENTRY,
+		data: thinkingModeState({ provider: "virtual", modelId: name }, mode),
+	};
 }
 
 async function writePolicy(agentDir: string, policy: unknown): Promise<void> {
@@ -239,24 +255,26 @@ test("preset thinking applies only to the named virtual model until the switch t
 	await VirtualModelRegistrar.create(explicit.pi, agentDir);
 	assert.equal(await thinkingFor(explicit, "fast"), "minimal", "no preset: the selected level");
 
-	let switched = false;
-	const preset = createFakePi();
-	await VirtualModelRegistrar.create(preset.pi, agentDir, {
-		virtualModel: "fast",
-		switchedToExplicit: () => switched,
-	});
-	assert.equal(await thinkingFor(preset, "fast"), "high", "preset: the routed entry's level");
-	assert.equal(await thinkingFor(preset, "fast", createFakeContext(ALL, [FLASH, PRO])), "max", "preset follows the serving entry");
+	const branch: SessionEntry[] = [];
+	const recordMode = (mode: "preset" | "explicit") => branch.push(thinkingModeEntry("fast", mode));
+	const presetContext = createFakeContext(ALL, ALL, [], false, branch);
+	recordMode("preset");
+	assert.equal(await thinkingFor(explicit, "fast", presetContext), "high", "preset: the routed entry's level");
 	assert.equal(
-		await thinkingFor(preset, "fast", ctx, { reason: "continuation", previous: FLASH }),
+		await thinkingFor(explicit, "fast", createFakeContext(ALL, [FLASH, PRO], [], false, branch)),
+		"max",
+		"preset follows the serving entry",
+	);
+	assert.equal(
+		await thinkingFor(explicit, "fast", presetContext, { reason: "continuation", previous: FLASH }),
 		"max",
 		"preset follows a sticky entry",
 	);
-	assert.equal(await thinkingFor(preset, "careful"), "minimal", "another virtual name routes explicitly");
+	assert.equal(await thinkingFor(explicit, "careful", presetContext), "minimal", "another virtual name routes explicitly");
 
-	switched = true;
-	assert.equal(await thinkingFor(preset, "fast"), "minimal", "after the switch: the selected level");
-	assert.equal(await thinkingFor(preset, "fast", ctx, { reason: "direct" }), "minimal");
+	recordMode("explicit");
+	assert.equal(await thinkingFor(explicit, "fast", presetContext), "minimal", "after the switch: the selected level");
+	assert.equal(await thinkingFor(explicit, "fast", presetContext, { reason: "direct" }), "minimal");
 });
 
 test("an invalid policy edit keeps the last valid definitions and is reported once per routing process", { timeout: 5_000 }, async (t) => {
@@ -268,10 +286,7 @@ test("an invalid policy edit keeps the last valid definitions and is reported on
 	for (const hasUI of [true, false]) {
 		const agentDir = await createAgentDir(FAST_POLICY);
 		const fake = createFakePi();
-		const registrar = await VirtualModelRegistrar.create(fake.pi, agentDir, {
-			virtualModel: "fast",
-			switchedToExplicit: () => false,
-		});
+		const registrar = await VirtualModelRegistrar.create(fake.pi, agentDir);
 		const notifications: string[] = [];
 		const stderr: string[] = [];
 		const write = t.mock.method(process.stderr, "write", (chunk: string | Uint8Array) => {
@@ -285,7 +300,7 @@ test("an invalid policy edit keeps the last valid definitions and is reported on
 			assert.deepEqual([...fake.registered.keys()].sort(), ["virtual/careful", "virtual/fast"]);
 			assert.deepEqual({ notifications, stderr }, { notifications: [], stderr: [] }, `hasUI: ${hasUI}`);
 
-			const ctx = createFakeContext(ALL, ALL, notifications, hasUI);
+			const ctx = createFakeContext(ALL, ALL, notifications, hasUI, [thinkingModeEntry("fast", "preset")]);
 			for (const [index, invalid] of invalidEdits.entries()) {
 				await writePolicy(agentDir, invalid);
 				for (let request = 0; request < 2; request += 1) {

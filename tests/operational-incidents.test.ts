@@ -2383,8 +2383,12 @@ test("two committed Moderator startup failures link the replacement and publish 
 		retentionReasons: [],
 	}, "the failed post-commit attempt is dormant without retention");
 	const firstEntries = SessionManager.open(first.path).getEntries();
-	assert.equal(firstEntries.length, 1, "the failed post-commit attempt holds only its Moderator Input");
-	assert.equal(firstEntries[0]?.type, "custom_message");
+	// Creation records the Moderator's initial model selection next to its Input.
+	assert.deepEqual(
+		firstEntries.map(({ type }) => type),
+		["custom_message", "model_change"],
+		"the failed post-commit attempt holds only its Moderator Input and initial model selection",
+	);
 	const replacement = moderators.find(({ id }) => id === attention.diagnostics[1]!.agentId);
 	assert.ok(replacement);
 	const replacementInput = SessionManager.open(replacement.path).getEntries()[0];

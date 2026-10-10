@@ -11,6 +11,7 @@ import {
 	materializeNewAgentTranscript,
 	transcriptFromSessionFile,
 } from "../pi-integration/session-manager-transcript.ts";
+import { recordModelSelection } from "../pi-integration/recorded-model-selection.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
 	createModelVisibleModeratorInput,
@@ -998,6 +999,9 @@ export class OperationalIncidentCoordinator {
 			modelInput.display,
 			modelInput.details,
 		);
+		// Pi records no model for a session that already holds a message, as this
+		// Moderator input is, so the host records the first selection itself.
+		recordModelSelection(sessionManager, prepared.configuration);
 		let sessionPath: string;
 		try {
 			sessionPath = await materializeNewAgentTranscript(sessionManager);

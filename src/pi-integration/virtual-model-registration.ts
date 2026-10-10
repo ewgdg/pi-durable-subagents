@@ -18,16 +18,7 @@ import {
 	type WorkflowPolicySnapshot,
 } from "../policy/workflow-policy.ts";
 import { RUNTIME_THINKING_LEVELS, type ModelReference } from "../protocol/runtime-configuration.ts";
-
-/**
- * A spawned child's launch selection may route each entry on its own level (preset
- * mode) until the user changes the thinking level. Every other selection routes on
- * the selected level (explicit mode).
- */
-export type PresetThinking = Readonly<{
-	virtualModel: string;
-	switchedToExplicit(): boolean;
-}>;
+import { isPresetThinking } from "./recorded-model-selection.ts";
 
 /**
  * Registers the user's Virtual Models with Pi in one process and routes their
@@ -44,20 +35,14 @@ export class VirtualModelRegistrar {
 	#policy: WorkflowPolicySnapshot = DEFAULT_WORKFLOW_POLICY;
 	#registered = new Set<string>();
 	#reportedInvalidPolicy: string | undefined;
-	readonly #presetThinking: PresetThinking | undefined;
 
-	private constructor(pi: ExtensionAPI, agentDir: string, presetThinking: PresetThinking | undefined) {
+	private constructor(pi: ExtensionAPI, agentDir: string) {
 		this.#pi = pi;
 		this.#agentDir = agentDir;
-		this.#presetThinking = presetThinking;
 	}
 
-	static async create(
-		pi: ExtensionAPI,
-		agentDir: string,
-		presetThinking?: PresetThinking,
-	): Promise<VirtualModelRegistrar> {
-		const registrar = new VirtualModelRegistrar(pi, agentDir, presetThinking);
+	static async create(pi: ExtensionAPI, agentDir: string): Promise<VirtualModelRegistrar> {
+		const registrar = new VirtualModelRegistrar(pi, agentDir);
 		await registrar.sync(agentDir);
 		return registrar;
 	}
@@ -113,7 +98,12 @@ export class VirtualModelRegistrar {
 			usability,
 			...(stickyModel === undefined ? {} : { sticky: { provider: stickyModel.provider, modelId: stickyModel.id } }),
 		});
-		const preset = this.#presetThinking?.virtualModel === name && !this.#presetThinking.switchedToExplicit();
+		// Preset mode routes each entry on its own level. It is the session's record, so
+		// a spawned selection keeps it across Runtimes until a manual thinking change.
+		const preset = isPresetThinking(
+			ctx.sessionManager.getBranch(),
+			{ provider: VIRTUAL_MODEL_PROVIDER, modelId: name },
+		);
 		return {
 			// Selection already proved the entry usable, so it is in the available list.
 			model: findAvailable(entry.model)!,

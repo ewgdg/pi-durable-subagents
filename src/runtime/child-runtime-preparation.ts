@@ -25,6 +25,7 @@ import type {
 	AgentTemplateCatalogueSnapshot,
 } from "../templates/agent-templates.ts";
 import { isBuiltinExtensionPath } from "../pi-integration/builtin-extension-paths.ts";
+import type { RecordedModelSelection } from "../pi-integration/recorded-model-selection.ts";
 
 export type AgentRuntimeRole = "ordinary" | "moderator";
 
@@ -64,6 +65,8 @@ type PrepareChildRuntimeOptions = {
 	isModelExcluded?(model: ModelReference): boolean;
 	clampThinking?(model: ModelReference, level: RuntimeThinkingLevel): RuntimeThinkingLevel;
 	presetThinking?(model: ModelReference): RuntimeThinkingLevel;
+	/** The Agent's recorded selection; an unusable one falls back to the initial values. */
+	recorded?: RecordedModelSelection;
 };
 
 export function prepareChildRuntime(
@@ -81,7 +84,7 @@ export async function prepareChildRuntime(
 	)
 		? await canonicalFileExtensions(options.parentRuntime.configuration.extensions)
 		: [];
-	const resolvedConfiguration = resolveAgentRunConfiguration({
+	const resolveWith = (recorded: RecordedModelSelection | undefined) => resolveAgentRunConfiguration({
 		inherited: {
 			...options.parentRuntime.configuration,
 			extensions: inheritedExtensions,
@@ -92,10 +95,21 @@ export async function prepareChildRuntime(
 		...(options.isModelExcluded === undefined ? {} : { isModelExcluded: options.isModelExcluded }),
 		...(options.clampThinking === undefined ? {} : { clampThinking: options.clampThinking }),
 		...(options.presetThinking === undefined ? {} : { presetThinking: options.presetThinking }),
+		...(recorded === undefined ? {} : { recorded }),
 	});
+	let recorded = usableRecordedSelection(options);
+	let resolvedConfiguration = resolveWith(recorded);
+	// An inherited model is never excluded, so the fallback can land on the recorded
+	// model itself. The Agent then keeps its recorded thinking level; preset mode needs
+	// a usable entry, which this unusable Virtual Model lacks.
+	const sameModelFallback = recorded === undefined ? sameModelRecordedThinking(options, resolvedConfiguration.model) : undefined;
+	if (sameModelFallback !== undefined) {
+		recorded = sameModelFallback;
+		resolvedConfiguration = resolveWith(recorded);
+	}
 	// Pi owns its shared default and model-capability clamp. Keep an absent
 	// Moderator selection unresolved until Pi starts instead of copying the Owner.
-	const launchConfiguration = usesPiDefaultThinking(options)
+	const launchConfiguration = usesPiDefaultThinking({ ...options, recorded })
 		? withoutThinking(resolvedConfiguration)
 		: resolvedConfiguration;
 	const effectiveCwd = launchConfiguration.cwd;
@@ -167,13 +181,47 @@ export async function prepareChildRuntime(
 	};
 }
 
+function usableRecordedSelection(options: Readonly<{
+	role: AgentRuntimeRole;
+	recorded?: RecordedModelSelection;
+	isModelAvailable?(model: ModelReference): boolean;
+}>): RecordedModelSelection | undefined {
+	const { recorded } = options;
+	if (recorded === undefined) return undefined;
+	if (!(options.isModelAvailable?.(recorded.model) ?? true)) return undefined;
+	// Only a Moderator may run on Pi's default level; an ordinary Agent always
+	// records one, so a missing level means the selection is incomplete.
+	if (options.role === "ordinary" && recorded.thinking === undefined && !recorded.presetThinking) {
+		return undefined;
+	}
+	return recorded;
+}
+
+function sameModelRecordedThinking(
+	options: Readonly<{ role: AgentRuntimeRole; recorded?: RecordedModelSelection }>,
+	model: ModelReference,
+): RecordedModelSelection | undefined {
+	const { recorded } = options;
+	if (recorded === undefined) return undefined;
+	if (recorded.model.provider !== model.provider || recorded.model.modelId !== model.modelId) return undefined;
+	if (options.role === "ordinary" && recorded.thinking === undefined) return undefined;
+	return {
+		model: recorded.model,
+		...(recorded.thinking === undefined ? {} : { thinking: recorded.thinking }),
+	};
+}
+
 function usesPiDefaultThinking(options: Readonly<{
 	role: AgentRuntimeRole;
 	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
+	recorded: RecordedModelSelection | undefined;
 }>): boolean {
-	return options.role === "moderator" &&
-		options.template?.models === undefined &&
+	if (options.role !== "moderator") return false;
+	if (options.recorded !== undefined) {
+		return options.recorded.thinking === undefined && !options.recorded.presetThinking;
+	}
+	return options.template?.models === undefined &&
 		options.overrides?.model === undefined;
 }
 

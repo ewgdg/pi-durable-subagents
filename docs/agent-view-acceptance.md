@@ -67,7 +67,7 @@ This matrix records the production process-backed Agent-view contract and its re
 | Dormant Runtime compaction and input accepted into Pi's compaction queue survive Owner detachment until the operation ends or the input transfers to a successor Run | detached Dormant compaction Agent-view regression |
 | `agent_settled` is authoritative; prompt acceptance is not settlement | hosted Runtime lifecycle and retry tests |
 | Selected failure, abort, interruption, and Workflow shutdown preserve exact Run identity | Runtime supervisor and process fault tests |
-| Successor and cold Runtimes re-resolve captured creation presets with current resources, trust, native project context-file loading, explicit system prompt, and ancestry | process factory, successor, and cold discovery tests |
+| Successor and cold Runtimes resume the recorded model selection and re-resolve captured creation presets with current resources, trust, native project context-file loading, explicit system prompt, and ancestry | process factory, successor, and cold discovery tests |
 | Nested spawning uses the admitted live parent Runtime or recursively resolves a dormant parent from canonical creation inputs | dynamic parent preparation and fullscreen nested-child tests |
 
 ## Release gates
