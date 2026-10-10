@@ -52,8 +52,7 @@ Pi 1.1 already ships native virtual models (`pi.registerVirtualModel()`, `node_m
 - **Peer dependency**: raise `@earendil-works/pi-coding-agent` (and the other `@earendil-works/*` peers) from `*` to `>=0.99.0`, the first release with `registerVirtualModel`.
 - **Out of scope**:
   - The Config tab editor (#213). This plan only ships the file format and a writer usable by #213 later.
-  - Switching a preset session to explicit when the user picks a thinking level by hand. See Layer 3.
-  - Retry fallback to the next entry on provider errors (quota, overload). Possible follow-up.
+  - Retry fallback to the next entry on provider errors (quota, overload): #218.
   - Spawn guidance changes (#217).
 
 ## Work Plan
@@ -76,9 +75,9 @@ Grow in layers. Each layer ships working behavior on its own.
 3. The child's router uses the entry level in preset mode.
 4. Docs and glossary for preset mode.
 
-### Layer 3 (proposal, needs a go-ahead): manual override
+### Layer 3: manual override
 
-Pi emits `thinking_level_select` for every level change, including Pi's own startup application of `--thinking` and model cycling, so the event alone cannot tell a manual pick. The extension itself never calls `setThinkingLevel`, so any change after child startup completes is user- or extension-initiated. Treat that as switching to explicit mode, and persist the switch as router state so a resumed Runtime keeps it.
+Pi emits `thinking_level_select` for every level change, including Pi's own startup application of `--thinking` and model cycling, so the event alone cannot tell a manual pick. The extension itself never calls `setThinkingLevel`, so any change after child startup completes is user- or extension-initiated. Treat that as switching to explicit mode, and persist the switch as router state so a resumed Runtime keeps it. Approved by the user: an explicit switch is allowed and stays for the rest of that session branch.
 
 ## Validation
 
@@ -91,10 +90,10 @@ Pi emits `thinking_level_select` for every level change, including Pi's own star
 
 ## Progress
 
-- [ ] Plan reviewed by the user
+- [x] Plan reviewed by the user (Layer 3 approved, provider-error fallback moved to #218)
 - [ ] Layer 1
 - [ ] Layer 2
-- [ ] Layer 3 decision
+- [ ] Layer 3
 
 ## Surprises & Discoveries
 
