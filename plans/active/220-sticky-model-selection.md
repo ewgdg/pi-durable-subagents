@@ -47,8 +47,9 @@ Pi saves a new session's starting model and thinking into the session and restor
 
 - [x] Investigation and design (user chose fallback for unusable recorded models).
 - [x] Implementation (3f4993b) and docs + ADR 0009 (98ece34). Focused fast + process tests pass (virtual-models, child-runtime-preparation, agent-templates, process-child-session-factory, agent-spawn, cold-host-recovery).
-- [ ] Independent blind tests.
-- [ ] Independent review.
+- [x] Independent blind tests (b7b26af): 7 process tests, all pass; Moderators not covered (stall setup too costly).
+- [x] Independent review; fixes in d288d13 / b77a14b.
+- [x] Full `test:fast` and `test:process` pass after updating one Moderator transcript assertion.
 
 ## Decisions
 
