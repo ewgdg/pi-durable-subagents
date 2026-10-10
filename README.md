@@ -79,7 +79,7 @@ Both templates below use one [Virtual Model](docs/workflow-policy.md#virtual-mod
 {
   "virtualModels": {
     "cheap": [
-      { "id": "openai-codex/gpt-5.6-luna", "thinking": "high" },
+      { "id": "openai-codex/gpt-6-luna", "thinking": "high" },
       { "id": "deepseek/deepseek-v4-flash", "thinking": "high" }
     ]
   }
