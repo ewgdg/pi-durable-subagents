@@ -42,20 +42,16 @@ import {
 	type AgentSelectorView,
 } from "./agent-selector-projection.ts";
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
-import { frameLine } from "./overlay-frame.ts";
+import { frameLine, maximumPanelRows, PANEL_FRAME_ROWS, PANEL_OVERLAY_OPTIONS } from "./overlay-frame.ts";
 import {
 	formatAgentWorkStatus,
 	SUSPENSION_LABEL,
 	selectedAgentWorkStatus,
 } from "./selected-agent-status.ts";
 
-const AGENT_SELECTOR_OVERLAY_WIDTH = 80;
-const AGENT_SELECTOR_OVERLAY_MARGIN = 1;
-const AGENT_SELECTOR_OVERLAY_MAX_HEIGHT_PERCENT = 90;
 const MAX_VISIBLE_ROSTER_ROWS = 10;
 const MAX_BREADCRUMB_AGENT_SEGMENTS = 3;
 const FOCUSED_DETAIL_ROWS = 4;
-const FRAME_ROWS = 2;
 const TAB_ROWS = 1;
 const CONTENT_GAP_ROWS = 2;
 const HELP_ROWS = 1;
@@ -63,7 +59,7 @@ const OWNER_FOOTER_ROWS = 1;
 const MAX_LIVE_SECTION_HEADER_ROWS = 2;
 const EMPTY_LIVE_AGENT_ROWS = 1;
 const FIXED_OVERLAY_ROWS =
-	FRAME_ROWS + TAB_ROWS + CONTENT_GAP_ROWS + HELP_ROWS + OWNER_FOOTER_ROWS +
+	PANEL_FRAME_ROWS + TAB_ROWS + CONTENT_GAP_ROWS + HELP_ROWS + OWNER_FOOTER_ROWS +
 	MAX_LIVE_SECTION_HEADER_ROWS + EMPTY_LIVE_AGENT_ROWS + FOCUSED_DETAIL_ROWS;
 const SCROLL_INDICATOR_ROWS = 1;
 const SELECTION_SPINNER_FRAMES = [
@@ -125,12 +121,7 @@ export function openAgentSelectorSurface(
 			new AgentSelectorSurface(tui, theme, options, done),
 		{
 			overlay: true,
-			overlayOptions: {
-				width: AGENT_SELECTOR_OVERLAY_WIDTH,
-				maxHeight: `${AGENT_SELECTOR_OVERLAY_MAX_HEIGHT_PERCENT}%`,
-				anchor: "center",
-				margin: { top: AGENT_SELECTOR_OVERLAY_MARGIN, bottom: AGENT_SELECTOR_OVERLAY_MARGIN },
-			},
+			overlayOptions: PANEL_OVERLAY_OPTIONS,
 		},
 	);
 }
@@ -314,7 +305,7 @@ class AgentSelectorSurface implements Component {
 
 	render(width: number): string[] {
 		const terminalRows = this.#tui.terminal.rows;
-		const frameWidth = Math.min(width, AGENT_SELECTOR_OVERLAY_WIDTH);
+		const frameWidth = Math.min(width, PANEL_OVERLAY_OPTIONS.width);
 		const innerWidth = Math.max(0, frameWidth - 2);
 		const contentWidth = Math.max(0, innerWidth - 2);
 		const border = (text: string) => this.#theme.fg("border", text);
@@ -335,7 +326,7 @@ class AgentSelectorSurface implements Component {
 		];
 		const visibleContentLines = fitOverlayContent(
 			contentLines,
-			Math.max(0, this.#maximumOverlayRows() - FRAME_ROWS),
+			Math.max(0, this.#maximumOverlayRows() - PANEL_FRAME_ROWS),
 		);
 		const leftMargin = Math.min(1, innerWidth);
 		const rightMargin = Math.max(0, innerWidth - contentWidth - leftMargin);
@@ -493,12 +484,7 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#maximumOverlayRows(): number {
-		const terminalRows = this.#tui.terminal.rows;
-		const percentBound = Math.floor(
-			terminalRows * AGENT_SELECTOR_OVERLAY_MAX_HEIGHT_PERCENT / 100,
-		);
-		const marginBound = terminalRows - AGENT_SELECTOR_OVERLAY_MARGIN * 2;
-		return Math.max(2, Math.min(percentBound, marginBound));
+		return maximumPanelRows(this.#tui.terminal.rows);
 	}
 
 	#items(): AgentSelectorItem[] {
@@ -673,7 +659,7 @@ class AgentSelectorSurface implements Component {
 		const visibleBodyRows = visibleItems.length;
 		// Short terminals trade detail rows for navigation and the fixed footer.
 		const detailRows = Math.max(0, Math.min(FOCUSED_DETAIL_ROWS,
-			this.#maximumOverlayRows() - FRAME_ROWS - TAB_ROWS - HELP_ROWS - OWNER_FOOTER_ROWS - 1 -
+			this.#maximumOverlayRows() - PANEL_FRAME_ROWS - TAB_ROWS - HELP_ROWS - OWNER_FOOTER_ROWS - 1 -
 			(visibleAttention || reportHistory ? 1 : 0) - visibleBodyRows - (emptyState ? 1 : 0) -
 			(listLines.length > visibleItems.length ? SCROLL_INDICATOR_ROWS : 0),
 		));
