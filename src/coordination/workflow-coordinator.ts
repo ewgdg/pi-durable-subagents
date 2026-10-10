@@ -90,6 +90,8 @@ import {
 	writeVirtualModels,
 } from "../policy/workflow-policy.ts";
 import {
+	parseVirtualModels,
+	serializeVirtualModels,
 	VIRTUAL_MODEL_PROVIDER,
 	type VirtualModelConfigSnapshot,
 	type VirtualModelDefinitions,
@@ -569,6 +571,16 @@ export class WorkflowCoordinator {
 			...this.#workflowPolicy.current(),
 			excludedModels: validated,
 		}));
+		await this.#refreshTemplateSnapshots();
+		return this.modelPolicy();
+	}
+
+	/**
+	 * Template catalogues drop candidates whose model is unavailable, so every cached
+	 * snapshot is captured again after a model policy change. A snapshot that cannot
+	 * be refreshed keeps its previous value and reports a diagnostic.
+	 */
+	async #refreshTemplateSnapshots(): Promise<void> {
 		this.#sessionFactory.invalidateTemplateLoads();
 		for (const record of this.#agents.values()) {
 			try {
@@ -580,7 +592,6 @@ export class WorkflowCoordinator {
 				});
 			}
 		}
-		return this.modelPolicy();
 	}
 
 	/**
@@ -601,15 +612,19 @@ export class WorkflowCoordinator {
 	}
 
 	/**
-	 * Persists the complete definitions, then publishes them. Template catalogues need
-	 * no refresh: Runtime Preparation and routing reread the file for every use.
+	 * Persists the complete definitions, then publishes them and refreshes Template
+	 * snapshots, whose candidates may name a Virtual Model that just became defined,
+	 * usable, or undefined.
 	 */
 	async setVirtualModels(definitions: VirtualModelDefinitions): Promise<VirtualModelConfigSnapshot> {
-		await writeVirtualModels(this.#ownerRuntime.services.agentDir, definitions);
+		// Round-trip through the file shape: validates before writing and freezes what is published.
+		const validated = parseVirtualModels(serializeVirtualModels(definitions));
+		await writeVirtualModels(this.#ownerRuntime.services.agentDir, validated);
 		this.#workflowPolicy.publish(Object.freeze({
 			...this.#workflowPolicy.current(),
-			virtualModels: definitions,
+			virtualModels: validated,
 		}));
+		await this.#refreshTemplateSnapshots();
 		return this.virtualModelConfig();
 	}
 

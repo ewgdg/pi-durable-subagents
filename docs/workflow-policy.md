@@ -112,7 +112,7 @@ In the admitted Workflow Owner session, `c` or a click on **Config** in the `/ag
 - `Enter` opens a name or `+ New virtual model`. Inside a name, `Enter` replaces the focused entry's model and thinking, `a` appends an entry, `d` deletes one, `K`/`J` move it, and `r` renames the name. In the list, `d` deletes a name after a second `d`.
 - The model picker searches the Owner's available models. Excluded models are marked but selectable, since routing skips them per request. A model already in the list is refused.
 - Every completed action rewrites this file at once through a temporary file and rename, keeping every other field. A new name is written together with its first entry, and the last entry cannot be deleted, so each step leaves a valid file. A failed write keeps the previous file and shows the error in the editor.
-- Deleting or renaming a name in use is not blocked. The old name becomes an unavailable model: a spawn that names it fails, and a recorded selection on it falls back like any unusable model (see [Model selection](agent-spawning.md#model-selection)).
+- Deleting or renaming a name in use is not blocked. The old name becomes an unavailable model: a spawn that names it fails, and a recorded selection on it falls back like any unusable model at the next fresh Runtime (see [Model selection](agent-spawning.md#model-selection)). A running session already on that name fails its next request until another model is selected.
 - While this file is invalid, Config shows the parse error and the Owner's last valid definitions, read-only.
 
 ### Thinking

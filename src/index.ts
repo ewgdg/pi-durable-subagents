@@ -78,7 +78,8 @@ export const createOwnerExtension = (
 					kind: "admitted_owner",
 					view: outcome.ownerView,
 					tools: ownerTools,
-					syncVirtualModels: () => virtualModels.sync(hostPi.getAgentDir()),
+					// The Owner bootstrap's sync set the runtime's agentDir, the one Config writes.
+					syncVirtualModels: () => virtualModels.sync(),
 				});
 				if (interaction === "terminal") showOwnerBlockage(ctx.ui, undefined);
 				return;

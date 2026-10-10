@@ -47,8 +47,12 @@ export class VirtualModelRegistrar {
 		return registrar;
 	}
 
-	/** Re-reads the policy and makes the registered names match its definitions. */
-	async sync(agentDir: string): Promise<void> {
+	/**
+	 * Re-reads the policy and makes the registered names match its definitions.
+	 * Without an argument it keeps the directory of the last sync, which the Owner
+	 * bootstrap sets from its runtime services.
+	 */
+	async sync(agentDir = this.#agentDir): Promise<void> {
 		this.#agentDir = agentDir;
 		// The Owner already warns about an invalid file on session_start, and the Owner
 		// refuses a child spawn while it is invalid, so a sync reports nothing.

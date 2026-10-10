@@ -117,6 +117,8 @@ async function openConfig(
 			return config;
 		},
 	});
+	// Template candidates may name an edited Virtual Model; see openModels.
+	role.tools.refreshSpawnGuidance(view.agentTemplateSnapshot());
 }
 
 async function openModels(

@@ -34,7 +34,7 @@ This is the first section of the #213 Config tab. It ships only Virtual Models. 
 - **Write path**:
   - One private field rewrite in `src/policy/workflow-policy.ts` (re-read the file, refuse an invalid file, set or delete one field, re-parse the result, write a temp file and rename), behind two typed writers: `writeExcludedModels` and `writeVirtualModels`.
   - `WorkflowCoordinator.setVirtualModels(definitions)` writes and publishes the policy snapshot. The `/agents` command then syncs the Owner's `VirtualModelRegistrar` (passed in as `syncVirtualModels`), so the Owner's `/model` list follows at once instead of after reload. Child processes keep their registrations and follow through `route()`, which rereads the file on every request.
-  - Template catalogues need no refresh: Runtime Preparation rereads Virtual Models before every prepare.
+  - Template snapshots and spawn guidance refresh after each edit, as after `/agents models`: catalogues drop candidates whose model is unavailable, and a `virtual/<name>` candidate is available only while the name is defined with a usable entry.
 - **Deleting a name in use** needs no special code:
   - A spawn that names it fails with the existing unavailable-model error.
   - A fresh Runtime whose recorded selection names it falls back to its initial values (#220), which fail the same way if they name it too.
