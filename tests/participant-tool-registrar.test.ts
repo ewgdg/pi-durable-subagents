@@ -282,7 +282,7 @@ test("Agent Spawn schema accepts isolated children and rejects extension path ar
 	}), false);
 });
 
-test("Template catalogue shows available Template configuration without Runtime guidance", () => {
+test("Template catalogue shows only Template name and useWhen", () => {
 	const catalogue = renderAgentTemplatePromptGuide({
 		templates: [
 		{
@@ -310,19 +310,17 @@ test("Template catalogue shows available Template configuration without Runtime 
 		],
 	});
 
-	assert.match(catalogue ?? "", /integration-researcher/);
-	assert.match(catalogue ?? "", /Use for integration research requiring primary sources\./);
-	assert.match(catalogue ?? "", /^## Available Agent Templates Snapshot/);
-	assert.match(catalogue ?? "", /  model: anthropic\/claude-sonnet-4-5\n  thinking: high/);
-	assert.doesNotMatch(catalogue ?? "", /deepseek\/deepseek-v4-flash/);
-	assert.doesNotMatch(catalogue ?? "", /models:|snapshot:/);
-	assert.doesNotMatch(catalogue ?? "", /explains when to choose/);
-	assert.match(catalogue ?? "", /systemPromptMode: replace/);
-	assert.match(catalogue ?? "", /- name: plain-agent\n  systemPromptMode: append/);
-	assert.doesNotMatch(catalogue, /Current Agent Runtime/);
-	assert.doesNotMatch(catalogue, /current\/model/);
-	assert.doesNotMatch(catalogue, /use `inherit`/);
+	assert.equal(catalogue, [
+		"## Available Agent Templates Snapshot",
+		"Use `agent_spawn.template` when a Template fits the task. `agent_spawn.config` overrides the selected Template's configuration.",
+		[
+			"- name: integration-researcher",
+			'  useWhen: "Use for integration research requiring primary sources."',
+			"- name: plain-agent",
+		].join("\n"),
+	].join("\n\n"));
 });
+
 
 test("Message guidance keeps obligations separate from delivery-mode rules", async (t) => {
 	const host = await createRegistrarHost(t, "ordinary", handlers);

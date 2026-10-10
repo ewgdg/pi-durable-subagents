@@ -12,29 +12,11 @@ export function renderAgentTemplatePromptGuide(
 			...(template.useWhen === undefined
 				? []
 				: [`  useWhen: ${JSON.stringify(template.useWhen)}`]),
-			...(template.models?.[0] === undefined
-				? []
-				: [
-					`  model: ${template.models[0].model.provider}/${template.models[0].model.modelId}`,
-					`  thinking: ${template.models[0].thinking}`,
-				]),
-			...(template.excludeTools === undefined
-				? []
-				: [`  excludeTools: ${JSON.stringify(template.excludeTools)}`]),
-			...(template.excludeSkills === undefined
-				? []
-				: [`  excludeSkills: ${JSON.stringify(template.excludeSkills)}`]),
-			...(template.extensions === undefined
-				? []
-				: [`  extensions: ${template.extensions}`]),
-			`  systemPromptMode: ${template.systemPromptMode}`,
-			`  loadContextFiles: ${template.loadContextFiles}`,
 		].join("\n"))
 		.join("\n");
 	return [
 		"## Available Agent Templates Snapshot",
-		"Use `agent_spawn.template` when a Template fits the task. `agent_spawn.config` overrides the listed Template configuration.",
-		"`loadContextFiles` controls native loading of trusted project instruction files such as `AGENTS.md` and `CLAUDE.md`; it does not inherit the parent conversation.",
+		"Use `agent_spawn.template` when a Template fits the task. `agent_spawn.config` overrides the selected Template's configuration.",
 		...(templates.length === 0 ? ["None."] : [templates]),
 	].join("\n\n");
 }
