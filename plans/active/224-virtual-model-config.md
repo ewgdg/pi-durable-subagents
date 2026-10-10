@@ -82,7 +82,7 @@ Grow in layers. Each layer works on its own.
 - [x] Layer 1: Config label, `c`, click, and the read-only list (typecheck and existing selector tests pass).
 - [x] Layer 2 and Layer 3, landed together: every edit flow walked through in a throwaway render script (new name, invalid and duplicate names, picker search and `[in list]` refusal, thinking, append, move, rename, delete with confirmation, last-entry refusal, failed save, read-only file). Typecheck and focused policy, virtual-model, command, and selector tests pass.
 - [x] Layer 4: selector and Workflow Policy docs, README line, registrar comment, regenerated screenshot.
-- [ ] Independent tests and review
+- [x] Independent blind tests (876c63b): all pass, no defects. Independent review: stale spawn guidance and registrar agentDir fixed (ded7ee6), shared entry usability (this branch). Skipped as minor: undo clearing a rename prefill, selector reopening on its default tab, re-registering every name per save, no re-read after a failed save.
 
 ## Decisions
 
