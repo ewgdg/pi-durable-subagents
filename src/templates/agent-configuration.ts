@@ -41,23 +41,22 @@ export type EffectiveAgentRunConfiguration = Readonly<{
 		body: string;
 	}>;
 	loadContextFiles: boolean;
+	/**
+	 * Set when a Virtual Model selection uses each entry's own thinking level. `thinking`
+	 * then names the first usable entry's level, so the selection matches the primary entry.
+	 */
+	presetThinking?: true;
 }>;
-
-/**
- * Set when a Virtual Model selection uses each entry's own thinking level. `thinking`
- * then names the first usable entry's level, so the selection matches the primary entry.
- */
-type PresetThinkingMarker = Readonly<{ presetThinking?: true }>;
 
 /** Launch input may delegate thinking selection to Pi while all other values stay explicit. */
 export type AgentRunLaunchConfiguration = Readonly<
 	Omit<EffectiveAgentRunConfiguration, "thinking"> & {
 		thinking?: RuntimeThinkingLevel;
 	}
-> & PresetThinkingMarker;
+>;
 
 /** Prepared rules before the child-owned skill discovery contributes the loaded set. */
-export type ResolvedAgentRunConfiguration = Omit<EffectiveAgentRunConfiguration, "skills"> & PresetThinkingMarker;
+export type ResolvedAgentRunConfiguration = Omit<EffectiveAgentRunConfiguration, "skills">;
 
 export function resolveAgentRunConfiguration(options: {
 	inherited: InheritableRuntimeConfiguration;

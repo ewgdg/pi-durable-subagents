@@ -53,8 +53,8 @@ export const ChildProcessBootstrapSchema = {
 		// coordination tools always stay active, and absent names are ignored.
 		excludedTools: { type: "array", items: NonEmptyStringSchema, uniqueItems: true },
 		expectedSessionId: NonEmptyStringSchema,
-		// Present when the child's Virtual Model selection routes each entry with its own level.
-		presetThinking: { type: "boolean", const: true },
+		// The Virtual Model name the child launched in preset thinking mode, if any.
+		presetVirtualModel: NonEmptyStringSchema,
 	},
 	additionalProperties: false,
 } as const;

@@ -67,35 +67,7 @@ Any other entry — a bare `*`, `*/*`, `gpt*`, `*/flash`, a missing slash, an em
 
 An excluded model is not selectable from Agent Template candidates and is refused as an explicit `agent_spawn.config.model.id`, reported as `excluded by model policy` rather than a generic availability failure. A Template whose candidates are all excluded is refused by name. Model availability for preparation therefore requires a catalogue entry, configured provider authentication, and absence from this list.
 
-Exclusion applies to selection only. An inherited parent model and the explicit `"inherit"` sentinel are never excluded, so banning the model you are currently using cannot break a spawn whose Template configures no model. Exclusion applies to Runtime preparation, never to a Runtime that already exists: an affected ban takes effect at the next preparation, and a running Agent keeps its current model.
-
-## Virtual Models
-
-`virtualModels` names ordered lists of real model and thinking pairs. Each name is usable as the model id `virtual/<name>` anywhere a model id is accepted: `/model`, Agent Template candidates, and `agent_spawn.config.model.id`. When a model is retired or banned, fixing one list updates every Agent that uses the name.
-
-- Names are lowercase kebab-case. Each list is nonempty.
-- An entry holds exactly `id` (a real `<provider>/<modelId>`, never `virtual/...`) and `thinking` (a Pi thinking level). Ids are unique within a list.
-- Any other shape rejects the complete file.
-
-Virtual Models use Pi's native virtual model support (Pi 0.99.0 or newer). Pi routes every request of a `virtual/<name>` selection to one real entry:
-
-- An entry is usable when it is in the catalogue, its provider has authentication, and `excludedModels` does not match it. The deny list applies to entries as usual.
-- A continuation or retry stays on the model that answered before while that model is still a usable entry, so prompt caches and thinking signatures stay valid.
-- Otherwise the first usable entry serves the request. With none usable, the request fails with an error naming each entry and why it is unusable.
-- Session history records the real model that answered. The footer shows both: `fast • high → deepseek-flash • max`.
-
-Names bind late. A captured `creationPreset` keeps `virtual/<name>`, so dormant Agents follow later edits. Each routed request rereads this file, so editing an existing name's entries applies on the next request in every process. Adding or removing a name applies to new processes and to the Owner after resource reload. An invalid edit keeps the last valid definitions and warns once.
-
-Runtime Preparation treats `virtual/<name>` as available only when the name is defined and at least one entry is usable now, so a broken definition fails a spawn before the Agent exists.
-
-### Thinking
-
-Each entry's `thinking` is a preset tuned for that model. A selection runs in one of two modes:
-
-- **Explicit** (the default): the selected thinking level applies to every entry, clamped by Pi to the model that serves the request.
-- **Preset**: each entry runs on its own `thinking`. Request it with `thinking: preset` in a Template candidate or `agent_spawn.config.model`, which is valid only with a `virtual/*` id. The child starts on the first usable entry's level, so its footer matches the primary entry.
-
-A manual thinking change in a preset child switches it to explicit mode for the rest of that session branch, including after resume. Selecting a virtual model through `/model`, or inheriting one from a parent, is explicit.
+Exclusion applies to selection only. An inherited parent model and the explicit `"inherit"` sentinel are never excluded, so banning the model you are currently using cannot break a spawn whose Template configures no model. Exclusion applies to Runtime preparation, never to a Runtime that already exists: an affected ban takes effect at the next preparation, and a running Agent keeps its current model. A [Virtual Model](#virtual-models) selection is the exception: its router applies the list to every request.
 
 ### Owner toggle menu
 
@@ -112,3 +84,31 @@ The menu lists every model the Owner may currently use, plus every stored entry,
 Every toggle rewrites this file immediately through a temporary file and rename, then republishes one frozen policy snapshot and refreshes cached Agent Template catalogues. A failed write leaves the previous list in effect and reports the failure inside the menu. Stored identities are never pruned automatically: an entry whose model is absent from the current catalogue stays listed and remains reversible.
 
 `/agents models` exists only in the admitted Workflow Owner session. A child Agent's `/agents` command offers only `owner`.
+
+## Virtual Models
+
+`virtualModels` names ordered lists of real model and thinking pairs. Each name is usable as the model id `virtual/<name>` anywhere a model id is accepted: `/model`, Agent Template candidates, and `agent_spawn.config.model.id`. When a model is retired or banned, fixing one list updates every Agent that uses the name.
+
+- Names are lowercase kebab-case. Each list is nonempty.
+- An entry holds exactly `id` (a real `<provider>/<modelId>`, never `virtual/...`) and `thinking` (a Pi thinking level). Ids are unique within a list.
+- Any other shape rejects the complete file.
+
+Virtual Models use Pi's native virtual model support (Pi 0.99.0 or newer). Pi routes every request of a `virtual/<name>` selection to one real entry:
+
+- An entry is usable when it is in the catalogue, its provider has authentication, and `excludedModels` does not match it. Unlike other selections, a running Agent on a virtual model follows a ban on its next request.
+- A continuation or retry stays on the model that answered before while that model is still a usable entry, so prompt caches and thinking signatures stay valid.
+- Otherwise the first usable entry serves the request. With none usable, the request fails with an error naming each entry and why it is unusable.
+- Session history records the real model that answered. The footer shows both: `fast • high → deepseek-flash • max`.
+
+Names bind late. A captured `creationPreset` keeps `virtual/<name>`, so dormant Agents follow later edits. Each routed request rereads this file, so editing an existing name's entries applies on the next request in every process. Adding or removing a name applies to new spawns at once, and to the Owner's own `/model` list after resource reload. An invalid edit keeps the last valid definitions for running Agents and warns once.
+
+Runtime Preparation reads this file too. It treats `virtual/<name>` as available only when the file is valid, the name is defined, and at least one entry is usable now, so a broken definition fails a spawn before the Agent exists.
+
+### Thinking
+
+Each entry's `thinking` is a preset tuned for that model. A selection runs in one of two modes:
+
+- **Explicit** (the default): the selected thinking level applies to every entry, clamped by Pi to the model that serves the request.
+- **Preset**: each entry runs on its own `thinking`. Request it with `thinking: preset` in a Template candidate or `agent_spawn.config.model`, which is valid only with a `virtual/*` id. The child starts on the first usable entry's level, so its footer matches the primary entry.
+
+Preset mode applies only to the child's launch selection. A thinking change in that child, by the user or by an extension, switches it to explicit mode for the rest of the Runtime, including `/reload`. A fresh Runtime prepares again and starts in preset mode, just as any Agent's manual model or thinking change does not outlive its Runtime. Selecting a virtual model through `/model`, or inheriting one from a parent, is explicit.

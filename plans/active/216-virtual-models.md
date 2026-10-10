@@ -51,7 +51,7 @@ Pi 1.1 already ships native virtual models (`pi.registerVirtualModel()`, `node_m
 - **Captured `creationPreset`** keeps storing the Template's candidates, which may now be `virtual/<name>` with a level or `preset`. The name binds late, so dormant Agents follow definition edits. No change to what is captured.
 - **Peer dependency**: raise `@earendil-works/pi-coding-agent` (and the other `@earendil-works/*` peers) from `*` to `>=0.99.0`, the first release with `registerVirtualModel`.
 - **Out of scope**:
-  - The Config tab editor (#213). This plan only ships the file format and a writer usable by #213 later.
+  - The Config tab editor (#213). This plan only ships the file format; #213 adds the writer.
   - Retry fallback to the next entry on provider errors (quota, overload): #218.
   - Spawn guidance changes (#217).
 
@@ -63,7 +63,7 @@ Grow in layers. Each layer ships working behavior on its own.
 
 1. `src/policy/workflow-policy.ts`: parse and validate `virtualModels`. Add it to the snapshot type, defaults, and allowed fields.
 2. New `src/policy/virtual-models.ts`: definition types, the usable-entry predicate (catalogue + auth + exclusions), and the pure routing decision (sticky vs first usable, error text). Keep it Pi-free apart from types so it is unit testable.
-3. New Pi integration module (`src/pi-integration/virtual-model-registration.ts`): build `registerVirtualModel` definitions (provider `virtual`, `thinkingLevels`, limits) and the `route()` adapter. Owns the mtime-cached policy re-read.
+3. New Pi integration module (`src/pi-integration/virtual-model-registration.ts`): build `registerVirtualModel` definitions (provider `virtual`, `thinkingLevels`, limits) and the `route()` adapter. Re-reads the policy file on every routed request.
 4. Register from the Owner extension and from the child bridge.
 5. Runtime preparation: the availability check handles `virtual/<name>` (definition exists + one usable entry). Check whether `modelRuntime.getAvailableSnapshot()` lists registered virtual models, and adapt `#catalogueModel` / `#clampThinking` if it does not.
 6. Docs: `docs/workflow-policy.md` (new field and rules), `docs/agent-spawning.md` (virtual ids in Template candidates and spawn config, routing, late binding), `GLOSSARY.md` (Virtual Model term, Workflow Policy entry), README mention.
@@ -77,7 +77,7 @@ Grow in layers. Each layer ships working behavior on its own.
 
 ### Layer 3: manual override
 
-Pi emits `thinking_level_select` for every level change, including Pi's own startup application of `--thinking` and model cycling, so the event alone cannot tell a manual pick. The extension itself never calls `setThinkingLevel`, so any change after child startup completes is user- or extension-initiated. Treat that as switching to explicit mode, and persist the switch as router state so a resumed Runtime keeps it. Approved by the user: an explicit switch is allowed and stays for the rest of that session branch.
+Pi emits `thinking_level_select` for every level change, including Pi's own startup application of `--thinking` and model cycling, so the event alone cannot tell a manual pick. The extension itself never calls `setThinkingLevel`, so any change after child startup completes is user- or extension-initiated. Treat that as switching to explicit mode for the rest of the Runtime, including `/reload`. Approved by the user: an explicit switch is allowed. See Decisions for why it does not outlive the Runtime.
 
 ## Validation
 
@@ -94,8 +94,9 @@ Pi emits `thinking_level_select` for every level change, including Pi's own star
 - [x] Layer 1 (71f13ce)
 - [x] Layer 2 and Layer 3 (76a1008); child control protocol moves to version 13
 - [x] Docs
-- [ ] Independent tests
-- [ ] Independent review
+- [x] Independent tests (83554a2)
+- [x] Independent review: fixed child-initiated preset receipt, preparation reading stale definitions, explicit switch lifetime, preset scope, docs
+- [ ] Tests updated for review fixes and trimmed
 
 ## Surprises & Discoveries
 
@@ -112,6 +113,9 @@ Pi emits `thinking_level_select` for every level change, including Pi's own star
 - **Every thinking level is offered.** Rejected the union of entry levels: the registered list would go stale after an edit, and Pi clamps the routed level anyway.
 - **The manual-switch boundary is the bridge's session_start binding.** Pi applies `--thinking` before `bindExtensions` emits `session_start`, and the extension never sets a level, so any later `thinking_level_select` is manual.
 - **Routing sticks to the previous model for continuations and retries.** Rejected always taking the first usable entry: it would switch models mid-turn and break prompt caches and thinking signatures.
+- **The explicit switch lasts for the Runtime, not the session branch.** The first cut stored it as router state, but a fresh Runtime relaunches with `--thinking <first entry level>`, which overrides the restored level: the branch kept explicit mode with a level the user never picked. Every Agent's manual model or thinking change already ends with its Runtime (a fresh Runtime prepares again), so the switch follows that rule. Kept in a process-global keyed by session id so it survives `/reload`.
+- **Preset applies only to the launch selection.** Rejected one process-wide mode: a `/model` pick of another virtual name would silently inherit preset mode.
+- **Runtime Preparation reads the policy file, not the Owner's snapshot.** The router rereads the file per request; checking a reload-only snapshot let a spawn be refused for a definition that routing would accept, and vice versa. It also skips the Owner's catalogue for virtual ids, because the child registers names itself, so a new name is spawnable without a reload.
 - **Definitions bind late.** Rejected expanding the list into the `creationPreset` at spawn: dormant Agents would keep retired models, which is the problem this solves.
 
 ## Outcomes & Retrospective

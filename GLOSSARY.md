@@ -110,7 +110,7 @@ The volatile resolution performed immediately before one new Agent Runtime start
 The working directory obtained during Runtime Preparation by resolving the canonical per-spawn `cwd` against the current parent Runtime working directory. It anchors that Agent's project-scoped Template discovery for descendants and Pi's ordinary Project Context and cwd-scoped resource discovery for the prepared Runtime.
 
 **Workflow Policy**:
-The Owner-scoped configuration snapshot governing new host admissions, limits, operation review, delivery progress, model exclusions, and Virtual Model definitions. Owner resource reload may replace the Policy prospectively without making it transcript state or changing already-admitted work.
+The Owner-scoped configuration snapshot governing new host admissions, limits, operation review, delivery progress, model exclusions, and Virtual Model definitions. Owner resource reload may replace the Policy prospectively without making it transcript state or changing already-admitted work, except that Virtual Model definitions and exclusions apply to each routed request.
 _Avoid_: Workflow state, Workflow configuration lifecycle
 
 **Virtual Model**:

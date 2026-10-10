@@ -292,6 +292,7 @@ const EffectiveConfigurationSchema = closed({
 		body: Type.String(),
 	})),
 	loadContextFiles: Type.Boolean(),
+	presetThinking: Type.Optional(Type.Literal(true)),
 });
 const AgentSpawnReceiptSchema = bindEquivalent<AgentSpawnReceipt>()(Type.Union([
 	closed({

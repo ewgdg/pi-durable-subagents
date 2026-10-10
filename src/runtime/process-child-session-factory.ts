@@ -53,7 +53,13 @@ import {
 } from "./child-runtime-preparation.ts";
 import { workflowSessionDirectory } from "./workflow-session-directory.ts";
 import { isModelExcluded } from "../policy/model-exclusion.ts";
-import { isVirtualModel, type VirtualModelDefinitions } from "../policy/virtual-models.ts";
+import {
+	isVirtualModel,
+	requireVirtualModelDefinition,
+	type VirtualModelDefinitions,
+	type VirtualModelEntry,
+} from "../policy/virtual-models.ts";
+import { readWorkflowPolicy } from "../policy/workflow-policy.ts";
 
 const COORDINATION_EXTENSION_PREFIXES = [
 	"<inline:pi-durable-subagents-agent:",
@@ -116,7 +122,12 @@ export class ProcessChildSessionFactory {
 		| undefined;
 	readonly #resolveAgent: (agentId: string) => AgentRecord | undefined;
 	readonly #modelExclusions: (() => readonly string[]) | undefined;
-	readonly #virtualModels: (() => VirtualModelDefinitions) | undefined;
+	/**
+	 * Read from the policy file at each preparation, like the child that will route
+	 * them, so a spawn check never disagrees with routing. Undefined while the file
+	 * is invalid: a child would register no Virtual Models then.
+	 */
+	#virtualModels: VirtualModelDefinitions | undefined = {};
 	readonly #ownerRequestHandlers: (
 		role: AgentRuntimeRole,
 		agentId: string,
@@ -136,7 +147,6 @@ export class ProcessChildSessionFactory {
 		resolveAgent(agentId: string): AgentRecord | undefined;
 		/** Current user policy exclusions; read per preparation so a reload applies prospectively. */
 		modelExclusions?(): readonly string[];
-		virtualModels?(): VirtualModelDefinitions;
 		ownerRequestHandlers(
 			role: AgentRuntimeRole,
 			agentId: string,
@@ -151,7 +161,6 @@ export class ProcessChildSessionFactory {
 		this.#templateRoots = options.templateRoots;
 		this.#resolveAgent = options.resolveAgent;
 		this.#modelExclusions = options.modelExclusions;
-		this.#virtualModels = options.virtualModels;
 		this.#ownerRequestHandlers = options.ownerRequestHandlers;
 		this.#interaction = options.interaction;
 	}
@@ -182,6 +191,7 @@ export class ProcessChildSessionFactory {
 		creationPreset?: AgentCreationPreset;
 	}): Promise<PreparedOrdinaryChildRuntime> {
 		await this.#launchContract.assertCompatible();
+		await this.#refreshVirtualModels();
 		return this.#prepareOrdinaryRun(options, new Set());
 	}
 
@@ -190,6 +200,7 @@ export class ProcessChildSessionFactory {
 		creationPreset?: AgentCreationPreset;
 	}): Promise<PreparedModeratorRuntime> {
 		await this.#launchContract.assertCompatible();
+		await this.#refreshVirtualModels();
 		const owner = this.#resolveAgent(this.#ownerIdentity.agentId);
 		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
 		const parentRuntime = await this.#resolveCurrentRuntime(owner, new Set());
@@ -364,8 +375,11 @@ export class ProcessChildSessionFactory {
 		if (current && !refresh) return current;
 		// One load owns both selection and guidance, including missing/invalid names.
 		// Cache the in-flight promise as well so concurrent spawns share that load.
-		const loading = discoverAgentTemplates(this.#resolveTemplateRoots(runtime.cwd, runtime.projectTrusted))
-			.then((discovery) => ({
+		const loading = Promise.all([
+			discoverAgentTemplates(this.#resolveTemplateRoots(runtime.cwd, runtime.projectTrusted)),
+			this.#refreshVirtualModels(),
+		])
+			.then(([discovery]) => ({
 				discovery,
 				snapshot: {
 					templates: createAgentTemplateCatalogue(
@@ -574,21 +588,29 @@ export class ProcessChildSessionFactory {
 		);
 	}
 
+	async #refreshVirtualModels(): Promise<void> {
+		const read = await readWorkflowPolicy(this.#ownerRuntime.services.agentDir);
+		this.#virtualModels = read.ok ? read.snapshot.virtualModels : undefined;
+	}
+
 	#isModelAvailable(model: Readonly<{ provider: string; modelId: string }>): boolean {
-		if (this.#modelExcluded(model) || this.#catalogueModel(model) === undefined) return false;
-		if (!isVirtualModel(model)) return true;
-		// Pi lists every registered virtual model as available. Check its entries now so
-		// a spawn fails before Agent Identity instead of at the child's first request.
-		const definitions = this.#virtualModels?.() ?? {};
-		return Object.hasOwn(definitions, model.modelId)
-			&& definitions[model.modelId]!.some((entry) => this.#isModelAvailable(entry.model));
+		if (this.#modelExcluded(model)) return false;
+		// The child registers Virtual Models from the file itself, so the Owner's
+		// catalogue may not list a name added since its last sync. Check the entries
+		// now so a spawn fails before Agent Identity instead of at the first request.
+		if (isVirtualModel(model)) return this.#firstUsableEntry(model) !== undefined;
+		return this.#catalogueModel(model) !== undefined;
+	}
+
+	#firstUsableEntry(model: Readonly<{ provider: string; modelId: string }>): VirtualModelEntry | undefined {
+		if (this.#virtualModels === undefined || !Object.hasOwn(this.#virtualModels, model.modelId)) return undefined;
+		return requireVirtualModelDefinition(this.#virtualModels, model.modelId)
+			.find((entry) => this.#isModelAvailable(entry.model));
 	}
 
 	/** A preset selection starts on the level of the entry its first request will use. */
 	#presetThinking(model: Readonly<{ provider: string; modelId: string }>): RuntimeThinkingLevel {
-		const definitions = this.#virtualModels?.() ?? {};
-		const entries = Object.hasOwn(definitions, model.modelId) ? definitions[model.modelId]! : [];
-		const entry = entries.find((candidate) => this.#isModelAvailable(candidate.model));
+		const entry = this.#firstUsableEntry(model);
 		// Availability already passed for this virtual model, so an entry exists.
 		if (entry === undefined) throw new Error(`Virtual model ${model.provider}/${model.modelId} has no usable entry`);
 		return entry.thinking;
