@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { parseDocument } from "yaml";
 
 import { parseExcludedModels } from "./model-exclusion.ts";
+import { parseVirtualModels, type VirtualModelDefinitions } from "./virtual-models.ts";
 
 export type WorkflowPolicySnapshot = Readonly<{
 	/** Approximate bound on concurrently working Agent Runs; see ADR 0007. */
@@ -13,6 +14,7 @@ export type WorkflowPolicySnapshot = Readonly<{
 	operationReviewIntervalMs: number;
 	deliveryProgressIntervalMs: number;
 	excludedModels: readonly string[];
+	virtualModels: VirtualModelDefinitions;
 }>;
 
 export const DEFAULT_WORKFLOW_POLICY: WorkflowPolicySnapshot = Object.freeze({
@@ -21,6 +23,7 @@ export const DEFAULT_WORKFLOW_POLICY: WorkflowPolicySnapshot = Object.freeze({
 	operationReviewIntervalMs: 600_000,
 	deliveryProgressIntervalMs: 60_000,
 	excludedModels: Object.freeze([]),
+	virtualModels: Object.freeze({}),
 });
 
 const POLICY_FIELDS = new Set<keyof WorkflowPolicySnapshot>([
@@ -29,6 +32,7 @@ const POLICY_FIELDS = new Set<keyof WorkflowPolicySnapshot>([
 	"operationReviewIntervalMs",
 	"deliveryProgressIntervalMs",
 	"excludedModels",
+	"virtualModels",
 ]);
 const MINIMUM_INTERVAL_MS = 1_000;
 const MAXIMUM_INTERVAL_MS = 2_147_483_647;
@@ -100,6 +104,7 @@ export function parseWorkflowPolicy(source: string): WorkflowPolicySnapshot {
 			policyValueOrDefault(parsed, "operationReviewIntervalMs"),
 		),
 		excludedModels: parseExcludedModels(policyValueOrDefault(parsed, "excludedModels")),
+		virtualModels: parseVirtualModels(policyValueOrDefault(parsed, "virtualModels")),
 	});
 	return snapshot;
 }
@@ -211,6 +216,9 @@ function assertCompleteWorkflowPolicy(snapshot: WorkflowPolicySnapshot): void {
 	parseBoundedInterval(snapshot.operationReviewIntervalMs);
 	parseBoundedInterval(snapshot.deliveryProgressIntervalMs, "deliveryProgressIntervalMs");
 	parseExcludedModels(snapshot.excludedModels);
+	if (!Object.isFrozen(snapshot.virtualModels)) {
+		throw new Error("Workflow Policy virtualModels must be immutable");
+	}
 	if (!Object.isFrozen(snapshot)) {
 		throw new Error("Workflow Policy snapshots must be immutable");
 	}

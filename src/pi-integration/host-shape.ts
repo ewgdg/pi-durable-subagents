@@ -26,6 +26,8 @@ export function assertExtensionApiShape(value: unknown): asserts value is Extens
 		"appendEntry",
 		"getActiveTools",
 		"setActiveTools",
+		"registerVirtualModel",
+		"unregisterVirtualModel",
 	] as const) {
 		requireFunction(api, member, `ExtensionAPI.${member}`);
 	}
@@ -50,6 +52,7 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"createAgentSessionServices",
 		"createAgentSessionFromServices",
 		"defineTool",
+		"getAgentDir",
 		"getPackageDir",
 		"hasTrustRequiringProjectResources",
 		"shouldCompact",

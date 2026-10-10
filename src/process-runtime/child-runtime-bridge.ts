@@ -20,6 +20,7 @@ import {
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { registerSessionStartup } from "../pi-integration/session-startup.ts";
+import { VirtualModelRegistrar } from "../pi-integration/virtual-model-registration.ts";
 import { installAgentActivityDock } from "../presentation/agent-activity-surface.ts";
 import {
 	type ParticipantLifecycleHandlers,
@@ -76,6 +77,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	let connection: ChildControlConnection | undefined;
 	registerSessionStartup(pi);
 	registerChildBindingHooks(pi, () => connection);
+	// The Owner launches children with PI_CODING_AGENT_DIR set to its own agent
+	// directory, and only this bridge is loaded, so the child registers its own.
+	await VirtualModelRegistrar.create(pi, hostPi.getAgentDir());
 	const resolveAgentLabel = (agentId: string) =>
 		connection?.currentBinding?.activity.agentLabel(agentId);
 	registerMessageDeliveryRenderer(pi, resolveAgentLabel);

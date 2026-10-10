@@ -53,6 +53,7 @@ import {
 } from "./child-runtime-preparation.ts";
 import { workflowSessionDirectory } from "./workflow-session-directory.ts";
 import { isModelExcluded } from "../policy/model-exclusion.ts";
+import { isVirtualModel, type VirtualModelDefinitions } from "../policy/virtual-models.ts";
 
 const COORDINATION_EXTENSION_PREFIXES = [
 	"<inline:pi-durable-subagents-agent:",
@@ -115,6 +116,7 @@ export class ProcessChildSessionFactory {
 		| undefined;
 	readonly #resolveAgent: (agentId: string) => AgentRecord | undefined;
 	readonly #modelExclusions: (() => readonly string[]) | undefined;
+	readonly #virtualModels: (() => VirtualModelDefinitions) | undefined;
 	readonly #ownerRequestHandlers: (
 		role: AgentRuntimeRole,
 		agentId: string,
@@ -134,6 +136,7 @@ export class ProcessChildSessionFactory {
 		resolveAgent(agentId: string): AgentRecord | undefined;
 		/** Current user policy exclusions; read per preparation so a reload applies prospectively. */
 		modelExclusions?(): readonly string[];
+		virtualModels?(): VirtualModelDefinitions;
 		ownerRequestHandlers(
 			role: AgentRuntimeRole,
 			agentId: string,
@@ -148,6 +151,7 @@ export class ProcessChildSessionFactory {
 		this.#templateRoots = options.templateRoots;
 		this.#resolveAgent = options.resolveAgent;
 		this.#modelExclusions = options.modelExclusions;
+		this.#virtualModels = options.virtualModels;
 		this.#ownerRequestHandlers = options.ownerRequestHandlers;
 		this.#interaction = options.interaction;
 	}
@@ -569,7 +573,13 @@ export class ProcessChildSessionFactory {
 	}
 
 	#isModelAvailable(model: Readonly<{ provider: string; modelId: string }>): boolean {
-		return !this.#modelExcluded(model) && this.#catalogueModel(model) !== undefined;
+		if (this.#modelExcluded(model) || this.#catalogueModel(model) === undefined) return false;
+		if (!isVirtualModel(model)) return true;
+		// Pi lists every registered virtual model as available. Check its entries now so
+		// a spawn fails before Agent Identity instead of at the child's first request.
+		const definitions = this.#virtualModels?.() ?? {};
+		return Object.hasOwn(definitions, model.modelId)
+			&& definitions[model.modelId]!.some((entry) => this.#isModelAvailable(entry.model));
 	}
 
 	#clampThinking(

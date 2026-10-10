@@ -21,6 +21,7 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 600_000,
 		excludedModels: [],
+		virtualModels: {},
 	});
 	assert.equal(Object.isFrozen(defaults), true);
 
@@ -114,6 +115,7 @@ test("Workflow Policy loads only the exact optional user file", async (t) => {
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_200,
 		excludedModels: [],
+		virtualModels: {},
 	});
 });
 
@@ -133,6 +135,7 @@ test("Workflow Policy reload publication replaces or preserves one whole snapsho
 		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
 		excludedModels: [],
+		virtualModels: {},
 	});
 });
 
