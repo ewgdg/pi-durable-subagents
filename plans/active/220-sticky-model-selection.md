@@ -46,11 +46,15 @@ Pi saves a new session's starting model and thinking into the session and restor
 ## Progress
 
 - [x] Investigation and design (user chose fallback for unusable recorded models).
+- [x] Implementation (3f4993b) and docs + ADR 0009 (98ece34). Focused fast + process tests pass (virtual-models, child-runtime-preparation, agent-templates, process-child-session-factory, agent-spawn, cold-host-recovery).
+- [ ] Independent blind tests.
+- [ ] Independent review.
 
 ## Decisions
 
 - Keep passing `--model` / `--thinking` (equal to the recorded values) instead of omitting them and letting Pi restore. Rejected omitting: Pi only restores when the session has messages, falls back to the user's settings default instead of the initial values, and does not know `excludedModels`; the host would also lose its exact effective configuration.
 - Preset state uses Pi's router-state entry rather than a new custom entry type: it is Pi's documented per-branch storage for router state.
+- Leaving a preset Virtual Model through `/model` also records explicit mode, so selecting the same name again is explicit as the docs say.
 - Selection = last `model_change` only (not Pi's "last answered physical model" rule): with initial values recorded, every Agent has a `model_change`, and a Virtual Model selection must not collapse to the physical model that answered.
 
 ## Surprises & Discoveries
