@@ -52,16 +52,24 @@ const FAST: VirtualModelDefinitions = {
 type OpenOptions = Readonly<{
 	definitions?: VirtualModelDefinitions;
 	invalidReason?: string;
+	/** The catalogue offered to pickers; defaults to `MODELS`. */
+	models?: VirtualModelConfigSnapshot["availableModels"];
+	/** Terminal height; `resize` changes it later. */
+	rows?: number;
 	persist?: (definitions: VirtualModelDefinitions) => Promise<VirtualModelConfigSnapshot>;
 }>;
 
-function snapshot(definitions: VirtualModelDefinitions): VirtualModelConfigSnapshot {
-	return { availableModels: MODELS, excludedModels: EXCLUDED, virtualModels: definitions };
+function snapshot(
+	definitions: VirtualModelDefinitions,
+	models: VirtualModelConfigSnapshot["availableModels"] = MODELS,
+): VirtualModelConfigSnapshot {
+	return { availableModels: models, excludedModels: EXCLUDED, virtualModels: definitions };
 }
 
 async function openSurface(options: OpenOptions = {}) {
 	let surface: Component | undefined;
-	const tui = { terminal: { rows: 40 }, requestRender() {} } as unknown as TUI;
+	const terminal = { rows: options.rows ?? 40 };
+	const tui = { terminal, requestRender() {} } as unknown as TUI;
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bg: (_color: string, text: string) => text,
@@ -83,13 +91,13 @@ async function openSurface(options: OpenOptions = {}) {
 	} as unknown as ExtensionUIContext;
 	const persisted: VirtualModelDefinitions[] = [];
 	const opened = openVirtualModelConfigSurface(ui, {
-		...snapshot(options.definitions ?? FAST),
+		...snapshot(options.definitions ?? FAST, options.models),
 		...(options.invalidReason === undefined ? {} : { invalidReason: options.invalidReason }),
 		async persist(definitions) {
 			persisted.push(definitions);
 			// Every save must be something the policy file parser reads back.
 			assert.deepEqual(asFile(parseVirtualModels(serializeVirtualModels(definitions))), asFile(definitions));
-			return options.persist ? options.persist(definitions) : snapshot(definitions);
+			return options.persist ? options.persist(definitions) : snapshot(definitions, options.models);
 		},
 	});
 	await settle();
@@ -105,6 +113,7 @@ async function openSurface(options: OpenOptions = {}) {
 		render: () => component().render(100).map(stripTerminalSequences)
 			.map((line) => line.replace(/^│ /u, "").replace(/\s*│$/u, "")).join("\n"),
 		renderFrame: () => component().render(100),
+		resize(rows: number) { terminal.rows = rows; },
 		async press(...keys: string[]) {
 			for (const key of keys) {
 				component().handleInput?.(key);
@@ -500,4 +509,176 @@ test("Escape on the list closes Config", { timeout: 5_000 }, async () => {
 	await surface.opened;
 	assert.equal(surface.closed, true);
 	assert.deepEqual(surface.persisted, []);
+});
+
+const pad = (index: number) => String(index).padStart(2, "0");
+const MANY_MODELS = Array.from({ length: 30 }, (_, index) => ({ provider: "p", modelId: `m${pad(index)}`, name: `Model ${index}` }));
+/** One name with a long entry list, then many short names. */
+const MANY_NAMES: VirtualModelDefinitions = {
+	"a-long": Array.from({ length: 20 }, (_, index) => entry(`p/m${pad(index)}`, "low")),
+	...Object.fromEntries(Array.from({ length: 25 }, (_, index) => [
+		`n${pad(index)}`,
+		[entry(`p/m${pad(index)}`, "low"), entry(`p/m${pad(index + 1)}`, "high")],
+	])),
+};
+const READ_ONLY_REASON = "Workflow Policy must be strict JSON";
+const failingPersist = async (): Promise<VirtualModelConfigSnapshot> => { throw new Error("disk full"); };
+
+/** Pi's overlay height for `maxHeight: "90%"` with 1-row top and bottom margins (pi-tui `resolveOverlayLayout`). */
+function overlayRowBound(terminalRows: number): number {
+	return Math.max(1, Math.min(Math.floor(terminalRows * 0.9), terminalRows - 2));
+}
+
+/** The overlay would cut anything past its bound, so the frame must fit and end with help then the border. */
+function assertFitsOverlay(lines: readonly string[], terminalRows: number, label: string): void {
+	const plain = lines.map(stripTerminalSequences);
+	const bound = overlayRowBound(terminalRows);
+	assert.ok(plain.length <= bound, `${label}: ${plain.length} rows exceed the ${bound}-row overlay of a ${terminalRows}-row terminal\n${plain.join("\n")}`);
+	assert.match(plain.at(-1) ?? "", /^└─+┘$/u, `${label}\n${plain.join("\n")}`);
+	assert.match(plain.at(-2) ?? "", /Esc (back|cancel|done)/u, `${label}: help is not the last content row\n${plain.join("\n")}`);
+}
+
+type ConfigSurface = Awaited<ReturnType<typeof openSurface>>;
+
+/** Walks every Config screen, with and without a message, and returns each screen's frame height. */
+async function visitEveryScreen(surface: ConfigSurface, definitions: VirtualModelDefinitions, terminalRows: number) {
+	const heights: Array<readonly [string, number]> = [];
+	const record = (screen: string) => {
+		const lines = surface.renderFrame();
+		assertFitsOverlay(lines, terminalRows, screen);
+		heights.push([screen, lines.length]);
+	};
+	record("list");
+	if (Object.keys(definitions).length > 0) {
+		await surface.press("d");
+		record("list, delete confirmation");
+		await surface.press(ESCAPE, ENTER);
+		record("definition");
+		await surface.press("J");
+		record("definition, save error");
+		await surface.backToList();
+	}
+	await surface.press(...downToNewRow(definitions), ENTER);
+	record("new name");
+	await surface.type("_X");
+	await surface.press(ENTER);
+	record("new name, refused");
+	await surface.press(BACKSPACE, BACKSPACE);
+	await surface.type("zz-new");
+	await surface.press(ENTER);
+	record("model picker");
+	await surface.type("m1");
+	record("model picker, searching");
+	await surface.type("zzz");
+	record("model picker, no matches");
+	await surface.press(BACKSPACE, BACKSPACE, BACKSPACE, BACKSPACE, BACKSPACE, ENTER);
+	assert.match(surface.render().split("\n")[1] ?? "", /› zz-new › \S+\//u, "the thinking picker should show");
+	record("thinking picker");
+	await surface.press(ENTER);
+	record("thinking picker, save error");
+	return heights;
+}
+
+async function visitReadOnlyScreens(surface: ConfigSurface, terminalRows: number) {
+	const heights: Array<readonly [string, number]> = [];
+	const record = (screen: string) => {
+		const lines = surface.renderFrame();
+		assertFitsOverlay(lines, terminalRows, screen);
+		heights.push([screen, lines.length]);
+	};
+	record("read-only list");
+	await surface.press(ENTER);
+	record("read-only definition");
+	await surface.press("d");
+	record("read-only definition, editing disabled");
+	return heights;
+}
+
+function assertFocused(text: string, focused: RegExp, label: string): void {
+	assert.match(text, focused, `${label}: the focused row is not visible\n${text}`);
+}
+
+test("every Config screen keeps one height that fits the overlay, whatever the content and messages", { timeout: 20_000 }, async (t) => {
+	const variants = [
+		["no names", {}, MODELS],
+		["one short name", FAST, MODELS],
+		["many names, a long entry list, a long catalogue", MANY_NAMES, MANY_MODELS],
+	] as const;
+	for (const rows of [40, 24, 16, 13, 12, 11, 10, 8]) {
+		await t.test(`${rows}-row terminal`, async () => {
+			const heights: Array<readonly [string, number]> = [];
+			for (const [variant, definitions, models] of variants) {
+				const surface = await openSurface({ rows, definitions, models, persist: failingPersist });
+				for (const [screen, height] of await visitEveryScreen(surface, definitions, rows)) heights.push([`${variant}: ${screen}`, height]);
+			}
+			// The read-only banner is part of that session's fixed chrome, so it is compared on its own.
+			const readOnly = await openSurface({ rows, definitions: MANY_NAMES, models: MANY_MODELS, invalidReason: READ_ONLY_REASON });
+			for (const session of [heights, await visitReadOnlyScreens(readOnly, rows)]) {
+				const expected = session[0]![1];
+				assert.deepEqual(session.filter(([, height]) => height !== expected), [], `screens differ from the first screen's ${expected} rows`);
+			}
+		});
+	}
+});
+
+test("a resize changes the Config height and keeps the focused row and picker selections", { timeout: 10_000 }, async () => {
+	const surface = await openSurface({ rows: 40, definitions: MANY_NAMES, models: MANY_MODELS });
+	const resizes = [14, 12, 30];
+	const checkAcrossResizes = (focused: RegExp, screen: string) => {
+		const heights = new Map<number, number>();
+		for (const rows of [...resizes, 40]) {
+			surface.resize(rows);
+			assertFitsOverlay(surface.renderFrame(), rows, `${screen} at ${rows} rows`);
+			assertFocused(surface.render(), focused, `${screen} at ${rows} rows`);
+			heights.set(rows, surface.renderFrame().length);
+		}
+		assert.notEqual(heights.get(14), heights.get(40), `${screen}: resizing from 40 to 14 rows must change the height`);
+	};
+
+	// The 21st name: a-long, then n00..n19.
+	await surface.press(...Array.from({ length: 20 }, () => DOWN));
+	checkAcrossResizes(/^→ n19\b/mu, "list");
+
+	await surface.press(ENTER, "a", ...Array.from({ length: 15 }, () => DOWN));
+	checkAcrossResizes(/^→ p\/m15\b/mu, "model picker");
+
+	await surface.press(ENTER);
+	assert.match(surface.render().split("\n")[1] ?? "", /p\/m15/u, "the picked model is the one focused before resizing");
+	for (let step = 0; step < RUNTIME_THINKING_LEVELS.length && !/^→ max\b/mu.test(surface.render()); step++) await surface.press(DOWN);
+	checkAcrossResizes(/^→ max\b/mu, "thinking picker");
+	await surface.press(ENTER);
+	assert.deepEqual(asFile(surface.persisted.at(-1)!).n19, ["p/m19 low", "p/m20 high", "p/m15 max"]);
+});
+
+test("long Config lists scroll so the focused row stays visible to the end and back", { timeout: 15_000 }, async () => {
+	const rows = 16;
+	const names = Object.keys(MANY_NAMES);
+	const cases = [
+		{
+			screen: "list",
+			enter: [] as string[],
+			focused: [...names.map((name) => new RegExp(`^→ ${name}\\b`, "mu")), /^→ \+ New virtual model/mu],
+		},
+		{
+			screen: "definition",
+			enter: [ENTER],
+			focused: [...MANY_NAMES["a-long"]!.map((_, index) => new RegExp(`^→ ${index + 1}\\s+p/m${pad(index)}\\b`, "mu")), /^→ \+ Add entry/mu],
+		},
+		{
+			screen: "model picker",
+			enter: [ENTER, "a"],
+			focused: MANY_MODELS.map(({ modelId }) => new RegExp(`^→ p/${modelId}\\b`, "mu")),
+		},
+	];
+	for (const { screen, enter, focused } of cases) {
+		const surface = await openSurface({ rows, definitions: MANY_NAMES, models: MANY_MODELS });
+		await surface.press(...enter);
+		const height = surface.renderFrame().length;
+		const path = [...focused.keys(), ...[...focused.keys()].reverse().slice(1)];
+		for (const [step, index] of path.entries()) {
+			if (step > 0) await surface.press(index > path[step - 1]! ? DOWN : "\x1b[A");
+			assertFocused(surface.render(), focused[index]!, `${screen}, row ${index + 1} of ${focused.length}`);
+			assert.equal(surface.renderFrame().length, height, `${screen}: scrolling must not change the height`);
+		}
+	}
 });

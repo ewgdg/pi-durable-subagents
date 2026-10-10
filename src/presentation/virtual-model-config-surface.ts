@@ -27,7 +27,17 @@ import {
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
-import { framePanel } from "./overlay-frame.ts";
+import {
+	fitPanelContent,
+	fitRows,
+	framePanel,
+	isBlankLine,
+	maximumPanelRows,
+	PANEL_FRAME_ROWS,
+	PANEL_OVERLAY_OPTIONS,
+	SCROLL_INDICATOR_ROWS,
+	scrollWindow,
+} from "./overlay-frame.ts";
 
 const MAXIMUM_NAME_COLUMNS = 20;
 const MAXIMUM_ID_COLUMNS = 44;
@@ -35,8 +45,24 @@ const MAXIMUM_PICKER_ROWS = 8;
 const MINIMUM_PICKER_ID_COLUMNS = 24;
 /** Leaves room for the `[in list]` / `[excluded]` badge within the 80-column overlay. */
 const MAXIMUM_PICKER_ID_COLUMNS = 64;
-/** Rows around the picker: borders, title, search, blank lines, status, and help. */
-const PICKER_CHROME_ROWS = 10;
+/** The search input and the gap below it. */
+const PICKER_SEARCH_ROWS = 2;
+/** The tallest screen, the model picker, sets the body height of every screen. */
+const MAXIMUM_BODY_ROWS = PICKER_SEARCH_ROWS + MAXIMUM_PICKER_ROWS + SCROLL_INDICATOR_ROWS;
+/**
+ * Keeps at least one picker row under the search input; on terminals too short
+ * for it, blank lines go first and the help line stays (see fitPanelContent).
+ */
+const MINIMUM_BODY_ROWS = PICKER_SEARCH_ROWS + 1 + SCROLL_INDICATOR_ROWS;
+/** The status row and help stay visible when a short terminal clips the body. */
+const FOOTER_ROWS = 2;
+/** Title, subtitle, the gaps around the body, the reserved status row, and help. */
+const CHROME_ROWS = 2 + 2 + 1 + 1;
+const INVALID_NOTICE_ROWS = 2;
+/** The focused name's detail: its heading and up to three entries. */
+const MAXIMUM_DETAIL_ROWS = 4;
+/** Short terminals keep this many list rows before showing any detail. */
+const MINIMUM_LIST_ROWS = 3;
 const ENTRY_SEPARATOR = " → ";
 /** A new name has no previous level to keep, so its first entry starts mid-range. */
 const NEW_ENTRY_THINKING: RuntimeThinkingLevel = "medium";
@@ -69,12 +95,7 @@ export function openVirtualModelConfigSurface(
 		(tui, theme, _keybindings, done) => new VirtualModelConfigSurface(tui, theme, options, done),
 		{
 			overlay: true,
-			overlayOptions: {
-				anchor: "center",
-				width: 80,
-				maxHeight: "90%",
-				margin: { top: 1, bottom: 1 },
-			},
+			overlayOptions: PANEL_OVERLAY_OPTIONS,
 		},
 	);
 }
@@ -89,8 +110,8 @@ type Screen =
 	| Readonly<{ kind: "list" }>
 	| Readonly<{ kind: "definition"; name: string }>
 	| Readonly<{ kind: "name"; renaming: string | undefined; input: Input }>
-	| Readonly<{ kind: "model"; target: EntryTarget; search: Input; list: SelectList }>
-	| Readonly<{ kind: "thinking"; target: EntryTarget; model: ModelReference; list: SelectList }>;
+	| Readonly<{ kind: "model"; target: EntryTarget; search: Input; list: SelectList; listRows: number }>
+	| Readonly<{ kind: "thinking"; target: EntryTarget; model: ModelReference; list: SelectList; listRows: number }>;
 
 type Status = Readonly<{ tone: "dim" | "warning" | "error"; text: string }>;
 
@@ -148,7 +169,10 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		const line = (text: string) => truncateToWidth(text, width, "");
 		const { invalidReason } = this.#config;
 		const status = this.#status;
-		return [
+		const bodyRows = this.#bodyRows();
+		// Resize changes the pickers' visible rows as well as the body.
+		this.#fitPickerToBody(bodyRows);
+		return fitPanelContent([
 			line(theme.fg("accent", theme.bold(this.#title()))),
 			line(theme.fg("muted", `Named model lists, usable as ${VIRTUAL_MODEL_PROVIDER}/<name>.`)),
 			...(invalidReason === undefined ? [] : [
@@ -156,11 +180,13 @@ class VirtualModelConfigSurface implements Component, Focusable {
 				line(theme.fg("error", invalidReason)),
 			]),
 			"",
-			...this.#renderScreen(width).map(line),
+			// Every screen shares one terminal-bounded body, so moving between them,
+			// scrolling, or a status never moves the centered frame.
+			...fitRows(this.#renderScreen(width, bodyRows).map(line), bodyRows),
 			"",
-			...(status === undefined ? [] : [line(theme.fg(status.tone, status.text))]),
+			status === undefined ? "" : line(theme.fg(status.tone, status.text)),
 			line(theme.fg("dim", `  ${this.#help()}`)),
-		];
+		], maximumPanelRows(this.#tui.terminal.rows) - PANEL_FRAME_ROWS, FOOTER_ROWS, isBlankLine);
 	}
 
 	invalidate(): void {
@@ -227,7 +253,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		}
 	}
 
-	#renderList(width: number): string[] {
+	#renderList(width: number, bodyRows: number): string[] {
 		const theme = this.#theme;
 		const names = this.#names();
 		const nameColumns = Math.min(
@@ -254,19 +280,32 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		if (this.#editable()) {
 			rows.push(`${this.#pointer(this.#listFocus === names.length)}${theme.fg("accent", "+ New virtual model")}`);
 		}
+		// Short terminals trade detail rows for list rows; the list window keeps its
+		// size as focus moves, whether or not the focused row has detail.
+		const detailRows = Math.max(0, Math.min(MAXIMUM_DETAIL_ROWS, bodyRows - MINIMUM_LIST_ROWS - 1));
+		const listRows = bodyRows - (detailRows > 0 ? detailRows + 1 : 0);
+		// The empty-state row comes first and is not focusable.
+		const focusedRow = names.length === 0 ? this.#listFocus + 1 : this.#listFocus;
+		const visibleRows = scrollWindow(rows, focusedRow, listRows, (text) => theme.fg("muted", text));
 		const focusedName = names[this.#listFocus];
-		return focusedName === undefined ? rows : [...rows, "", ...this.#renderDetail(focusedName)];
+		return focusedName === undefined || detailRows === 0
+			? visibleRows
+			: [...fitRows(visibleRows, listRows), "", ...this.#renderDetail(focusedName, detailRows)];
 	}
 
-	#renderDetail(name: string): string[] {
+	/** The focused name's full ids, ending in `+N more` when they exceed `maximumRows`. */
+	#renderDetail(name: string, maximumRows: number): string[] {
 		const entries = this.#entries(name);
 		const theme = this.#theme;
+		const shownEntries = entries.length < maximumRows ? entries.length : Math.max(0, maximumRows - 2);
+		const hiddenEntries = entries.length - shownEntries;
 		return [
 			theme.fg("dim", `  ${VIRTUAL_MODEL_PROVIDER}/${name} · ${entries.length} entr${entries.length === 1 ? "y" : "ies"}`),
-			...entries.map((entry, index) =>
+			...entries.slice(0, shownEntries).map((entry, index) =>
 				theme.fg("dim", `  ${index + 1}  ${modelIdentity(entry.model)} · ${entry.thinking}`) +
 					this.#usabilityMarker(entry.model)),
-		];
+			...(hiddenEntries > 0 ? [theme.fg("dim", `  +${hiddenEntries} more`)] : []),
+		].slice(0, maximumRows);
 	}
 
 	// Definition
@@ -328,7 +367,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		}
 	}
 
-	#renderDefinition(name: string): string[] {
+	#renderDefinition(name: string, bodyRows: number): string[] {
 		const theme = this.#theme;
 		const entries = this.#entries(name);
 		const idColumns = Math.min(
@@ -345,7 +384,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		if (this.#editable()) {
 			rows.push(`${this.#pointer(this.#entryFocus === entries.length)}${theme.fg("accent", "+ Add entry")}`);
 		}
-		return rows;
+		return scrollWindow(rows, this.#entryFocus, bodyRows, (text) => theme.fg("muted", text));
 	}
 
 	// Name input
@@ -410,7 +449,12 @@ class VirtualModelConfigSurface implements Component, Focusable {
 	#openModelPicker(target: EntryTarget, focus?: ModelReference): void {
 		const search = new Input({ prompt: "Search  ", placeholder: "model or provider" });
 		const current = target.kind === "replace" ? this.#entries(target.name)[target.index]?.model : undefined;
-		this.#screen = { kind: "model", target, search, list: this.#modelList(target, "", focus ?? current) };
+		const focusModel = focus ?? current;
+		const listRows = this.#modelPickerRows(this.#bodyRows());
+		this.#screen = {
+			kind: "model", target, search, listRows,
+			list: this.#modelList(target, "", listRows, focusModel === undefined ? undefined : modelIdentity(focusModel)),
+		};
 		this.#syncInputFocus();
 	}
 
@@ -422,7 +466,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 			.map((entry) => modelIdentity(entry.model)));
 	}
 
-	#modelList(target: EntryTarget, query: string, focus?: ModelReference): SelectList {
+	#modelList(target: EntryTarget, query: string, listRows: number, focusIdentity?: string): SelectList {
 		const taken = this.#takenModels(target);
 		const models = [...this.#config.availableModels].sort((left, right) =>
 			modelIdentity(left).localeCompare(modelIdentity(right)));
@@ -433,13 +477,13 @@ class VirtualModelConfigSurface implements Component, Focusable {
 				label: modelIdentity(model),
 				description: this.#modelBadge(model, taken),
 			})),
-			this.#pickerRows(),
+			listRows,
 			this.#selectListTheme(),
 			// SelectList cuts labels at 32 columns by default; model ids run longer.
 			{ minPrimaryColumnWidth: MINIMUM_PICKER_ID_COLUMNS, maxPrimaryColumnWidth: MAXIMUM_PICKER_ID_COLUMNS },
 		);
-		if (focus !== undefined) {
-			list.setSelectedIndex(Math.max(0, matches.findIndex((model) => modelIdentity(model) === modelIdentity(focus))));
+		if (focusIdentity !== undefined) {
+			list.setSelectedIndex(Math.max(0, matches.findIndex((model) => modelIdentity(model) === focusIdentity)));
 		}
 		return list;
 	}
@@ -474,20 +518,26 @@ class VirtualModelConfigSurface implements Component, Focusable {
 			return;
 		}
 		screen.search.handleInput(data);
-		this.#screen = { ...screen, list: this.#modelList(target, screen.search.getValue()) };
+		this.#screen = { ...screen, list: this.#modelList(target, screen.search.getValue(), screen.listRows) };
 	}
 
 	// Thinking picker
 
 	#openThinkingPicker(target: EntryTarget, model: ModelReference): void {
+		const listRows = this.#thinkingPickerRows(this.#bodyRows());
+		const list = this.#thinkingList(listRows, RUNTIME_THINKING_LEVELS.indexOf(this.#initialThinking(target)));
+		this.#screen = { kind: "thinking", target, model, list, listRows };
+		this.#syncInputFocus();
+	}
+
+	#thinkingList(listRows: number, selectedIndex: number): SelectList {
 		const list = new SelectList(
 			RUNTIME_THINKING_LEVELS.map((level) => ({ value: level, label: level })),
-			RUNTIME_THINKING_LEVELS.length,
+			listRows,
 			this.#selectListTheme(),
 		);
-		list.setSelectedIndex(RUNTIME_THINKING_LEVELS.indexOf(this.#initialThinking(target)));
-		this.#screen = { kind: "thinking", target, model, list };
-		this.#syncInputFocus();
+		list.setSelectedIndex(selectedIndex);
+		return list;
 	}
 
 	/** Editing keeps the entry's level; a new entry starts on the previous entry's level. */
@@ -598,11 +648,11 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		}
 	}
 
-	#renderScreen(width: number): string[] {
+	#renderScreen(width: number, bodyRows: number): string[] {
 		const screen = this.#screen;
 		switch (screen.kind) {
-			case "list": return this.#renderList(width);
-			case "definition": return this.#renderDefinition(screen.name);
+			case "list": return this.#renderList(width, bodyRows);
+			case "definition": return this.#renderDefinition(screen.name, bodyRows);
 			case "name": return this.#renderName(screen, width);
 			case "model": return [
 				...screen.search.render(width),
@@ -632,8 +682,40 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		return focused ? this.#theme.fg("accent", "→ ") : "  ";
 	}
 
-	#pickerRows(): number {
-		return Math.max(1, Math.min(MAXIMUM_PICKER_ROWS, this.#tui.terminal.rows - PICKER_CHROME_ROWS));
+	#bodyRows(): number {
+		const chromeRows = CHROME_ROWS + (this.#config.invalidReason === undefined ? 0 : INVALID_NOTICE_ROWS);
+		return Math.max(MINIMUM_BODY_ROWS, Math.min(
+			MAXIMUM_BODY_ROWS,
+			maximumPanelRows(this.#tui.terminal.rows) - PANEL_FRAME_ROWS - chromeRows,
+		));
+	}
+
+	#modelPickerRows(bodyRows: number): number {
+		return Math.max(1, bodyRows - PICKER_SEARCH_ROWS - SCROLL_INDICATOR_ROWS);
+	}
+
+	/** All levels when they fit; otherwise a scrolling window with its indicator. */
+	#thinkingPickerRows(bodyRows: number): number {
+		return RUNTIME_THINKING_LEVELS.length <= bodyRows
+			? RUNTIME_THINKING_LEVELS.length
+			: Math.max(1, bodyRows - SCROLL_INDICATOR_ROWS);
+	}
+
+	/** SelectList fixes its visible rows at construction, so a resize rebuilds it. */
+	#fitPickerToBody(bodyRows: number): void {
+		const screen = this.#screen;
+		if (screen.kind === "model") {
+			const listRows = this.#modelPickerRows(bodyRows);
+			if (listRows === screen.listRows) return;
+			const list = this.#modelList(screen.target, screen.search.getValue(), listRows, screen.list.getSelectedItem()?.value);
+			this.#screen = { ...screen, list, listRows };
+		} else if (screen.kind === "thinking") {
+			const listRows = this.#thinkingPickerRows(bodyRows);
+			if (listRows === screen.listRows) return;
+			const selected = screen.list.getSelectedItem()?.value;
+			const list = this.#thinkingList(listRows, Math.max(0, RUNTIME_THINKING_LEVELS.findIndex((level) => level === selected)));
+			this.#screen = { ...screen, list, listRows };
+		}
 	}
 
 	#selectListTheme(): SelectListTheme {

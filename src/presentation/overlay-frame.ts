@@ -33,3 +33,75 @@ export function framePanel(
 		border(`└${"─".repeat(innerWidth)}┘`),
 	];
 }
+
+const PANEL_OVERLAY_WIDTH = 80;
+const PANEL_OVERLAY_MARGIN = 1;
+const PANEL_OVERLAY_MAX_HEIGHT_PERCENT = 90;
+/** The top and bottom frame borders. */
+export const PANEL_FRAME_ROWS = 2;
+export const SCROLL_INDICATOR_ROWS = 1;
+
+/** Centered, bounded overlay shared by the `/agents` selector and its panels. */
+export const PANEL_OVERLAY_OPTIONS = {
+	anchor: "center",
+	width: PANEL_OVERLAY_WIDTH,
+	maxHeight: `${PANEL_OVERLAY_MAX_HEIGHT_PERCENT}%`,
+	margin: { top: PANEL_OVERLAY_MARGIN, bottom: PANEL_OVERLAY_MARGIN },
+} as const;
+
+/** The most rows a panel may paint, frame included, so the overlay never clips it. */
+export function maximumPanelRows(terminalRows: number): number {
+	const percentBound = Math.floor(terminalRows * PANEL_OVERLAY_MAX_HEIGHT_PERCENT / 100);
+	const marginBound = terminalRows - PANEL_OVERLAY_MARGIN * 2;
+	return Math.max(PANEL_FRAME_ROWS, Math.min(percentBound, marginBound));
+}
+
+/** Pads or cuts lines to exactly `rows`, so content changes never move the frame. */
+export function fitRows(lines: readonly string[], rows: number): string[] {
+	return Array.from({ length: Math.max(0, rows) }, (_, index) => lines[index] ?? "");
+}
+
+/**
+ * At most `maximumRows` lines: a window centered on the focused line, as pi-tui's
+ * `SelectList` scrolls, with its `(i/n)` indicator when lines overflow.
+ */
+export function scrollWindow(
+	lines: readonly string[],
+	focusIndex: number,
+	maximumRows: number,
+	indicator: (text: string) => string,
+): string[] {
+	if (lines.length <= maximumRows) return [...lines];
+	const visible = Math.max(1, maximumRows - SCROLL_INDICATOR_ROWS);
+	const start = Math.max(0, Math.min(focusIndex - Math.floor(visible / 2), lines.length - visible));
+	const focusNumber = Math.max(0, Math.min(focusIndex, lines.length - 1)) + 1;
+	return [
+		...lines.slice(start, start + visible),
+		indicator(`  (${focusNumber}/${lines.length})`),
+	].slice(0, Math.max(0, maximumRows));
+}
+
+/**
+ * Fits content into `maximumRows` when the terminal is too short for the fixed
+ * layout: drops blank lines from the bottom up first, then clips the body while
+ * keeping the last `footerRows` lines, such as help, visible.
+ */
+export function fitPanelContent<Line>(
+	lines: readonly Line[],
+	maximumRows: number,
+	footerRows: number,
+	isBlank: (line: Line) => boolean,
+): Line[] {
+	const content = [...lines];
+	while (content.length > maximumRows) {
+		const blankLine = content.findLastIndex(isBlank);
+		if (blankLine < 0) break;
+		content.splice(blankLine, 1);
+	}
+	const footer = content.splice(-footerRows);
+	return [...content.slice(0, Math.max(0, maximumRows - footer.length)), ...footer].slice(0, maximumRows);
+}
+
+export function isBlankLine(line: string): boolean {
+	return visibleWidth(line) === 0;
+}

@@ -83,6 +83,8 @@ The menu lists every model the Owner may currently use, plus every stored entry,
 
 Every toggle rewrites this file immediately through a temporary file and rename, then republishes one frozen policy snapshot and refreshes cached Agent Template catalogues. A failed write leaves the previous list in effect and reports the failure inside the menu. Stored identities are never pruned automatically: an entry whose model is absent from the current catalogue stays listed and remains reversible.
 
+Like the `/agents` selector, the menu keeps one terminal-bounded height while you search or a status shows; only a terminal resize changes it.
+
 `/agents models` exists only in the admitted Workflow Owner session. A child Agent's `/agents` command offers only `owner`.
 
 ## Virtual Models
@@ -114,6 +116,7 @@ In the admitted Workflow Owner session, `c` or a click on **Config** in the `/ag
 - Every completed action rewrites this file at once through a temporary file and rename, keeping every other field. A new name is written together with its first entry, and the last entry cannot be deleted, so each step leaves a valid file. A failed write keeps the previous file and shows the error in the editor.
 - Deleting or renaming a name in use is not blocked. The old name becomes an unavailable model: a spawn that names it fails, and a recorded selection on it falls back like any unusable model at the next fresh Runtime (see [Model selection](agent-spawning.md#model-selection)). A running session already on that name fails its next request until another model is selected.
 - While this file is invalid, Config shows the parse error and the Owner's last valid definitions, read-only.
+- Like the `/agents` selector, Config keeps one terminal-bounded height on every screen; only a terminal resize changes it. Long lists scroll around the focused row, and on short terminals the focused name's details shrink first.
 
 ### Thinking
 

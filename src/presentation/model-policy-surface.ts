@@ -16,9 +16,23 @@ import {
 	providerExclusionEntry,
 	type ModelPolicyModel,
 } from "../policy/model-exclusion.ts";
-import { framePanel } from "./overlay-frame.ts";
+import {
+	fitPanelContent,
+	fitRows,
+	framePanel,
+	isBlankLine,
+	maximumPanelRows,
+	PANEL_FRAME_ROWS,
+	PANEL_OVERLAY_OPTIONS,
+	SCROLL_INDICATOR_ROWS,
+	scrollWindow,
+} from "./overlay-frame.ts";
 
 const MAXIMUM_VISIBLE_ROWS = 8;
+/** Title, subtitle, search, the gaps around it and the rows, the reserved status and model-name rows, and help. */
+const CHROME_ROWS = 9;
+/** The status, model-name, and help rows stay visible when a short terminal clips the rows. */
+const FOOTER_ROWS = 3;
 
 export type { ModelPolicyModel } from "../policy/model-exclusion.ts";
 
@@ -119,12 +133,7 @@ export function openModelPolicySurface(
 		(tui, theme, _keybindings, done) => new ModelPolicySurface(tui, theme, options, done),
 		{
 			overlay: true,
-			overlayOptions: {
-				anchor: "center",
-				width: 80,
-				maxHeight: "90%",
-				margin: { top: 1, bottom: 1 },
-			},
+			overlayOptions: PANEL_OVERLAY_OPTIONS,
 		},
 	);
 }
@@ -172,20 +181,19 @@ class ModelPolicySurface implements Component, Focusable {
 	#renderContent(width: number): string[] {
 		const theme = this.#theme;
 		const rows = this.#rows();
-		return [
+		return fitPanelContent([
 			theme.fg("accent", theme.bold("Agent spawn model policy")),
 			theme.fg("muted", "Banned models cannot be used by Agent Templates or agent_spawn."),
 			"",
 			...this.#search.render(width),
 			"",
-			...this.#renderRows(rows, width),
+			// One terminal-bounded height for every search, so the centered frame never moves.
+			...fitRows(this.#renderRows(rows, width), this.#rowBudget()),
 			"",
-			...(this.#status === undefined
-				? []
-				: [theme.fg("warning", truncateToWidth(this.#status, width, ""))]),
-			...this.#renderDetail(rows, width),
+			this.#status === undefined ? "" : theme.fg("warning", truncateToWidth(this.#status, width, "")),
+			this.#renderDetail(rows, width),
 			theme.fg("dim", truncateToWidth(this.#footer(rows), width, "")),
-		];
+		], maximumPanelRows(this.#tui.terminal.rows) - PANEL_FRAME_ROWS, FOOTER_ROWS, isBlankLine);
 	}
 
 	invalidate(): void {
@@ -239,17 +247,8 @@ class ModelPolicySurface implements Component, Focusable {
 	#renderRows(rows: readonly ModelPolicyRow[], width: number): string[] {
 		const theme = this.#theme;
 		if (rows.length === 0) return [theme.fg("muted", "No matching models")];
-		const visible = Math.max(1, Math.min(
-			MAXIMUM_VISIBLE_ROWS,
-			(this.#tui.terminal?.rows ?? MAXIMUM_VISIBLE_ROWS + 8) - 8,
-		));
-		const start = Math.max(0, Math.min(
-			this.#selectedIndex - Math.floor(visible / 2),
-			rows.length - visible,
-		));
-		const end = Math.min(start + visible, rows.length);
-		const lines = rows.slice(start, end).map((row, offset) => {
-			const selected = start + offset === this.#selectedIndex;
+		const lines = rows.map((row, index) => {
+			const selected = index === this.#selectedIndex;
 			const marker = selected ? theme.fg("accent", "→ ") : "  ";
 			const check = row.banned ? "  " : theme.fg("accent", "✓ ");
 			const label = row.kind === "provider" ? `${row.provider}/*` : row.modelId;
@@ -261,18 +260,20 @@ class ModelPolicySurface implements Component, Focusable {
 					: theme.fg("muted", " [unavailable]");
 			return truncateToWidth(`${marker}${check}${styledLabel}${badge}`, width, "");
 		});
-		if (start > 0 || end < rows.length) {
-			lines.push(theme.fg("muted", `  (${this.#selectedIndex + 1}/${rows.length})`));
-		}
-		return lines;
+		return scrollWindow(lines, this.#selectedIndex, this.#rowBudget(), (text) => theme.fg("muted", text));
 	}
 
-	#renderDetail(rows: readonly ModelPolicyRow[], width: number): string[] {
+	#rowBudget(): number {
+		return Math.max(1, Math.min(
+			MAXIMUM_VISIBLE_ROWS + SCROLL_INDICATOR_ROWS,
+			maximumPanelRows(this.#tui.terminal.rows) - PANEL_FRAME_ROWS - CHROME_ROWS,
+		));
+	}
+
+	#renderDetail(rows: readonly ModelPolicyRow[], width: number): string {
 		const selected = rows[this.#selectedIndex];
-		if (!selected || selected.kind === "provider" || selected.name.length === 0) return [];
-		return [
-			this.#theme.fg("muted", truncateToWidth(`  Model Name: ${selected.name}`, width, "")),
-		];
+		if (!selected || selected.kind === "provider" || selected.name.length === 0) return "";
+		return this.#theme.fg("muted", truncateToWidth(`  Model Name: ${selected.name}`, width, ""));
 	}
 
 	#footer(rows: readonly ModelPolicyRow[]): string {
