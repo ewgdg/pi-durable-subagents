@@ -66,4 +66,8 @@ Pi saves a new session's starting model and thinking into the session and restor
 
 ## Outcomes & Retrospective
 
-(pending)
+- Landed in PR #222. Spawn configuration is now only the initial selection; every fresh Runtime launches with the selection recorded in the Agent's session, and an unusable one falls back to re-resolving the raw initial values (Template candidates, Spawn config, current parent) with an Owner warning.
+- Preset thinking moved from process memory and the bootstrap into Pi router state on the session branch (control protocol 14).
+- `"inherit"` is now captured once at spawn: a child no longer follows its parent's later model changes after a restart.
+- Durable decisions live in `docs/agent-spawning.md#model-selection`, `docs/workflow-policy.md`, `GLOSSARY.md` (Recorded Model Selection), and ADR 0009.
+- Retrospective: my focused test list missed the protocol fixtures and a Moderator transcript assertion; the independent review and the full process suite caught them. A protocol bump should always include a search for version fixtures.
