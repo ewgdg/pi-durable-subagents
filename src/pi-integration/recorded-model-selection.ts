@@ -41,10 +41,10 @@ export function readRecordedModelSelection(
 	const modelChange = branch.findLast((entry) => entry.type === "model_change");
 	if (!modelChange) return undefined;
 	const model = { provider: modelChange.provider, modelId: modelChange.modelId };
-	const thinking = branch.findLast((entry) => entry.type === "thinking_level_change")?.thinkingLevel;
-	if (thinking !== undefined && !isRuntimeThinkingLevel(thinking)) {
-		throw new Error(`Recorded thinking level is invalid: ${thinking}`);
-	}
+	// A level this package does not know (a newer Pi, a hand edit) is unusable like an
+	// unavailable model: an ordinary Agent then falls back to its initial values.
+	const recordedThinking = branch.findLast((entry) => entry.type === "thinking_level_change")?.thinkingLevel;
+	const thinking = isRuntimeThinkingLevel(recordedThinking) ? recordedThinking : undefined;
 	return {
 		model,
 		...(thinking === undefined ? {} : { thinking }),

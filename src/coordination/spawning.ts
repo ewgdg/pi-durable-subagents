@@ -186,8 +186,8 @@ export class DefaultChildSpawner {
 		};
 		try {
 			commitChildAgentIdentity(sessionManager, identity);
-			// Pi records a new session's first selection, but a child session already
-			// holds its Identity when Pi opens it. Later Runtimes resume this selection.
+			// The session owns the selection from its first entry, including the Virtual
+			// Model thinking mode Pi never records itself. Later Runtimes resume it.
 			recordModelSelection(sessionManager, prepared.configuration);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;

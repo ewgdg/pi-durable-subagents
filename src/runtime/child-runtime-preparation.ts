@@ -84,8 +84,7 @@ export async function prepareChildRuntime(
 	)
 		? await canonicalFileExtensions(options.parentRuntime.configuration.extensions)
 		: [];
-	const recorded = usableRecordedSelection(options);
-	const resolvedConfiguration = resolveAgentRunConfiguration({
+	const resolveWith = (recorded: RecordedModelSelection | undefined) => resolveAgentRunConfiguration({
 		inherited: {
 			...options.parentRuntime.configuration,
 			extensions: inheritedExtensions,
@@ -98,6 +97,16 @@ export async function prepareChildRuntime(
 		...(options.presetThinking === undefined ? {} : { presetThinking: options.presetThinking }),
 		...(recorded === undefined ? {} : { recorded }),
 	});
+	let recorded = usableRecordedSelection(options);
+	let resolvedConfiguration = resolveWith(recorded);
+	// An inherited model is never excluded, so the fallback can land on the recorded
+	// model itself. The Agent then keeps its recorded thinking level; preset mode needs
+	// a usable entry, which this unusable Virtual Model lacks.
+	const sameModelFallback = recorded === undefined ? sameModelRecordedThinking(options, resolvedConfiguration.model) : undefined;
+	if (sameModelFallback !== undefined) {
+		recorded = sameModelFallback;
+		resolvedConfiguration = resolveWith(recorded);
+	}
 	// Pi owns its shared default and model-capability clamp. Keep an absent
 	// Moderator selection unresolved until Pi starts instead of copying the Owner.
 	const launchConfiguration = usesPiDefaultThinking({ ...options, recorded })
@@ -186,6 +195,20 @@ function usableRecordedSelection(options: Readonly<{
 		return undefined;
 	}
 	return recorded;
+}
+
+function sameModelRecordedThinking(
+	options: Readonly<{ role: AgentRuntimeRole; recorded?: RecordedModelSelection }>,
+	model: ModelReference,
+): RecordedModelSelection | undefined {
+	const { recorded } = options;
+	if (recorded === undefined) return undefined;
+	if (recorded.model.provider !== model.provider || recorded.model.modelId !== model.modelId) return undefined;
+	if (options.role === "ordinary" && recorded.thinking === undefined) return undefined;
+	return {
+		model: recorded.model,
+		...(recorded.thinking === undefined ? {} : { thinking: recorded.thinking }),
+	};
 }
 
 function usesPiDefaultThinking(options: Readonly<{

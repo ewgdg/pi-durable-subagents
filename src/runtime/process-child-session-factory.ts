@@ -196,20 +196,28 @@ export class ProcessChildSessionFactory {
 		parent: AgentRecord;
 		spawnInput: AgentSpawnInput | undefined;
 		creationPreset?: AgentCreationPreset;
-		recorded?: RecordedModelSelection;
+		/** The existing Agent session whose recorded selection a fresh Runtime resumes. */
+		sessionPath?: string;
 	}): Promise<PreparedOrdinaryChildRuntime> {
 		await this.#launchContract.assertCompatible();
 		await this.#refreshVirtualModels();
-		return this.#prepareOrdinaryRun(options, new Set());
+		const { sessionPath, ...prepareOptions } = options;
+		const recorded = sessionPath === undefined ? undefined : recordedSelectionAt(sessionPath);
+		return this.#prepareOrdinaryRun({
+			...prepareOptions,
+			...(recorded === undefined ? {} : { recorded }),
+		}, new Set());
 	}
 
 	async prepareModeratorRun(options: {
 		agentId: string;
 		creationPreset?: AgentCreationPreset;
-		recorded?: RecordedModelSelection;
+		/** The existing Moderator session whose recorded selection a fresh Runtime resumes. */
+		sessionPath?: string;
 	}): Promise<PreparedModeratorRuntime> {
 		await this.#launchContract.assertCompatible();
 		await this.#refreshVirtualModels();
+		const recorded = options.sessionPath === undefined ? undefined : recordedSelectionAt(options.sessionPath);
 		const owner = this.#resolveAgent(this.#ownerIdentity.agentId);
 		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
 		const parentRuntime = await this.#resolveCurrentRuntime(owner, new Set());
@@ -227,7 +235,7 @@ export class ProcessChildSessionFactory {
 			clampThinking: (model, level) => this.#clampThinking(model, level),
 			presetThinking: (model) => this.#presetThinking(model),
 			...(template === undefined ? {} : { template }),
-			...(options.recorded === undefined ? {} : { recorded: options.recorded }),
+			...(recorded === undefined ? {} : { recorded }),
 		});
 	}
 
@@ -252,15 +260,15 @@ export class ProcessChildSessionFactory {
 		const host = AgentRuntimeSupervisor.createChild({
 			agentId: identity.agentId,
 			startSession: async () => {
-				const prepared = firstPreparation ?? await this.#prepareKeepingSelection(
+				const prepared = firstPreparation ?? await this.#keepSelectionRecorded(
 					identity,
 					sessionPath,
-					(recorded) => this.prepareOrdinaryRun({
+					await this.prepareOrdinaryRun({
 						agentId: identity.agentId,
 						parent,
 						spawnInput,
 						creationPreset: identity.creationPreset,
-						...(recorded === undefined ? {} : { recorded }),
+						sessionPath,
 					}),
 				);
 				firstPreparation = undefined;
@@ -296,13 +304,13 @@ export class ProcessChildSessionFactory {
 		const host = AgentRuntimeSupervisor.createChild({
 			agentId: identity.agentId,
 			startSession: async () => {
-				const prepared = firstPreparation ?? await this.#prepareKeepingSelection(
+				const prepared = firstPreparation ?? await this.#keepSelectionRecorded(
 					identity,
 					sessionPath,
-					(recorded) => this.prepareModeratorRun({
+					await this.prepareModeratorRun({
 						agentId: identity.agentId,
 						creationPreset: identity.creationPreset,
-						...(recorded === undefined ? {} : { recorded }),
+						sessionPath,
 					}),
 				);
 				firstPreparation = undefined;
@@ -505,7 +513,7 @@ export class ProcessChildSessionFactory {
 		try {
 			// A dormant parent contributes the selection it would resume with. Its
 			// session is only read here; its own next Runtime records any fallback.
-			const recorded = readRecordedModelSelection(record.transcript.inspect().activeBranch);
+			const recorded = recordedSelectionAt(record.transcript);
 			const prepared = await this.#prepareOrdinaryRun({
 				agentId: record.identity.agentId,
 				parent,
@@ -524,18 +532,15 @@ export class ProcessChildSessionFactory {
 
 	/**
 	 * A fresh Runtime resumes the selection its session records. When that is missing
-	 * or no longer usable, preparation falls back to the initial values, which become
+	 * or no longer usable, preparation fell back to the initial values, which become
 	 * the recorded selection before launch.
 	 */
-	async #prepareKeepingSelection<Prepared extends PreparedChildRuntime>(
+	#keepSelectionRecorded<Prepared extends PreparedChildRuntime>(
 		identity: ChildAgentIdentity | ModeratorIdentity,
 		sessionPath: string,
-		prepare: (recorded: RecordedModelSelection | undefined) => Promise<Prepared>,
-	): Promise<Prepared> {
-		const recorded = readRecordedModelSelection(
-			transcriptFromSessionFile(sessionPath).inspect().activeBranch,
-		);
-		const prepared = await prepare(recorded);
+		prepared: Prepared,
+	): Prepared {
+		const recorded = recordedSelectionAt(sessionPath);
 		const { model, thinking, presetThinking } = prepared.configuration;
 		const selection: RecordedModelSelection = {
 			model,
@@ -692,6 +697,11 @@ export class ProcessChildSessionFactory {
 			path === INLINE_PUBLIC_EXTENSION_PATH ||
 			COORDINATION_EXTENSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 	}
+}
+
+function recordedSelectionAt(session: string | AgentRecord["transcript"]): RecordedModelSelection | undefined {
+	const transcript = typeof session === "string" ? transcriptFromSessionFile(session) : session;
+	return readRecordedModelSelection(transcript.inspect().activeBranch);
 }
 
 function requireAgentTemplateSnapshot(
