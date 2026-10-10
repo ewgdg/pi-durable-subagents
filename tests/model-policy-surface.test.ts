@@ -11,7 +11,7 @@ import type {
 	Component,
 	TUI,
 } from "@earendil-works/pi-tui";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import {
 	modelPolicyRows,
@@ -229,6 +229,26 @@ test("a refused write keeps the previous state and reports the failure", async (
 	await settle();
 	assert.equal(attempts, 2);
 	assert.doesNotMatch(lineWith(harness.component, "gpt-5.6-luna"), /✓/);
+
+	harness.component.handleInput?.("\x1b");
+	await opened;
+});
+
+test("every panel row is boxed at the full width so text behind never shows through", async () => {
+	const harness = surfaceHarness();
+	const opened = openModelPolicySurface(harness.ui, {
+		availableModels: MODELS,
+		excludedModels: [],
+		async persist(entries) { return entries; },
+	});
+	await Promise.resolve();
+
+	const lines = harness.component.render(100);
+	assert.ok(lines.every((line) => visibleWidth(line) === 100), lines.join("\n"));
+	const plain = lines.map(stripTerminalSequences);
+	assert.match(plain[0] ?? "", /^┌─+┐$/u);
+	assert.match(plain.at(-1) ?? "", /^└─+┘$/u);
+	assert.ok(plain.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│")), plain.join("\n"));
 
 	harness.component.handleInput?.("\x1b");
 	await opened;
