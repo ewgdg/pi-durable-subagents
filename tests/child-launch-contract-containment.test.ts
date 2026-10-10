@@ -165,8 +165,8 @@ test("new child bridge rejects legacy producers and malformed JSON without expos
 	};
 	for (const [content, expected, remedy] of [
 		// This error is authored inside the child, so a contract disagreement must name the Owner host it needs.
-		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 12, the received bootstrap descriptor is version 7/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
-		[JSON.stringify({ ...legacy, protocolVersion: 12 }), /schema_drift.*missing descriptor fields: interaction, excludedTools/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
+		[JSON.stringify(legacy), /protocol_mismatch: the loaded child launch contract is version 13, the received bootstrap descriptor is version 7/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
+		[JSON.stringify({ ...legacy, protocolVersion: 13 }), /schema_drift.*missing descriptor fields: interaction, excludedTools/, /Stop child and Moderator launches.*Restart the Pi host that runs the Workflow Owner/],
 		// A handoff defect involves no host-wide block, so it asks for a relaunch instead.
 		['{"connectionToken":"SECRET-TOKEN", invalid}', /descriptor could not be read as JSON/, /^control_bootstrap_invalid: descriptor could not be read as JSON\. Relaunch this Agent/],
 	] as const) {

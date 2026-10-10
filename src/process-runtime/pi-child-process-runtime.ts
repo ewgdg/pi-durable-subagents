@@ -233,6 +233,9 @@ export class PiChildProcessRuntime {
 				// The child removes these names from its own runtime default surface.
 				excludedTools: [...options.configuration.excludeTools],
 				expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),
+				...(options.configuration.presetThinking
+					? { presetVirtualModel: options.configuration.model.modelId }
+					: {}),
 			};
 			validateChildProcessBootstrap(bootstrap);
 			if (options.configuration.systemPrompt !== undefined) {

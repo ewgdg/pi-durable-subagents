@@ -10,6 +10,7 @@ import type {
 	WorkflowCoordinator,
 } from "../coordination/workflow-coordinator.ts";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
+import type { VirtualModelRegistrar } from "../pi-integration/virtual-model-registration.ts";
 import type { WorkflowInteraction } from "../pi-integration/workflow-interaction.ts";
 import {
 	installOwnerSettlementParker,
@@ -58,6 +59,7 @@ export async function initializeOwnerWorkflow(options: {
 	interaction: WorkflowInteraction;
 	entryModulePath: string;
 	constructWorkflowCoordinator: ConstructWorkflowCoordinator;
+	virtualModels: VirtualModelRegistrar;
 	event: SessionStartEvent;
 	onOwnerIdentified(): void;
 }): Promise<(() => OrdinaryAgentCoordinatorView) | undefined> {
@@ -83,6 +85,9 @@ export async function initializeOwnerWorkflow(options: {
 		// Pi renders service diagnostics only at startup; say which policy stays in effect.
 		ctx.ui.notify(`${initialPolicy.diagnostic.message}. Using the ${existing ? "previous" : "default"} Workflow Policy.`, "warning");
 	}
+	// The factory registered names from the default agent directory; the runtime's own
+	// directory is authoritative, and a reload may have added or removed names.
+	await options.virtualModels.sync(runtime.services.agentDir);
 	const policy = new WorkflowPolicyStore(initialPolicy.ok
 		? initialPolicy.snapshot : existing?.policy.current() ?? DEFAULT_WORKFLOW_POLICY);
 	// Admission always rebuilds projections, including when the host loader retains modules.

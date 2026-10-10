@@ -20,6 +20,14 @@ export type RuntimeThinkingLevel = ThinkingLevel;
 
 export type ModelReference = Readonly<{ provider: string; modelId: string }>;
 
+/**
+ * A candidate thinking choice that defers to each Virtual Model entry's own level.
+ * Valid only next to a `virtual/<name>` model id.
+ */
+export const PRESET_THINKING = "preset";
+
+export type CandidateThinking = RuntimeThinkingLevel | typeof PRESET_THINKING;
+
 export type InheritableRuntimeConfiguration = Readonly<{
 	cwd: string;
 	model: ModelReference;
@@ -28,6 +36,10 @@ export type InheritableRuntimeConfiguration = Readonly<{
 }>;
 
 const RUNTIME_THINKING_LEVEL_SET = new Set<RuntimeThinkingLevel>(RUNTIME_THINKING_LEVELS);
+
+export function isCandidateThinking(value: unknown): value is CandidateThinking {
+	return value === PRESET_THINKING || isRuntimeThinkingLevel(value);
+}
 
 export function isRuntimeThinkingLevel(value: unknown): value is RuntimeThinkingLevel {
 	return typeof value === "string" && RUNTIME_THINKING_LEVEL_SET.has(

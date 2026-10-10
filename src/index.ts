@@ -24,6 +24,7 @@ import {
 } from "./pi-integration/host-shape.ts";
 import { registerHerdrQuestionAttention } from "./pi-integration/herdr-question-attention.ts";
 import { registerSessionStartup } from "./pi-integration/session-startup.ts";
+import { VirtualModelRegistrar } from "./pi-integration/virtual-model-registration.ts";
 import { installInteractiveHostBridge } from "./pi-integration/interactive-host-bridge.ts";
 import { workflowInteractionForMode } from "./pi-integration/workflow-interaction.ts";
 import { registerMessageDeliveryRenderer } from "./tools/message-delivery-renderer.ts";
@@ -47,7 +48,7 @@ type OwnerSessionStart = Readonly<{
  */
 export const createOwnerExtension = (
 	constructWorkflowCoordinator: ConstructWorkflowCoordinator,
-): ExtensionFactory => (pi) => {
+): ExtensionFactory => async (pi) => {
 	assertExtensionApiShape(pi);
 	registerSessionStartup(pi);
 	registerHerdrQuestionAttention(pi, () => admission.ownerView());
@@ -60,6 +61,7 @@ export const createOwnerExtension = (
 		(agentId) => admission.ownerView()?.agentLabel(agentId),
 	);
 	const bridge = installInteractiveHostBridge(hostPi);
+	const virtualModels = await VirtualModelRegistrar.create(pi, hostPi.getAgentDir());
 	// Pi reconstructs replacement transcripts before session_start. Register the
 	// official tool definitions now so historical calls receive their renderers.
 	const ownerTools = registerOwnerAgentTools(pi, () => admission.admittedOwnerView());
@@ -99,6 +101,7 @@ export const createOwnerExtension = (
 			interaction: workflowInteractionForMode(ctx.mode),
 			entryModulePath: ENTRY_MODULE_PATH,
 			constructWorkflowCoordinator,
+			virtualModels,
 			event,
 			onOwnerIdentified,
 		}),

@@ -1,10 +1,11 @@
 import { isAlias, isMap, isScalar, parseDocument, visit } from "yaml";
 
 import type {
+	CandidateThinking,
 	ModelReference,
-	RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
-import { isRuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
+import { isCandidateThinking, PRESET_THINKING } from "../protocol/runtime-configuration.ts";
+import { isVirtualModel } from "../policy/virtual-models.ts";
 import { isAgentTemplateName } from "./agent-template-name.ts";
 import type {
 	AgentTemplate,
@@ -205,10 +206,8 @@ function parseModelCandidates(
 		if (typeof candidate.id !== "string") {
 			throw new AgentTemplateParseError(sourcePath, "model id must be provider/model", templateName);
 		}
-		return {
-			model: parseModelReference(candidate.id, sourcePath, templateName),
-			thinking: parseThinking(candidate.thinking, sourcePath, templateName),
-		};
+		const model = parseModelReference(candidate.id, sourcePath, templateName);
+		return { model, thinking: parseThinking(candidate.thinking, model, sourcePath, templateName) };
 	});
 	const identities = models.map(({ model }) => `${model.provider}\0${model.modelId}`);
 	if (new Set(identities).size !== identities.length) {
@@ -234,11 +233,15 @@ function parseModelReference(
 
 function parseThinking(
 	value: unknown,
+	model: ModelReference,
 	sourcePath: string,
 	templateName: string,
-): RuntimeThinkingLevel {
-	if (!isRuntimeThinkingLevel(value)) {
+): CandidateThinking {
+	if (!isCandidateThinking(value)) {
 		throw new AgentTemplateParseError(sourcePath, "thinking level is invalid", templateName);
+	}
+	if (value === PRESET_THINKING && !isVirtualModel(model)) {
+		throw new AgentTemplateParseError(sourcePath, 'thinking "preset" requires a virtual/<name> model id', templateName);
 	}
 	return value;
 }
