@@ -83,7 +83,19 @@ import type {
 	AgentTemplateCatalogueSnapshot,
 	AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
-import { WorkflowPolicyStore, writeExcludedModels } from "../policy/workflow-policy.ts";
+import {
+	readWorkflowPolicy,
+	WorkflowPolicyStore,
+	writeExcludedModels,
+	writeVirtualModels,
+} from "../policy/workflow-policy.ts";
+import {
+	parseVirtualModels,
+	serializeVirtualModels,
+	VIRTUAL_MODEL_PROVIDER,
+	type VirtualModelConfigSnapshot,
+	type VirtualModelDefinitions,
+} from "../policy/virtual-models.ts";
 import { parseExcludedModels, type ModelPolicySnapshot } from "../policy/model-exclusion.ts";
 import type { ColdWorkflowRecovery } from "../bootstrap/cold-host-discovery.ts";
 import { piSessionRecency } from "../pi-integration/session-recency.ts";
@@ -157,6 +169,9 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	/** Owner-authored deny list of models child Runtime preparation must refuse. */
 	modelPolicy(): ModelPolicySnapshot;
 	setModelExclusions(entries: readonly string[]): Promise<ModelPolicySnapshot>;
+	/** Virtual Model definitions as the Config tab shows them. */
+	virtualModelConfig(): Promise<VirtualModelConfigSnapshot>;
+	setVirtualModels(definitions: VirtualModelDefinitions): Promise<VirtualModelConfigSnapshot>;
 	refreshTranscriptFacts(): Promise<void>;
 	resumeFromHuman(
 		text: string,
@@ -556,6 +571,16 @@ export class WorkflowCoordinator {
 			...this.#workflowPolicy.current(),
 			excludedModels: validated,
 		}));
+		await this.#refreshTemplateSnapshots();
+		return this.modelPolicy();
+	}
+
+	/**
+	 * Template catalogues drop candidates whose model is unavailable, so every cached
+	 * snapshot is captured again after a model policy change. A snapshot that cannot
+	 * be refreshed keeps its previous value and reports a diagnostic.
+	 */
+	async #refreshTemplateSnapshots(): Promise<void> {
 		this.#sessionFactory.invalidateTemplateLoads();
 		for (const record of this.#agents.values()) {
 			try {
@@ -567,7 +592,40 @@ export class WorkflowCoordinator {
 				});
 			}
 		}
-		return this.modelPolicy();
+	}
+
+	/**
+	 * Reads the policy file itself: routing and Runtime Preparation reread it too, so
+	 * a hand edit since the last Owner reload is what Agents already run with.
+	 */
+	async virtualModelConfig(): Promise<VirtualModelConfigSnapshot> {
+		const read = await readWorkflowPolicy(this.#ownerRuntime.services.agentDir);
+		const policy = read.ok ? read.snapshot : this.#workflowPolicy.current();
+		return {
+			// Entries are real models only, so registered Virtual Models are not candidates.
+			availableModels: this.modelPolicy().availableModels
+				.filter(({ provider }) => provider !== VIRTUAL_MODEL_PROVIDER),
+			excludedModels: [...policy.excludedModels],
+			virtualModels: policy.virtualModels,
+			...(read.ok ? {} : { invalidReason: read.diagnostic.message }),
+		};
+	}
+
+	/**
+	 * Persists the complete definitions, then publishes them and refreshes Template
+	 * snapshots, whose candidates may name a Virtual Model that just became defined,
+	 * usable, or undefined.
+	 */
+	async setVirtualModels(definitions: VirtualModelDefinitions): Promise<VirtualModelConfigSnapshot> {
+		// Round-trip through the file shape: validates before writing and freezes what is published.
+		const validated = parseVirtualModels(serializeVirtualModels(definitions));
+		await writeVirtualModels(this.#ownerRuntime.services.agentDir, validated);
+		this.#workflowPolicy.publish(Object.freeze({
+			...this.#workflowPolicy.current(),
+			virtualModels: validated,
+		}));
+		await this.#refreshTemplateSnapshots();
+		return this.virtualModelConfig();
 	}
 
 	async refreshAgentTemplateSnapshot(agentId: string): Promise<AgentTemplateCatalogueSnapshot> {
@@ -672,6 +730,8 @@ export class WorkflowCoordinator {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
 			modelPolicy: () => this.modelPolicy(),
 			setModelExclusions: (entries) => this.setModelExclusions(entries),
+			virtualModelConfig: () => this.virtualModelConfig(),
+			setVirtualModels: (definitions) => this.setVirtualModels(definitions),
 			agentLabel: (targetAgentId) =>
 				this.#agents.get(targetAgentId)?.identity.metadata.label,
 			answerTargetAgent: (toolCallId) => answerCallTargetAgentId({

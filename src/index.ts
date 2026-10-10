@@ -74,7 +74,13 @@ export const createOwnerExtension = (
 			case "admitted":
 				ownerTools.refreshSpawnGuidance(outcome.ownerView().agentTemplateSnapshot());
 				setOwnerAgentToolsActive(pi, interaction, true);
-				registerAgentsCommand(pi, { kind: "admitted_owner", view: outcome.ownerView, tools: ownerTools });
+				registerAgentsCommand(pi, {
+					kind: "admitted_owner",
+					view: outcome.ownerView,
+					tools: ownerTools,
+					// The Owner bootstrap's sync set the runtime's agentDir, the one Config writes.
+					syncVirtualModels: () => virtualModels.sync(),
+				});
 				if (interaction === "terminal") showOwnerBlockage(ctx.ui, undefined);
 				return;
 			case "blocked": {

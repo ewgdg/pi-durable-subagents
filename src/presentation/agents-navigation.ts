@@ -26,6 +26,8 @@ export type AgentsNavigationAdapter<Prepared> = Readonly<{
 	/** `tui` is the selector's terminal UI; `/agents owner` has none. */
 	prepare(action: AgentSelectionAction, tui: TUI | undefined): Promise<Prepared>;
 	present(prepared: Prepared): Promise<AgentsNavigationNext>;
+	/** The Owner's Config surface; absent where Config is not offered. */
+	openConfig?(): Promise<void>;
 }>;
 
 /** Run one `/agents` command: return to the Owner, or open the selector until it ends. */
@@ -70,6 +72,7 @@ async function runSelector<Prepared>(
 		};
 		const action = await openAgentSelectorSurface(ui, {
 			...currentSnapshot,
+			configAvailable: adapter.openConfig !== undefined,
 			addChangeHandler(handler) {
 				publishSnapshot = handler;
 				handler(currentSnapshot!);
@@ -88,6 +91,10 @@ async function runSelector<Prepared>(
 				ui.notify(`Agent view failed: ${errorMessage(error)}`, "error");
 			},
 		});
+		if (action?.kind === "open_config") {
+			await adapter.openConfig!();
+			return "reopen_selector";
+		}
 		if (action?.kind === "open_report") {
 			const item = currentSnapshot.reports.find(({ report }) => report.reportId === action.reportId);
 			if (!item) throw new Error("Report is unavailable");

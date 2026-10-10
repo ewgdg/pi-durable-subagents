@@ -9,6 +9,7 @@ import {
 } from "../presentation/agents-navigation-adapters.ts";
 import { navigateAgents, type AgentsNavigationTarget } from "../presentation/agents-navigation.ts";
 import { openModelPolicySurface } from "../presentation/model-policy-surface.ts";
+import { openVirtualModelConfigSurface } from "../presentation/virtual-model-config-surface.ts";
 import { headlessOwnerDiagnostics, openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
 import type { SpawnGuidanceRefresh } from "./coordination-tools.ts";
 
@@ -24,6 +25,8 @@ export type AgentsCommandRole =
 		view: () => OrdinaryAgentCoordinatorView;
 		/** Spawn guidance that `/agents models` refreshes. */
 		tools: SpawnGuidanceRefresh;
+		/** Re-registers the Owner's Virtual Models after the Config tab edits them. */
+		syncVirtualModels(): Promise<void>;
 	}>
 	| Readonly<{ kind: "blocked_owner"; failure: OwnerRecoveryError }>;
 
@@ -93,7 +96,29 @@ function navigate(
 ): Promise<void> {
 	return role.kind === "participant"
 		? navigateAgents(ctx.ui, createControlAgentsNavigation(role.presentation), target)
-		: navigateAgents(ctx.ui, createLocalAgentsNavigation(role.view(), ctx), target);
+		: navigateAgents(ctx.ui, {
+			...createLocalAgentsNavigation(role.view(), ctx),
+			openConfig: () => openConfig(ctx, role),
+		}, target);
+}
+
+async function openConfig(
+	ctx: ExtensionCommandContext,
+	role: Extract<AgentsCommandRole, { kind: "admitted_owner" }>,
+): Promise<void> {
+	const view = role.view();
+	await openVirtualModelConfigSurface(ctx.ui, {
+		...await view.virtualModelConfig(),
+		async persist(definitions) {
+			const config = await view.setVirtualModels(definitions);
+			// Without a sync, an added or removed name reaches the Owner's own /model
+			// list only after reload; children reread the file on every request.
+			await role.syncVirtualModels();
+			return config;
+		},
+	});
+	// Template candidates may name an edited Virtual Model; see openModels.
+	role.tools.refreshSpawnGuidance(view.agentTemplateSnapshot());
 }
 
 async function openModels(

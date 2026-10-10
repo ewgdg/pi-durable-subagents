@@ -5,8 +5,8 @@ import type {
 	ModelRouteRequest,
 } from "@earendil-works/pi-coding-agent";
 
-import { isModelExcluded } from "../policy/model-exclusion.ts";
 import {
+	entryUsability,
 	requireVirtualModelDefinition,
 	selectVirtualModelEntry,
 	VIRTUAL_MODEL_PROVIDER,
@@ -27,7 +27,7 @@ import { isPresetThinking } from "./recorded-model-selection.ts";
  *
  * Every routed request re-reads the policy file, so an edited entry list applies on
  * the next request in every process. Only adding or removing a name waits for the
- * next sync (a new process, or an Owner session_start).
+ * next sync (a new process, an Owner session_start, or an Owner Config tab edit).
  */
 export class VirtualModelRegistrar {
 	readonly #pi: ExtensionAPI;
@@ -47,8 +47,12 @@ export class VirtualModelRegistrar {
 		return registrar;
 	}
 
-	/** Re-reads the policy and makes the registered names match its definitions. */
-	async sync(agentDir: string): Promise<void> {
+	/**
+	 * Re-reads the policy and makes the registered names match its definitions.
+	 * Without an argument it keeps the directory of the last sync, which the Owner
+	 * bootstrap sets from its runtime services.
+	 */
+	async sync(agentDir = this.#agentDir): Promise<void> {
 		this.#agentDir = agentDir;
 		// The Owner already warns about an invalid file on session_start, and the Owner
 		// refuses a child spawn while it is invalid, so a sync reports nothing.
@@ -85,10 +89,9 @@ export class VirtualModelRegistrar {
 		const available = ctx.modelRegistry.getAvailable();
 		const findAvailable = (model: ModelReference) =>
 			available.find((candidate) => candidate.provider === model.provider && candidate.id === model.modelId);
-		const usability = (model: ModelReference): EntryUsability => {
-			if (isModelExcluded(excludedModels, model)) return "excluded";
-			return findAvailable(model) === undefined ? "unavailable" : "usable";
-		};
+		const availableModels = available.map((model) => ({ provider: model.provider, modelId: model.id, name: model.name }));
+		const usability = (model: ModelReference): EntryUsability =>
+			entryUsability({ availableModels, excludedModels }, model);
 		const stickyModel = request.reason === "retry"
 			? request.failed?.model ?? request.previous?.model
 			: request.reason === "continuation" ? request.previous?.model : undefined;

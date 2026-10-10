@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { parseDocument } from "yaml";
 
 import { parseExcludedModels } from "./model-exclusion.ts";
-import { parseVirtualModels, type VirtualModelDefinitions } from "./virtual-models.ts";
+import {
+	parseVirtualModels,
+	serializeVirtualModels,
+	type VirtualModelDefinitions,
+} from "./virtual-models.ts";
 
 export type WorkflowPolicySnapshot = Readonly<{
 	/** Approximate bound on concurrently working Agent Runs; see ADR 0007. */
@@ -137,15 +141,37 @@ export async function readWorkflowPolicy(
 	}
 }
 
-/**
- * Replaces only the exclusion list in the user's policy file. The write is atomic
- * so a failed toggle cannot leave a half-written file that blocks Owner admission.
- */
+/** Replaces only the exclusion list in the user's policy file. */
 export async function writeExcludedModels(
 	agentDir: string,
 	entries: readonly string[],
 ): Promise<void> {
 	const validated = parseExcludedModels(entries);
+	await rewritePolicyField(agentDir, "excludedModels", validated.length === 0 ? undefined : [...validated]);
+}
+
+/** Replaces only the Virtual Model definitions in the user's policy file. */
+export async function writeVirtualModels(
+	agentDir: string,
+	definitions: VirtualModelDefinitions,
+): Promise<void> {
+	await rewritePolicyField(
+		agentDir,
+		"virtualModels",
+		Object.keys(definitions).length === 0 ? undefined : serializeVirtualModels(definitions),
+	);
+}
+
+/**
+ * Sets one field, or removes it when `value` is undefined, so the file keeps only
+ * explicit values. The write is atomic so a failed edit cannot leave a
+ * half-written file that blocks Owner admission.
+ */
+async function rewritePolicyField(
+	agentDir: string,
+	field: keyof WorkflowPolicySnapshot,
+	value: unknown,
+): Promise<void> {
 	const directory = join(agentDir, POLICY_DIRECTORY);
 	const path = join(directory, POLICY_FILENAME);
 	let current: string | undefined;
@@ -160,10 +186,10 @@ export async function writeExcludedModels(
 		parseWorkflowPolicy(current);
 		Object.assign(policy, JSON.parse(current) as Record<string, unknown>);
 	}
-	if (validated.length === 0) {
-		delete policy.excludedModels;
+	if (value === undefined) {
+		delete policy[field];
 	} else {
-		policy.excludedModels = [...validated];
+		policy[field] = value;
 	}
 	const body = `${JSON.stringify(policy, null, 2)}\n`;
 	parseWorkflowPolicy(body);

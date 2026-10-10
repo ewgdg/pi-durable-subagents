@@ -1,7 +1,7 @@
 import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -10,7 +10,9 @@ import {
 	parseWorkflowPolicy,
 	readWorkflowPolicy,
 	writeExcludedModels,
+	writeVirtualModels,
 } from "../src/policy/workflow-policy.ts";
+import type { VirtualModelDefinitions } from "../src/policy/virtual-models.ts";
 import { createUnboundTestOwnerHost } from "./support/pi-host.ts";
 
 test("strict Workflow Policy parsing fills defaults and freezes one complete snapshot", () => {
@@ -309,4 +311,84 @@ test("writing excluded models preserves valid virtual models and refuses an inva
 	assert.equal((await readWorkflowPolicy(host.services.agentDir)).ok, false);
 	await assert.rejects(() => writeExcludedModels(host.services.agentDir, ["openai-codex/*"]));
 	assert.equal(await readFile(policyPath, "utf8"), invalid);
+});
+
+function virtualDefinitions(source: Record<string, ReadonlyArray<readonly [string, string]>>): VirtualModelDefinitions {
+	return Object.fromEntries(Object.entries(source).map(([name, entries]) => [name, entries.map(([id, thinking]) => {
+		const separator = id.indexOf("/");
+		return { model: { provider: id.slice(0, separator), modelId: id.slice(separator + 1) }, thinking };
+	})])) as unknown as VirtualModelDefinitions;
+}
+
+test("writing virtual models replaces only that field and reads back", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, { processVisibleModel: false });
+	const policyDirectory = join(host.services.agentDir, "config");
+	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
+
+	// A missing file is created.
+	await writeVirtualModels(host.services.agentDir, virtualDefinitions({ fast: [["openai-codex/gpt-6-astra", "high"]] }));
+	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), {
+		virtualModels: { fast: [{ id: "openai-codex/gpt-6-astra", thinking: "high" }] },
+	});
+
+	await writeFile(policyPath, JSON.stringify({
+		maxPendingDeliveriesPerAgent: 4,
+		excludedModels: ["deepseek/*"],
+		virtualModels: { fast: [{ id: "openai-codex/gpt-6-astra", thinking: "high" }], old: [{ id: "a/b", thinking: "low" }] },
+	}), "utf8");
+	// The complete next definitions win: a deleted name disappears, order is kept.
+	await writeVirtualModels(host.services.agentDir, virtualDefinitions({
+		fast: [["deepseek/deepseek-v4-flash", "max"], ["openrouter/vendor/model", "off"]],
+		renamed: [["a/b", "low"]],
+	}));
+	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), {
+		maxPendingDeliveriesPerAgent: 4,
+		excludedModels: ["deepseek/*"],
+		virtualModels: {
+			fast: [{ id: "deepseek/deepseek-v4-flash", thinking: "max" }, { id: "openrouter/vendor/model", thinking: "off" }],
+			renamed: [{ id: "a/b", thinking: "low" }],
+		},
+	});
+	const loaded = await readWorkflowPolicy(host.services.agentDir);
+	assert.equal(loaded.ok, true);
+	if (!loaded.ok) throw new Error("Expected the written policy to load");
+	assert.deepEqual(Object.keys(loaded.snapshot.virtualModels), ["fast", "renamed"]);
+	assert.deepEqual(loaded.snapshot.virtualModels.fast?.[1]?.model, { provider: "openrouter", modelId: "vendor/model" });
+
+	// No definitions removes the field.
+	await writeVirtualModels(host.services.agentDir, {});
+	assert.deepEqual(JSON.parse(await readFile(policyPath, "utf8")), {
+		maxPendingDeliveriesPerAgent: 4,
+		excludedModels: ["deepseek/*"],
+	});
+	assert.deepEqual(await readdir(policyDirectory), ["pi-durable-subagents.json"], "no temporary file is left behind");
+});
+
+test("writing virtual models refuses what the parser rejects and an invalid file, leaving it untouched", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, { processVisibleModel: false });
+	const policyDirectory = join(host.services.agentDir, "config");
+	const policyPath = join(policyDirectory, "pi-durable-subagents.json");
+	await mkdir(policyDirectory, { recursive: true });
+	const original = '{"maxPendingDeliveriesPerAgent": 4}';
+	await writeFile(policyPath, original, "utf8");
+
+	const invalidDefinitions: Record<string, Record<string, ReadonlyArray<readonly [string, string]>>> = {
+		"uppercase name": { Fast: [["a/b", "low"]] },
+		"underscore name": { fast_review: [["a/b", "low"]] },
+		"empty list": { fast: [] },
+		"duplicate id": { fast: [["a/b", "low"], ["a/b", "high"]] },
+		"virtual entry": { fast: [["virtual/other", "low"]] },
+		"missing model id": { fast: [["a/", "low"]] },
+		"unknown thinking": { fast: [["a/b", "ultra"]] },
+	};
+	for (const [label, definitions] of Object.entries(invalidDefinitions)) {
+		await assert.rejects(() => writeVirtualModels(host.services.agentDir, virtualDefinitions(definitions)), Error, label);
+		assert.equal(await readFile(policyPath, "utf8"), original, label);
+	}
+
+	const invalidFile = JSON.stringify({ virtualModels: { fast: [] } });
+	await writeFile(policyPath, invalidFile, "utf8");
+	await assert.rejects(() => writeVirtualModels(host.services.agentDir, virtualDefinitions({ fast: [["a/b", "low"]] })));
+	assert.equal(await readFile(policyPath, "utf8"), invalidFile);
+	assert.deepEqual(await readdir(policyDirectory), ["pi-durable-subagents.json"]);
 });

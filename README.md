@@ -23,7 +23,7 @@ Select a subagent to enter its complete Pi session and interact with it directly
 - **Incident handling:** a runtime reminder recovers forgotten Answers; isolated Moderators handle persistent stalls, deadlocks, and failures under policy bounds. See [Operational Incident moderation](docs/operational-incident-moderation.md).
 - **Durable recovery:** a fresh host rebuilds authority and pending Requests from Pi transcripts. See [Cold host recovery](docs/cold-host-recovery.md).
 - **Model policy:** `/agents models` maintains a durable deny list of models children may not use. See [Workflow Policy](docs/workflow-policy.md).
-- **Virtual models:** name an ordered fallback list of models once and use `virtual/<name>` in Templates and spawns; fixing the list updates every Agent. See [Virtual Models](docs/workflow-policy.md#virtual-models).
+- **Virtual models:** name an ordered fallback list of models once and use `virtual/<name>` in Templates and spawns; fixing the list updates every Agent. Edit them in the `/agents` Config tab (`c`). See [Virtual Models](docs/workflow-policy.md#virtual-models).
 
 Coordination does not override Pi's compaction, retry, or transport settings.
 
@@ -73,6 +73,19 @@ In a headless Workflow, Agents cannot use `ask_user`; they escalate through thei
 
 Templates are creation presets: edits apply to future spawns only. See [Agent Templates](docs/agent-spawning.md#agent-templates) for configuration details.
 
+Both templates below use one [Virtual Model](docs/workflow-policy.md#virtual-models), so a retired or banned model is fixed in one place. `thinking: preset` runs each entry on its own level. Add it in the `/agents` Config tab (`c`), or in `~/.pi/agent/config/pi-durable-subagents.json`:
+
+```json
+{
+  "virtualModels": {
+    "cheap": [
+      { "id": "openai-codex/gpt-6-luna", "thinking": "high" },
+      { "id": "deepseek/deepseek-v4-flash", "thinking": "high" }
+    ]
+  }
+}
+```
+
 ### `cheap-delegate`
 
 A cost-efficient default for bounded implementation, routine execution, and targeted fact-finding.
@@ -91,8 +104,8 @@ useWhen: >-
   If its results remain inadequate after several iterations and show no obvious
   improvement, stop assigning that task to this template.
 models:
-  - id: openai-codex/gpt-5.6-luna
-    thinking: high
+  - id: virtual/cheap
+    thinking: preset
 ---
 ```
 
@@ -107,10 +120,8 @@ Save as `~/.agents/agents/moderator.md`:
 name: moderator
 useWhen: Use for moderation and incident response.
 models:
-  - id: openai-codex/gpt-5.6-luna
-    thinking: high
-  - id: deepseek/deepseek-v4-flash
-    thinking: high
+  - id: virtual/cheap
+    thinking: preset
 ---
 ```
 

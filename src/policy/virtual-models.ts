@@ -7,7 +7,7 @@
 import type { ModelReference, RuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { isRuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
-import { modelIdentity } from "./model-exclusion.ts";
+import { isModelExcluded, modelIdentity, type ModelPolicySnapshot } from "./model-exclusion.ts";
 
 /** Pi lists a virtual model under an unused provider id as always available. */
 export const VIRTUAL_MODEL_PROVIDER = "virtual";
@@ -19,11 +19,33 @@ export type VirtualModelEntry = Readonly<{
 
 export type VirtualModelDefinitions = Readonly<Record<string, readonly VirtualModelEntry[]>>;
 
+/**
+ * What the Config tab edits: the policy file's definitions, or the Owner's last
+ * valid ones while the file is invalid, plus what decides entry usability.
+ */
+export type VirtualModelConfigSnapshot = ModelPolicySnapshot & Readonly<{
+	virtualModels: VirtualModelDefinitions;
+	/** Why the policy file cannot be read; editing is disabled while it is set. */
+	invalidReason?: string;
+}>;
+
 /** Why an entry cannot serve a request right now. */
 export type EntryUsability = "usable" | "excluded" | "unavailable";
 
 const ENTRY_RULE =
 	"Workflow Policy virtualModels entries must contain only id (a real \"<provider>/<modelId>\") and thinking";
+
+/** Excluded wins over availability, for routing and for the Config tab alike. */
+export function entryUsability(
+	policy: Pick<ModelPolicySnapshot, "availableModels" | "excludedModels">,
+	model: ModelReference,
+): EntryUsability {
+	if (isModelExcluded(policy.excludedModels, model)) return "excluded";
+	return policy.availableModels.some((candidate) =>
+		candidate.provider === model.provider && candidate.modelId === model.modelId)
+		? "usable"
+		: "unavailable";
+}
 
 export function isVirtualModel(model: ModelReference): boolean {
 	return model.provider === VIRTUAL_MODEL_PROVIDER;
@@ -79,6 +101,16 @@ export function selectVirtualModelEntry(options: Readonly<{
 	throw new Error(
 		`Virtual model ${VIRTUAL_MODEL_PROVIDER}/${name} has no usable entry: ${reasons.join(", ")}`,
 	);
+}
+
+/** The policy file shape `parseVirtualModels` reads back. */
+export function serializeVirtualModels(
+	definitions: VirtualModelDefinitions,
+): Record<string, Array<{ id: string; thinking: RuntimeThinkingLevel }>> {
+	return Object.fromEntries(Object.entries(definitions).map(([name, entries]) => [
+		name,
+		entries.map((entry) => ({ id: modelIdentity(entry.model), thinking: entry.thinking })),
+	]));
 }
 
 function parseEntries(name: string, value: unknown): readonly VirtualModelEntry[] {

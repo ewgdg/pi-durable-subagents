@@ -100,9 +100,20 @@ Virtual Models use Pi's native virtual model support (Pi 0.99.0 or newer). Pi ro
 - Otherwise the first usable entry serves the request. With none usable, the request fails with an error naming each entry and why it is unusable.
 - Session history records the real model that answered. The footer shows both: `fast • high → deepseek-flash • max`.
 
-Names bind late. A captured `creationPreset` keeps `virtual/<name>`, so dormant Agents follow later edits. Each routed request rereads this file, so editing an existing name's entries applies on the next request in every process. Adding or removing a name applies to new spawns at once, and to the Owner's own `/model` list after resource reload. An invalid edit keeps the last valid definitions for running Agents and warns once.
+Names bind late. A captured `creationPreset` keeps `virtual/<name>`, so dormant Agents follow later edits. Each routed request rereads this file, so editing an existing name's entries applies on the next request in every process. Adding or removing a name applies to new spawns at once, and to the Owner's own `/model` list after resource reload, or at once when the edit is made in [Config](#editing-in-the-config-tab). An invalid edit keeps the last valid definitions for running Agents and warns once.
 
 Runtime Preparation reads this file too. It treats `virtual/<name>` as available only when the file is valid, the name is defined, and at least one entry is usable now, so a broken definition fails a spawn before the Agent exists.
+
+### Editing in the Config tab
+
+In the admitted Workflow Owner session, `c` or a click on **Config** in the `/agents` selector opens an editor for these definitions. Child Agents do not offer it.
+
+- The list shows each name with its entries in routing order. A name with unusable entries carries one `[N unusable]` marker, and the focused name's full ids show below the list.
+- `Enter` opens a name or `+ New virtual model`. Inside a name, `Enter` replaces the focused entry's model and thinking, `a` appends an entry, `d` deletes one, `K`/`J` move it, and `r` renames the name. In the list, `d` deletes a name after a second `d`.
+- The model picker searches the Owner's available models. Excluded models are marked but selectable, since routing skips them per request. A model already in the list is refused.
+- Every completed action rewrites this file at once through a temporary file and rename, keeping every other field. A new name is written together with its first entry, and the last entry cannot be deleted, so each step leaves a valid file. A failed write keeps the previous file and shows the error in the editor.
+- Deleting or renaming a name in use is not blocked. The old name becomes an unavailable model: a spawn that names it fails, and a recorded selection on it falls back like any unusable model at the next fresh Runtime (see [Model selection](agent-spawning.md#model-selection)). A running session already on that name fails its next request until another model is selected.
+- While this file is invalid, Config shows the parse error and the Owner's last valid definitions, read-only.
 
 ### Thinking
 

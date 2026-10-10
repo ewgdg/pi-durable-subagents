@@ -69,7 +69,7 @@ function recordingRoles() {
 	};
 	const roles = {
 		participant: { kind: "participant", presentation },
-		admitted_owner: { kind: "admitted_owner", view, tools: { refreshSpawnGuidance() {} } },
+		admitted_owner: { kind: "admitted_owner", view, tools: { refreshSpawnGuidance() {} }, syncVirtualModels: async () => {} },
 		blocked_owner: { kind: "blocked_owner", failure: new OwnerRecoveryError("admission", "owner", undefined, new Error("admission failed")) },
 	} as const satisfies Record<string, AgentsCommandRole>;
 	return { effects, roles };
@@ -156,3 +156,112 @@ test("a participant returns to the Owner over Control without opening the select
 
 	assert.deepEqual(effects, ["snapshot", "select owner"]);
 });
+
+test("the Owner's Config saves through the view, re-registers Virtual Models, and Escape reopens the selector", { timeout: 5_000 }, async () => {
+	const effects: string[] = [];
+	const config = {
+		availableModels: [{ provider: "openai-codex", modelId: "gpt-6-astra", name: "Astra" }],
+		excludedModels: [],
+		virtualModels: { fast: [{ model: { provider: "openai-codex", modelId: "gpt-6-astra" }, thinking: "high" as const }] },
+	};
+	const view = {
+		status: () => childStatus,
+		selectionRoster: () => ({ live: [ownerStatus, childStatus], dormant: [], quarantined: [], quarantinedCandidateCount: 0 }),
+		humanAttention: () => [],
+		operationalAttention: () => [],
+		reportHistory: () => [],
+		setReportRead: () => undefined,
+		addAgentActivityChangeHandler: () => () => undefined,
+		agentTemplateSnapshot: () => ({}),
+		async virtualModelConfig() {
+			effects.push("read config");
+			return config;
+		},
+		async setVirtualModels(definitions: Record<string, unknown>) {
+			effects.push(`save ${JSON.stringify(Object.keys(definitions))}`);
+			return { ...config, virtualModels: definitions };
+		},
+	} as unknown as OrdinaryAgentCoordinatorView;
+	const role: AgentsCommandRole = {
+		kind: "admitted_owner",
+		view: () => view,
+		tools: { refreshSpawnGuidance() { effects.push("refresh guidance"); } },
+		async syncVirtualModels() { effects.push("sync"); },
+	};
+	const steps: SurfaceStep[] = [
+		async (press) => press("c"),
+		async (press, text) => {
+			assert.match(text(), /Virtual Models/);
+			await press("d", "d");
+			assert.doesNotMatch(text(), /fast/);
+			await press("\x1b");
+		},
+		async (press, text) => {
+			assert.match(text(), /Config \[c\]/);
+			await press("\x1b");
+		},
+	];
+	const { ctx, surfaces } = scriptedCommandContext(steps, effects);
+
+	await captureCommand(role).handler("", ctx);
+
+	assert.deepEqual(surfaces, ["surface 1", "surface 2", "surface 3"]);
+	assert.deepEqual(effects.filter((effect) => effect !== "refresh guidance"), ["read config", "save []", "sync"]);
+});
+
+test("a child's /agents selector offers no Config", { timeout: 5_000 }, async () => {
+	const { roles } = recordingRoles();
+	const { ctx, surfaces } = scriptedCommandContext([
+		async (press, text) => {
+			assert.doesNotMatch(text(), /Config/);
+			await press("c");
+			assert.match(text(), /Live/, "c must leave the selector open");
+			await press("\x1b");
+		},
+	], []);
+
+	await captureCommand(roles.participant).handler("", ctx);
+
+	assert.deepEqual(surfaces, ["surface 1"]);
+});
+
+type SurfaceStep = (press: (...keys: string[]) => Promise<void>, text: () => string) => Promise<void>;
+
+/** A TUI command context whose surfaces each run one scripted step; extra surfaces fail. */
+function scriptedCommandContext(steps: readonly SurfaceStep[], effects: string[]) {
+	const surfaces: string[] = [];
+	const ctx = {
+		mode: "tui",
+		shutdown() {},
+		ui: {
+			notify(message: string) { effects.push(`notify ${message}`); },
+			custom<T>(factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: T) => void) => {
+				handleInput?(data: string): void;
+				render(width: number): string[];
+			}) {
+				const step = steps[surfaces.length];
+				surfaces.push(`surface ${surfaces.length + 1}`);
+				return new Promise<T>((resolve, reject) => {
+					const component = factory(
+						{ terminal: { rows: 40 }, requestRender() {} },
+						{ fg: (_c: string, text: string) => text, bg: (_c: string, text: string) => text, getBgAnsi: () => "", bold: (text: string) => text },
+						{},
+						resolve,
+					);
+					if (!step) {
+						reject(new Error(`unexpected surface ${surfaces.length}`));
+						return;
+					}
+					const press = async (...keys: string[]) => {
+						for (const key of keys) {
+							component.handleInput?.(key);
+							await new Promise<void>((done) => setImmediate(done));
+						}
+					};
+					void step(press, () => component.render(100).join("\n")).catch(reject);
+				});
+			},
+		},
+	} as unknown as ExtensionCommandContext;
+	return { ctx, surfaces };
+}
