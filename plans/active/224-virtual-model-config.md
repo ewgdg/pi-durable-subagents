@@ -79,7 +79,7 @@ Grow in layers. Each layer works on its own.
 
 - [x] Investigation and design (user chose per-action saves, structured TUI, `c` key, no block on deleting a name in use, excluded models selectable with a marker, lists kept, inline `| Config [c]`).
 - [x] HTML mockup of all views reviewed with the user.
-- [ ] Layer 1
+- [x] Layer 1: Config label, `c`, click, and the read-only list (typecheck and existing selector tests pass).
 - [ ] Layer 2
 - [ ] Layer 3
 - [ ] Layer 4

@@ -100,9 +100,14 @@ export type AgentSelectorOptions = AgentSelectorSnapshot & Readonly<{
 		tui: TUI,
 	): Promise<void> | void;
 	onSelectionError?(error: unknown): void;
+	/** Shows the Config entry (`c` or a click), which closes the selector with `open_config`. */
+	configAvailable?: boolean;
 	/** Clock for wheel-tick coalescing; defaults to Date.now. Tests inject a fake. */
 	now?: () => number;
 }>;
+
+/** How the selector closes: a chosen action, the Config entry, or nothing. */
+export type AgentSelectorResult = AgentSelectorAction | Readonly<{ kind: "open_config" }> | undefined;
 
 /** A projection row prepared for painting through Pi's list row renderer. */
 type AgentSelectorItem = SelectItem & Readonly<{
@@ -113,8 +118,8 @@ type AgentSelectorItem = SelectItem & Readonly<{
 export function openAgentSelectorSurface(
 	ui: ExtensionUIContext,
 	options: AgentSelectorOptions,
-): Promise<AgentSelectorAction | undefined> {
-	return ui.custom<AgentSelectorAction | undefined>(
+): Promise<AgentSelectorResult> {
+	return ui.custom<AgentSelectorResult>(
 		(tui, theme, _keybindings, done) =>
 			new AgentSelectorSurface(tui, theme, options, done),
 		{
@@ -132,6 +137,7 @@ export function openAgentSelectorSurface(
 type PointerAction =
 	| { kind: "root" }
 	| { kind: "tab"; tab: AgentSelectorTab }
+	| { kind: "config" }
 	| { kind: "open"; value: string }
 	| { kind: "children"; value: string }
 	| { kind: "ancestor"; agentId: string; childId: string };
@@ -153,7 +159,7 @@ type ScrollMode = "center" | "keep";
 class AgentSelectorSurface implements Component {
 	readonly #tui: TUI;
 	readonly #theme: Theme;
-	readonly #done: (result: AgentSelectorAction | undefined) => void;
+	readonly #done: (result: AgentSelectorResult) => void;
 	readonly #options: AgentSelectorOptions;
 	#state: AgentSelectorState;
 	#view: AgentSelectorView;
@@ -176,7 +182,7 @@ class AgentSelectorSurface implements Component {
 		tui: TUI,
 		theme: Theme,
 		options: AgentSelectorOptions,
-		done: (result: AgentSelectorAction | undefined) => void,
+		done: (result: AgentSelectorResult) => void,
 	) {
 		this.#tui = tui;
 		this.#theme = theme;
@@ -200,6 +206,8 @@ class AgentSelectorSurface implements Component {
 			this.#done(undefined);
 		} else if (matchesKey(data, "m")) {
 			void this.#toggleFocusedReportRead();
+		} else if (this.#options.configAvailable && matchesKey(data, "c")) {
+			this.#done({ kind: "open_config" });
 		} else if (matchesKey(data, "o")) {
 			void this.#completeSelection(this.#ownerRow().action, false);
 		} else if (matchesKey(data, Key.tab)) {
@@ -282,6 +290,8 @@ class AgentSelectorSurface implements Component {
 			this.#apply({ kind: "go_to_root" }, "center");
 		} else if (action.kind === "tab") {
 			this.#apply({ kind: "choose_tab", tab: action.tab }, "center");
+		} else if (action.kind === "config") {
+			this.#done({ kind: "open_config" });
 		} else if (action.kind === "ancestor") {
 			this.#apply({ kind: "go_to_ancestor", agentId: action.agentId, childId: action.childId }, "center");
 		} else {
@@ -830,6 +840,14 @@ class AgentSelectorSurface implements Component {
 			text += rendered;
 			column += width + 1;
 		}
+		if (this.#options.configAvailable) {
+			// Config sits after the cycled tabs; the bar marks that Tab never lands on it.
+			const separator = this.#theme.fg("dim", "|");
+			const label = this.#theme.fg("muted", " Config") + this.#theme.fg("dim", " [c] ");
+			const start = column + visibleWidth(separator);
+			text += ` ${separator}${label}`;
+			regions.push({ start, end: start + visibleWidth(label), text: label, action: { kind: "config" } });
+		}
 		return { text, regions };
 	}
 
@@ -874,6 +892,7 @@ function samePointerAction(left: PointerAction | undefined, right: PointerAction
 	switch (left.kind) {
 		case "root": return right.kind === "root";
 		case "tab": return right.kind === "tab" && left.tab === right.tab;
+		case "config": return right.kind === "config";
 		case "open":
 		case "children": return right.kind === left.kind && left.value === right.value;
 		case "ancestor": return right.kind === "ancestor" &&

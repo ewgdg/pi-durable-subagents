@@ -7,7 +7,7 @@
 import type { ModelReference, RuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { isRuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
-import { modelIdentity } from "./model-exclusion.ts";
+import { modelIdentity, type ModelPolicySnapshot } from "./model-exclusion.ts";
 
 /** Pi lists a virtual model under an unused provider id as always available. */
 export const VIRTUAL_MODEL_PROVIDER = "virtual";
@@ -18,6 +18,16 @@ export type VirtualModelEntry = Readonly<{
 }>;
 
 export type VirtualModelDefinitions = Readonly<Record<string, readonly VirtualModelEntry[]>>;
+
+/**
+ * What the Config tab edits: the policy file's definitions, or the Owner's last
+ * valid ones while the file is invalid, plus what decides entry usability.
+ */
+export type VirtualModelConfigSnapshot = ModelPolicySnapshot & Readonly<{
+	virtualModels: VirtualModelDefinitions;
+	/** Why the policy file cannot be read; editing is disabled while it is set. */
+	invalidReason?: string;
+}>;
 
 /** Why an entry cannot serve a request right now. */
 export type EntryUsability = "usable" | "excluded" | "unavailable";

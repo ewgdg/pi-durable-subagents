@@ -9,6 +9,7 @@ import {
 } from "../presentation/agents-navigation-adapters.ts";
 import { navigateAgents, type AgentsNavigationTarget } from "../presentation/agents-navigation.ts";
 import { openModelPolicySurface } from "../presentation/model-policy-surface.ts";
+import { openVirtualModelConfigSurface } from "../presentation/virtual-model-config-surface.ts";
 import { headlessOwnerDiagnostics, openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
 import type { SpawnGuidanceRefresh } from "./coordination-tools.ts";
 
@@ -93,7 +94,17 @@ function navigate(
 ): Promise<void> {
 	return role.kind === "participant"
 		? navigateAgents(ctx.ui, createControlAgentsNavigation(role.presentation), target)
-		: navigateAgents(ctx.ui, createLocalAgentsNavigation(role.view(), ctx), target);
+		: navigateAgents(ctx.ui, {
+			...createLocalAgentsNavigation(role.view(), ctx),
+			openConfig: () => openConfig(ctx, role),
+		}, target);
+}
+
+async function openConfig(
+	ctx: ExtensionCommandContext,
+	role: Extract<AgentsCommandRole, { kind: "admitted_owner" }>,
+): Promise<void> {
+	await openVirtualModelConfigSurface(ctx.ui, await role.view().virtualModelConfig());
 }
 
 async function openModels(
